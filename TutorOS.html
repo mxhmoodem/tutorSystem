@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TutorOS — Tuition Centre Management</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; background: #F9FAFB; }
+    body { font-family: 'Plus Jakarta Sans', sans-serif; -webkit-font-smoothing: antialiased; }
+    #root { height: 100%; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #D1D5DB; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #9CA3AF; }
+    * { text-wrap: pretty; }
+    input, textarea, button { font-family: inherit; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" src="shared.jsx"></script>
+<script type="text/babel" src="LandingPage.jsx"></script>
+<script type="text/babel" src="AdminDashboard.jsx"></script>
+<script type="text/babel" src="AdminPages.jsx"></script>
+<script type="text/babel" src="TeacherDashboard.jsx"></script>
+<script type="text/babel" src="TeacherPages.jsx"></script>
+<script type="text/babel" src="StudentDashboard.jsx"></script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+
+<script type="text/babel">
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "accent": "#43b190",
+  "density": "compact"
+}/*EDITMODE-END*/;
+
+const TopBar = ({ view, onBack, accent }) => (
+  <div style={{
+    display: 'flex', alignItems: 'center', gap: 8,
+    padding: '0 20px', height: 40,
+    borderBottom: `1px solid #E5E7EB`,
+    background: '#FFFFFF', flexShrink: 0,
+  }}>
+    <button onClick={onBack} style={{
+      display: 'flex', alignItems: 'center', gap: 5,
+      background: 'none', border: 'none', cursor: 'pointer',
+      color: '#6B7280', fontSize: 12, padding: '2px 6px', borderRadius: 5,
+    }}>
+      ← Back to marketing site
+    </button>
+    <div style={{ flex: 1 }} />
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#16A34A' }} />
+      <span style={{ fontSize: 12, color: '#6B7280' }}>Spring Term 2026</span>
+    </div>
+    <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6B7280', padding: '4px', display: 'flex' }}>
+      <Icon name="bell" size={16} />
+    </button>
+    <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6B7280', padding: '4px', display: 'flex' }}>
+      <Icon name="search" size={16} />
+    </button>
+  </div>
+);
+
+const App = () => {
+  const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const [view, setView]     = React.useState('landing');
+  const [page, setPage]     = React.useState('dashboard');
+  const [renderKey, setRenderKey] = React.useState(0);
+
+  React.useLayoutEffect(() => {
+    if (window.DS) {
+      window.DS.accent       = tweaks.accent;
+      window.DS.accentHover  = tweaks.accent;
+      window.DS.accentLight  = tweaks.accent + '18';
+      window.DS.accentBorder = tweaks.accent + '55';
+    }
+    setRenderKey(k => k + 1);
+  }, [tweaks.accent]);
+
+  const enterApp = (role) => { setView(role || 'admin'); setPage('dashboard'); };
+  const handleNav = (p)   => setPage(p);
+  const isApp = view !== 'landing';
+
+  const renderContent = () => {
+    if (view === 'admin') {
+      if (page === 'students') return <AdminPages page="students" />;
+      if (page === 'reports')  return <AdminPages page="reports" />;
+      return <AdminDashboard />;
+    }
+    if (view === 'teacher') {
+      if (page === 'classes')  return <TeacherPages page="classes" />;
+      if (page === 'homework') return <TeacherPages page="homework" />;
+      if (page === 'progress') return <TeacherPages page="progress" />;
+      return <TeacherDashboard />;
+    }
+    if (view === 'student') {
+      return <StudentDashboard page={page} onNav={handleNav} />;
+    }
+    return null;
+  };
+
+  return (
+    <div key={renderKey} style={{ height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {isApp ? (
+        <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+          <Sidebar
+            role={view}
+            active={page}
+            onNav={handleNav}
+            onRoleSwitch={(role) => { setView(role); setPage('dashboard'); }}
+          />
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#F9FAFB' }}>
+            <TopBar view={view} onBack={() => setView('landing')} accent={tweaks.accent} />
+            <div style={{ flex: 1, overflow: 'auto' }}>
+              {renderContent()}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div style={{ flex: 1, overflow: 'auto' }}>
+          <LandingPage onEnterApp={() => enterApp('admin')} />
+        </div>
+      )}
+
+      <TweaksPanel>
+        <TweakSection label="Brand" />
+        <TweakColor label="Accent colour" value={tweaks.accent} onChange={v => setTweak('accent', v)} />
+        <TweakSection label="Navigate to" />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {[
+            ['landing',  null,        'Marketing site'],
+            ['admin',    'dashboard', 'Admin — Dashboard'],
+            ['admin',    'students',  'Admin — Students'],
+            ['admin',    'reports',   'Admin — Reports'],
+            ['teacher',  'dashboard', 'Teacher — Dashboard'],
+            ['teacher',  'classes',   'Teacher — Classes'],
+            ['teacher',  'homework',  'Teacher — Homework'],
+            ['teacher',  'progress',  'Teacher — Progress'],
+            ['student',  'dashboard', 'Student — Overview'],
+            ['student',  'homework',  'Student — Homework'],
+            ['student',  'progress',  'Student — Progress'],
+            ['student',  'sessions',  'Student — Sessions'],
+            ['student',  'feedback',  'Student — AI Feedback'],
+          ].map(([role, pg, label]) => {
+            const isActive = pg === null ? view === 'landing' : view === role && page === pg;
+            return (
+              <button key={label}
+                onClick={() => {
+                  if (pg === null) { setView('landing'); }
+                  else { setView(role); setPage(pg); }
+                }}
+                style={{
+                  padding: '6px 10px', borderRadius: 6,
+                  border: `1px solid ${isActive ? (tweaks.accent + '55') : '#E5E7EB'}`,
+                  background: isActive ? (tweaks.accent + '18') : '#F9FAFB',
+                  color: isActive ? tweaks.accent : '#374151',
+                  fontSize: 12, fontWeight: isActive ? 600 : 400,
+                  cursor: 'pointer', textAlign: 'left',
+                }}
+              >{label}</button>
+            );
+          })}
+        </div>
+      </TweaksPanel>
+    </div>
+  );
+};
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
