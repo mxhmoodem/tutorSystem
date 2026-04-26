@@ -124,16 +124,25 @@ const TeacherClassesPage = () => {
 
 // ─── Full Homework Management ───────────────────────────────────────────────────
 const TeacherHomeworkPage = () => {
-  const [tab, setTab] = React.useState('marking');
+  const [tab, setTab] = React.useState('all');
   const [showNewForm, setShowNewForm] = React.useState(false);
   const [newHw, setNewHw] = React.useState({ title:'', class:'', due:'', instructions:'' });
   const [saved, setSaved] = React.useState(false);
 
+  // Map data to "active / marking / closed" tabs visible in card grid
   const filtered = homeworkFull.filter(h =>
+    tab === 'all'      ? true :
     tab === 'marking'  ? h.status === 'marking' :
     tab === 'open'     ? h.status === 'open' :
     h.status === 'complete'
   );
+
+  const stats = {
+    active:    homeworkFull.filter(h => h.status !== 'complete').length,
+    marking:   homeworkFull.filter(h => h.status === 'marking').length,
+    drafts:    0,
+    rate:      Math.round(homeworkFull.reduce((s,h) => s + h.submitted, 0) / homeworkFull.reduce((s,h) => s + h.total, 0) * 100),
+  };
 
   const handleSave = () => {
     setSaved(true);
@@ -142,25 +151,51 @@ const TeacherHomeworkPage = () => {
     setTimeout(() => setSaved(false), 3000);
   };
 
+  // Subject colour for the card's left stripe
+  const subjectColor = (subj) =>
+    subj.includes('A-Level') ? '#7C3AED' :
+    subj.includes('Physics') ? '#0891B2' :
+    DS.accent;
+
   return (
     <div style={{ padding:'32px' }}>
+      <div style={{ fontSize:11, fontWeight:700, color:DS.muted, letterSpacing:'0.08em', textTransform:'uppercase', marginBottom:6 }}>
+        Spring Term · Week 8
+      </div>
       <PageHeader
         title="Homework"
-        subtitle="Set, track, and mark all assignments"
+        subtitle={`${homeworkFull.length} assignments · ${stats.marking} awaiting your review`}
         actions={[
           saved && <Badge key="s" variant="success">Assignment set!</Badge>,
           <Btn key="new" variant="primary" icon="plus" small onClick={() => setShowNewForm(!showNewForm)}>
-            Set New Homework
+            Set Homework
           </Btn>,
         ].filter(Boolean)}
       />
 
+      {/* KPI stats row */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:14, marginBottom:24 }}>
+        {[
+          ['Active',          stats.active,  DS.success],
+          ['Awaiting Marking',stats.marking, DS.warning],
+          ['Drafts',          stats.drafts,  DS.muted   ],
+          ['Submission Rate', stats.rate+'%',DS.accent  ],
+        ].map(([l,v,c]) => (
+          <div key={l} style={{
+            background:DS.bg, border:`1px solid ${DS.border}`, borderRadius:10,
+            padding:'16px 20px',
+          }}>
+            <div style={{ fontSize:11, fontWeight:600, color:DS.faint, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom:8 }}>{l}</div>
+            <div style={{ fontSize:28, fontWeight:800, color:c, letterSpacing:'-0.5px', lineHeight:1 }}>{v}</div>
+          </div>
+        ))}
+      </div>
+
       {/* New homework form */}
       {showNewForm && (
         <div style={{
-          background:DS.bg, border:`1px solid ${DS.accentBorder}`,
+          background:DS.accentLight, border:`1px solid ${DS.accentBorder}`,
           borderRadius:10, padding:'24px', marginBottom:24,
-          background: DS.accentLight,
         }}>
           <div style={{ fontSize:14, fontWeight:600, color:DS.text, marginBottom:16 }}>New Assignment</div>
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:16, marginBottom:16 }}>
@@ -213,7 +248,12 @@ const TeacherHomeworkPage = () => {
 
       {/* Tabs */}
       <div style={{ display:'flex', borderBottom:`1px solid ${DS.border}`, marginBottom:20 }}>
-        {[['marking','To Mark',7],['open','Open',2],['complete','Complete',null]].map(([id,label,count]) => (
+        {[
+          ['all',     'All',       homeworkFull.length],
+          ['marking', 'To Mark',   stats.marking],
+          ['open',    'Open',      homeworkFull.filter(h=>h.status==='open').length],
+          ['complete','Closed',    homeworkFull.filter(h=>h.status==='complete').length],
+        ].map(([id,label,count]) => (
           <button key={id} onClick={() => setTab(id)} style={{
             padding:'10px 18px', border:'none', background:'none', cursor:'pointer',
             fontSize:14, fontWeight: tab===id ? 600 : 400,
@@ -222,61 +262,62 @@ const TeacherHomeworkPage = () => {
             marginBottom:-1, display:'flex', alignItems:'center', gap:7,
           }}>
             {label}
-            {count && <span style={{ fontSize:11, fontWeight:700, padding:'1px 7px', borderRadius:10, background: id==='marking' ? DS.accent : DS.warning, color:'#fff' }}>{count}</span>}
+            <span style={{ fontSize:11, fontWeight:600, padding:'1px 7px', borderRadius:10, background:DS.surface, color:DS.muted }}>{count}</span>
           </button>
         ))}
       </div>
 
-      {/* Assignment cards */}
-      <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
-        {filtered.map(hw => (
-          <div key={hw.id} style={{ background:DS.bg, border:`1px solid ${DS.border}`, borderRadius:10, padding:'20px' }}>
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:12 }}>
-              <div>
-                <div style={{ fontSize:14, fontWeight:600, color:DS.text, marginBottom:4 }}>{hw.title}</div>
-                <div style={{ fontSize:13, color:DS.muted }}>{hw.class} · {hw.subject} · Due {hw.due}</div>
+      {/* Assignment card grid */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:16 }}>
+        {filtered.map(hw => {
+          const color = subjectColor(hw.subject);
+          const pct = (hw.submitted / hw.total) * 100;
+          const toMark = hw.submitted - hw.marked;
+          return (
+            <div key={hw.id} style={{
+              background:DS.bg, border:`1px solid ${DS.border}`, borderRadius:10,
+              padding:'18px 20px', borderTop:`3px solid ${color}`,
+              display:'flex', flexDirection:'column', gap:14,
+            }}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:10 }}>
+                <div style={{ minWidth:0, flex:1 }}>
+                  <div style={{ fontSize:14, fontWeight:600, color:DS.text, marginBottom:3, lineHeight:1.3 }}>{hw.title}</div>
+                  <div style={{ fontSize:12, color:DS.muted }}>{hw.subject} · {hw.class}</div>
+                </div>
+                {toMark > 0 && hw.status === 'marking' && (
+                  <Badge variant="warning">{toMark} to mark</Badge>
+                )}
+                {hw.status === 'complete' && <Badge variant="success">Closed</Badge>}
               </div>
-              <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-                {hw.avgScore && <div style={{ textAlign:'right' }}>
-                  <div style={{ fontSize:13, color:DS.muted }}>Avg score</div>
-                  <ScorePill score={hw.avgScore} />
-                </div>}
-                {hw.status === 'marking' && <Btn variant="primary" small>Mark submissions</Btn>}
-                {hw.status === 'complete' && <Badge variant="success">Complete</Badge>}
-                {hw.status === 'open' && <Badge variant="default">Awaiting submissions</Badge>}
-              </div>
-            </div>
 
-            {/* Progress bar + stats */}
-            <div style={{ display:'flex', gap:20, alignItems:'center' }}>
-              <div style={{ flex:1 }}>
-                <div style={{ display:'flex', justifyContent:'space-between', fontSize:12, color:DS.muted, marginBottom:5 }}>
-                  <span>Submissions</span>
-                  <span style={{ fontWeight:600, color:DS.text }}>{hw.submitted}/{hw.total}</span>
+              <div style={{ fontSize:12, color:DS.muted }}>Due {hw.due}</div>
+
+              {/* Progress */}
+              <div>
+                <div style={{ height:6, background:DS.surface, borderRadius:3, overflow:'hidden', marginBottom:6 }}>
+                  <div style={{ width:`${pct}%`, height:'100%', background: pct===100 ? DS.success : color, borderRadius:3 }} />
                 </div>
-                <div style={{ height:6, background:DS.surface, borderRadius:3, overflow:'hidden' }}>
-                  <div style={{ width:`${(hw.submitted/hw.total)*100}%`, height:'100%', background: hw.submitted===hw.total ? DS.success : DS.accent, borderRadius:3 }} />
+                <div style={{ fontSize:11, color:DS.muted, textAlign:'right', fontVariantNumeric:'tabular-nums' }}>
+                  {hw.submitted}/{hw.total} submitted
                 </div>
               </div>
+
+              {/* Action */}
               {hw.status === 'marking' && (
-                <div style={{ display:'flex', gap:16, fontSize:12, flexShrink:0 }}>
-                  <div style={{ textAlign:'center' }}>
-                    <div style={{ fontWeight:700, color:DS.success, fontSize:15 }}>{hw.marked}</div>
-                    <div style={{ color:DS.muted }}>Marked</div>
-                  </div>
-                  <div style={{ textAlign:'center' }}>
-                    <div style={{ fontWeight:700, color:DS.warning, fontSize:15 }}>{hw.submitted - hw.marked}</div>
-                    <div style={{ color:DS.muted }}>Pending</div>
-                  </div>
-                  <div style={{ textAlign:'center' }}>
-                    <div style={{ fontWeight:700, color:DS.faint, fontSize:15 }}>{hw.total - hw.submitted}</div>
-                    <div style={{ color:DS.muted }}>Not submitted</div>
-                  </div>
+                <Btn variant="primary" small>Mark Submissions</Btn>
+              )}
+              {hw.status === 'open' && (
+                <Btn variant="secondary" small>View Submissions</Btn>
+              )}
+              {hw.status === 'complete' && hw.avgScore && (
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', fontSize:12 }}>
+                  <span style={{ color:DS.muted }}>Class avg</span>
+                  <ScorePill score={hw.avgScore} />
                 </div>
               )}
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

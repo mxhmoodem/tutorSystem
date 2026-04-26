@@ -443,49 +443,70 @@ const StudentProgressPage = () => {
 
 // ─── Sessions page ──────────────────────────────────────────────────────────────
 const StudentSessionsPage = () => {
-  const weeks = ['This week', 'Next week', '5 May week'];
-  const grouped = [
-    studentSessions.slice(0,2),
-    studentSessions.slice(2,4),
-    studentSessions.slice(4),
+  const upcoming = [
+    { subject:'Mathematics',   teacher:'Mr Davies', date:'Mon 21 Apr', time:'09:00–10:00', room:'Room 3A' },
+    { subject:'Further Maths', teacher:'Mr Davies', date:'Tue 22 Apr', time:'10:15–11:15', room:'Room 3A' },
+    { subject:'Physics',       teacher:'Dr Patel',  date:'Wed 23 Apr', time:'13:00–14:00', room:'Lab 2'   },
+    { subject:'Mathematics',   teacher:'Mr Davies', date:'Thu 24 Apr', time:'09:00–10:00', room:'Room 3A' },
+  ];
+
+  const history = [
+    { subject:'Further Maths', teacher:'Mr Davies', date:'Mon 14 Apr', time:'10:15–11:15', status:'attended' },
+    { subject:'Physics',       teacher:'Dr Patel',  date:'Wed 16 Apr', time:'13:00–14:00', status:'attended' },
+    { subject:'Mathematics',   teacher:'Mr Davies', date:'Thu 17 Apr', time:'09:00–10:00', status:'attended' },
+    { subject:'Further Maths', teacher:'Mr Davies', date:'Tue 8 Apr',  time:'10:15–11:15', status:'missed'   },
   ];
 
   return (
     <div style={{ padding:'32px' }}>
-      <PageHeader title="Sessions" subtitle="Your upcoming tuition schedule" actions={[
+      <PageHeader title="My Sessions" subtitle="Your upcoming and past tutoring sessions" actions={[
         <Btn key="cal" variant="secondary" icon="download" small>Export to Calendar</Btn>
       ]} />
 
-      {weeks.map((week, wi) => (
-        <div key={week} style={{ marginBottom:28 }}>
-          <div style={{ fontSize:12, fontWeight:600, color:DS.muted, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:12 }}>{week}</div>
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(2, 1fr)', gap:12 }}>
-            {grouped[wi].map((s, i) => {
-              const subj = studentSelf.subjects.find(x => x.name === s.subject);
-              const color = subj ? subj.color : DS.accent;
-              return (
-                <div key={i} style={{
-                  background:DS.bg, border:`1px solid ${DS.border}`,
-                  borderRadius:10, padding:'20px',
-                  borderLeft:`4px solid ${color}`,
-                  display:'flex', gap:16,
-                }}>
-                  <div style={{ flex:1 }}>
-                    <div style={{ fontSize:15, fontWeight:600, color:DS.text, marginBottom:4 }}>{s.subject}</div>
-                    <div style={{ fontSize:13, color:DS.muted, marginBottom:2 }}>{s.date} · {s.time}</div>
-                    <div style={{ fontSize:12, color:DS.faint }}>{s.teacher} · {s.room}</div>
+      {/* Upcoming row */}
+      <div style={{ fontSize:14, fontWeight:600, color:DS.text, marginBottom:12 }}>Upcoming</div>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:12, marginBottom:32 }}>
+        {upcoming.map((s, i) => {
+          const subj = studentSelf.subjects.find(x => x.name === s.subject);
+          const color = subj ? subj.color : DS.accent;
+          return (
+            <div key={i} style={{
+              background:DS.bg, border:`1px solid ${DS.border}`, borderRadius:10,
+              padding:'18px', borderTop:`3px solid ${color}`,
+            }}>
+              <div style={{ fontSize:14, fontWeight:600, color:DS.text }}>{s.subject}</div>
+              <div style={{ fontSize:12, color:DS.muted, marginBottom:14 }}>{s.teacher}</div>
+              <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+                {[['calendar', s.date], ['clock', s.time], ['home', s.room]].map(([icon, txt]) => (
+                  <div key={txt} style={{ display:'flex', alignItems:'center', gap:7, fontSize:12, color:DS.muted }}>
+                    <Icon name={icon} size={12} color={DS.faint} />
+                    {txt}
                   </div>
-                  <div style={{ display:'flex', flexDirection:'column', justifyContent:'space-between', alignItems:'flex-end' }}>
-                    {s.type === 'Mock prep' && <Badge variant="warning">Mock prep</Badge>}
-                    {s.type === 'Regular' && <Badge variant="default">Regular</Badge>}
-                    <Btn variant="ghost" icon="calendar" small>Add to cal</Btn>
-                  </div>
-                </div>
-              );
-            })}
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* History */}
+      <div style={{ fontSize:14, fontWeight:600, color:DS.text, marginBottom:12 }}>History</div>
+      <Card>
+        {history.map((s, i) => (
+          <div key={i} style={{
+            display:'flex', alignItems:'center', gap:14, padding:'14px 18px',
+            borderBottom: i < history.length-1 ? `1px solid ${DS.border}` : 'none',
+          }}>
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ fontSize:13, fontWeight:600, color:DS.text }}>{s.subject}</div>
+              <div style={{ fontSize:12, color:DS.muted }}>{s.teacher} · {s.date} · {s.time}</div>
+            </div>
+            <Badge variant={s.status === 'attended' ? 'success' : 'danger'}>
+              {s.status === 'attended' ? 'Attended' : 'Missed'}
+            </Badge>
           </div>
-        </div>
-      ))}
+        ))}
+      </Card>
     </div>
   );
 };

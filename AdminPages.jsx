@@ -583,6 +583,106 @@ const AdminInvoicesPage = () => {
   );
 };
 
+// ─── Admin Schedule Page ────────────────────────────────────────────────────────
+const AdminSchedulePage = () => {
+  const slots = ['09:00', '10:15', '11:30', '13:00', '14:15', '15:30'];
+  const days  = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+
+  // colour palette by subject
+  const palette = {
+    'Mathematics':   { c:'#16A34A', bg:'#F0FDF4', border:'#BBF7D0' },
+    'Further Maths': { c:'#16A34A', bg:'#F0FDF4', border:'#BBF7D0' },
+    'Maths':         { c:'#16A34A', bg:'#F0FDF4', border:'#BBF7D0' },
+    'Chemistry':     { c:'#4F46E5', bg:'#EEF2FF', border:'#C7D2FE' },
+    'Physics':       { c:'#4F46E5', bg:'#EEF2FF', border:'#C7D2FE' },
+    'Biology':       { c:'#9333EA', bg:'#FAF5FF', border:'#E9D5FF' },
+    'English':       { c:'#D97706', bg:'#FFFBEB', border:'#FDE68A' },
+    'History':       { c:'#DC2626', bg:'#FEF2F2', border:'#FECACA' },
+    'CS':            { c:'#DC2626', bg:'#FEF2F2', border:'#FECACA' },
+  };
+
+  // grid cells keyed as `${day}|${time}`
+  const sessions = {
+    'Monday|09:00':    { subject:'Mathematics',   teacher:'Mr Davies',  room:'3A',     year:'Yr 11' },
+    'Monday|10:15':    { subject:'Further Maths', teacher:'Mr Davies',  room:'3A',     year:'Yr 12' },
+    'Tuesday|09:00':   { subject:'Chemistry',     teacher:'Dr Patel',   room:'Lab 1',  year:'Yr 12' },
+    'Tuesday|11:30':   { subject:'Biology',       teacher:'Ms Chen',    room:'Lab 3',  year:'Yr 10' },
+    'Tuesday|14:15':   { subject:'Mathematics',   teacher:'Mr Davies',  room:'3A',     year:'Yr 10' },
+    'Wednesday|09:00': { subject:'English',       teacher:'Mr Harrison',room:'2B',     year:'Yr 11' },
+    'Wednesday|10:15': { subject:'Physics',       teacher:'Dr Patel',   room:'Lab 2',  year:'Yr 12' },
+    'Wednesday|13:00': { subject:'Further Maths', teacher:'Mr Davies',  room:'3A',     year:'Yr 13' },
+    'Thursday|09:00':  { subject:'Biology',       teacher:'Ms Chen',    room:'Lab 3',  year:'Yr 13' },
+    'Thursday|11:30':  { subject:'Mathematics',   teacher:'Mr Davies',  room:'3A',     year:'Yr 12' },
+    'Thursday|15:30':  { subject:'CS',            teacher:'Ms O’Brien', room:'IT Suite', year:'Yr 11' },
+    'Friday|10:15':    { subject:'Chemistry',     teacher:'Dr Patel',   room:'Lab 1',  year:'Yr 11' },
+    'Friday|13:00':    { subject:'English',       teacher:'Mr Harrison',room:'2B',     year:'Yr 12' },
+    'Friday|14:15':    { subject:'Maths',         teacher:'Mr Davies',  room:'3A',     year:'Yr 13' },
+  };
+
+  return (
+    <div style={{ padding:'32px' }}>
+      <PageHeader title="Schedule" subtitle="Weekly timetable — Spring Term 2026" actions={[
+        <Btn key="exp" variant="secondary" icon="download" small>Export</Btn>,
+        <Btn key="new" variant="primary"   icon="plus"     small>Add Session</Btn>,
+      ]} />
+
+      <Card>
+        {/* Header row */}
+        <div style={{ display:'grid', gridTemplateColumns:'80px repeat(5,1fr)', borderBottom:`1px solid ${DS.border}`, background:DS.surface }}>
+          <div style={{ padding:'12px 14px', fontSize:12, fontWeight:600, color:DS.muted }}>Time</div>
+          {days.map(d => (
+            <div key={d} style={{ padding:'12px 14px', fontSize:13, fontWeight:600, color:DS.text, borderLeft:`1px solid ${DS.border}` }}>{d}</div>
+          ))}
+        </div>
+
+        {/* Time-slot rows */}
+        {slots.map((time, ri) => (
+          <div key={time} style={{
+            display:'grid', gridTemplateColumns:'80px repeat(5,1fr)',
+            borderBottom: ri < slots.length-1 ? `1px solid ${DS.border}` : 'none',
+            minHeight:84,
+          }}>
+            <div style={{ padding:'14px', fontSize:12, color:DS.muted, fontVariantNumeric:'tabular-nums' }}>{time}</div>
+            {days.map(day => {
+              const s = sessions[`${day}|${time}`];
+              return (
+                <div key={day} style={{ padding:8, borderLeft:`1px solid ${DS.border}` }}>
+                  {s && (() => {
+                    const p = palette[s.subject] || { c:DS.accent, bg:DS.accentLight, border:DS.accentBorder };
+                    return (
+                      <div style={{
+                        background:p.bg, border:`1px solid ${p.border}`, borderRadius:8,
+                        padding:'8px 10px', height:'100%', cursor:'pointer',
+                      }}>
+                        <div style={{ fontSize:13, fontWeight:600, color:p.c, marginBottom:2 }}>{s.subject}</div>
+                        <div style={{ fontSize:11, color:DS.muted, marginBottom:6 }}>{s.teacher}</div>
+                        <div style={{ display:'flex', gap:5 }}>
+                          <span style={{ fontSize:10, padding:'1px 6px', borderRadius:4, background:'#FFFFFF80', color:DS.sub, fontWeight:500 }}>{s.room}</span>
+                          <span style={{ fontSize:10, padding:'1px 6px', borderRadius:4, background:'#FFFFFF80', color:p.c, fontWeight:500 }}>{s.year}</span>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </Card>
+
+      {/* Legend */}
+      <div style={{ display:'flex', gap:14, marginTop:16, flexWrap:'wrap' }}>
+        {[['Mathematics',palette['Mathematics']],['Sciences',palette['Chemistry']],['Biology',palette['Biology']],['English',palette['English']],['History / CS',palette['History']]].map(([l,p]) => (
+          <div key={l} style={{ display:'flex', alignItems:'center', gap:6, fontSize:12, color:DS.muted }}>
+            <div style={{ width:12, height:12, borderRadius:3, background:p.bg, border:`1px solid ${p.border}` }} />
+            {l}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 // ─── Router ─────────────────────────────────────────────────────────────────────
 const AdminPages = ({ page }) => {
   if (page === 'students') return <AdminStudentsPage />;
@@ -590,6 +690,7 @@ const AdminPages = ({ page }) => {
   if (page === 'classes')  return <AdminClassesPage />;
   if (page === 'teachers') return <AdminTeachersPage />;
   if (page === 'invoices') return <AdminInvoicesPage />;
+  if (page === 'schedule') return <AdminSchedulePage />;
   return null;
 };
 

@@ -169,6 +169,7 @@ const NAV_CONFIG = {
       { id: 'students',  icon: 'users',    label: 'Students' },
       { id: 'classes',   icon: 'book',     label: 'Classes' },
       { id: 'teachers',  icon: 'user',     label: 'Teachers' },
+      { id: 'schedule',  icon: 'calendar', label: 'Schedule' },
       { id: 'invoices',  icon: 'invoice',  label: 'Invoices' },
       { id: 'reports',   icon: 'chart',    label: 'Reports' },
     ],
@@ -442,95 +443,165 @@ const Sparkline = ({ data = [], color = DS.accent, width = 80, height = 30 }) =>
 };
 
 // ─── Multi-series Line Chart ────────────────────────────────────────────────────
+// Picks a "nice" round number ≥ raw, e.g. 12400 → 13000, 142 → 150.
+const niceCeil = (raw) => {
+  if (raw <= 0) return 1;
+  const pow = Math.pow(10, Math.floor(Math.log10(raw)));
+  const norm = raw / pow;
+  const niceNorm = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10;
+  return niceNorm * pow;
+};
+const niceFloor = (raw) => {
+  if (raw <= 0) return 0;
+  const pow = Math.pow(10, Math.floor(Math.log10(raw)));
+  const norm = raw / pow;
+  const niceNorm = norm >= 5 ? 5 : norm >= 2 ? 2 : norm >= 1 ? 1 : 0;
+  return niceNorm * pow;
+};
+const fmtTick = (v, isCurrency) => {
+  if (isCurrency) return v >= 1000 ? `£${Math.round(v/1000)}k` : `£${Math.round(v)}`;
+  return v >= 1000 ? `${(v/1000).toFixed(v % 1000 === 0 ? 0 : 1)}k` : Math.round(v).toString();
+};
+
 const LineChart = ({ labels = [], series = [], height = 200 }) => {
-  const allVals = series.flatMap(s => s.data);
-  const min = Math.min(...allVals) * 0.9;
-  const max = Math.max(...allVals) * 1.05;
-  const range = max - min || 1;
-  const pL = 52, pR = 16, pT = 12, pB = 28;
-  const W = 100, H = height; // use % for width
-  const chartH = H - pT - pB;
-  const chartW = `calc(100% - ${pL + pR}px)`;
+  const wrapRef = React.useRef(null);
+  const [w, setW] = React.useState(600);
+  const [measuredH, setMeasuredH] = React.useState(200);
+
+  React.useLayoutEffect(() => {
+    if (!wrapRef.current) return;
+    const measure = () => {
+      setW(wrapRef.current.clientWidth || 600);
+      if (height === 'auto') setMeasuredH(wrapRef.current.clientHeight || 200);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(wrapRef.current);
+    return () => ro.disconnect();
+  }, [height]);
+
+  const pL = 52, pR = 16, pT = 14, pB = 28;
+  const totalW = Math.max(w, 280);
+  const svgH = height === 'auto' ? Math.max(measuredH, 120) : height;
+  const chartH = svgH - pT - pB;
   const ticks = 4;
 
-  const getPath = (data, totalW) => {
-    return data.map((v, i) => {
-      const x = pL + (i / (data.length - 1)) * (totalW - pL - pR);
-      const y = pT + (1 - (v - min) / range) * chartH;
-      return `${i === 0 ? 'M' : 'L'}${x},${y}`;
-    }).join(' ');
-  };
+  // Decide whether series share an axis or each gets its own scale.
+  // Auto-split when the ratio between the largest and smallest series-max exceeds 5×.
+  const seriesMax = series.map(s => Math.max(...s.data));
+  const seriesMin = series.map(s => Math.min(...s.data));
+  const overallMax = Math.max(...seriesMax);
+  const overallMinPos = Math.min(...seriesMax) || 1;
+  const splitScales = series.length > 1 && overallMax / overallMinPos > 5;
 
-  const totalW = 600; // logical SVG width
-  const svgH = H;
-  const svgChartH = svgH - pT - pB;
+  // Build a per-series scale: { min, max } in data units
+  const scales = series.map((s, i) => {
+    if (!splitScales) {
+      const lo = niceFloor(Math.min(...seriesMin));
+      const hi = niceCeil(overallMax * 1.05);
+      return { min: lo, max: hi };
+    }
+    const lo = niceFloor(seriesMin[i]);
+    const hi = niceCeil(seriesMax[i] * 1.1);
+    return { min: lo, max: hi };
+  });
+
+  const yPos = (v, scale) => {
+    const r = scale.max - scale.min || 1;
+    return pT + (1 - (v - scale.min) / r) * chartH;
+  };
+  const xPos = (i, len) => pL + (i / (len - 1 || 1)) * (totalW - pL - pR);
+
+  const isCurrency0 = (series[0]?.label || '').includes('£');
 
   return (
-    <svg viewBox={`0 0 ${totalW} ${svgH}`} style={{ width: '100%', height: svgH }} preserveAspectRatio="none">
-      {/* Grid lines */}
-      {Array.from({ length: ticks + 1 }, (_, i) => {
-        const y = pT + (i / ticks) * svgChartH;
-        const val = max - (i / ticks) * range;
-        return (
-          <g key={i}>
-            <line x1={pL} y1={y} x2={totalW - pR} y2={y}
-              stroke={DS.border} strokeWidth="1" />
-            <text x={pL - 6} y={y + 4} textAnchor="end" fontSize="10" fill={DS.faint}>
-              {val >= 1000 ? `£${(val/1000).toFixed(0)}k` : val.toFixed(0)}
-            </text>
-          </g>
-        );
-      })}
-      {/* X labels */}
-      {labels.map((l, i) => {
-        const x = pL + (i / (labels.length - 1)) * (totalW - pL - pR);
-        return <text key={i} x={x} y={svgH - 6} textAnchor="middle" fontSize="10" fill={DS.faint}>{l}</text>;
-      })}
-      {/* Series lines */}
-      {series.map((s, si) => (
-        <path key={si} d={getPath(s.data, totalW)}
-          fill="none" stroke={s.color} strokeWidth="2"
-          strokeLinecap="round" strokeLinejoin="round" />
-      ))}
-      {/* Dots */}
-      {series.map((s, si) =>
-        s.data.map((v, i) => {
-          const x = pL + (i / (s.data.length - 1)) * (totalW - pL - pR);
-          const y = pT + (1 - (v - min) / range) * svgChartH;
-          return <circle key={`${si}-${i}`} cx={x} cy={y} r="3" fill={s.color} />;
-        })
-      )}
-    </svg>
+    <div ref={wrapRef} style={{ width: '100%', height: height === 'auto' ? '100%' : svgH }}>
+      <svg width={totalW} height={svgH} style={{ display: 'block' }}>
+        {/* Grid lines + left axis (uses series[0] scale) */}
+        {Array.from({ length: ticks + 1 }, (_, i) => {
+          const y = pT + (i / ticks) * chartH;
+          const val0 = scales[0].max - (i / ticks) * (scales[0].max - scales[0].min);
+          return (
+            <g key={i}>
+              <line x1={pL} y1={y} x2={totalW - pR} y2={y} stroke={DS.border} strokeWidth="1" />
+              <text x={pL - 8} y={y + 3} textAnchor="end" fontSize="10" fill={DS.faint}>
+                {fmtTick(val0, isCurrency0)}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* X labels */}
+        {labels.map((l, i) => (
+          <text key={i} x={xPos(i, labels.length)} y={svgH - 8}
+            textAnchor="middle" fontSize="10" fill={DS.faint}>{l}</text>
+        ))}
+
+        {/* Lines */}
+        {series.map((s, si) => {
+          const d = s.data.map((v, i) =>
+            `${i === 0 ? 'M' : 'L'}${xPos(i, s.data.length)},${yPos(v, scales[si])}`
+          ).join(' ');
+          return (
+            <path key={si} d={d} fill="none" stroke={s.color}
+              strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          );
+        })}
+
+        {/* Dots */}
+        {series.map((s, si) =>
+          s.data.map((v, i) => (
+            <circle key={`${si}-${i}`}
+              cx={xPos(i, s.data.length)} cy={yPos(v, scales[si])}
+              r="3" fill={s.color} />
+          ))
+        )}
+      </svg>
+    </div>
   );
 };
 
 // ─── Bar Chart ─────────────────────────────────────────────────────────────────
 const BarChart = ({ labels = [], data = [], color = DS.accent, height = 160 }) => {
+  const wrapRef = React.useRef(null);
+  const [w, setW] = React.useState(600);
+
+  React.useLayoutEffect(() => {
+    if (!wrapRef.current) return;
+    const measure = () => setW(wrapRef.current.clientWidth || 600);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(wrapRef.current);
+    return () => ro.disconnect();
+  }, []);
+
   const max = Math.max(...data) * 1.1 || 1;
   const pL = 8, pR = 8, pT = 8, pB = 24;
-  const totalW = 600;
+  const totalW = Math.max(w, 240);
   const svgH = height;
   const chartH = svgH - pT - pB;
-  const barW = ((totalW - pL - pR) / data.length) * 0.6;
-  const gap = (totalW - pL - pR) / data.length;
+  const slot = (totalW - pL - pR) / Math.max(data.length, 1);
+  const barW = slot * 0.6;
 
   return (
-    <svg viewBox={`0 0 ${totalW} ${svgH}`} style={{ width: '100%', height: svgH }} preserveAspectRatio="none">
-      {data.map((v, i) => {
-        const bh = (v / max) * chartH;
-        const x = pL + i * gap + (gap - barW) / 2;
-        const y = pT + chartH - bh;
-        return (
-          <g key={i}>
-            <rect x={x} y={y} width={barW} height={bh}
-              rx="3" fill={color} opacity="0.85" />
-            <text x={x + barW / 2} y={svgH - 6} textAnchor="middle" fontSize="10" fill={DS.faint}>
-              {labels[i]}
-            </text>
-          </g>
-        );
-      })}
-    </svg>
+    <div ref={wrapRef} style={{ width: '100%', height: svgH }}>
+      <svg width={totalW} height={svgH} style={{ display: 'block' }}>
+        {data.map((v, i) => {
+          const bh = (v / max) * chartH;
+          const x = pL + i * slot + (slot - barW) / 2;
+          const y = pT + chartH - bh;
+          return (
+            <g key={i}>
+              <rect x={x} y={y} width={barW} height={bh}
+                rx="3" fill={color} opacity="0.85" />
+              <text x={x + barW / 2} y={svgH - 6} textAnchor="middle" fontSize="10" fill={DS.faint}>
+                {labels[i]}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
   );
 };
 

@@ -73,10 +73,10 @@ const AdminDashboard = () => {
             {/* Revenue + Enrolment Chart */}
             <Card title="Revenue & Enrolment Trend" actions={[
               <Badge key="q" variant="accent">Last 6 months</Badge>
-            ]}>
-              <div style={{ padding: '20px 20px 8px' }}>
+            ]} style={{ display: 'flex', flexDirection: 'column' }}>
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '20px 20px 8px', minHeight: 0 }}>
                 {/* Legend */}
-                <div style={{ display: 'flex', gap: 16, marginBottom: 16 }}>
+                <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexShrink: 0 }}>
                   {revenueData.series.map(s => (
                     <div key={s.label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <div style={{ width: 24, height: 2, background: s.color, borderRadius: 2 }} />
@@ -84,10 +84,12 @@ const AdminDashboard = () => {
                     </div>
                   ))}
                 </div>
-                <LineChart labels={revenueData.labels} series={revenueData.series} height={200} />
+                <div style={{ flex: 1, minHeight: 0 }}>
+                  <LineChart labels={revenueData.labels} series={revenueData.series} height="auto" />
+                </div>
               </div>
               <div style={{
-                display: 'grid', gridTemplateColumns: '1fr 1fr',
+                display: 'grid', gridTemplateColumns: '1fr 1fr', flexShrink: 0,
                 borderTop: `1px solid ${DS.border}`, background: DS.surface,
               }}>
                 {[['£12,400', 'Revenue this month', DS.accent], ['142', 'Active students', '#0891B2']].map(([v, l, c]) => (
