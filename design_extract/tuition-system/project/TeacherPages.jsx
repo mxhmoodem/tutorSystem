@@ -395,11 +395,317 @@ const TeacherProgressPage = () => {
   );
 };
 
+// ─── Teacher Attendance Page ────────────────────────────────────────────────────
+const teacherAllClasses = [
+  { group:'Year 10 – Group A', subject:'GCSE Mathematics', students:['Emma Thompson','Oliver Chen','Sophia Patel','James Wilson','Aiden Foster','Mia Okonkwo','Liam Thornton','Zoe Patterson'] },
+  { group:'Year 11 – Group B', subject:'GCSE Mathematics', students:['Amelia Roberts','Noah Fitzgerald','Ethan Huang','Isabella Martinez','James Wilson','Sophia Patel','Emma Thompson'] },
+  { group:'Year 12 – Group A', subject:'A-Level Mathematics', students:['Oliver Chen','Isabella Martinez','Ethan Huang','Mia Okonkwo','Aiden Foster'] },
+  { group:'Year 9 – Group C',  subject:'GCSE Mathematics', students:['Mia Okonkwo','Aiden Foster','Emma Thompson','Sophia Patel','James Wilson','Amelia Roberts','Noah Fitzgerald','Ethan Huang','Isabella Martinez'] },
+];
+
+const TeacherAttendancePage = () => {
+  const [selectedClass, setSelectedClass] = React.useState(0);
+  const cls = teacherAllClasses[selectedClass];
+  const [records, setRecords] = React.useState(() =>
+    Object.fromEntries(cls.students.map(n => [n, null]))
+  );
+  const [saved, setSaved] = React.useState(false);
+  const [selectedDate, setSelectedDate] = React.useState('2026-04-25');
+
+  React.useEffect(() => {
+    setRecords(Object.fromEntries(cls.students.map(n => [n, null])));
+    setSaved(false);
+  }, [selectedClass]);
+
+  const mark = (name, status) => { setRecords(p => ({...p, [name]:status})); setSaved(false); };
+  const markAll = (status) => { setRecords(Object.fromEntries(cls.students.map(n => [n, status]))); setSaved(false); };
+  const handleSave = () => { setSaved(true); setTimeout(() => setSaved(false), 2500); };
+
+  const counts = { present:0, absent:0, late:0, unmarked:0 };
+  Object.values(records).forEach(v => { if (v) counts[v]++; else counts.unmarked++; });
+
+  // Past attendance log (mock)
+  const pastLog = [
+    { date:'22 Apr', present:7, absent:1, late:0 },
+    { date:'18 Apr', present:8, absent:0, late:0 },
+    { date:'15 Apr', present:6, absent:1, late:1 },
+    { date:'11 Apr', present:7, absent:1, late:0 },
+    { date:'8 Apr',  present:5, absent:2, late:1 },
+  ];
+
+  return (
+    <div style={{ padding:'32px' }}>
+      <PageHeader title="Attendance" subtitle="Mark and review attendance for your classes" actions={[
+        <Btn key="exp" variant="secondary" icon="download" small>Export Register</Btn>
+      ]} />
+
+      {/* Class selector */}
+      <div style={{ display:'flex', gap:10, marginBottom:24, flexWrap:'wrap' }}>
+        {teacherAllClasses.map((c,i) => (
+          <button key={i} onClick={() => setSelectedClass(i)} style={{
+            padding:'8px 16px', borderRadius:20, border:`1px solid ${selectedClass===i ? DS.accentBorder : DS.border}`,
+            background: selectedClass===i ? DS.accentLight : DS.bg,
+            color: selectedClass===i ? DS.accent : DS.muted,
+            fontSize:13, fontWeight: selectedClass===i ? 600 : 400, cursor:'pointer',
+          }}>{c.group}</button>
+        ))}
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 280px', gap:20 }}>
+        {/* Mark attendance */}
+        <Card title={`${cls.group} — ${cls.subject}`} actions={[
+          <div key="date" style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <input type="date" value={selectedDate} onChange={e => setSelectedDate(e.target.value)}
+              style={{ padding:'5px 10px', borderRadius:6, border:`1px solid ${DS.border}`, fontSize:13, outline:'none' }} />
+          </div>
+        ]}>
+          {/* Bulk actions */}
+          <div style={{ display:'flex', gap:8, padding:'12px 16px', borderBottom:`1px solid ${DS.border}`, background:DS.surface }}>
+            <span style={{ fontSize:12, color:DS.muted, alignSelf:'center', marginRight:4 }}>Mark all:</span>
+            {['present','absent','late'].map(st => (
+              <button key={st} onClick={() => markAll(st)} style={{
+                padding:'5px 12px', borderRadius:6, fontSize:12, fontWeight:600, cursor:'pointer',
+                border:`1px solid ${st==='present' ? DS.successBorder : st==='absent' ? DS.dangerBorder : DS.warningBorder}`,
+                background: st==='present' ? DS.successBg : st==='absent' ? DS.dangerBg : DS.warningBg,
+                color: st==='present' ? DS.success : st==='absent' ? DS.danger : DS.warning,
+              }}>{st.charAt(0).toUpperCase() + st.slice(1)}</button>
+            ))}
+          </div>
+
+          <div>
+            {cls.students.map((name, i) => {
+              const status = records[name];
+              return (
+                <div key={name} style={{
+                  display:'flex', alignItems:'center', gap:12, padding:'11px 16px',
+                  borderBottom: i < cls.students.length-1 ? `1px solid ${DS.border}` : 'none',
+                }}>
+                  <Avatar name={name} size={30} />
+                  <span style={{ flex:1, fontSize:13, fontWeight:500, color:DS.text }}>{name}</span>
+                  <div style={{ display:'flex', gap:6 }}>
+                    {['present','absent','late'].map(st => {
+                      const active = status === st;
+                      const colors = { present:[DS.success, DS.successBg, DS.successBorder], absent:[DS.danger, DS.dangerBg, DS.dangerBorder], late:[DS.warning, DS.warningBg, DS.warningBorder] };
+                      const [c, bg, border] = colors[st];
+                      return (
+                        <button key={st} onClick={() => mark(name, st)} style={{
+                          padding:'5px 12px', borderRadius:6, fontSize:12, fontWeight:600, cursor:'pointer',
+                          border:`1px solid ${active ? border : DS.border}`,
+                          background: active ? bg : DS.surface,
+                          color: active ? c : DS.faint,
+                          transition:'all 0.1s',
+                        }}>
+                          {st === 'present' ? 'Present' : st === 'absent' ? 'Absent' : 'Late'}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div style={{ padding:'14px 16px', borderTop:`1px solid ${DS.border}`, background:DS.surface, display:'flex', alignItems:'center', gap:16 }}>
+            <div style={{ display:'flex', gap:14, flex:1 }}>
+              {[['present',DS.success],['absent',DS.danger],['late',DS.warning],['unmarked',DS.faint]].map(([k,c])=>(
+                <span key={k} style={{ fontSize:12, color:c, fontWeight:600 }}>{counts[k]} {k}</span>
+              ))}
+            </div>
+            <Btn variant={saved ? 'secondary' : 'primary'} icon={saved ? 'check' : 'clip'} onClick={handleSave}>
+              {saved ? 'Saved!' : 'Save Register'}
+            </Btn>
+          </div>
+        </Card>
+
+        {/* Past log + stats */}
+        <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+          <Card title="Attendance Rate">
+            <div style={{ padding:'20px' }}>
+              <div style={{ fontSize:40, fontWeight:800, color:DS.success, letterSpacing:'-1px', lineHeight:1 }}>94%</div>
+              <div style={{ fontSize:12, color:DS.muted, marginTop:4, marginBottom:16 }}>This term · {cls.group}</div>
+              <div style={{ height:6, background:DS.surface, borderRadius:3, overflow:'hidden', marginBottom:12 }}>
+                <div style={{ width:'94%', height:'100%', background:DS.success, borderRadius:3 }} />
+              </div>
+              {[['Target', '95%'],['Class avg','91%'],['Centre avg','93%']].map(([l,v])=>(
+                <div key={l} style={{ display:'flex', justifyContent:'space-between', fontSize:13, padding:'6px 0', borderBottom:`1px solid ${DS.border}` }}>
+                  <span style={{ color:DS.muted }}>{l}</span>
+                  <span style={{ fontWeight:500, color:DS.text }}>{v}</span>
+                </div>
+              ))}
+            </div>
+          </Card>
+
+          <Card title="Recent Sessions">
+            <div style={{ padding:'8px 0' }}>
+              {pastLog.map((row,i) => (
+                <div key={i} style={{ display:'flex', alignItems:'center', gap:10, padding:'9px 16px', borderBottom: i<pastLog.length-1 ? `1px solid ${DS.border}` : 'none' }}>
+                  <span style={{ fontSize:12, color:DS.muted, width:44, flexShrink:0 }}>{row.date}</span>
+                  <div style={{ flex:1, display:'flex', gap:6 }}>
+                    <span style={{ fontSize:12, color:DS.success, fontWeight:600 }}>{row.present}P</span>
+                    {row.absent > 0 && <span style={{ fontSize:12, color:DS.danger, fontWeight:600 }}>{row.absent}A</span>}
+                    {row.late > 0 && <span style={{ fontSize:12, color:DS.warning, fontWeight:600 }}>{row.late}L</span>}
+                  </div>
+                  <span style={{ fontSize:11, color:DS.faint }}>{Math.round((row.present/(row.present+row.absent+row.late))*100)}%</span>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─── Teacher AI Feedback Page ───────────────────────────────────────────────────
+const aiQueueFull = [
+  { student:'Oliver Chen',        hw:'Calculus: Differentiation Basics',  subject:'A-Level Maths', submitted:'2h ago',    confidence:92, score:94, draft:'Excellent work — your chain rule application is correct. Consider showing intermediate steps for full marks in the exam.', strengths:['All 6 questions correct','Clear working shown','Good notation throughout'], issues:['Show intermediate steps on Q4 expansion'] },
+  { student:'Sophia Patel',       hw:'Calculus: Differentiation Basics',  subject:'A-Level Maths', submitted:'3h ago',    confidence:85, score:74, draft:'Good attempt. You have the right method but made an arithmetic error in step 3 — check your sign when expanding the bracket.', strengths:['Correct method applied','Good attempt at product rule'], issues:['Sign error in bracket expansion on Q3','Notation unclear on Q5'] },
+  { student:'Ethan Huang',        hw:'Calculus: Differentiation Basics',  subject:'A-Level Maths', submitted:'5h ago',    confidence:88, score:83, draft:'Strong understanding. Notation could be cleaner — write dy/dx clearly throughout.', strengths:['Strong conceptual understanding','Correct answers on Q1–Q4'], issues:['Cleaner dy/dx notation needed','Q5 missing second derivative step'] },
+  { student:'Isabella Martinez',  hw:'Calculus: Differentiation Basics',  subject:'A-Level Maths', submitted:'Yesterday', confidence:95, score:96, draft:'Flawless. All six questions correct with clear working shown. Well done.', strengths:['Perfect score — all 6 correct','Exemplary working shown','Great exam technique'], issues:[] },
+  { student:'Emma Thompson',      hw:'Algebra: Simultaneous Equations',   subject:'GCSE Maths',    submitted:'Yesterday', confidence:83, score:78, draft:'Good work overall. The substitution method is well applied. Small arithmetic error on Q3 — double-check before submitting in an exam.', strengths:['Correct method throughout','Good presentation'], issues:['Arithmetic error on Q3','Check signs when substituting negative values'] },
+  { student:'Aiden Foster',       hw:'Algebra: Simultaneous Equations',   subject:'GCSE Maths',    submitted:'2 days ago',confidence:79, score:71, draft:'Solid attempt. You understood the elimination method well but struggled with Q4 which had fractional coefficients. Practice these — they appear often in GCSE papers.', strengths:['Elimination method applied correctly','Neat working'], issues:['Fractional coefficients caused errors on Q4 and Q5','Review multiplying equations by fractions'] },
+];
+
+const TeacherAIFeedbackPage = () => {
+  const [expanded, setExpanded] = React.useState(null);
+  const [editMap, setEditMap]   = React.useState({});
+  const [sentSet, setSentSet]   = React.useState(new Set());
+  const [filter, setFilter]     = React.useState('all');
+
+  const filtered = aiQueueFull.filter(item =>
+    filter === 'all'  ? true :
+    filter === 'sent' ? sentSet.has(item.student + item.hw) :
+    !sentSet.has(item.student + item.hw)
+  );
+
+  return (
+    <div style={{ padding:'32px' }}>
+      <PageHeader title="AI Feedback Queue" subtitle="Review, edit and send AI-drafted feedback to students" actions={[
+        <div key="badge" style={{ display:'flex', alignItems:'center', gap:6, fontSize:12, color:DS.accent, fontWeight:600 }}>
+          <Icon name="brain" size={14} />
+          {aiQueueFull.length - sentSet.size} awaiting review
+        </div>
+      ]} />
+
+      {/* How it works */}
+      <div style={{ background:DS.accentLight, border:`1px solid ${DS.accentBorder}`, borderRadius:10, padding:'16px 20px', marginBottom:20, display:'flex', alignItems:'flex-start', gap:14 }}>
+        <Icon name="brain" size={20} color={DS.accent} />
+        <div>
+          <div style={{ fontSize:13, fontWeight:600, color:DS.accent, marginBottom:3 }}>How AI Feedback works</div>
+          <div style={{ fontSize:13, color:DS.sub, lineHeight:1.6 }}>
+            When a student submits homework, TutorOS AI analyses their answers and generates a personalised feedback draft. You review, edit if needed, and send — it typically takes under 30 seconds per student.
+          </div>
+        </div>
+      </div>
+
+      {/* Filter */}
+      <div style={{ display:'flex', gap:6, marginBottom:20 }}>
+        {[['all','All'],['pending','Pending'],['sent','Sent']].map(([id,label]) => (
+          <button key={id} onClick={() => setFilter(id)} style={{
+            padding:'7px 14px', borderRadius:7, border:`1px solid ${filter===id ? DS.accentBorder : DS.border}`,
+            background: filter===id ? DS.accentLight : DS.bg,
+            color: filter===id ? DS.accent : DS.muted,
+            fontSize:13, fontWeight: filter===id ? 600 : 400, cursor:'pointer',
+          }}>{label}</button>
+        ))}
+      </div>
+
+      <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+        {filtered.map((item, i) => {
+          const key = item.student + item.hw;
+          const isOpen = expanded === key;
+          const isSent = sentSet.has(key);
+          const feedbackText = editMap[key] !== undefined ? editMap[key] : item.draft;
+          const confColor = item.confidence >= 90 ? DS.success : item.confidence >= 80 ? DS.warning : DS.danger;
+
+          return (
+            <div key={key} style={{ background:DS.bg, border:`1px solid ${isSent ? DS.successBorder : DS.border}`, borderRadius:10, overflow:'hidden' }}>
+              <div style={{ padding:'16px 20px', cursor:'pointer', display:'flex', alignItems:'center', gap:14 }} onClick={() => setExpanded(isOpen ? null : key)}>
+                <Avatar name={item.student} size={36} />
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:13, fontWeight:600, color:DS.text }}>{item.student}</div>
+                  <div style={{ fontSize:12, color:DS.muted }}>{item.hw} · {item.subject}</div>
+                </div>
+                <div style={{ display:'flex', alignItems:'center', gap:10, flexShrink:0 }}>
+                  <span style={{ fontSize:12, color:DS.faint }}>{item.submitted}</span>
+                  <div style={{ display:'flex', alignItems:'center', gap:4 }}>
+                    <div style={{ width:6, height:6, borderRadius:'50%', background:confColor }} />
+                    <span style={{ fontSize:11, color:DS.muted }}>{item.confidence}% confidence</span>
+                  </div>
+                  <ScorePill score={item.score} />
+                  {isSent ? <Badge variant="success">Sent</Badge> : <Badge variant="accent">Draft ready</Badge>}
+                  <Icon name={isOpen ? 'chevron_d' : 'chevron_r'} size={14} color={DS.faint} />
+                </div>
+              </div>
+
+              {isOpen && (
+                <div style={{ borderTop:`1px solid ${DS.border}`, padding:'20px' }}>
+                  {/* Strengths & Issues */}
+                  <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
+                    <div>
+                      <div style={{ fontSize:11, fontWeight:600, color:DS.success, marginBottom:8 }}>✓ STRENGTHS DETECTED</div>
+                      {item.strengths.map((s,si) => (
+                        <div key={si} style={{ fontSize:12, color:DS.sub, padding:'5px 10px', background:DS.successBg, borderRadius:6, border:`1px solid ${DS.successBorder}`, marginBottom:5 }}>{s}</div>
+                      ))}
+                    </div>
+                    <div>
+                      <div style={{ fontSize:11, fontWeight:600, color:DS.warning, marginBottom:8 }}>
+                        {item.issues.length > 0 ? '⚠ AREAS TO IMPROVE' : '✓ NO ISSUES FOUND'}
+                      </div>
+                      {item.issues.length > 0
+                        ? item.issues.map((s,si) => (
+                          <div key={si} style={{ fontSize:12, color:DS.sub, padding:'5px 10px', background:DS.warningBg, borderRadius:6, border:`1px solid ${DS.warningBorder}`, marginBottom:5 }}>{s}</div>
+                        ))
+                        : <div style={{ fontSize:12, color:DS.success, fontStyle:'italic' }}>All questions answered correctly.</div>
+                      }
+                    </div>
+                  </div>
+
+                  {/* Draft text */}
+                  <div style={{ marginBottom:14 }}>
+                    <div style={{ fontSize:11, fontWeight:600, color:DS.accent, marginBottom:6, display:'flex', alignItems:'center', gap:5 }}>
+                      <Icon name="brain" size={11} /> AI DRAFT — EDIT BEFORE SENDING
+                    </div>
+                    <textarea
+                      rows={3}
+                      value={feedbackText}
+                      onChange={e => setEditMap(p => ({...p, [key]:e.target.value}))}
+                      disabled={isSent}
+                      style={{
+                        width:'100%', padding:'10px 12px', borderRadius:8,
+                        border:`1px solid ${DS.border}`, fontSize:13, color:DS.sub, lineHeight:1.65,
+                        background: isSent ? DS.surface : DS.bg,
+                        resize:'vertical', outline:'none', boxSizing:'border-box', fontFamily:'inherit',
+                      }}
+                    />
+                  </div>
+                  {!isSent && (
+                    <div style={{ display:'flex', gap:8 }}>
+                      <Btn variant="primary" icon="check" onClick={() => { setSentSet(p => new Set([...p, key])); setExpanded(null); }}>
+                        Send to student
+                      </Btn>
+                      <Btn variant="secondary" icon="edit">Edit draft</Btn>
+                      <Btn variant="ghost" icon="x">Discard draft</Btn>
+                    </div>
+                  )}
+                  {isSent && <Badge variant="success">Feedback sent to student</Badge>}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 // ─── Router ─────────────────────────────────────────────────────────────────────
 const TeacherPages = ({ page }) => {
-  if (page === 'classes')  return <TeacherClassesPage />;
-  if (page === 'homework') return <TeacherHomeworkPage />;
-  if (page === 'progress') return <TeacherProgressPage />;
+  if (page === 'classes')    return <TeacherClassesPage />;
+  if (page === 'homework')   return <TeacherHomeworkPage />;
+  if (page === 'progress')   return <TeacherProgressPage />;
+  if (page === 'attendance') return <TeacherAttendancePage />;
+  if (page === 'ai_queue')   return <TeacherAIFeedbackPage />;
   return null;
 };
 

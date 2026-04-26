@@ -185,3 +185,106 @@ _[tool: fork_verifier_agent]_
 
 Both fixes applied — admin sub-pages now render correctly and the role-switcher shows Admin / Teacher / Student. All 13 screens are navigable. Let me know if you want to push further on any screen.
 
+## User
+
+Export this design as a PPTX (screenshot mode): TutorOS.html
+
+## Assistant
+
+_[tool: str_replace_edit]_
+
+First I need to expose a `window.__navigate` hook so the exporter can switch screens, then capture all 13 views:
+
+_[tool: show_to_user]_
+
+_[tool: gen_pptx]_
+
+Done — **TutorOS.pptx** downloaded with all 13 screens as full-bleed slides:
+
+1. Marketing / Landing page
+2. Admin — Dashboard
+3. Admin — Students list
+4. Admin — Reports
+5. Teacher — Dashboard
+6. Teacher — Classes
+7. Teacher — Homework management
+8. Teacher — Progress
+9. Student — Overview
+10. Student — Homework queue
+11. Student — Progress
+12. Student — Sessions
+13. Student — AI Feedback
+
+## User
+
+These pages don't show anything or correct things:
+
+admin classes, teachers or invoices. teacher attendace, feedback
+
+## Assistant
+
+_[tool: read_file]_
+
+Let me add proper pages for all of those. I'll build them out and wire up the routing.
+
+_[tool: str_replace_edit]_
+
+_[tool: str_replace_edit]_
+
+_[tool: str_replace_edit]_
+
+_[tool: str_replace_edit]_
+
+_[tool: str_replace_edit]_
+
+_[tool: done]_
+
+Now update the teacher routing and the Tweaks nav list:
+
+_[tool: fork_verifier_agent]_
+
+All 18 screens are now fully built and navigable:
+
+**Admin (7 pages)**
+- Dashboard, Students, Classes, Teachers, Invoices, Reports + sidebar nav
+
+**Teacher (6 pages)**  
+- Dashboard, My Classes, Homework, Attendance (live P/A/L register with bulk-mark + session history), AI Feedback (expandable drafts with strengths/issues panels, edit + send), Progress
+
+**Student (5 pages)**
+- Overview, Homework, Progress, Sessions, AI Feedback
+
+Use the **Tweaks panel** to jump instantly to any of the 18 screens. Let me know what to refine next.
+
+## User
+
+Save as standalone HTML: TutorOS.html
+
+## Assistant
+
+_[tool: read_file]_
+
+Let me read the file first to check for any code-referenced resources before bundling.
+
+_[tool: copy_files]_
+
+No code-referenced image assets — everything is drawn with inline SVG and CSS. I just need to add the thumbnail, then bundle.
+
+_[tool: str_replace_edit]_
+
+_[tool: str_replace_edit]_
+
+_[tool: super_inline_html]_
+
+_[tool: show_html]_
+
+_[tool: show_html]_
+
+_[tool: get_webview_logs]_
+
+Clean — just the expected Babel dev-mode warning, nothing broken. Presenting for download:
+
+_[tool: present_fs_item_for_download]_
+
+Here's your standalone file — all 18 screens, fonts, and scripts bundled into a single 1.4MB HTML that works completely offline. No internet connection needed.
+

@@ -86,6 +86,14 @@ const App = () => {
   }, [tweaks.accent]);
 
   const enterApp = (role) => { setView(role || 'admin'); setPage('dashboard'); };
+
+  // Expose navigation for PPTX export
+  React.useEffect(() => {
+    window.__navigate = (role, pg) => {
+      if (role === 'landing') { setView('landing'); setPage('dashboard'); }
+      else { setView(role); setPage(pg || 'dashboard'); }
+    };
+  }, []);
   const handleNav = (p)   => setPage(p);
   const isApp = view !== 'landing';
 
@@ -93,12 +101,17 @@ const App = () => {
     if (view === 'admin') {
       if (page === 'students') return <AdminPages page="students" />;
       if (page === 'reports')  return <AdminPages page="reports" />;
+      if (page === 'classes')  return <AdminPages page="classes" />;
+      if (page === 'teachers') return <AdminPages page="teachers" />;
+      if (page === 'invoices') return <AdminPages page="invoices" />;
       return <AdminDashboard />;
     }
     if (view === 'teacher') {
-      if (page === 'classes')  return <TeacherPages page="classes" />;
-      if (page === 'homework') return <TeacherPages page="homework" />;
-      if (page === 'progress') return <TeacherPages page="progress" />;
+      if (page === 'classes')    return <TeacherPages page="classes" />;
+      if (page === 'homework')   return <TeacherPages page="homework" />;
+      if (page === 'progress')   return <TeacherPages page="progress" />;
+      if (page === 'attendance') return <TeacherPages page="attendance" />;
+      if (page === 'ai_queue')   return <TeacherPages page="ai_queue" />;
       return <TeacherDashboard />;
     }
     if (view === 'student') {
@@ -136,19 +149,24 @@ const App = () => {
         <TweakSection label="Navigate to" />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           {[
-            ['landing',  null,        'Marketing site'],
-            ['admin',    'dashboard', 'Admin — Dashboard'],
-            ['admin',    'students',  'Admin — Students'],
-            ['admin',    'reports',   'Admin — Reports'],
-            ['teacher',  'dashboard', 'Teacher — Dashboard'],
-            ['teacher',  'classes',   'Teacher — Classes'],
-            ['teacher',  'homework',  'Teacher — Homework'],
-            ['teacher',  'progress',  'Teacher — Progress'],
-            ['student',  'dashboard', 'Student — Overview'],
-            ['student',  'homework',  'Student — Homework'],
-            ['student',  'progress',  'Student — Progress'],
-            ['student',  'sessions',  'Student — Sessions'],
-            ['student',  'feedback',  'Student — AI Feedback'],
+            ['landing',  null,         'Marketing site'],
+            ['admin',    'dashboard',  'Admin — Dashboard'],
+            ['admin',    'students',   'Admin — Students'],
+            ['admin',    'classes',    'Admin — Classes'],
+            ['admin',    'teachers',   'Admin — Teachers'],
+            ['admin',    'invoices',   'Admin — Invoices'],
+            ['admin',    'reports',    'Admin — Reports'],
+            ['teacher',  'dashboard',  'Teacher — Dashboard'],
+            ['teacher',  'classes',    'Teacher — My Classes'],
+            ['teacher',  'homework',   'Teacher — Homework'],
+            ['teacher',  'attendance', 'Teacher — Attendance'],
+            ['teacher',  'progress',   'Teacher — Progress'],
+            ['teacher',  'ai_queue',   'Teacher — AI Feedback'],
+            ['student',  'dashboard',  'Student — Overview'],
+            ['student',  'homework',   'Student — Homework'],
+            ['student',  'progress',   'Student — Progress'],
+            ['student',  'sessions',   'Student — Sessions'],
+            ['student',  'feedback',   'Student — AI Feedback'],
           ].map(([role, pg, label]) => {
             const isActive = pg === null ? view === 'landing' : view === role && page === pg;
             return (
