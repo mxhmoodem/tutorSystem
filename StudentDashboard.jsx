@@ -602,7 +602,7 @@ const StudentFeedbackPage = () => {
 
 // ─── Router ────────────────────────────────────────────────────────────────────
 const StudentDashboard = ({ page = 'dashboard', onNav }) => {
-  if (page === 'homework') return <StudentHomeworkPage />;
+  if (page === 'homework') return <StudentHomework />;
   if (page === 'progress') return <StudentProgressPage />;
   if (page === 'sessions') return <StudentSessionsPage />;
   if (page === 'feedback') return <StudentFeedbackPage />;

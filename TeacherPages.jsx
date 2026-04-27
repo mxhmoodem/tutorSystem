@@ -743,7 +743,7 @@ const TeacherAIFeedbackPage = () => {
 // ─── Router ─────────────────────────────────────────────────────────────────────
 const TeacherPages = ({ page }) => {
   if (page === 'classes')    return <TeacherClassesPage />;
-  if (page === 'homework')   return <TeacherHomeworkPage />;
+  if (page === 'homework')   return <TeacherHomework />;
   if (page === 'progress')   return <TeacherProgressPage />;
   if (page === 'attendance') return <TeacherAttendancePage />;
   if (page === 'ai_queue')   return <TeacherAIFeedbackPage />;
