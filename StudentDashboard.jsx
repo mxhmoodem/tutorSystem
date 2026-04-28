@@ -40,15 +40,18 @@ const aiFeedbackLog = [
 const StudentOverview = ({ onNav }) => {
   const pendingHw   = studentHomework.filter(h => h.status === 'pending');
   const urgentCount = pendingHw.filter(h => h.urgent).length;
-  const avgScore    = Math.round(studentSelf.subjects.reduce((s,sub) => s + sub.scores[sub.scores.length-1], 0) / studentSelf.subjects.length);
 
   return (
     <div style={{ padding: '32px' }}>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:28 }}>
-        <div style={{ display:'flex', alignItems:'center', gap:16 }}>
-          <Avatar name={studentSelf.name} size={48} color="#43b190" />
+      {/* Hero: greeting + inline stats */}
+      <div style={{
+        display:'flex', alignItems:'center', gap:32, marginBottom:24,
+        padding:'24px 28px', background:DS.bg, border:`1px solid ${DS.border}`, borderRadius:12,
+      }}>
+        <div style={{ display:'flex', alignItems:'center', gap:16, flex:'0 0 auto' }}>
+          <Avatar name={studentSelf.name} size={52} color="#43b190" />
           <div>
-            <h1 style={{ fontSize:22, fontWeight:700, color:DS.text, margin:'0 0 2px', letterSpacing:'-0.4px' }}>
+            <h1 style={{ fontSize:22, fontWeight:700, color:DS.text, margin:'0 0 4px', letterSpacing:'-0.4px' }}>
               Good morning, Oliver
             </h1>
             <div style={{ display:'flex', gap:8, alignItems:'center' }}>
@@ -57,148 +60,158 @@ const StudentOverview = ({ onNav }) => {
             </div>
           </div>
         </div>
-        <Btn variant="secondary" icon="download" small>Download Report</Btn>
-      </div>
 
-      {/* KPI row */}
-      <div style={{ display:'flex', gap:16, marginBottom:28 }}>
-        <KPICard label="Average Score"    value={`${avgScore}%`}          trend="+3% this term"  trendDir="up"   icon="star"     iconBg="#F0FDF4"   accent="#16A34A" />
-        <KPICard label="Homework Due"     value={pendingHw.length}         trend={urgentCount ? `${urgentCount} urgent` : 'None urgent'} trendDir={urgentCount ? 'down' : 'up'} icon="clip"    iconBg="#FFFBEB"   accent="#D97706" />
-        <KPICard label="Sessions This Wk" value="4"                        trend="Next: Mon 09:00" trendDir="up"  icon="calendar" iconBg={DS.accentLight} accent={DS.accent} />
-        <KPICard label="Overall Attendance" value="96.3%"                  trend="+0.8% vs last term" trendDir="up" icon="check" iconBg="#F0FDF4" accent="#16A34A" />
-      </div>
+        <div style={{ width:1, alignSelf:'stretch', background:DS.border }} />
 
-      {/* Subjects + upcoming hw */}
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 340px', gap:20 }}>
-        <div>
-          {/* Subject cards */}
-          <Card title="My Subjects" style={{ marginBottom:20 }}>
-            <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)' }}>
-              {studentSelf.subjects.map((s, i) => (
-                <div key={s.name} style={{
-                  padding:'20px', borderRight: i < 2 ? `1px solid ${DS.border}` : 'none',
-                  borderTop:`3px solid ${s.color}`,
-                }}>
-                  <div style={{ fontSize:13, fontWeight:500, color:DS.muted, marginBottom:12 }}>{s.name}</div>
-                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-end', marginBottom:12 }}>
-                    <div>
-                      <div style={{ fontSize:32, fontWeight:800, color:DS.text, lineHeight:1, letterSpacing:'-0.8px' }}>
-                        {s.scores[s.scores.length-1]}%
-                      </div>
-                      <div style={{ fontSize:11, color:DS.muted, marginTop:3 }}>Latest score</div>
-                    </div>
-                    <div style={{ textAlign:'right' }}>
-                      <div style={{ fontSize:20, fontWeight:700, color:s.color }}>{s.predicted}</div>
-                      <div style={{ fontSize:11, color:DS.muted }}>Predicted</div>
-                    </div>
-                  </div>
-                  <Sparkline data={s.scores} color={s.color} width={100} height={32} />
-                  <div style={{ marginTop:10, display:'flex', justifyContent:'space-between', fontSize:12 }}>
-                    <span style={{ color:DS.muted }}>Attendance</span>
-                    <span style={{ fontWeight:600, color:s.attendance > 95 ? DS.success : DS.warning }}>{s.attendance}%</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </Card>
-
-          {/* Score trends chart */}
-          <Card title="Score Trends" actions={[<Badge key="b" variant="default">Last 8 assessments</Badge>]}>
-            <div style={{ padding:'16px 20px 8px' }}>
-              <div style={{ display:'flex', gap:16, marginBottom:12 }}>
-                {studentSelf.subjects.map(s => (
-                  <div key={s.name} style={{ display:'flex', alignItems:'center', gap:6 }}>
-                    <div style={{ width:20, height:2, background:s.color, borderRadius:2 }} />
-                    <span style={{ fontSize:12, color:DS.muted }}>{s.name}</span>
-                  </div>
-                ))}
+        <div style={{ display:'flex', flex:1, gap:0 }}>
+          {[
+            { label:'Homework due', value: pendingHw.length, sub: urgentCount ? `${urgentCount} due today` : 'Nothing urgent' },
+            { label:'Sessions this week', value: 4, sub: 'Next: Mon 09:00' },
+            { label:'Attendance', value: '96%', sub: 'This term' },
+          ].map((stat, i) => (
+            <div key={stat.label} style={{
+              flex:1, paddingLeft: i === 0 ? 0 : 24,
+              borderLeft: i === 0 ? 'none' : `1px solid ${DS.border}`,
+            }}>
+              <div style={{ fontSize:12, color:DS.muted, marginBottom:6 }}>{stat.label}</div>
+              <div style={{ display:'flex', alignItems:'baseline', gap:8 }}>
+                <span style={{ fontSize:24, fontWeight:700, color:DS.text, letterSpacing:'-0.4px', lineHeight:1 }}>{stat.value}</span>
+                <span style={{ fontSize:12, color:DS.muted }}>{stat.sub}</span>
               </div>
-              <LineChart
-                labels={['4 Mar','11 Mar','18 Mar','25 Mar','1 Apr','8 Apr','15 Apr','22 Apr']}
-                series={studentSelf.subjects.map(s => ({ label:s.name, data:s.scores, color:s.color }))}
-                height={180}
-              />
             </div>
-          </Card>
+          ))}
         </div>
 
-        {/* Right col */}
-        <div style={{ display:'flex', flexDirection:'column', gap:20 }}>
-          {/* Urgent homework */}
-          <Card title="Due Soon" actions={[
-            <Btn key="all" variant="ghost" small onClick={() => onNav('homework')}>View all</Btn>
-          ]}>
-            <div style={{ padding:'8px 0' }}>
-              {pendingHw.slice(0,3).map((hw, i) => (
-                <div key={hw.id} style={{
-                  padding:'12px 16px',
-                  borderBottom: i < Math.min(pendingHw.length,3)-1 ? `1px solid ${DS.border}` : 'none',
-                }}>
-                  <div style={{ display:'flex', justifyContent:'space-between', gap:8, marginBottom:4 }}>
-                    <span style={{ fontSize:13, fontWeight:500, color:DS.text }}>{hw.title}</span>
-                    {hw.urgent && <Badge variant="danger">Today</Badge>}
+        <Btn variant="secondary" icon="download" small>Report</Btn>
+      </div>
+
+      {/* Primary action row: Due Soon */}
+      <Card title="Due Soon" style={{ marginBottom:20 }} actions={[
+        <Btn key="all" variant="ghost" small onClick={() => onNav('homework')}>View all</Btn>
+      ]}>
+        <div style={{ display:'grid', gridTemplateColumns:`repeat(${Math.min(pendingHw.length,3)},1fr)` }}>
+          {pendingHw.slice(0,3).map((hw, i, arr) => {
+            const subj = studentSelf.subjects.find(x => x.name === hw.subject);
+            const color = subj ? subj.color : DS.accent;
+            return (
+              <div key={hw.id} style={{
+                padding:'18px 20px',
+                borderRight: i < arr.length-1 ? `1px solid ${DS.border}` : 'none',
+                display:'flex', flexDirection:'column', gap:10,
+              }}>
+                <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                  <div style={{ width:6, height:6, borderRadius:'50%', background:color }} />
+                  <span style={{ fontSize:11, fontWeight:600, color:DS.muted, textTransform:'uppercase', letterSpacing:'0.5px' }}>{hw.subject}</span>
+                  {hw.urgent && <Badge variant="danger">Today</Badge>}
+                </div>
+                <div style={{ fontSize:14, fontWeight:600, color:DS.text, lineHeight:1.4 }}>{hw.title}</div>
+                <div style={{ flex:1 }} />
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                  <span style={{ fontSize:12, color:hw.urgent ? DS.danger : DS.muted }}>
+                    Due {hw.due}
+                  </span>
+                  <Btn variant="primary" small>Start</Btn>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+
+      {/* Subjects + sessions */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 340px', gap:20, marginBottom:20 }}>
+        <Card title="My Subjects">
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)' }}>
+            {studentSelf.subjects.map((s, i) => (
+              <div key={s.name} style={{
+                padding:'20px', borderRight: i < 2 ? `1px solid ${DS.border}` : 'none',
+                borderTop:`3px solid ${s.color}`,
+              }}>
+                <div style={{ fontSize:13, fontWeight:500, color:DS.muted, marginBottom:12 }}>{s.name}</div>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-end', marginBottom:12 }}>
+                  <div>
+                    <div style={{ fontSize:32, fontWeight:800, color:DS.text, lineHeight:1, letterSpacing:'-0.8px' }}>
+                      {s.scores[s.scores.length-1]}%
+                    </div>
+                    <div style={{ fontSize:11, color:DS.muted, marginTop:3 }}>Latest score</div>
                   </div>
-                  <div style={{ fontSize:12, color:DS.muted, marginBottom:8 }}>{hw.subject} · {hw.teacher}</div>
-                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-                    <span style={{ fontSize:11, color:hw.urgent ? DS.danger : DS.muted }}>
-                      Due {hw.due}
-                    </span>
-                    <Btn variant="primary" small>Start</Btn>
+                  <div style={{ textAlign:'right' }}>
+                    <div style={{ fontSize:20, fontWeight:700, color:s.color }}>{s.predicted}</div>
+                    <div style={{ fontSize:11, color:DS.muted }}>Predicted</div>
                   </div>
                 </div>
-              ))}
-            </div>
-          </Card>
+                <Sparkline data={s.scores} color={s.color} width={100} height={32} />
+                <div style={{ marginTop:10, display:'flex', justifyContent:'space-between', fontSize:12 }}>
+                  <span style={{ color:DS.muted }}>Attendance</span>
+                  <span style={{ fontWeight:600, color:s.attendance > 95 ? DS.success : DS.warning }}>{s.attendance}%</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
 
-          {/* Next sessions */}
-          <Card title="Upcoming Sessions" actions={[
-            <Btn key="all" variant="ghost" small onClick={() => onNav('sessions')}>View all</Btn>
-          ]}>
-            <div style={{ padding:'8px 0' }}>
-              {studentSessions.slice(0,4).map((s, i) => {
-                const subj = studentSelf.subjects.find(x => x.name === s.subject);
-                const color = subj ? subj.color : DS.accent;
-                return (
-                  <div key={i} style={{
-                    display:'flex', alignItems:'center', gap:12, padding:'10px 16px',
-                    borderBottom: i < 3 ? `1px solid ${DS.border}` : 'none',
+        <Card title="Upcoming Sessions" actions={[
+          <Btn key="all" variant="ghost" small onClick={() => onNav('sessions')}>View all</Btn>
+        ]}>
+          <div style={{ padding:'8px 0' }}>
+            {studentSessions.slice(0,4).map((s, i) => {
+              const subj = studentSelf.subjects.find(x => x.name === s.subject);
+              const color = subj ? subj.color : DS.accent;
+              return (
+                <div key={i} style={{
+                  display:'flex', alignItems:'center', gap:12, padding:'10px 16px',
+                  borderBottom: i < 3 ? `1px solid ${DS.border}` : 'none',
+                }}>
+                  <div style={{
+                    width:32, height:32, borderRadius:7, flexShrink:0,
+                    background: color + '18', color,
+                    display:'flex', alignItems:'center', justifyContent:'center',
                   }}>
-                    <div style={{
-                      width:32, height:32, borderRadius:7, flexShrink:0,
-                      background: color + '18', color,
-                      display:'flex', alignItems:'center', justifyContent:'center',
-                    }}>
-                      <Icon name="book" size={14} />
-                    </div>
-                    <div style={{ flex:1, minWidth:0 }}>
-                      <div style={{ fontSize:13, fontWeight:500, color:DS.text }}>{s.subject}</div>
-                      <div style={{ fontSize:11, color:DS.muted }}>{s.date} · {s.time}</div>
-                    </div>
-                    {s.type === 'Mock prep' && <Badge variant="warning">Mock prep</Badge>}
+                    <Icon name="book" size={14} />
                   </div>
-                );
-              })}
-            </div>
-          </Card>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:13, fontWeight:500, color:DS.text }}>{s.subject}</div>
+                    <div style={{ fontSize:11, color:DS.muted }}>{s.date} · {s.time}</div>
+                  </div>
+                  {s.type === 'Mock prep' && <Badge variant="warning">Mock prep</Badge>}
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      </div>
 
-          {/* Recent feedback */}
-          <Card title="Latest Feedback" actions={[
-            <Btn key="all" variant="ghost" small onClick={() => onNav('feedback')}>View all</Btn>
-          ]}>
-            <div style={{ padding:'8px 0' }}>
-              {aiFeedbackLog.slice(0,2).map((f, i) => (
-                <div key={i} style={{ padding:'12px 16px', borderBottom: i < 1 ? `1px solid ${DS.border}` : 'none' }}>
-                  <div style={{ display:'flex', justifyContent:'space-between', marginBottom:4 }}>
-                    <span style={{ fontSize:13, fontWeight:500, color:DS.text }}>{f.hw}</span>
-                    <ScorePill score={f.score} />
-                  </div>
+      {/* Recent feedback */}
+      <Card title="Latest Feedback" actions={[
+        <Btn key="all" variant="ghost" small onClick={() => onNav('feedback')}>View all</Btn>
+      ]}>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(2,1fr)' }}>
+          {aiFeedbackLog.slice(0,2).map((f, i) => {
+            const subj = studentSelf.subjects.find(s => s.name === f.subject);
+            const color = subj ? subj.color : DS.accent;
+            return (
+              <div key={i} style={{
+                padding:'16px 20px',
+                borderRight: i < 1 ? `1px solid ${DS.border}` : 'none',
+                display:'flex', alignItems:'center', gap:14,
+              }}>
+                <div style={{
+                  width:38, height:38, borderRadius:9, flexShrink:0,
+                  background: color + '18', color,
+                  display:'flex', alignItems:'center', justifyContent:'center',
+                }}>
+                  <Icon name="brain" size={16} />
+                </div>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:13, fontWeight:600, color:DS.text, marginBottom:2 }}>{f.hw}</div>
                   <div style={{ fontSize:12, color:DS.muted }}>{f.subject} · {f.date}</div>
                 </div>
-              ))}
-            </div>
-          </Card>
+                <ScorePill score={f.score} />
+              </div>
+            );
+          })}
         </div>
-      </div>
+      </Card>
     </div>
   );
 };

@@ -48,8 +48,26 @@ const attendanceClass = {
   ],
 };
 
+const TODAY_ISO = '2026-04-25';
+
 const TeacherDashboard = () => {
   const [hwTab, setHwTab] = React.useState('marking');
+  // Tick when a plan is created/edited elsewhere so badges update on return.
+  const [, setPlanTick] = React.useState(0);
+  React.useEffect(() => {
+    const handler = () => setPlanTick(t => t + 1);
+    window.addEventListener('focus', handler);
+    return () => window.removeEventListener('focus', handler);
+  }, []);
+  const hasPlan = (group) => {
+    const store = window.__lessonPlans || {};
+    return !!store[`${group}__${TODAY_ISO}`];
+  };
+  const openPlanner = (group) => {
+    if (window.__openLessonPlanner) {
+      window.__openLessonPlanner(group, TODAY_ISO, hasPlan(group) ? 'view' : 'edit');
+    }
+  };
   const [attendance, setAttendance] = React.useState(
     Object.fromEntries(attendanceClass.students.map(s => [s.name, s.status]))
   );
@@ -107,10 +125,29 @@ const TeacherDashboard = () => {
                 </div>
                 <div style={{ fontSize: 13, fontWeight: 600, color: DS.text, marginBottom: 3 }}>{cls.subject}</div>
                 <div style={{ fontSize: 12, color: DS.muted, marginBottom: 8 }}>{cls.group}</div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: DS.faint }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: DS.faint, marginBottom: 10 }}>
                   <span>{cls.room}</span>
                   <span>{cls.students} students</span>
                 </div>
+                {(() => {
+                  const planned = hasPlan(cls.group);
+                  return (
+                    <button
+                      onClick={() => openPlanner(cls.group)}
+                      style={{
+                        width: '100%', padding: '6px 10px', borderRadius: 6,
+                        border: `1px solid ${planned ? DS.accentBorder : DS.border}`,
+                        background: planned ? DS.accentLight : DS.surface,
+                        color: planned ? DS.accent : DS.sub,
+                        fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                      }}
+                    >
+                      <Icon name={planned ? 'eye' : 'edit'} size={12} />
+                      {planned ? 'View Plan' : 'Make Plan'}
+                    </button>
+                  );
+                })()}
               </div>
             );
           })}

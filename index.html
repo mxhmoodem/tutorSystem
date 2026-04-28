@@ -81,6 +81,7 @@ const App = () => {
   const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const [view, setView]     = React.useState('landing');
   const [page, setPage]     = React.useState('dashboard');
+  const [plannerArgs, setPlannerArgs] = React.useState(null);
   const [renderKey, setRenderKey] = React.useState(0);
 
   React.useLayoutEffect(() => {
@@ -101,8 +102,13 @@ const App = () => {
       if (role === 'landing') { setView('landing'); setPage('dashboard'); }
       else { setView(role); setPage(pg || 'dashboard'); }
     };
+    window.__openLessonPlanner = (group, date, mode) => {
+      setPlannerArgs({ group, date, mode });
+      setView('teacher');
+      setPage('lesson_planner');
+    };
   }, []);
-  const handleNav = (p)   => setPage(p);
+  const handleNav = (p)   => { setPlannerArgs(null); setPage(p); };
   const isApp = view !== 'landing';
 
   const renderContent = () => {
@@ -116,11 +122,12 @@ const App = () => {
       return <AdminDashboard />;
     }
     if (view === 'teacher') {
-      if (page === 'classes')    return <TeacherPages page="classes" />;
-      if (page === 'homework')   return <TeacherPages page="homework" />;
-      if (page === 'progress')   return <TeacherPages page="progress" />;
-      if (page === 'attendance') return <TeacherPages page="attendance" />;
-      if (page === 'ai_queue')   return <TeacherPages page="ai_queue" />;
+      if (page === 'classes')        return <TeacherPages page="classes" />;
+      if (page === 'homework')       return <TeacherPages page="homework" />;
+      if (page === 'progress')       return <TeacherPages page="progress" />;
+      if (page === 'attendance')     return <TeacherPages page="attendance" />;
+      if (page === 'ai_queue')       return <TeacherPages page="ai_queue" />;
+      if (page === 'lesson_planner') return <TeacherPages page="lesson_planner" plannerArgs={plannerArgs} />;
       return <TeacherDashboard />;
     }
     if (view === 'student') {
@@ -168,6 +175,7 @@ const App = () => {
             ['admin',    'reports',    'Admin — Reports'],
             ['teacher',  'dashboard',  'Teacher — Dashboard'],
             ['teacher',  'classes',    'Teacher — My Classes'],
+            ['teacher',  'lesson_planner','Teacher — Lesson Planner'],
             ['teacher',  'homework',   'Teacher — Homework'],
             ['teacher',  'attendance', 'Teacher — Attendance'],
             ['teacher',  'progress',   'Teacher — Progress'],

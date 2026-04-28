@@ -597,6 +597,718 @@ const TeacherAttendancePage = () => {
   );
 };
 
+// ─── Lesson Planner ─────────────────────────────────────────────────────────────
+// Global store so plans persist across page navigation and are readable from the dashboard.
+window.__lessonPlans = window.__lessonPlans || {};
+const planKey = (group, date) => `${group}__${date}`;
+
+const blankPlan = () => ({
+  title: '',
+  topic: '',
+  duration: '60',
+  objectives: '',
+  agenda: '',
+  homework: '',
+  notes: '',
+  resources: [],   // [{ id, name, size, type, dataUrl }]
+});
+
+const formatBytes = (b) => {
+  if (b < 1024) return b + ' B';
+  if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+  return (b / 1024 / 1024).toFixed(1) + ' MB';
+};
+
+const fileIconFor = (type, name) => {
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  if (type.startsWith('image/'))                 return { icon:'eye',    color:'#7C3AED' };
+  if (ext === 'pdf')                             return { icon:'clip',   color:'#DC2626' };
+  if (['doc','docx'].includes(ext))              return { icon:'edit',   color:'#2563EB' };
+  if (['xls','xlsx','csv'].includes(ext))        return { icon:'chart',  color:'#16A34A' };
+  if (['ppt','pptx','key'].includes(ext))        return { icon:'book',   color:'#D97706' };
+  return { icon:'clip', color:DS.muted };
+};
+
+const formatDateLong = (iso) => {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso + 'T00:00:00');
+    return d.toLocaleDateString('en-GB', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
+  } catch (e) { return iso; }
+};
+
+const formatDateShort = (iso) => {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso + 'T00:00:00');
+    return d.toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' });
+  } catch (e) { return iso; }
+};
+
+// ─── Saved Plans Browser ──────────────────────────────────────────────────────
+const SavedPlansBrowser = ({ onOpen, onNew, currentKey }) => {
+  const [query, setQuery] = React.useState('');
+  const [classFilter, setClassFilter] = React.useState('all');
+  const [, force] = React.useState(0);
+
+  const allPlans = React.useMemo(() => {
+    const store = window.__lessonPlans || {};
+    return Object.entries(store).map(([k, v]) => ({ key:k, ...v }));
+  }, [currentKey]);
+
+  const filtered = allPlans.filter(p => {
+    if (classFilter !== 'all' && p.group !== classFilter) return false;
+    if (!query.trim()) return true;
+    const q = query.toLowerCase();
+    const haystack = [
+      p.group, p.date, p.savedAt,
+      p.plan?.title, p.plan?.topic, p.plan?.objectives,
+      p.plan?.agenda, p.plan?.homework, p.plan?.notes,
+      ...(p.plan?.resources || []).map(r => r.name),
+    ].filter(Boolean).join(' ').toLowerCase();
+    return haystack.includes(q);
+  }).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+  const uniqueGroups = Array.from(new Set(allPlans.map(p => p.group))).filter(Boolean);
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+      {/* Search + filter */}
+      <div style={{
+        background:DS.bg, border:`1px solid ${DS.border}`, borderRadius:12,
+        padding:'18px 20px',
+      }}>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr auto auto', gap:12, alignItems:'center' }}>
+          <div style={{ position:'relative' }}>
+            <div style={{ position:'absolute', left:12, top:'50%', transform:'translateY(-50%)', display:'flex' }}>
+              <Icon name="search" size={15} color={DS.faint} />
+            </div>
+            <input
+              type="text"
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder="Search by title, topic, class, content, resource name…"
+              style={{
+                width:'100%', padding:'10px 12px 10px 36px', borderRadius:8,
+                border:`1px solid ${DS.border}`, fontSize:13, outline:'none',
+                boxSizing:'border-box', background:DS.surface,
+              }}
+            />
+          </div>
+          <select
+            value={classFilter}
+            onChange={e => setClassFilter(e.target.value)}
+            style={{ padding:'10px 12px', borderRadius:8, border:`1px solid ${DS.border}`, fontSize:13, outline:'none', background:DS.bg }}
+          >
+            <option value="all">All classes</option>
+            {uniqueGroups.map(g => <option key={g} value={g}>{g}</option>)}
+          </select>
+          <Btn variant="primary" icon="plus" small onClick={onNew}>New Lesson</Btn>
+        </div>
+
+        <div style={{ display:'flex', gap:14, marginTop:12, fontSize:12, color:DS.muted }}>
+          <span>{allPlans.length} plan{allPlans.length === 1 ? '' : 's'} saved</span>
+          {query && <span>· {filtered.length} match{filtered.length === 1 ? '' : 'es'}</span>}
+        </div>
+      </div>
+
+      {/* Plan grid */}
+      {filtered.length === 0 ? (
+        <div style={{
+          background:DS.bg, border:`1px dashed ${DS.borderDark}`, borderRadius:12,
+          padding:'48px 20px', textAlign:'center',
+        }}>
+          <div style={{
+            width:48, height:48, borderRadius:12, background:DS.accentLight,
+            display:'inline-flex', alignItems:'center', justifyContent:'center',
+            marginBottom:14, color:DS.accent,
+          }}>
+            <Icon name="book" size={22} />
+          </div>
+          <div style={{ fontSize:15, fontWeight:600, color:DS.text, marginBottom:4 }}>
+            {allPlans.length === 0 ? 'No lesson plans yet' : 'No matches'}
+          </div>
+          <div style={{ fontSize:13, color:DS.muted, marginBottom:18 }}>
+            {allPlans.length === 0
+              ? 'Create your first lesson plan to start building your library.'
+              : 'Try a different search term or class filter.'}
+          </div>
+          <Btn variant="primary" icon="plus" onClick={onNew}>Plan a New Lesson</Btn>
+        </div>
+      ) : (
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(320px, 1fr))', gap:14 }}>
+          {filtered.map(p => {
+            const cls = teacherClasses.find(c => c.group === p.group);
+            const color = cls?.color || DS.accent;
+            const resCount = p.plan?.resources?.length || 0;
+            const title = p.plan?.title || p.plan?.topic || `Lesson — ${formatDateShort(p.date)}`;
+            const isCurrent = p.key === currentKey;
+            return (
+              <button
+                key={p.key}
+                onClick={() => onOpen(p.group, p.date)}
+                style={{
+                  textAlign:'left', cursor:'pointer',
+                  background:DS.bg,
+                  border:`1px solid ${isCurrent ? DS.accentBorder : DS.border}`,
+                  borderTop:`3px solid ${color}`,
+                  borderRadius:10, padding:'16px 18px',
+                  display:'flex', flexDirection:'column', gap:10,
+                  transition:'box-shadow 0.15s, transform 0.1s',
+                  boxShadow: isCurrent ? '0 0 0 3px ' + DS.accentLight : 'none',
+                }}
+                onMouseEnter={e => e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.06)'}
+                onMouseLeave={e => e.currentTarget.style.boxShadow = isCurrent ? '0 0 0 3px ' + DS.accentLight : 'none'}
+              >
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:10 }}>
+                  <div style={{ minWidth:0, flex:1 }}>
+                    <div style={{ fontSize:11, fontWeight:600, color, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:4 }}>
+                      {formatDateShort(p.date)}
+                    </div>
+                    <div style={{ fontSize:14, fontWeight:600, color:DS.text, lineHeight:1.35, marginBottom:3 }}>{title}</div>
+                    <div style={{ fontSize:12, color:DS.muted }}>{p.group}</div>
+                  </div>
+                  {isCurrent && <Badge variant="accent">Open</Badge>}
+                </div>
+
+                {p.plan?.objectives && (
+                  <div style={{
+                    fontSize:12, color:DS.sub, lineHeight:1.5,
+                    display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical',
+                    overflow:'hidden',
+                  }}>
+                    {p.plan.objectives}
+                  </div>
+                )}
+
+                <div style={{ display:'flex', alignItems:'center', gap:10, marginTop:'auto', fontSize:11, color:DS.faint }}>
+                  {resCount > 0 && (
+                    <span style={{ display:'flex', alignItems:'center', gap:4 }}>
+                      <Icon name="clip" size={11} /> {resCount} file{resCount === 1 ? '' : 's'}
+                    </span>
+                  )}
+                  {p.plan?.duration && (
+                    <span style={{ display:'flex', alignItems:'center', gap:4 }}>
+                      <Icon name="clock" size={11} /> {p.plan.duration} min
+                    </span>
+                  )}
+                  {p.savedAt && (
+                    <span style={{ marginLeft:'auto' }}>Saved {p.savedAt}</span>
+                  )}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ─── File Upload Drop Zone ────────────────────────────────────────────────────
+const FileDropZone = ({ files, onAdd, onRemove, disabled }) => {
+  const [dragOver, setDragOver] = React.useState(false);
+  const inputRef = React.useRef(null);
+
+  const handleFiles = (fileList) => {
+    const arr = Array.from(fileList || []);
+    const reads = arr.map(file => new Promise(resolve => {
+      const reader = new FileReader();
+      reader.onload = () => resolve({
+        id: Date.now() + '-' + Math.random().toString(36).slice(2, 7),
+        name: file.name,
+        size: file.size,
+        type: file.type || '',
+        dataUrl: reader.result,
+      });
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(file);
+    }));
+    Promise.all(reads).then(results => onAdd(results.filter(Boolean)));
+  };
+
+  const onDrop = (e) => {
+    e.preventDefault();
+    setDragOver(false);
+    if (!disabled) handleFiles(e.dataTransfer.files);
+  };
+
+  return (
+    <div>
+      {!disabled && (
+        <div
+          onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={onDrop}
+          onClick={() => inputRef.current?.click()}
+          style={{
+            border:`2px dashed ${dragOver ? DS.accent : DS.borderDark}`,
+            background: dragOver ? DS.accentLight : DS.surface,
+            borderRadius:10, padding:'20px', textAlign:'center', cursor:'pointer',
+            transition:'all 0.15s', marginBottom: files.length > 0 ? 12 : 0,
+          }}
+        >
+          <input
+            ref={inputRef}
+            type="file"
+            multiple
+            onChange={e => { handleFiles(e.target.files); e.target.value = ''; }}
+            style={{ display:'none' }}
+          />
+          <div style={{
+            width:40, height:40, borderRadius:10,
+            background:dragOver ? DS.bg : DS.accentLight,
+            display:'inline-flex', alignItems:'center', justifyContent:'center',
+            marginBottom:10, color:DS.accent,
+          }}>
+            <Icon name="upload" size={18} />
+          </div>
+          <div style={{ fontSize:13, fontWeight:600, color:DS.text, marginBottom:3 }}>
+            {dragOver ? 'Drop files to upload' : 'Drag & drop or click to upload'}
+          </div>
+          <div style={{ fontSize:12, color:DS.muted }}>
+            Worksheets, slides, PDFs, images — anything your students need
+          </div>
+        </div>
+      )}
+
+      {files.length > 0 && (
+        <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+          {files.map(f => {
+            const fi = fileIconFor(f.type, f.name);
+            return (
+              <div key={f.id} style={{
+                display:'flex', alignItems:'center', gap:12,
+                padding:'10px 12px', background:DS.bg,
+                border:`1px solid ${DS.border}`, borderRadius:8,
+              }}>
+                <div style={{
+                  width:32, height:32, borderRadius:7,
+                  background:fi.color + '18', color:fi.color,
+                  display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0,
+                }}>
+                  <Icon name={fi.icon} size={15} />
+                </div>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{
+                    fontSize:13, fontWeight:500, color:DS.text,
+                    whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
+                  }}>{f.name}</div>
+                  <div style={{ fontSize:11, color:DS.faint }}>{formatBytes(f.size)}</div>
+                </div>
+                <a
+                  href={f.dataUrl}
+                  download={f.name}
+                  onClick={e => e.stopPropagation()}
+                  title="Download"
+                  style={{
+                    width:30, height:30, borderRadius:6, display:'flex',
+                    alignItems:'center', justifyContent:'center',
+                    color:DS.muted, textDecoration:'none',
+                    border:`1px solid ${DS.border}`, background:DS.surface,
+                  }}
+                >
+                  <Icon name="download" size={13} />
+                </a>
+                {!disabled && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onRemove(f.id); }}
+                    title="Remove"
+                    style={{
+                      width:30, height:30, borderRadius:6,
+                      border:`1px solid ${DS.border}`, background:DS.surface,
+                      color:DS.muted, cursor:'pointer', display:'flex',
+                      alignItems:'center', justifyContent:'center',
+                    }}
+                  >
+                    <Icon name="x" size={13} />
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ─── Lesson Plan Editor ───────────────────────────────────────────────────────
+const LessonPlanEditor = ({
+  selectedGroup, setSelectedGroup,
+  selectedDate, setSelectedDate,
+  plan, setPlan,
+  mode, setMode,
+  exists, savedAt, saved,
+  onSave, onDelete, onBack,
+}) => {
+  const cls = teacherClasses.find(c => c.group === selectedGroup) || teacherClasses[0];
+  const isEdit = mode === 'edit';
+
+  const update = (field, value) => setPlan(p => ({ ...p, [field]: value }));
+  const addFiles = (files) => setPlan(p => ({ ...p, resources: [...(p.resources || []), ...files] }));
+  const removeFile = (id) => setPlan(p => ({ ...p, resources: (p.resources || []).filter(r => r.id !== id) }));
+
+  const inputStyle = {
+    width:'100%', padding:'9px 12px', borderRadius:7,
+    border:`1px solid ${DS.border}`, fontSize:13, outline:'none',
+    boxSizing:'border-box', background:DS.bg, fontFamily:'inherit',
+  };
+  const labelStyle = { fontSize:11, fontWeight:600, color:DS.muted, display:'block', marginBottom:6, textTransform:'uppercase', letterSpacing:'0.05em' };
+
+  const renderFieldValue = (val, placeholder) => (
+    <div style={{
+      fontSize:13.5, color: val ? DS.sub : DS.faint,
+      lineHeight:1.7, whiteSpace:'pre-wrap', minHeight:24,
+      fontStyle: val ? 'normal' : 'italic',
+    }}>
+      {val || placeholder}
+    </div>
+  );
+
+  return (
+    <>
+      {/* Hero header */}
+      <div style={{
+        background: `linear-gradient(135deg, ${cls.color}12 0%, ${DS.accentLight} 100%)`,
+        border:`1px solid ${cls.color}33`,
+        borderRadius:14, padding:'24px 28px', marginBottom:20,
+        position:'relative', overflow:'hidden',
+      }}>
+        <div style={{ position:'absolute', top:0, left:0, right:0, height:4, background:cls.color }} />
+        <div style={{ display:'flex', alignItems:'flex-start', gap:20 }}>
+          <div style={{
+            width:56, height:56, borderRadius:12,
+            background:cls.color, color:'#fff',
+            display:'flex', alignItems:'center', justifyContent:'center',
+            flexShrink:0, boxShadow:`0 4px 12px ${cls.color}55`,
+          }}>
+            <Icon name="book" size={26} />
+          </div>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ fontSize:11, fontWeight:700, color:cls.color, letterSpacing:'0.08em', textTransform:'uppercase', marginBottom:6 }}>
+              {formatDateLong(selectedDate)}
+            </div>
+            {isEdit ? (
+              <input
+                value={plan.title}
+                onChange={e => update('title', e.target.value)}
+                placeholder="Lesson title (e.g. Introduction to Quadratics)"
+                style={{
+                  width:'100%', padding:'4px 0', fontSize:24, fontWeight:700,
+                  color:DS.text, border:'none', outline:'none', background:'transparent',
+                  letterSpacing:'-0.5px', fontFamily:'inherit', marginBottom:6,
+                }}
+              />
+            ) : (
+              <div style={{ fontSize:24, fontWeight:700, color:DS.text, letterSpacing:'-0.5px', marginBottom:6, lineHeight:1.2 }}>
+                {plan.title || 'Untitled Lesson'}
+              </div>
+            )}
+            <div style={{ display:'flex', alignItems:'center', gap:14, fontSize:13, color:DS.muted, flexWrap:'wrap' }}>
+              <span style={{ fontWeight:600, color:DS.text }}>{cls.name}</span>
+              <span>·</span>
+              <span>{cls.group}</span>
+              <span>·</span>
+              <span>{cls.students} students</span>
+              <span>·</span>
+              <span>{cls.room}</span>
+              {plan.duration && (<><span>·</span><span>{plan.duration} min</span></>)}
+            </div>
+          </div>
+          <div style={{ display:'flex', flexDirection:'column', gap:8, alignItems:'flex-end', flexShrink:0 }}>
+            {saved && <Badge variant="success">✓ Plan saved</Badge>}
+            {exists && !saved && <Badge variant="success">Saved {savedAt}</Badge>}
+            {!exists && <Badge variant="default">Draft — not saved</Badge>}
+          </div>
+        </div>
+      </div>
+
+      {/* Two-column layout */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 320px', gap:20 }}>
+        {/* Left: main plan content */}
+        <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+          {/* Objectives card */}
+          <div style={{ background:DS.bg, border:`1px solid ${DS.border}`, borderRadius:12, padding:'20px 22px' }}>
+            <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:14 }}>
+              <div style={{ width:30, height:30, borderRadius:8, background:DS.accentLight, color:DS.accent, display:'flex', alignItems:'center', justifyContent:'center' }}>
+                <Icon name="star" size={15} />
+              </div>
+              <div style={{ fontSize:14, fontWeight:600, color:DS.text }}>Learning Objectives</div>
+            </div>
+            {isEdit ? (
+              <textarea
+                rows={3}
+                value={plan.objectives}
+                onChange={e => update('objectives', e.target.value)}
+                placeholder="What should students know or be able to do by the end of the lesson?"
+                style={{ ...inputStyle, lineHeight:1.6, color:DS.sub, resize:'vertical' }}
+              />
+            ) : renderFieldValue(plan.objectives, 'No objectives recorded.')}
+          </div>
+
+          {/* Agenda card */}
+          <div style={{ background:DS.bg, border:`1px solid ${DS.border}`, borderRadius:12, padding:'20px 22px' }}>
+            <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:14 }}>
+              <div style={{ width:30, height:30, borderRadius:8, background:'#7C3AED18', color:'#7C3AED', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                <Icon name="clock" size={15} />
+              </div>
+              <div style={{ fontSize:14, fontWeight:600, color:DS.text, flex:1 }}>Lesson Agenda</div>
+              {isEdit && (
+                <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                  <span style={{ fontSize:11, color:DS.muted }}>Duration</span>
+                  <input
+                    type="number"
+                    value={plan.duration}
+                    onChange={e => update('duration', e.target.value)}
+                    style={{ width:60, padding:'4px 8px', borderRadius:6, border:`1px solid ${DS.border}`, fontSize:12, outline:'none', textAlign:'center' }}
+                  />
+                  <span style={{ fontSize:11, color:DS.muted }}>min</span>
+                </div>
+              )}
+            </div>
+            {isEdit ? (
+              <textarea
+                rows={8}
+                value={plan.agenda}
+                onChange={e => update('agenda', e.target.value)}
+                placeholder={`Outline the lesson structure with timings, e.g.:\n0–10 min  Starter: recap last lesson\n10–35 min Main activity: ...\n35–55 min Practice: ...\n55–60 min Plenary: ...`}
+                style={{ ...inputStyle, lineHeight:1.6, color:DS.sub, resize:'vertical', fontFamily:'inherit' }}
+              />
+            ) : renderFieldValue(plan.agenda, 'No agenda recorded.')}
+          </div>
+
+          {/* Homework card */}
+          <div style={{ background:DS.bg, border:`1px solid ${DS.border}`, borderRadius:12, padding:'20px 22px' }}>
+            <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:14 }}>
+              <div style={{ width:30, height:30, borderRadius:8, background:DS.warningBg, color:DS.warning, display:'flex', alignItems:'center', justifyContent:'center' }}>
+                <Icon name="clip" size={15} />
+              </div>
+              <div style={{ fontSize:14, fontWeight:600, color:DS.text }}>Homework to Set</div>
+            </div>
+            {isEdit ? (
+              <textarea
+                rows={3}
+                value={plan.homework}
+                onChange={e => update('homework', e.target.value)}
+                placeholder="What homework will be assigned at the end of this lesson?"
+                style={{ ...inputStyle, lineHeight:1.6, color:DS.sub, resize:'vertical' }}
+              />
+            ) : renderFieldValue(plan.homework, 'No homework set.')}
+          </div>
+
+          {/* Notes card */}
+          <div style={{ background:DS.bg, border:`1px solid ${DS.border}`, borderRadius:12, padding:'20px 22px' }}>
+            <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:14 }}>
+              <div style={{ width:30, height:30, borderRadius:8, background:DS.surface, color:DS.muted, display:'flex', alignItems:'center', justifyContent:'center' }}>
+                <Icon name="edit" size={15} />
+              </div>
+              <div style={{ fontSize:14, fontWeight:600, color:DS.text }}>Personal Notes</div>
+            </div>
+            {isEdit ? (
+              <textarea
+                rows={3}
+                value={plan.notes}
+                onChange={e => update('notes', e.target.value)}
+                placeholder="Differentiation, students to watch, things to remember…"
+                style={{ ...inputStyle, lineHeight:1.6, color:DS.sub, resize:'vertical' }}
+              />
+            ) : renderFieldValue(plan.notes, 'No notes recorded.')}
+          </div>
+        </div>
+
+        {/* Right: sidebar */}
+        <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+          {/* Class & date selector */}
+          <div style={{ background:DS.bg, border:`1px solid ${DS.border}`, borderRadius:12, padding:'18px 20px' }}>
+            <div style={{ fontSize:14, fontWeight:600, color:DS.text, marginBottom:14 }}>Lesson Details</div>
+            <div style={{ marginBottom:12 }}>
+              <label style={labelStyle}>Topic / Unit</label>
+              {isEdit ? (
+                <input
+                  value={plan.topic}
+                  onChange={e => update('topic', e.target.value)}
+                  placeholder="e.g. Algebra · Quadratics"
+                  style={inputStyle}
+                />
+              ) : (
+                <div style={{ fontSize:13, color: plan.topic ? DS.text : DS.faint, fontStyle: plan.topic ? 'normal' : 'italic' }}>
+                  {plan.topic || 'Not set'}
+                </div>
+              )}
+            </div>
+            <div style={{ marginBottom:12 }}>
+              <label style={labelStyle}>Class</label>
+              <select
+                value={selectedGroup}
+                onChange={e => setSelectedGroup(e.target.value)}
+                style={inputStyle}
+              >
+                {teacherClasses.map(c => <option key={c.id} value={c.group}>{c.group}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={labelStyle}>Date</label>
+              <input
+                type="date"
+                value={selectedDate}
+                onChange={e => setSelectedDate(e.target.value)}
+                style={inputStyle}
+              />
+            </div>
+          </div>
+
+          {/* Resources / file uploads */}
+          <div style={{ background:DS.bg, border:`1px solid ${DS.border}`, borderRadius:12, padding:'18px 20px' }}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:14 }}>
+              <div style={{ fontSize:14, fontWeight:600, color:DS.text }}>Resources</div>
+              <Badge variant="default">{plan.resources?.length || 0}</Badge>
+            </div>
+            <FileDropZone
+              files={plan.resources || []}
+              onAdd={addFiles}
+              onRemove={removeFile}
+              disabled={!isEdit}
+            />
+            {!isEdit && (!plan.resources || plan.resources.length === 0) && (
+              <div style={{ fontSize:12, color:DS.faint, fontStyle:'italic', textAlign:'center', padding:'12px 0' }}>
+                No resources uploaded.
+              </div>
+            )}
+          </div>
+
+          {/* Action buttons */}
+          <div style={{
+            background:DS.bg, border:`1px solid ${DS.border}`, borderRadius:12,
+            padding:'14px 16px', display:'flex', flexDirection:'column', gap:8,
+            position:'sticky', top:16,
+          }}>
+            {isEdit ? (
+              <>
+                <Btn variant="primary" icon="check" onClick={onSave}>
+                  {exists ? 'Update Plan' : 'Save Plan'}
+                </Btn>
+                {exists && <Btn variant="secondary" onClick={() => setMode('view')}>Cancel Edits</Btn>}
+              </>
+            ) : (
+              <Btn variant="primary" icon="edit" onClick={() => setMode('edit')}>Edit Plan</Btn>
+            )}
+            <Btn variant="ghost" icon="chevron_d" onClick={onBack}>Back to All Plans</Btn>
+            {exists && <Btn variant="ghost" icon="x" onClick={onDelete}>Delete Plan</Btn>}
+          </div>
+        </div>
+      </div>
+    </>
+  );
+};
+
+const LessonPlannerPage = ({ initialGroup, initialDate, initialMode }) => {
+  // 'browse' shows the saved-plans list; 'editor' shows the plan editor/viewer.
+  const [screen, setScreen] = React.useState(initialGroup ? 'editor' : 'browse');
+  const [selectedGroup, setSelectedGroup] = React.useState(initialGroup || teacherClasses[0].group);
+  const [selectedDate, setSelectedDate] = React.useState(initialDate || '2026-04-25');
+  const [mode, setMode] = React.useState(initialMode || 'edit');
+  const [plan, setPlan] = React.useState(blankPlan());
+  const [saved, setSaved] = React.useState(false);
+  const [savedAt, setSavedAt] = React.useState(null);
+
+  const key = planKey(selectedGroup, selectedDate);
+  const exists = !!window.__lessonPlans[key];
+
+  React.useEffect(() => {
+    const stored = window.__lessonPlans[key];
+    if (stored) {
+      setPlan({ ...blankPlan(), ...stored.plan });
+      setSavedAt(stored.savedAt);
+      setMode('view');
+    } else {
+      setPlan(blankPlan());
+      setSavedAt(null);
+      setMode('edit');
+    }
+    setSaved(false);
+  }, [key]);
+
+  const handleSave = () => {
+    const now = new Date().toLocaleString('en-GB', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' });
+    window.__lessonPlans[key] = { plan, savedAt: now, group: selectedGroup, date: selectedDate };
+    setSavedAt(now);
+    setSaved(true);
+    setMode('view');
+    setTimeout(() => setSaved(false), 2500);
+  };
+
+  const handleDelete = () => {
+    delete window.__lessonPlans[key];
+    setPlan(blankPlan());
+    setSavedAt(null);
+    setMode('edit');
+    setScreen('browse');
+  };
+
+  const openExisting = (group, date) => {
+    setSelectedGroup(group);
+    setSelectedDate(date);
+    setScreen('editor');
+  };
+
+  const startNew = () => {
+    setSelectedGroup(teacherClasses[0].group);
+    setSelectedDate(new Date().toISOString().slice(0, 10));
+    setPlan(blankPlan());
+    setMode('edit');
+    setScreen('editor');
+  };
+
+  return (
+    <div style={{ padding:'32px', maxWidth:1280, margin:'0 auto' }}>
+      <PageHeader
+        title="Lesson Planner"
+        subtitle={screen === 'browse'
+          ? 'Search saved lessons or plan a new one'
+          : 'Plan, save and review lessons for any class on any date'}
+        actions={[
+          screen === 'editor' && (
+            <Btn key="back" variant="secondary" icon="chevron_d" small onClick={() => setScreen('browse')}>
+              All Plans
+            </Btn>
+          ),
+          screen === 'browse' && (
+            <Btn key="new" variant="primary" icon="plus" small onClick={startNew}>
+              Plan a New Lesson
+            </Btn>
+          ),
+        ].filter(Boolean)}
+      />
+
+      {screen === 'browse' ? (
+        <SavedPlansBrowser
+          onOpen={openExisting}
+          onNew={startNew}
+          currentKey={null}
+        />
+      ) : (
+        <LessonPlanEditor
+          selectedGroup={selectedGroup}
+          setSelectedGroup={setSelectedGroup}
+          selectedDate={selectedDate}
+          setSelectedDate={setSelectedDate}
+          plan={plan}
+          setPlan={setPlan}
+          mode={mode}
+          setMode={setMode}
+          exists={exists}
+          savedAt={savedAt}
+          saved={saved}
+          onSave={handleSave}
+          onDelete={handleDelete}
+          onBack={() => setScreen('browse')}
+        />
+      )}
+    </div>
+  );
+};
+
 // ─── Teacher AI Feedback Page ───────────────────────────────────────────────────
 const aiQueueFull = [
   { student:'Oliver Chen',        hw:'Calculus: Differentiation Basics',  subject:'A-Level Maths', submitted:'2h ago',    confidence:92, score:94, draft:'Excellent work — your chain rule application is correct. Consider showing intermediate steps for full marks in the exam.', strengths:['All 6 questions correct','Clear working shown','Good notation throughout'], issues:['Show intermediate steps on Q4 expansion'] },
@@ -741,12 +1453,17 @@ const TeacherAIFeedbackPage = () => {
 };
 
 // ─── Router ─────────────────────────────────────────────────────────────────────
-const TeacherPages = ({ page }) => {
-  if (page === 'classes')    return <TeacherClassesPage />;
-  if (page === 'homework')   return <TeacherHomework />;
-  if (page === 'progress')   return <TeacherProgressPage />;
-  if (page === 'attendance') return <TeacherAttendancePage />;
-  if (page === 'ai_queue')   return <TeacherAIFeedbackPage />;
+const TeacherPages = ({ page, plannerArgs }) => {
+  if (page === 'classes')        return <TeacherClassesPage />;
+  if (page === 'homework')       return <TeacherHomework />;
+  if (page === 'progress')       return <TeacherProgressPage />;
+  if (page === 'attendance')     return <TeacherAttendancePage />;
+  if (page === 'ai_queue')       return <TeacherAIFeedbackPage />;
+  if (page === 'lesson_planner') return <LessonPlannerPage
+    initialGroup={plannerArgs && plannerArgs.group}
+    initialDate={plannerArgs && plannerArgs.date}
+    initialMode={plannerArgs && plannerArgs.mode}
+  />;
   return null;
 };
 
