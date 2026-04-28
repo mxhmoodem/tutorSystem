@@ -185,6 +185,7 @@ const NAV_CONFIG = {
       { id: 'homework',        icon: 'clip',      label: 'Homework' },
       { id: 'attendance',      icon: 'check',     label: 'Attendance' },
       { id: 'progress',        icon: 'chart',     label: 'Progress' },
+      { id: 'tracking',        icon: 'star',      label: 'Tracking' },
       { id: 'ai_queue',        icon: 'brain',     label: 'AI Feedback' },
     ],
     bottom: [{ id: 'settings', icon: 'settings', label: 'Settings' }],

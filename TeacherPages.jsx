@@ -1452,12 +1452,716 @@ const TeacherAIFeedbackPage = () => {
   );
 };
 
+// ─── Tracking Page ──────────────────────────────────────────────────────────────
+const TRACKING_STORAGE_KEY = 'tutoros.tracking.v1';
+
+const COLUMN_TYPES = [
+  { id: 'score',   label: 'Score / %',   icon: 'chart' },
+  { id: 'number',  label: 'Number',      icon: 'chart' },
+  { id: 'grade',   label: 'Grade',       icon: 'star' },
+  { id: 'text',    label: 'Text / Note', icon: 'edit' },
+  { id: 'check',   label: 'Yes / No',    icon: 'check' },
+  { id: 'select',  label: 'Choice',      icon: 'clip' },
+  { id: 'date',    label: 'Date',        icon: 'calendar' },
+];
+
+const GRADE_OPTIONS = ['A*', 'A', 'B', 'C', 'D', 'E', 'U'];
+
+const DEFAULT_TRACKERS = [
+  {
+    id: 't_hw',
+    name: 'Homework Scores',
+    description: 'Weekly homework marks per student',
+    classGroup: 'Year 10 – Group A',
+    columns: [
+      { id: 'c1', name: 'HW1: Algebra',       type: 'score', max: 20 },
+      { id: 'c2', name: 'HW2: Equations',     type: 'score', max: 20 },
+      { id: 'c3', name: 'HW3: Probability',   type: 'score', max: 25 },
+      { id: 'c4', name: 'On time?',           type: 'check' },
+      { id: 'c5', name: 'Notes',              type: 'text' },
+    ],
+    entries: {
+      'Emma Thompson':   { c1: 17, c2: 18, c3: 22, c4: true,  c5: 'Excellent presentation' },
+      'Oliver Chen':     { c1: 19, c2: 20, c3: 24, c4: true,  c5: '' },
+      'Sophia Patel':    { c1: 14, c2: 13, c3: 18, c4: false, c5: 'Late submission' },
+      'James Wilson':    { c1: 12, c2: 14, c3: 16, c4: true,  c5: '' },
+      'Aiden Foster':    { c1: 16, c2: 17, c3: 20, c4: true,  c5: '' },
+      'Mia Okonkwo':     { c1: 18, c2: 19, c3: 23, c4: true,  c5: '' },
+      'Liam Thornton':   { c1: 11, c2: 12, c3: 14, c4: false, c5: 'Needs support' },
+      'Zoe Patterson':   { c1: 15, c2: 16, c3: 19, c4: true,  c5: '' },
+    },
+  },
+  {
+    id: 't_test',
+    name: 'Test Scores',
+    description: 'Half-term assessments',
+    classGroup: 'Year 10 – Group A',
+    columns: [
+      { id: 'c1', name: 'Mock Paper 1',  type: 'score', max: 100 },
+      { id: 'c2', name: 'Mock Paper 2',  type: 'score', max: 100 },
+      { id: 'c3', name: 'Predicted',     type: 'grade' },
+    ],
+    entries: {
+      'Emma Thompson':   { c1: 76, c2: 81, c3: 'B'  },
+      'Oliver Chen':     { c1: 92, c2: 95, c3: 'A*' },
+      'Sophia Patel':    { c1: 64, c2: 68, c3: 'C'  },
+      'James Wilson':    { c1: 71, c2: 69, c3: 'B'  },
+    },
+  },
+];
+
+const loadTrackers = () => {
+  try {
+    const raw = localStorage.getItem(TRACKING_STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {}
+  return DEFAULT_TRACKERS;
+};
+
+const saveTrackers = (trackers) => {
+  try { localStorage.setItem(TRACKING_STORAGE_KEY, JSON.stringify(trackers)); } catch (e) {}
+};
+
+const newId = (prefix) => prefix + '_' + Math.random().toString(36).slice(2, 8);
+
+// Read class roster from teacherClasses; fall back to sane default
+const getRosterForGroup = (group) => {
+  const cls = teacherClasses.find(c => c.group === group);
+  return cls ? cls.studentList : [];
+};
+
+const TrackingCell = ({ col, value, onChange }) => {
+  const baseInputStyle = {
+    width: '100%', padding: '6px 8px', fontSize: 13,
+    border: `1px solid ${DS.border}`, borderRadius: 6,
+    background: DS.bg, color: DS.text, fontFamily: 'inherit', outline: 'none',
+  };
+
+  if (col.type === 'check') {
+    const v = !!value;
+    return (
+      <button
+        onClick={() => onChange(!v)}
+        style={{
+          width: 28, height: 28, borderRadius: 6, cursor: 'pointer',
+          border: `1px solid ${v ? DS.successBorder : DS.border}`,
+          background: v ? DS.successBg : DS.surface,
+          color: v ? DS.success : DS.faint,
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        }}
+      >
+        {v ? <Icon name="check" size={14} /> : <Icon name="x" size={12} />}
+      </button>
+    );
+  }
+  if (col.type === 'grade') {
+    return (
+      <select value={value || ''} onChange={e => onChange(e.target.value)} style={baseInputStyle}>
+        <option value="">—</option>
+        {GRADE_OPTIONS.map(g => <option key={g} value={g}>{g}</option>)}
+      </select>
+    );
+  }
+  if (col.type === 'select') {
+    const opts = col.options || [];
+    return (
+      <select value={value || ''} onChange={e => onChange(e.target.value)} style={baseInputStyle}>
+        <option value="">—</option>
+        {opts.map(o => <option key={o} value={o}>{o}</option>)}
+      </select>
+    );
+  }
+  if (col.type === 'date') {
+    return (
+      <input type="date" value={value || ''} onChange={e => onChange(e.target.value)} style={baseInputStyle} />
+    );
+  }
+  if (col.type === 'score' || col.type === 'number') {
+    const max = col.type === 'score' ? (col.max || 100) : null;
+    const num = value === '' || value === null || value === undefined ? '' : value;
+    const pct = (col.type === 'score' && typeof value === 'number' && max) ? (value / max) * 100 : null;
+    const colour = pct === null ? DS.text : pct >= 70 ? DS.success : pct >= 50 ? DS.warning : DS.danger;
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <input
+          type="number"
+          value={num}
+          onChange={e => {
+            const v = e.target.value;
+            onChange(v === '' ? null : Number(v));
+          }}
+          style={{ ...baseInputStyle, color: colour, fontWeight: 600 }}
+        />
+        {max != null && <span style={{ fontSize: 11, color: DS.faint, whiteSpace: 'nowrap' }}>/ {max}</span>}
+      </div>
+    );
+  }
+  // text
+  return (
+    <input
+      type="text"
+      value={value || ''}
+      onChange={e => onChange(e.target.value)}
+      placeholder="—"
+      style={baseInputStyle}
+    />
+  );
+};
+
+const ColumnSummary = ({ col, entries, students }) => {
+  const values = students.map(s => entries[s] && entries[s][col.id]).filter(v => v !== undefined && v !== null && v !== '');
+  if (values.length === 0) return <span style={{ fontSize: 11, color: DS.faint }}>—</span>;
+
+  if (col.type === 'score' || col.type === 'number') {
+    const nums = values.filter(v => typeof v === 'number');
+    if (!nums.length) return <span style={{ fontSize: 11, color: DS.faint }}>—</span>;
+    const avg = nums.reduce((a, b) => a + b, 0) / nums.length;
+    if (col.type === 'score' && col.max) {
+      const pct = (avg / col.max) * 100;
+      return <span style={{ fontSize: 11, color: DS.muted }}>avg <b style={{ color: pct >= 70 ? DS.success : pct >= 50 ? DS.warning : DS.danger }}>{avg.toFixed(1)} / {col.max}</b> ({pct.toFixed(0)}%)</span>;
+    }
+    return <span style={{ fontSize: 11, color: DS.muted }}>avg <b style={{ color: DS.text }}>{avg.toFixed(1)}</b></span>;
+  }
+  if (col.type === 'check') {
+    const yes = values.filter(v => v === true).length;
+    return <span style={{ fontSize: 11, color: DS.muted }}>{yes}/{values.length} yes</span>;
+  }
+  if (col.type === 'grade' || col.type === 'select') {
+    const counts = {};
+    values.forEach(v => { counts[v] = (counts[v] || 0) + 1; });
+    const top = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 3);
+    return <span style={{ fontSize: 11, color: DS.muted }}>{top.map(([k, n]) => `${k}×${n}`).join(' · ')}</span>;
+  }
+  return <span style={{ fontSize: 11, color: DS.faint }}>{values.length} filled</span>;
+};
+
+const ColumnEditor = ({ col, onSave, onCancel, onDelete }) => {
+  const [draft, setDraft] = React.useState(() => ({
+    name: col.name || '',
+    type: col.type || 'score',
+    max: col.max || 100,
+    options: (col.options || []).join(', '),
+  }));
+  const inputStyle = {
+    width: '100%', padding: '7px 10px', fontSize: 13,
+    border: `1px solid ${DS.border}`, borderRadius: 6,
+    background: DS.bg, color: DS.text, fontFamily: 'inherit', outline: 'none',
+  };
+  const submit = () => {
+    if (!draft.name.trim()) return;
+    const next = { ...col, name: draft.name.trim(), type: draft.type };
+    if (draft.type === 'score') next.max = Number(draft.max) || 100;
+    else delete next.max;
+    if (draft.type === 'select') {
+      next.options = draft.options.split(',').map(s => s.trim()).filter(Boolean);
+    } else {
+      delete next.options;
+    }
+    onSave(next);
+  };
+  return (
+    <div style={{
+      background: DS.bg, border: `1px solid ${DS.border}`, borderRadius: 10,
+      padding: 16, display: 'flex', flexDirection: 'column', gap: 10, width: 320,
+    }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>
+        {onDelete ? 'Edit column' : 'New column'}
+      </div>
+      <label style={{ fontSize: 11, color: DS.muted, fontWeight: 500 }}>
+        Column name
+        <input
+          autoFocus
+          value={draft.name}
+          onChange={e => setDraft(d => ({ ...d, name: e.target.value }))}
+          placeholder="e.g. Mock Paper 1"
+          style={{ ...inputStyle, marginTop: 4 }}
+        />
+      </label>
+      <label style={{ fontSize: 11, color: DS.muted, fontWeight: 500 }}>
+        Type
+        <select
+          value={draft.type}
+          onChange={e => setDraft(d => ({ ...d, type: e.target.value }))}
+          style={{ ...inputStyle, marginTop: 4 }}
+        >
+          {COLUMN_TYPES.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+        </select>
+      </label>
+      {draft.type === 'score' && (
+        <label style={{ fontSize: 11, color: DS.muted, fontWeight: 500 }}>
+          Out of (max)
+          <input
+            type="number"
+            value={draft.max}
+            onChange={e => setDraft(d => ({ ...d, max: e.target.value }))}
+            style={{ ...inputStyle, marginTop: 4 }}
+          />
+        </label>
+      )}
+      {draft.type === 'select' && (
+        <label style={{ fontSize: 11, color: DS.muted, fontWeight: 500 }}>
+          Options (comma separated)
+          <input
+            value={draft.options}
+            onChange={e => setDraft(d => ({ ...d, options: e.target.value }))}
+            placeholder="e.g. Excellent, Good, Needs work"
+            style={{ ...inputStyle, marginTop: 4 }}
+          />
+        </label>
+      )}
+      <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+        <Btn variant="primary" small onClick={submit}>Save</Btn>
+        <Btn variant="secondary" small onClick={onCancel}>Cancel</Btn>
+        {onDelete && (
+          <button onClick={onDelete} style={{
+            marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer',
+            color: DS.danger, fontSize: 12, fontWeight: 500, padding: '6px 8px',
+          }}>Delete column</button>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const TrackerEditor = ({ tracker, onSave, onCancel }) => {
+  const [draft, setDraft] = React.useState(() => ({
+    name: tracker.name || '',
+    description: tracker.description || '',
+    classGroup: tracker.classGroup || (teacherClasses[0] && teacherClasses[0].group) || '',
+  }));
+  const inputStyle = {
+    width: '100%', padding: '8px 10px', fontSize: 13,
+    border: `1px solid ${DS.border}`, borderRadius: 6,
+    background: DS.bg, color: DS.text, fontFamily: 'inherit', outline: 'none',
+  };
+  return (
+    <div style={{
+      background: DS.bg, border: `1px solid ${DS.border}`, borderRadius: 10,
+      padding: 16, display: 'flex', flexDirection: 'column', gap: 10, width: 360,
+    }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>
+        {tracker.id ? 'Edit tracker' : 'New tracker'}
+      </div>
+      <label style={{ fontSize: 11, color: DS.muted, fontWeight: 500 }}>
+        Name
+        <input
+          autoFocus
+          value={draft.name}
+          onChange={e => setDraft(d => ({ ...d, name: e.target.value }))}
+          placeholder="e.g. Behaviour log"
+          style={{ ...inputStyle, marginTop: 4 }}
+        />
+      </label>
+      <label style={{ fontSize: 11, color: DS.muted, fontWeight: 500 }}>
+        Description
+        <input
+          value={draft.description}
+          onChange={e => setDraft(d => ({ ...d, description: e.target.value }))}
+          placeholder="What is this tracker for?"
+          style={{ ...inputStyle, marginTop: 4 }}
+        />
+      </label>
+      <label style={{ fontSize: 11, color: DS.muted, fontWeight: 500 }}>
+        Class / group
+        <select
+          value={draft.classGroup}
+          onChange={e => setDraft(d => ({ ...d, classGroup: e.target.value }))}
+          style={{ ...inputStyle, marginTop: 4 }}
+        >
+          {teacherClasses.map(c => <option key={c.id} value={c.group}>{c.group}</option>)}
+        </select>
+      </label>
+      <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+        <Btn variant="primary" small onClick={() => {
+          if (!draft.name.trim()) return;
+          onSave({ ...draft, name: draft.name.trim() });
+        }}>Save</Btn>
+        <Btn variant="secondary" small onClick={onCancel}>Cancel</Btn>
+      </div>
+    </div>
+  );
+};
+
+const TeacherTrackingPage = () => {
+  const [trackers, setTrackers] = React.useState(loadTrackers);
+  const [activeId, setActiveId] = React.useState(() => {
+    const t = loadTrackers();
+    return t[0] ? t[0].id : null;
+  });
+  const [editingTracker, setEditingTracker] = React.useState(null); // {id?} | null
+  const [editingColumn, setEditingColumn] = React.useState(null);   // {trackerId, col} | null
+  const [extraStudent, setExtraStudent] = React.useState('');
+
+  React.useEffect(() => { saveTrackers(trackers); }, [trackers]);
+
+  const active = trackers.find(t => t.id === activeId) || trackers[0];
+
+  const updateTracker = (id, mut) => {
+    setTrackers(prev => prev.map(t => t.id === id ? mut(t) : t));
+  };
+
+  const addTracker = (data) => {
+    const t = {
+      id: newId('t'),
+      name: data.name,
+      description: data.description,
+      classGroup: data.classGroup,
+      columns: [],
+      entries: {},
+    };
+    setTrackers(prev => [...prev, t]);
+    setActiveId(t.id);
+    setEditingTracker(null);
+  };
+
+  const saveTrackerEdit = (id, data) => {
+    updateTracker(id, t => ({ ...t, ...data }));
+    setEditingTracker(null);
+  };
+
+  const deleteTracker = (id) => {
+    if (!window.confirm('Delete this tracker and all its data?')) return;
+    setTrackers(prev => {
+      const next = prev.filter(t => t.id !== id);
+      if (activeId === id) setActiveId(next[0] ? next[0].id : null);
+      return next;
+    });
+  };
+
+  const addColumn = (col) => {
+    if (!active) return;
+    const withId = { ...col, id: newId('c') };
+    updateTracker(active.id, t => ({ ...t, columns: [...t.columns, withId] }));
+    setEditingColumn(null);
+  };
+
+  const updateColumn = (colId, col) => {
+    updateTracker(active.id, t => ({
+      ...t,
+      columns: t.columns.map(c => c.id === colId ? { ...col, id: colId } : c),
+    }));
+    setEditingColumn(null);
+  };
+
+  const deleteColumn = (colId) => {
+    if (!window.confirm('Delete this column and all its values?')) return;
+    updateTracker(active.id, t => {
+      const newEntries = {};
+      Object.keys(t.entries || {}).forEach(s => {
+        const row = { ...t.entries[s] };
+        delete row[colId];
+        newEntries[s] = row;
+      });
+      return { ...t, columns: t.columns.filter(c => c.id !== colId), entries: newEntries };
+    });
+    setEditingColumn(null);
+  };
+
+  const setCell = (student, colId, value) => {
+    updateTracker(active.id, t => ({
+      ...t,
+      entries: {
+        ...t.entries,
+        [student]: { ...(t.entries[student] || {}), [colId]: value },
+      },
+    }));
+  };
+
+  const removeStudent = (student) => {
+    updateTracker(active.id, t => {
+      const e = { ...t.entries };
+      delete e[student];
+      return { ...t, entries: e, extraStudents: (t.extraStudents || []).filter(s => s !== student) };
+    });
+  };
+
+  const addStudent = () => {
+    const name = extraStudent.trim();
+    if (!name) return;
+    updateTracker(active.id, t => {
+      const list = t.extraStudents || [];
+      if (list.includes(name) || getRosterForGroup(t.classGroup).includes(name)) return t;
+      return { ...t, extraStudents: [...list, name], entries: { ...t.entries, [name]: t.entries[name] || {} } };
+    });
+    setExtraStudent('');
+  };
+
+  const exportCSV = () => {
+    if (!active) return;
+    const students = [...getRosterForGroup(active.classGroup), ...(active.extraStudents || [])];
+    const escape = (s) => {
+      const v = s == null ? '' : String(s);
+      return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+    };
+    const header = ['Student', ...active.columns.map(c => c.name)];
+    const rows = students.map(s => [s, ...active.columns.map(c => {
+      const v = active.entries[s] && active.entries[s][c.id];
+      if (typeof v === 'boolean') return v ? 'Yes' : 'No';
+      return v == null ? '' : v;
+    })]);
+    const csv = [header, ...rows].map(r => r.map(escape).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${active.name.replace(/[^a-z0-9]+/gi, '_')}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const students = active
+    ? [...getRosterForGroup(active.classGroup), ...(active.extraStudents || [])]
+    : [];
+
+  return (
+    <div style={{ padding: '32px' }}>
+      <PageHeader
+        title="Tracking"
+        subtitle="Custom trackers for homework, tests, behaviour — anything you want to log per student"
+        actions={[
+          <Btn key="new" variant="primary" icon="plus" small onClick={() => setEditingTracker({})}>
+            New tracker
+          </Btn>,
+        ]}
+      />
+
+      {/* Tracker tabs */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap', alignItems: 'center' }}>
+        {trackers.map(t => {
+          const isActive = active && t.id === active.id;
+          return (
+            <button
+              key={t.id}
+              onClick={() => setActiveId(t.id)}
+              style={{
+                padding: '8px 14px', borderRadius: 8, cursor: 'pointer',
+                border: `1px solid ${isActive ? DS.accentBorder : DS.border}`,
+                background: isActive ? DS.accentLight : DS.bg,
+                color: isActive ? DS.accent : DS.sub,
+                fontSize: 13, fontWeight: isActive ? 600 : 500,
+                display: 'inline-flex', alignItems: 'center', gap: 8,
+              }}
+            >
+              <Icon name="star" size={13} color={isActive ? DS.accent : DS.muted} />
+              {t.name}
+              <span style={{ fontSize: 11, color: isActive ? DS.accent : DS.faint, opacity: 0.7 }}>
+                · {t.classGroup}
+              </span>
+            </button>
+          );
+        })}
+        {trackers.length === 0 && (
+          <span style={{ fontSize: 13, color: DS.muted }}>No trackers yet — create one to get started.</span>
+        )}
+      </div>
+
+      {/* Inline new-tracker editor */}
+      {editingTracker && !editingTracker.id && (
+        <div style={{ marginBottom: 20 }}>
+          <TrackerEditor
+            tracker={{}}
+            onSave={addTracker}
+            onCancel={() => setEditingTracker(null)}
+          />
+        </div>
+      )}
+
+      {!active && !editingTracker && (
+        <Card>
+          <div style={{ padding: 32, textAlign: 'center', color: DS.muted, fontSize: 14 }}>
+            Click <b>New tracker</b> above to start tracking anything you like.
+          </div>
+        </Card>
+      )}
+
+      {active && (
+        <Card>
+          {/* Tracker header */}
+          <div style={{
+            padding: '16px 20px', borderBottom: `1px solid ${DS.border}`,
+            display: 'flex', alignItems: 'center', gap: 16,
+          }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: DS.text }}>{active.name}</div>
+              {active.description && (
+                <div style={{ fontSize: 12, color: DS.muted, marginTop: 2 }}>{active.description}</div>
+              )}
+            </div>
+            <Badge variant="default">{active.classGroup}</Badge>
+            <Badge variant="accent">{students.length} students</Badge>
+            <Btn variant="ghost" icon="edit" small onClick={() => setEditingTracker({ id: active.id })}>
+              Settings
+            </Btn>
+            <Btn variant="ghost" icon="download" small onClick={exportCSV}>Export CSV</Btn>
+            <button
+              onClick={() => deleteTracker(active.id)}
+              style={{
+                background: 'none', border: 'none', cursor: 'pointer',
+                color: DS.danger, fontSize: 12, fontWeight: 500, padding: '6px 8px',
+              }}
+            >Delete</button>
+          </div>
+
+          {/* Inline tracker-edit form */}
+          {editingTracker && editingTracker.id === active.id && (
+            <div style={{ padding: 16, borderBottom: `1px solid ${DS.border}`, background: DS.surface }}>
+              <TrackerEditor
+                tracker={active}
+                onSave={(data) => saveTrackerEdit(active.id, data)}
+                onCancel={() => setEditingTracker(null)}
+              />
+            </div>
+          )}
+
+          {/* Column editor */}
+          {editingColumn && editingColumn.trackerId === active.id && (
+            <div style={{ padding: 16, borderBottom: `1px solid ${DS.border}`, background: DS.surface }}>
+              <ColumnEditor
+                col={editingColumn.col || { name: '', type: 'score', max: 100 }}
+                onSave={(c) => editingColumn.col && editingColumn.col.id
+                  ? updateColumn(editingColumn.col.id, c)
+                  : addColumn(c)}
+                onCancel={() => setEditingColumn(null)}
+                onDelete={editingColumn.col && editingColumn.col.id
+                  ? () => deleteColumn(editingColumn.col.id)
+                  : null}
+              />
+            </div>
+          )}
+
+          {/* Table */}
+          <div style={{ overflow: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${DS.border}`, background: DS.surface }}>
+                  <th style={{
+                    position: 'sticky', left: 0, background: DS.surface, zIndex: 1,
+                    padding: '10px 16px', textAlign: 'left',
+                    fontSize: 11, fontWeight: 600, color: DS.muted,
+                    textTransform: 'uppercase', letterSpacing: '0.06em',
+                    minWidth: 200, borderRight: `1px solid ${DS.border}`,
+                  }}>Student</th>
+                  {active.columns.map(col => (
+                    <th key={col.id} style={{
+                      padding: '10px 12px', textAlign: 'left',
+                      fontSize: 11, fontWeight: 600, color: DS.muted,
+                      textTransform: 'uppercase', letterSpacing: '0.06em',
+                      minWidth: 140,
+                    }}>
+                      <button
+                        onClick={() => setEditingColumn({ trackerId: active.id, col })}
+                        style={{
+                          background: 'none', border: 'none', cursor: 'pointer',
+                          padding: 0, color: DS.muted, fontWeight: 600, fontSize: 11,
+                          textTransform: 'uppercase', letterSpacing: '0.06em',
+                          textAlign: 'left', display: 'inline-flex', alignItems: 'center', gap: 5,
+                        }}
+                        title="Edit column"
+                      >
+                        {col.name}
+                        {col.type === 'score' && col.max && (
+                          <span style={{ color: DS.faint, fontWeight: 400 }}>/{col.max}</span>
+                        )}
+                        <Icon name="edit" size={10} color={DS.faint} />
+                      </button>
+                    </th>
+                  ))}
+                  <th style={{ padding: '10px 12px', minWidth: 120 }}>
+                    <Btn variant="ghost" icon="plus" small onClick={() => setEditingColumn({ trackerId: active.id, col: null })}>
+                      Add column
+                    </Btn>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {students.map((s, i) => (
+                  <tr key={s} style={{ borderBottom: `1px solid ${DS.border}` }}>
+                    <td style={{
+                      position: 'sticky', left: 0, background: DS.bg, zIndex: 1,
+                      padding: '8px 16px', borderRight: `1px solid ${DS.border}`,
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <Avatar name={s} size={26} />
+                        <span style={{ fontSize: 13, color: DS.text, fontWeight: 500, flex: 1 }}>{s}</span>
+                        {(active.extraStudents || []).includes(s) && (
+                          <button
+                            onClick={() => removeStudent(s)}
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: DS.faint, padding: 2 }}
+                            title="Remove from tracker"
+                          >
+                            <Icon name="x" size={12} />
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                    {active.columns.map(col => (
+                      <td key={col.id} style={{ padding: '6px 12px' }}>
+                        <TrackingCell
+                          col={col}
+                          value={active.entries[s] && active.entries[s][col.id]}
+                          onChange={(v) => setCell(s, col.id, v)}
+                        />
+                      </td>
+                    ))}
+                    <td />
+                  </tr>
+                ))}
+                {/* Summary row */}
+                {students.length > 0 && active.columns.length > 0 && (
+                  <tr style={{ background: DS.surface }}>
+                    <td style={{
+                      position: 'sticky', left: 0, background: DS.surface, zIndex: 1,
+                      padding: '10px 16px', borderRight: `1px solid ${DS.border}`,
+                      fontSize: 11, fontWeight: 600, color: DS.muted,
+                      textTransform: 'uppercase', letterSpacing: '0.06em',
+                    }}>Summary</td>
+                    {active.columns.map(col => (
+                      <td key={col.id} style={{ padding: '10px 12px' }}>
+                        <ColumnSummary col={col} entries={active.entries} students={students} />
+                      </td>
+                    ))}
+                    <td />
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Add-student row */}
+          <div style={{
+            padding: '12px 16px', borderTop: `1px solid ${DS.border}`,
+            display: 'flex', alignItems: 'center', gap: 8,
+          }}>
+            <input
+              value={extraStudent}
+              onChange={e => setExtraStudent(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') addStudent(); }}
+              placeholder="Add another student to this tracker…"
+              style={{
+                flex: 1, maxWidth: 320,
+                padding: '7px 10px', fontSize: 13,
+                border: `1px solid ${DS.border}`, borderRadius: 6,
+                background: DS.bg, color: DS.text, fontFamily: 'inherit', outline: 'none',
+              }}
+            />
+            <Btn variant="secondary" icon="plus" small onClick={addStudent}>Add student</Btn>
+            <span style={{ marginLeft: 'auto', fontSize: 11, color: DS.faint }}>
+              Tip: click any column header to edit or delete it. All data is saved locally.
+            </span>
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+};
+
 // ─── Router ─────────────────────────────────────────────────────────────────────
 const TeacherPages = ({ page, plannerArgs }) => {
   if (page === 'classes')        return <TeacherClassesPage />;
   if (page === 'homework')       return <TeacherHomework />;
   if (page === 'progress')       return <TeacherProgressPage />;
   if (page === 'attendance')     return <TeacherAttendancePage />;
+  if (page === 'tracking')       return <TeacherTrackingPage />;
   if (page === 'ai_queue')       return <TeacherAIFeedbackPage />;
   if (page === 'lesson_planner') return <LessonPlannerPage
     initialGroup={plannerArgs && plannerArgs.group}

@@ -126,6 +126,7 @@ const App = () => {
       if (page === 'homework')       return <TeacherPages page="homework" />;
       if (page === 'progress')       return <TeacherPages page="progress" />;
       if (page === 'attendance')     return <TeacherPages page="attendance" />;
+      if (page === 'tracking')       return <TeacherPages page="tracking" />;
       if (page === 'ai_queue')       return <TeacherPages page="ai_queue" />;
       if (page === 'lesson_planner') return <TeacherPages page="lesson_planner" plannerArgs={plannerArgs} />;
       return <TeacherDashboard />;
@@ -179,6 +180,7 @@ const App = () => {
             ['teacher',  'homework',   'Teacher — Homework'],
             ['teacher',  'attendance', 'Teacher — Attendance'],
             ['teacher',  'progress',   'Teacher — Progress'],
+            ['teacher',  'tracking',   'Teacher — Tracking'],
             ['teacher',  'ai_queue',   'Teacher — AI Feedback'],
             ['student',  'dashboard',  'Student — Overview'],
             ['student',  'homework',   'Student — Homework'],
