@@ -161,6 +161,22 @@ const KPICard = ({ label, value, sub, trend, trendDir, icon, iconBg, accent }) =
 
 // ─── Sidebar ───────────────────────────────────────────────────────────────────
 const NAV_CONFIG = {
+  superadmin: {
+    label: 'Platform Owner',
+    color: '#7C3AED',
+    items: [
+      { id: 'dashboard',     icon: 'dashboard',   label: 'Overview' },
+      { id: 'centres',       icon: 'book',        label: 'Centres' },
+      { id: 'users',         icon: 'users',       label: 'Users' },
+      { id: 'revenue',       icon: 'invoice',     label: 'Revenue' },
+      { id: 'engagement',    icon: 'chart',       label: 'Engagement' },
+      { id: 'system',        icon: 'zap',         label: 'System Health' },
+      { id: 'comms',         icon: 'message',     label: 'Communications' },
+      { id: 'security',      icon: 'alert',       label: 'Security & Audit' },
+      { id: 'controls',      icon: 'settings',    label: 'Platform Controls' },
+    ],
+    bottom: [{ id: 'settings', icon: 'settings', label: 'Settings' }],
+  },
   admin: {
     label: 'Centre Admin',
     color: DS.accent,
@@ -270,15 +286,14 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch }) => {
       {onRoleSwitch && (
         <div style={{ marginBottom: 12 }}>
           <div style={{ fontSize: 10, color: DS.faint, padding: '4px 4px 6px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Switch view</div>
-          <div style={{ display: 'flex', gap: 4 }}>
-            {['admin','teacher','student'].map(r => (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
+            {[['superadmin','Owner'],['admin','Admin'],['teacher','Teacher'],['student','Student']].map(([r,lbl]) => (
               <button key={r} onClick={() => onRoleSwitch(r)} style={{
-                flex: 1, padding: '4px 6px', borderRadius: 5, border: `1px solid ${role === r ? DS.accentBorder : DS.border}`,
+                padding: '4px 6px', borderRadius: 5, border: `1px solid ${role === r ? DS.accentBorder : DS.border}`,
                 background: role === r ? DS.accentLight : DS.surface,
                 color: role === r ? DS.accent : DS.muted,
                 fontSize: 10, fontWeight: role === r ? 600 : 400, cursor: 'pointer',
-                textTransform: 'capitalize',
-              }}>{r}</button>
+              }}>{lbl}</button>
             ))}
           </div>
         </div>
@@ -296,7 +311,7 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch }) => {
           <Avatar name="User" size={28} color={cfg.color} />
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 13, fontWeight: 500, color: DS.sub, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {role === 'admin' ? 'Lisa Chen' : role === 'teacher' ? 'Sarah Clarke' : 'Oliver Chen'}
+              {role === 'superadmin' ? 'Marcus Hale' : role === 'admin' ? 'Lisa Chen' : role === 'teacher' ? 'Sarah Clarke' : 'Oliver Chen'}
             </div>
             <div style={{ fontSize: 11, color: DS.faint }}>{cfg.label}</div>
           </div>
