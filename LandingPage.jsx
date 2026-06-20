@@ -313,7 +313,7 @@ const LandingPage = ({ onEnterApp }) => {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 24 }}>
           {features.map(f => (
             <div key={f.title} style={{
-              border: `1px solid ${DS.border}`, borderRadius: 12,
+              border: `1px solid ${DS.cardBorder}`, borderRadius: 12,
               padding: '28px', background: DS.bg,
             }}>
               <div style={{

@@ -28,12 +28,38 @@
     ::-webkit-scrollbar-thumb:hover { background: #9CA3AF; }
     * { text-wrap: pretty; }
     input, textarea, button { font-family: inherit; }
+    @keyframes tos-fade { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes tos-pop  { from { opacity: 0; transform: translateY(8px) scale(0.98); } to { opacity: 1; transform: none; } }
+    select option { font-family: inherit; }
   </style>
 </head>
 <body>
 <div id="root"></div>
 
 <script type="text/babel" src="shared.jsx"></script>
+
+<!-- Mock data — each loads before the page that consumes it (depends on shared.jsx for DS) -->
+<script type="text/babel" src="mocks/superAdmin.mock.jsx"></script>
+<script type="text/babel" src="mocks/adminDashboard.mock.jsx"></script>
+<script type="text/babel" src="mocks/adminPages.mock.jsx"></script>
+<script type="text/babel" src="mocks/teacherDashboard.mock.jsx"></script>
+<script type="text/babel" src="mocks/teacherPages.mock.jsx"></script>
+<script type="text/babel" src="mocks/lessonPlanner.mock.jsx"></script>
+<script type="text/babel" src="mocks/studentDashboard.mock.jsx"></script>
+<script type="text/babel" src="mocks/homework.mock.jsx"></script>
+<script type="text/babel" src="mocks/reports.mock.jsx"></script>
+<script type="text/babel" src="mocks/settings.mock.jsx"></script>
+<script type="text/babel" src="mocks/communications.mock.jsx"></script>
+
+<!-- Reports module (consumes reports.mock; consumed by Teacher/Student/Admin pages) -->
+<script type="text/babel" src="Reports.jsx"></script>
+
+<!-- Settings module (per-role tabbed settings; consumes settings.mock) -->
+<script type="text/babel" src="Settings.jsx"></script>
+
+<!-- Communications module (announcements + messages; consumes communications.mock + SuperAdmin's SACommsPage) -->
+<script type="text/babel" src="Communications.jsx"></script>
+
 <script type="text/babel" src="LandingPage.jsx"></script>
 <script type="text/babel" src="SuperAdmin.jsx"></script>
 <script type="text/babel" src="AdminDashboard.jsx"></script>
@@ -50,33 +76,89 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "density": "compact"
 }/*EDITMODE-END*/;
 
-const TopBar = ({ view, onBack, accent }) => (
-  <div style={{
-    display: 'flex', alignItems: 'center', gap: 8,
-    padding: '0 20px', height: 40,
-    borderBottom: `1px solid #E5E7EB`,
-    background: '#FFFFFF', flexShrink: 0,
-  }}>
-    <button onClick={onBack} style={{
-      display: 'flex', alignItems: 'center', gap: 5,
-      background: 'none', border: 'none', cursor: 'pointer',
-      color: '#6B7280', fontSize: 12, padding: '2px 6px', borderRadius: 5,
+// Build a breadcrumb trail (e.g. "Reports › All Reports") from the active page id
+// using NAV_CONFIG, mirroring the sidebar's parent/sub structure.
+const buildCrumbs = (role, page) => {
+  const cfg = window.NAV_CONFIG[role];
+  if (!cfg) return [];
+  const parentId = window.navParentId(page);
+  const section  = page.includes(':') ? page.split(':')[1] : null;
+  const all = [...(cfg.items || []), ...(cfg.bottom || [])];
+  const item = all.find(i => i.id === parentId || i.id === parentId + 's' || parentId === i.id + 's')
+    || all.find(i => page.startsWith(i.id));
+  if (!item) return [{ label: parentId.charAt(0).toUpperCase() + parentId.slice(1) }];
+  const crumbs = [{ label: item.label }];
+  if (section && Array.isArray(item.sub)) {
+    const sub = item.sub.find(s => s.id === `${parentId}:${section}`);
+    if (sub) crumbs.push({ label: sub.label });
+  }
+  return crumbs;
+};
+
+const TopBar = ({ view, page, onBack, accent, comms, onNavigate, collapsed, onToggleSidebar }) => {
+  const [hovBack, setHovBack] = React.useState(false);
+  const crumbs = buildCrumbs(view, page);
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 6,
+      padding: '0 18px', height: 52,
+      borderBottom: `1px solid ${DS.border}`,
+      boxShadow: '0 1px 2px rgba(16,24,40,0.04)',
+      background: '#FFFFFF', flexShrink: 0, zIndex: 20,
     }}>
-      ← Back to marketing site
-    </button>
-    <div style={{ flex: 1 }} />
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-      <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#16A34A' }} />
-      <span style={{ fontSize: 12, color: '#6B7280' }}>Spring Term 2026</span>
+      {/* Sidebar collapse toggle */}
+      <button onClick={onToggleSidebar} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: 'none', border: 'none', cursor: 'pointer',
+        color: '#6B7280', padding: 7, borderRadius: 7, marginLeft: -4,
+      }}>
+        <Icon name="sidebar" size={17} />
+      </button>
+      <div style={{ width: 1, height: 18, background: DS.border, margin: '0 6px 0 2px' }} />
+
+      {/* Breadcrumb trail */}
+      <nav style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flex: 1 }}>
+        {crumbs.map((c, i) => (
+          <React.Fragment key={i}>
+            {i > 0 && <Icon name="chevron_r" size={13} color={DS.faint} />}
+            <span style={{
+              fontSize: 13.5,
+              fontWeight: i === crumbs.length - 1 ? 600 : 500,
+              color: i === crumbs.length - 1 ? DS.text : DS.muted,
+              whiteSpace: 'nowrap',
+            }}>{c.label}</span>
+          </React.Fragment>
+        ))}
+      </nav>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#16A34A' }} />
+        <span style={{ fontSize: 12, color: '#6B7280' }}>Spring Term 2026</span>
+      </div>
+      {/* Live notification bell — aggregates unread announcements + messages */}
+      {comms && window.NotificationBell
+        ? <NotificationBell comms={comms} onNavigate={onNavigate} />
+        : (
+          <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6B7280', padding: '4px', display: 'flex' }}>
+            <Icon name="bell" size={16} />
+          </button>
+        )}
+      <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6B7280', padding: '4px', display: 'flex' }}>
+        <Icon name="search" size={16} />
+      </button>
+      <div style={{ width: 1, height: 18, background: DS.border, margin: '0 2px' }} />
+      <button onClick={onBack}
+        onMouseEnter={() => setHovBack(true)} onMouseLeave={() => setHovBack(false)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 5,
+          background: hovBack ? DS.surfaceHover : 'none', border: 'none', cursor: 'pointer',
+          color: '#6B7280', fontSize: 12, padding: '5px 8px', borderRadius: 6,
+        }}>
+        ← Exit
+      </button>
     </div>
-    <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6B7280', padding: '4px', display: 'flex' }}>
-      <Icon name="bell" size={16} />
-    </button>
-    <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6B7280', padding: '4px', display: 'flex' }}>
-      <Icon name="search" size={16} />
-    </button>
-  </div>
-);
+  );
+};
 
 const App = () => {
   const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
@@ -84,16 +166,53 @@ const App = () => {
   const [page, setPage]     = React.useState('dashboard');
   const [plannerArgs, setPlannerArgs] = React.useState(null);
   const [renderKey, setRenderKey] = React.useState(0);
+  const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
+
+  // Admin-settable primary accent. Persisted to localStorage so it survives
+  // reloads independently of the dev Tweaks panel (which writes to disk). The
+  // effective accent is the admin override when set, otherwise the Tweaks value.
+  const [accentOverride, setAccentOverride] = React.useState(() => {
+    try { return localStorage.getItem('tutoros.accent') || null; } catch (e) { return null; }
+  });
+  const accent = accentOverride || tweaks.accent;
+  React.useEffect(() => {
+    // Settings → Appearance writes the live accent through this bridge.
+    window.__setAccent = (hex) => {
+      try { hex ? localStorage.setItem('tutoros.accent', hex) : localStorage.removeItem('tutoros.accent'); } catch (e) {}
+      setAccentOverride(hex || null);
+    };
+    window.__getAccent = () => { try { return localStorage.getItem('tutoros.accent') || window.DS.accent; } catch (e) { return window.DS.accent; } };
+    return () => { delete window.__setAccent; delete window.__getAccent; };
+  }, []);
+
+  // Communications state is lifted here (localStorage isn't reactive) so the
+  // notification bell + sidebar badges update live across the page, topbar and
+  // sidebar. The context is the active role's demo identity (see COMMS_SELF).
+  const commsRole = view === 'landing' ? 'admin' : view;
+  const commsCtx  = React.useMemo(() => window.commsContext ? window.commsContext(commsRole) : null, [commsRole]);
+  const comms     = window.useComms ? window.useComms(commsCtx) : null;
 
   React.useLayoutEffect(() => {
     if (window.DS) {
-      window.DS.accent       = tweaks.accent;
-      window.DS.accentHover  = tweaks.accent;
-      window.DS.accentLight  = tweaks.accent + '18';
-      window.DS.accentBorder = tweaks.accent + '55';
+      window.DS.accent       = accent;
+      window.DS.accentHover  = accent;
+      window.DS.accentLight  = accent + '18';
+      window.DS.accentBorder = accent + '55';
     }
     setRenderKey(k => k + 1);
-  }, [tweaks.accent]);
+  }, [accent]);
+
+  // Expand a bare nav id (e.g. "reports") to its first sub-section ("reports:overview")
+  // when that item has a dropdown, so the active section is always canonical — this
+  // keeps the sidebar dropdown + sub-item highlighting consistent no matter the entry
+  // point (sidebar click, PPTX export, Tweaks panel).
+  const normalizePage = (role, pg) => {
+    if (!pg || pg.includes(':')) return pg || 'dashboard';
+    const cfg = window.NAV_CONFIG[role];
+    if (!cfg) return pg;
+    const item = [...(cfg.items || []), ...(cfg.bottom || [])].find(i => i.id === pg);
+    return item && item.sub && item.sub.length ? item.sub[0].id : pg;
+  };
 
   const enterApp = (role) => { setView(role || 'admin'); setPage('dashboard'); };
 
@@ -101,7 +220,7 @@ const App = () => {
   React.useEffect(() => {
     window.__navigate = (role, pg) => {
       if (role === 'landing') { setView('landing'); setPage('dashboard'); }
-      else { setView(role); setPage(pg || 'dashboard'); }
+      else { setView(role); setPage(normalizePage(role, pg)); }
     };
     window.__openLessonPlanner = (group, date, mode) => {
       setPlannerArgs({ group, date, mode });
@@ -109,35 +228,43 @@ const App = () => {
       setPage('lesson_planner');
     };
   }, []);
-  const handleNav = (p)   => { setPlannerArgs(null); setPage(p); };
+  const handleNav = (p)   => { setPlannerArgs(null); setPage(normalizePage(view, p)); };
   const isApp = view !== 'landing';
 
   const renderContent = () => {
+    // Nav items with sub-sections route on a `<parent>:<section>` id (e.g.
+    // reports:browse). Split the active page into its parent and section so the
+    // owning page can open straight to that section.
+    const parent  = page.split(':')[0];
+    const section = page.includes(':') ? page.split(':')[1] : null;
+
+    // Settings is available to every role and lives in its own module.
+    if (parent === 'settings') return <SettingsPage role={view} section={section} />;
+    // Communications is shared across all roles (announcements + messages),
+    // backed by the lifted comms state. Superadmin's view is platform-scoped.
+    if (parent === 'comms' && comms) return <CommunicationsPage role={view} section={section} comms={comms} />;
     if (view === 'superadmin') {
-      if (page === 'dashboard') return <SuperAdminDashboard />;
-      return <SuperAdminPages page={page} />;
+      if (parent === 'dashboard') return <SuperAdminDashboard />;
+      return <SuperAdminPages page={parent} />;
     }
     if (view === 'admin') {
-      if (page === 'students') return <AdminPages page="students" />;
-      if (page === 'reports')  return <AdminPages page="reports" />;
-      if (page === 'classes')  return <AdminPages page="classes" />;
-      if (page === 'teachers') return <AdminPages page="teachers" />;
-      if (page === 'invoices') return <AdminPages page="invoices" />;
-      if (page === 'schedule') return <AdminPages page="schedule" />;
-      return <AdminDashboard />;
+      if (parent === 'dashboard') return <AdminDashboard />;
+      if (parent === 'reports')   return <AdminReportsConfig section={section} />;
+      return <AdminPages page={parent} section={section} />;
     }
     if (view === 'teacher') {
-      if (page === 'classes')        return <TeacherPages page="classes" />;
-      if (page === 'homework')       return <TeacherPages page="homework" />;
-      if (page === 'progress')       return <TeacherPages page="progress" />;
-      if (page === 'attendance')     return <TeacherPages page="attendance" />;
-      if (page === 'tracking')       return <TeacherPages page="tracking" />;
-      if (page === 'ai_queue')       return <TeacherPages page="ai_queue" />;
-      if (page === 'lesson_planner') return <TeacherPages page="lesson_planner" plannerArgs={plannerArgs} />;
+      if (parent === 'classes')        return <TeacherPages page="classes" />;
+      if (parent === 'timetable')      return <TeacherPages page="timetable" />;
+      if (parent === 'homework')       return <TeacherPages page="homework" section={section} />;
+      if (parent === 'progress')       return <TeacherPages page="progress" />;
+      if (parent === 'attendance')     return <TeacherPages page="attendance" />;
+      if (parent === 'tracking')       return <TeacherPages page="tracking" />;
+      if (parent === 'reports')        return <TeacherPages page="reports" />;
+      if (parent === 'lesson_planner') return <TeacherPages page="lesson_planner" plannerArgs={plannerArgs} />;
       return <TeacherDashboard />;
     }
     if (view === 'student') {
-      return <StudentDashboard page={page} onNav={handleNav} />;
+      return <StudentDashboard page={parent} section={section} onNav={handleNav} />;
     }
     return null;
   };
@@ -151,9 +278,13 @@ const App = () => {
             active={page}
             onNav={handleNav}
             onRoleSwitch={(role) => { setView(role); setPage('dashboard'); }}
+            badges={comms ? { comms: comms.unread.total } : null}
+            collapsed={sidebarCollapsed}
           />
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#F9FAFB' }}>
-            <TopBar view={view} onBack={() => setView('landing')} accent={tweaks.accent} />
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#FFFFFF' }}>
+            <TopBar view={view} page={page} onBack={() => setView('landing')} accent={tweaks.accent}
+              comms={comms} onNavigate={(role, pg) => window.__navigate(role, pg)}
+              collapsed={sidebarCollapsed} onToggleSidebar={() => setSidebarCollapsed(c => !c)} />
             <div style={{ flex: 1, overflow: 'auto' }}>
               {renderContent()}
             </div>
@@ -167,7 +298,7 @@ const App = () => {
 
       <TweaksPanel>
         <TweakSection label="Brand" />
-        <TweakColor label="Accent colour" value={tweaks.accent} onChange={v => setTweak('accent', v)} />
+        <TweakColor label="Accent colour" value={accent} onChange={v => { setTweak('accent', v); window.__setAccent && window.__setAccent(v); }} />
         <TweakSection label="Navigate to" />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           {[
@@ -181,6 +312,7 @@ const App = () => {
             ['superadmin',  'comms',        'SuperAdmin — Communications'],
             ['superadmin',  'security',     'SuperAdmin — Security & Audit'],
             ['superadmin',  'controls',     'SuperAdmin — Platform Controls'],
+            ['superadmin',  'settings',     'SuperAdmin — Settings'],
             ['admin',    'dashboard',  'Admin — Dashboard'],
             ['admin',    'students',   'Admin — Students'],
             ['admin',    'classes',    'Admin — Classes'],
@@ -188,26 +320,33 @@ const App = () => {
             ['admin',    'schedule',   'Admin — Schedule'],
             ['admin',    'invoices',   'Admin — Invoices'],
             ['admin',    'reports',    'Admin — Reports'],
+            ['admin',    'comms',      'Admin — Communications'],
+            ['admin',    'settings',   'Admin — Settings'],
             ['teacher',  'dashboard',  'Teacher — Dashboard'],
             ['teacher',  'classes',    'Teacher — My Classes'],
+            ['teacher',  'timetable',  'Teacher — Timetable'],
             ['teacher',  'lesson_planner','Teacher — Lesson Planner'],
             ['teacher',  'homework',   'Teacher — Homework'],
             ['teacher',  'attendance', 'Teacher — Attendance'],
             ['teacher',  'progress',   'Teacher — Progress'],
             ['teacher',  'tracking',   'Teacher — Tracking'],
-            ['teacher',  'ai_queue',   'Teacher — AI Feedback'],
+            ['teacher',  'reports',    'Teacher — Reports'],
+            ['teacher',  'comms',      'Teacher — Communications'],
+            ['teacher',  'settings',   'Teacher — Settings'],
             ['student',  'dashboard',  'Student — Overview'],
             ['student',  'homework',   'Student — Homework'],
             ['student',  'progress',   'Student — Progress'],
             ['student',  'sessions',   'Student — Sessions'],
-            ['student',  'feedback',   'Student — AI Feedback'],
+            ['student',  'reports',    'Student — Reports'],
+            ['student',  'comms',      'Student — Communications'],
+            ['student',  'settings',   'Student — Settings'],
           ].map(([role, pg, label]) => {
-            const isActive = pg === null ? view === 'landing' : view === role && page === pg;
+            const isActive = pg === null ? view === 'landing' : view === role && page.split(':')[0] === pg;
             return (
               <button key={label}
                 onClick={() => {
                   if (pg === null) { setView('landing'); }
-                  else { setView(role); setPage(pg); }
+                  else { setView(role); setPage(normalizePage(role, pg)); }
                 }}
                 style={{
                   padding: '6px 10px', borderRadius: 6,

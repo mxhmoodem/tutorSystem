@@ -2,41 +2,10 @@
 //  TutorOS — Extra Teacher Pages
 // ══════════════════════════════════════════════════════════════
 
-const teacherClasses = [
-  {
-    id: 1, name: 'GCSE Mathematics',  group: 'Year 10 – Group A', day: 'Fri', time: '09:00', room: 'Room 3',
-    students: 8, nextSession: 'Fri 25 Apr, 09:00', color: DS.accent,
-    hwPending: 2, avgScore: 76, attendance: 94,
-    studentList: ['Emma Thompson','Oliver Chen','Sophia Patel','James Wilson','Aiden Foster','Mia Okonkwo','Liam Thornton','Zoe Patterson'],
-  },
-  {
-    id: 2, name: 'GCSE Mathematics',  group: 'Year 11 – Group B', day: 'Fri', time: '10:30', room: 'Room 3',
-    students: 7, nextSession: 'Fri 25 Apr, 10:30', color: DS.accent,
-    hwPending: 3, avgScore: 71, attendance: 88,
-    studentList: ['Amelia Roberts','Noah Fitzgerald','Ethan Huang','Isabella Martinez','James Wilson','Sophia Patel','Emma Thompson'],
-  },
-  {
-    id: 3, name: 'A-Level Mathematics', group: 'Year 12 – Group A', day: 'Fri', time: '13:00', room: 'Room 5',
-    students: 5, nextSession: 'Fri 25 Apr, 13:00', color: '#7C3AED',
-    hwPending: 4, avgScore: 88, attendance: 97,
-    studentList: ['Oliver Chen','Isabella Martinez','Ethan Huang','Mia Okonkwo','Aiden Foster'],
-  },
-  {
-    id: 4, name: 'GCSE Mathematics',  group: 'Year 9 – Group C',  day: 'Fri', time: '15:00', room: 'Room 3',
-    students: 9, nextSession: 'Fri 25 Apr, 15:00', color: DS.accent,
-    hwPending: 1, avgScore: 79, attendance: 92,
-    studentList: ['Mia Okonkwo','Aiden Foster','Emma Thompson','Sophia Patel','James Wilson','Amelia Roberts','Noah Fitzgerald','Ethan Huang','Isabella Martinez'],
-  },
-];
-
-const homeworkFull = [
-  { id:1, title:'Algebra: Simultaneous Equations',   class:'Yr 10 Group A', subject:'GCSE Maths', set:'18 Apr', due:'22 Apr', submitted:8, total:8, marked:5, avgScore:81, status:'marking'  },
-  { id:2, title:'Calculus: Differentiation Basics',  class:'Yr 12 Group A', subject:'A-Level',    set:'20 Apr', due:'24 Apr', submitted:4, total:5, marked:0, avgScore:null,status:'marking'  },
-  { id:3, title:'Trigonometry: Sine & Cosine Rules', class:'Yr 11 Group B', subject:'GCSE Maths', set:'22 Apr', due:'27 Apr', submitted:2, total:7, marked:0, avgScore:null,status:'open'     },
-  { id:4, title:'Statistics: Probability Trees',     class:'Yr 10 Group A', subject:'GCSE Maths', set:'22 Apr', due:'29 Apr', submitted:0, total:8, marked:0, avgScore:null,status:'open'     },
-  { id:5, title:'Integration: Reverse Chain Rule',   class:'Yr 12 Group A', subject:'A-Level',    set:'15 Apr', due:'20 Apr', submitted:5, total:5, marked:5, avgScore:84,  status:'complete' },
-  { id:6, title:'Quadratics: Completing the Square', class:'Yr 11 Group B', subject:'GCSE Maths', set:'14 Apr', due:'17 Apr', submitted:7, total:7, marked:7, avgScore:73,  status:'complete' },
-];
+// Mock data (teacherClasses, homeworkFull, teacherAllClasses,
+// DEFAULT_TRACKERS) lives in mocks/teacherPages.mock.jsx, loaded before this
+// file in index.html. The Reports page is provided by Reports.jsx
+// (window.TeacherReports).
 
 // ─── Classes Page ───────────────────────────────────────────────────────────────
 const TeacherClassesPage = () => {
@@ -50,74 +19,91 @@ const TeacherClassesPage = () => {
         actions={[<Btn key="a" variant="primary" icon="plus" small>Schedule Class</Btn>]}
       />
 
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(2,1fr)', gap:20 }}>
-        {teacherClasses.map(cls => {
-          const isOpen = expandedClass === cls.id;
-          return (
-            <div key={cls.id} style={{ background:DS.bg, border:`1px solid ${DS.border}`, borderRadius:10, overflow:'hidden' }}>
-              {/* Header */}
-              <div style={{ padding:'20px', borderTop:`3px solid ${cls.color}` }}>
-                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:12 }}>
-                  <div>
-                    <div style={{ fontSize:15, fontWeight:700, color:DS.text, marginBottom:3 }}>{cls.name}</div>
-                    <div style={{ fontSize:13, color:DS.muted }}>{cls.group}</div>
-                  </div>
-                  {cls.hwPending > 0 && (
-                    <Badge variant="warning">{cls.hwPending} to mark</Badge>
-                  )}
-                </div>
+      <Card>
+        <div style={{ overflow:'auto' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+            <thead>
+              <tr style={{ borderBottom:`1px solid ${DS.border}`, background:DS.surface }}>
+                {['Class','Next Session','Students','Avg Score','Attendance','Homework',''].map((h, i) => (
+                  <th key={i} style={{
+                    padding:'10px 16px', textAlign: i >= 2 && i <= 5 ? 'center' : 'left',
+                    fontSize:11, fontWeight:600, color:DS.muted,
+                    textTransform:'uppercase', letterSpacing:'0.06em', whiteSpace:'nowrap',
+                  }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {teacherClasses.map(cls => {
+                const isOpen = expandedClass === cls.id;
+                const scoreColor = cls.avgScore > 80 ? DS.success : DS.warning;
+                const attColor   = cls.attendance > 90 ? DS.success : DS.warning;
+                return (
+                  <React.Fragment key={cls.id}>
+                    <tr
+                      style={{ borderBottom: isOpen ? 'none' : `1px solid ${DS.border}`, cursor:'pointer', background: isOpen ? DS.surface : 'transparent' }}
+                      onClick={() => setExpandedClass(isOpen ? null : cls.id)}
+                    >
+                      <td style={{ padding:'12px 16px' }}>
+                        <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+                          <div style={{ width:4, alignSelf:'stretch', minHeight:34, borderRadius:2, background:cls.color, flexShrink:0 }} />
+                          <Icon name={isOpen ? 'chevron_d' : 'chevron_r'} size={14} color={DS.faint} />
+                          <div>
+                            <div style={{ fontSize:13, fontWeight:600, color:DS.text }}>{cls.name}</div>
+                            <div style={{ fontSize:12, color:DS.muted, marginTop:1 }}>{cls.group}</div>
+                          </div>
+                        </div>
+                      </td>
+                      <td style={{ padding:'12px 16px', whiteSpace:'nowrap' }}>
+                        <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                          <Icon name="clock" size={12} color={DS.faint} />
+                          <span style={{ fontSize:13, color:DS.sub }}>{cls.nextSession}</span>
+                        </div>
+                        <div style={{ fontSize:12, color:DS.muted, marginTop:2, marginLeft:18 }}>{cls.room}</div>
+                      </td>
+                      <td style={{ padding:'12px 16px', textAlign:'center', fontSize:13, fontWeight:600, color:DS.text }}>{cls.students}</td>
+                      <td style={{ padding:'12px 16px', textAlign:'center', fontSize:13, fontWeight:600, color:scoreColor }}>{cls.avgScore}%</td>
+                      <td style={{ padding:'12px 16px', textAlign:'center', fontSize:13, fontWeight:600, color:attColor }}>{cls.attendance}%</td>
+                      <td style={{ padding:'12px 16px', textAlign:'center' }}>
+                        {cls.hwPending > 0
+                          ? <Badge variant="warning">{cls.hwPending} to mark</Badge>
+                          : <span style={{ fontSize:12, color:DS.faint }}>—</span>}
+                      </td>
+                      <td style={{ padding:'12px 16px', textAlign:'right', whiteSpace:'nowrap' }} onClick={e => e.stopPropagation()}>
+                        <Btn variant="primary" small>Take Attendance</Btn>
+                      </td>
+                    </tr>
 
-                {/* Stats row */}
-                <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:12, marginBottom:14 }}>
-                  {[
-                    ['Students', cls.students, null],
-                    ['Avg Score', cls.avgScore + '%', cls.avgScore > 80 ? DS.success : DS.warning],
-                    ['Attendance', cls.attendance + '%', cls.attendance > 90 ? DS.success : DS.warning],
-                  ].map(([l, v, c]) => (
-                    <div key={l} style={{ padding:'10px', background:DS.surface, borderRadius:7, textAlign:'center' }}>
-                      <div style={{ fontSize:16, fontWeight:700, color:c || DS.text }}>{v}</div>
-                      <div style={{ fontSize:11, color:DS.muted, marginTop:2 }}>{l}</div>
-                    </div>
-                  ))}
-                </div>
-
-                <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-                  <Icon name="clock" size={12} color={DS.faint} />
-                  <span style={{ fontSize:12, color:DS.muted }}>Next: {cls.nextSession} · {cls.room}</span>
-                  <div style={{ marginLeft:'auto', display:'flex', gap:6 }}>
-                    <Btn variant="secondary" small onClick={() => setExpandedClass(isOpen ? null : cls.id)}>
-                      {isOpen ? 'Collapse' : 'Students'}
-                    </Btn>
-                    <Btn variant="primary" small>Take Attendance</Btn>
-                  </div>
-                </div>
-              </div>
-
-              {/* Student list expand */}
-              {isOpen && (
-                <div style={{ borderTop:`1px solid ${DS.border}` }}>
-                  <div style={{ padding:'12px 16px', background:DS.surface, borderBottom:`1px solid ${DS.border}` }}>
-                    <span style={{ fontSize:12, fontWeight:600, color:DS.muted, textTransform:'uppercase', letterSpacing:'0.06em' }}>
-                      Student List
-                    </span>
-                  </div>
-                  {cls.studentList.map((name, i) => (
-                    <div key={name} style={{
-                      display:'flex', alignItems:'center', gap:12, padding:'10px 16px',
-                      borderBottom: i < cls.studentList.length-1 ? `1px solid ${DS.border}` : 'none',
-                    }}>
-                      <Avatar name={name} size={28} />
-                      <span style={{ flex:1, fontSize:13, color:DS.sub }}>{name}</span>
-                      <Sparkline data={[70,72,74,71,76,78,79,80].map(v => v + Math.round(Math.random()*10-5))} color={cls.color} width={60} height={22} />
-                      <Btn variant="ghost" icon="eye" small>Profile</Btn>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+                    {/* Student list expand */}
+                    {isOpen && (
+                      <tr style={{ borderBottom:`1px solid ${DS.border}` }}>
+                        <td colSpan={7} style={{ padding:0, background:DS.surface }}>
+                          <div style={{ padding:'10px 16px 10px 36px' }}>
+                            <span style={{ fontSize:11, fontWeight:600, color:DS.muted, textTransform:'uppercase', letterSpacing:'0.06em' }}>
+                              Student List · {cls.studentList.length}
+                            </span>
+                          </div>
+                          {cls.studentList.map((name, i) => (
+                            <div key={name} style={{
+                              display:'flex', alignItems:'center', gap:12, padding:'8px 16px 8px 36px',
+                              borderTop:`1px solid ${DS.border}`, background:DS.bg,
+                            }}>
+                              <Avatar name={name} size={28} />
+                              <span style={{ flex:1, fontSize:13, color:DS.sub }}>{name}</span>
+                              <Sparkline data={[70,72,74,71,76,78,79,80].map(v => v + Math.round(Math.random()*10-5))} color={cls.color} width={60} height={22} />
+                              <Btn variant="ghost" icon="eye" small>Profile</Btn>
+                            </div>
+                          ))}
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </Card>
     </div>
   );
 };
@@ -182,7 +168,7 @@ const TeacherHomeworkPage = () => {
           ['Submission Rate', stats.rate+'%',DS.accent  ],
         ].map(([l,v,c]) => (
           <div key={l} style={{
-            background:DS.bg, border:`1px solid ${DS.border}`, borderRadius:10,
+            background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:10,
             padding:'16px 20px',
           }}>
             <div style={{ fontSize:11, fontWeight:600, color:DS.faint, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom:8 }}>{l}</div>
@@ -275,7 +261,7 @@ const TeacherHomeworkPage = () => {
           const toMark = hw.submitted - hw.marked;
           return (
             <div key={hw.id} style={{
-              background:DS.bg, border:`1px solid ${DS.border}`, borderRadius:10,
+              background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:10,
               padding:'18px 20px', borderTop:`3px solid ${color}`,
               display:'flex', flexDirection:'column', gap:14,
             }}>
@@ -436,16 +422,163 @@ const TeacherProgressPage = () => {
   );
 };
 
+// ─── Teacher Timetable Page ─────────────────────────────────────────────────────
+
+// The teacher's own slice of the centre timetable. It is NOT editable here — the
+// admin owns class creation and assignment (store.classes). This page just reads
+// store.classes.filter(c => c.teacher === me) and presents today's sessions plus
+// the weekly grid, with a "Take register" jump into the attendance page per session.
+// Shares the date/time/colour helpers + useAdminStore defined in AdminPages.jsx.
+const TeacherTimetablePage = () => {
+  const store = useAdminStore();
+  const me = store.teachers.find(t => t.name === 'Sarah Clarke') || store.teachers[0];
+  const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+  const todayName = new Date().toLocaleDateString('en-GB', { weekday:'long' });
+
+  const myClasses = store.classes.filter(c => me && c.teacher === me.name && c.status !== 'paused');
+  const byTime = arr => [...arr].sort((a, b) => startTimeOf(a.time).localeCompare(startTimeOf(b.time)));
+  const todaySessions = byTime(myClasses.filter(c => c.day === todayName));
+
+  // If nothing on today, surface the teacher's next teaching day instead so the
+  // register flow is still reachable from the top of the page.
+  const fromToday = days.slice(days.indexOf(todayName) >= 0 ? days.indexOf(todayName) : 0).concat(days);
+  const nextDay = todaySessions.length ? todayName : fromToday.find(d => myClasses.some(c => c.day === d)) || null;
+  const focusDay = todaySessions.length ? todayName : nextDay;
+  const focusSessions = byTime(myClasses.filter(c => c.day === focusDay));
+
+  // Jump to the attendance page with this session's group pre-selected.
+  const takeRegister = (cls) => {
+    window.__registerGroup = cls.group;
+    if (window.__navigate) window.__navigate('teacher', 'attendance');
+  };
+
+  return (
+    <div style={{ padding:'32px' }}>
+      <PageHeader title="My Timetable" subtitle={`${myClasses.length} weekly sessions · assigned by your centre admin`} actions={[
+        <Btn key="att" variant="secondary" icon="check" small onClick={() => window.__navigate && window.__navigate('teacher', 'attendance')}>Attendance</Btn>,
+      ]} />
+
+      {/* How this works */}
+      <div style={{ display:'flex', gap:12, alignItems:'flex-start', padding:'14px 16px', marginBottom:24, background:DS.surface, border:`1px solid ${DS.cardBorder}`, borderRadius:10 }}>
+        <Icon name="clock" size={18} color={DS.muted} />
+        <div style={{ fontSize:13, color:DS.sub, lineHeight:1.5 }}>
+          Your centre admin creates each class and assigns you to it, which sets the day, time and room you see below — so this
+          timetable is <strong style={{ color:DS.text }}>read-only</strong>. What you do here is <strong style={{ color:DS.text }}>take the register</strong> for
+          each session and <strong style={{ color:DS.text }}>log your own attendance or absence</strong>. Need a change? Ask your admin to edit the class.
+        </div>
+      </div>
+
+      {/* Today (or next teaching day) */}
+      <Card
+        title={todaySessions.length ? `Today — ${todayName}` : focusDay ? `Next teaching day — ${focusDay}` : `Today — ${todayName}`}
+        style={{ marginBottom:24 }}
+        actions={<span style={{ fontSize:12, color:DS.muted }}>{focusSessions.length} session{focusSessions.length===1?'':'s'}</span>}
+      >
+        {focusSessions.length ? (
+          <div style={{ padding:'8px 0' }}>
+            {focusSessions.map((c, i) => {
+              const color = subjectColor(c.name);
+              return (
+                <div key={c.id} style={{ display:'flex', alignItems:'center', gap:14, padding:'14px 20px', borderBottom: i < focusSessions.length-1 ? `1px solid ${DS.border}` : 'none' }}>
+                  <div style={{ width:60, textAlign:'center' }}>
+                    <div style={{ fontSize:14, fontWeight:700, color:DS.text, fontVariantNumeric:'tabular-nums' }}>{startTimeOf(c.time)}</div>
+                    <div style={{ fontSize:11, color:DS.faint }}>{(c.time||'').split(/[–-]/)[1]?.trim()}</div>
+                  </div>
+                  <div style={{ width:4, alignSelf:'stretch', borderRadius:2, background:color }} />
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:14, fontWeight:600, color:DS.text }}>{c.name}</div>
+                    <div style={{ fontSize:12, color:DS.muted }}>{c.group} · {c.room || 'No room'} · {c.students} students</div>
+                  </div>
+                  <Btn variant="primary" icon="check" small onClick={() => takeRegister(c)}>Take register</Btn>
+                </div>
+              );
+            })}
+          </div>
+        ) : <EmptyState icon="calendar" title="No classes assigned yet" message="Once your centre admin assigns you to a class, your sessions will appear here." />}
+      </Card>
+
+      {/* Weekly grid */}
+      <Card title="This Week">
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)' }}>
+          {days.map((day, di) => {
+            const sessions = byTime(myClasses.filter(c => c.day === day));
+            const isToday = day === todayName;
+            return (
+              <div key={day} style={{ borderLeft: di ? `1px solid ${DS.border}` : 'none', minHeight:200 }}>
+                <div style={{ padding:'12px 14px', borderBottom:`1px solid ${DS.border}`, background: isToday ? DS.accentLight : DS.surface }}>
+                  <div style={{ fontSize:13, fontWeight:600, color: isToday ? DS.accent : DS.text }}>{day}</div>
+                  <div style={{ fontSize:11, color: isToday ? DS.accent : DS.faint }}>{sessions.length} session{sessions.length===1?'':'s'}</div>
+                </div>
+                <div style={{ padding:8, display:'flex', flexDirection:'column', gap:8 }}>
+                  {sessions.map(c => {
+                    const color = subjectColor(c.name);
+                    return (
+                      <button key={c.id} onClick={() => takeRegister(c)} title="Take register" style={{
+                        textAlign:'left', background:color+'12', border:`1px solid ${color}44`, borderRadius:8,
+                        padding:'9px 10px', cursor:'pointer',
+                      }}>
+                        <div style={{ fontSize:11.5, fontWeight:700, color, fontVariantNumeric:'tabular-nums', marginBottom:3 }}>{startTimeOf(c.time)}</div>
+                        <div style={{ fontSize:12, fontWeight:600, color:DS.text, lineHeight:1.3 }}>{c.name.replace(/^(GCSE|A-Level)\s/, '')}</div>
+                        <div style={{ fontSize:10.5, color:DS.muted, marginTop:2 }}>{c.group.replace(/\s*–.*$/, '')} · {c.room || '—'}</div>
+                      </button>
+                    );
+                  })}
+                  {!sessions.length && <div style={{ fontSize:11, color:DS.faint, textAlign:'center', padding:'12px 0' }}>—</div>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+    </div>
+  );
+};
+
 // ─── Teacher Attendance Page ────────────────────────────────────────────────────
-const teacherAllClasses = [
-  { group:'Year 10 – Group A', subject:'GCSE Mathematics', students:['Emma Thompson','Oliver Chen','Sophia Patel','James Wilson','Aiden Foster','Mia Okonkwo','Liam Thornton','Zoe Patterson'] },
-  { group:'Year 11 – Group B', subject:'GCSE Mathematics', students:['Amelia Roberts','Noah Fitzgerald','Ethan Huang','Isabella Martinez','James Wilson','Sophia Patel','Emma Thompson'] },
-  { group:'Year 12 – Group A', subject:'A-Level Mathematics', students:['Oliver Chen','Isabella Martinez','Ethan Huang','Mia Okonkwo','Aiden Foster'] },
-  { group:'Year 9 – Group C',  subject:'GCSE Mathematics', students:['Mia Okonkwo','Aiden Foster','Emma Thompson','Sophia Patel','James Wilson','Amelia Roberts','Noah Fitzgerald','Ethan Huang','Isabella Martinez'] },
-];
+
+// Teacher self check-in. Writes to the shared admin store so the centre admin
+// sees the same attendance record on the Teachers page. Demo teacher = Sarah Clarke.
+const MyAttendanceCard = () => {
+  const store = useAdminStore();
+  const me = store.teachers.find(t => t.name === 'Sarah Clarke') || store.teachers[0];
+  if (!me) return null;
+  const days = recentWeekdays(5);
+  const today = todayISO();
+  const todayVal = store.attendance[`${me.id}|${today}`] || null;
+
+  return (
+    <Card title="My Attendance" actions={<span style={{ fontSize:12, color:DS.muted }}>Check yourself in for today</span>} style={{ marginBottom:24 }}>
+      <div style={{ padding:'16px 20px', display:'flex', alignItems:'center', gap:16, borderBottom:`1px solid ${DS.border}` }}>
+        <Avatar name={me.name} size={40} color={me.color} />
+        <div style={{ flex:1 }}>
+          <div style={{ fontSize:14, fontWeight:600, color:DS.text }}>{me.name}</div>
+          <div style={{ fontSize:12, color:DS.muted }}>{fmtDay(today)}</div>
+        </div>
+        <AttendanceToggle value={todayVal} onSet={val => store.setAttendance(me.id, today, val)} />
+      </div>
+      <div style={{ display:'flex', gap:8, padding:'12px 20px', flexWrap:'wrap' }}>
+        {days.slice(1).map(d => {
+          const v = store.attendance[`${me.id}|${d}`] || 'present';
+          const m = ({ present:DS.success, late:DS.warning, absent:DS.danger })[v];
+          return (
+            <div key={d} style={{ display:'flex', alignItems:'center', gap:6, fontSize:12, color:DS.muted }}>
+              <span style={{ width:8, height:8, borderRadius:'50%', background:m }} />{fmtDay(d)}
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+};
 
 const TeacherAttendancePage = () => {
-  const [selectedClass, setSelectedClass] = React.useState(0);
+  // If we arrived via "Take register" on the timetable, open that class.
+  const [selectedClass, setSelectedClass] = React.useState(() => {
+    const g = window.__registerGroup;
+    const i = g ? teacherAllClasses.findIndex(c => c.group === g) : -1;
+    return i >= 0 ? i : 0;
+  });
+  React.useEffect(() => { window.__registerGroup = null; }, []);
   const cls = teacherAllClasses[selectedClass];
   const [records, setRecords] = React.useState(() =>
     Object.fromEntries(cls.students.map(n => [n, null]))
@@ -479,6 +612,9 @@ const TeacherAttendancePage = () => {
       <PageHeader title="Attendance" subtitle="Mark and review attendance for your classes" actions={[
         <Btn key="exp" variant="secondary" icon="download" small>Export Register</Btn>
       ]} />
+
+      {/* Teacher's own attendance — self check-in, shared with admin */}
+      <MyAttendanceCard />
 
       {/* Class selector */}
       <div style={{ display:'flex', gap:10, marginBottom:24, flexWrap:'wrap' }}>
@@ -675,7 +811,7 @@ const SavedPlansBrowser = ({ onOpen, onNew, currentKey }) => {
     <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
       {/* Search + filter */}
       <div style={{
-        background:DS.bg, border:`1px solid ${DS.border}`, borderRadius:12,
+        background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:12,
         padding:'18px 20px',
       }}>
         <div style={{ display:'grid', gridTemplateColumns:'1fr auto auto', gap:12, alignItems:'center' }}>
@@ -1029,7 +1165,7 @@ const LessonPlanEditor = ({
         {/* Left: main plan content */}
         <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
           {/* Objectives card */}
-          <div style={{ background:DS.bg, border:`1px solid ${DS.border}`, borderRadius:12, padding:'20px 22px' }}>
+          <div style={{ background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:12, padding:'20px 22px' }}>
             <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:14 }}>
               <div style={{ width:30, height:30, borderRadius:8, background:DS.accentLight, color:DS.accent, display:'flex', alignItems:'center', justifyContent:'center' }}>
                 <Icon name="star" size={15} />
@@ -1048,7 +1184,7 @@ const LessonPlanEditor = ({
           </div>
 
           {/* Agenda card */}
-          <div style={{ background:DS.bg, border:`1px solid ${DS.border}`, borderRadius:12, padding:'20px 22px' }}>
+          <div style={{ background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:12, padding:'20px 22px' }}>
             <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:14 }}>
               <div style={{ width:30, height:30, borderRadius:8, background:'#7C3AED18', color:'#7C3AED', display:'flex', alignItems:'center', justifyContent:'center' }}>
                 <Icon name="clock" size={15} />
@@ -1079,7 +1215,7 @@ const LessonPlanEditor = ({
           </div>
 
           {/* Homework card */}
-          <div style={{ background:DS.bg, border:`1px solid ${DS.border}`, borderRadius:12, padding:'20px 22px' }}>
+          <div style={{ background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:12, padding:'20px 22px' }}>
             <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:14 }}>
               <div style={{ width:30, height:30, borderRadius:8, background:DS.warningBg, color:DS.warning, display:'flex', alignItems:'center', justifyContent:'center' }}>
                 <Icon name="clip" size={15} />
@@ -1098,7 +1234,7 @@ const LessonPlanEditor = ({
           </div>
 
           {/* Notes card */}
-          <div style={{ background:DS.bg, border:`1px solid ${DS.border}`, borderRadius:12, padding:'20px 22px' }}>
+          <div style={{ background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:12, padding:'20px 22px' }}>
             <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:14 }}>
               <div style={{ width:30, height:30, borderRadius:8, background:DS.surface, color:DS.muted, display:'flex', alignItems:'center', justifyContent:'center' }}>
                 <Icon name="edit" size={15} />
@@ -1120,7 +1256,7 @@ const LessonPlanEditor = ({
         {/* Right: sidebar */}
         <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
           {/* Class & date selector */}
-          <div style={{ background:DS.bg, border:`1px solid ${DS.border}`, borderRadius:12, padding:'18px 20px' }}>
+          <div style={{ background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:12, padding:'18px 20px' }}>
             <div style={{ fontSize:14, fontWeight:600, color:DS.text, marginBottom:14 }}>Lesson Details</div>
             <div style={{ marginBottom:12 }}>
               <label style={labelStyle}>Topic / Unit</label>
@@ -1159,7 +1295,7 @@ const LessonPlanEditor = ({
           </div>
 
           {/* Resources / file uploads */}
-          <div style={{ background:DS.bg, border:`1px solid ${DS.border}`, borderRadius:12, padding:'18px 20px' }}>
+          <div style={{ background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:12, padding:'18px 20px' }}>
             <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:14 }}>
               <div style={{ fontSize:14, fontWeight:600, color:DS.text }}>Resources</div>
               <Badge variant="default">{plan.resources?.length || 0}</Badge>
@@ -1179,7 +1315,7 @@ const LessonPlanEditor = ({
 
           {/* Action buttons */}
           <div style={{
-            background:DS.bg, border:`1px solid ${DS.border}`, borderRadius:12,
+            background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:12,
             padding:'14px 16px', display:'flex', flexDirection:'column', gap:8,
             position:'sticky', top:16,
           }}>
@@ -1309,148 +1445,9 @@ const LessonPlannerPage = ({ initialGroup, initialDate, initialMode }) => {
   );
 };
 
-// ─── Teacher AI Feedback Page ───────────────────────────────────────────────────
-const aiQueueFull = [
-  { student:'Oliver Chen',        hw:'Calculus: Differentiation Basics',  subject:'A-Level Maths', submitted:'2h ago',    confidence:92, score:94, draft:'Excellent work — your chain rule application is correct. Consider showing intermediate steps for full marks in the exam.', strengths:['All 6 questions correct','Clear working shown','Good notation throughout'], issues:['Show intermediate steps on Q4 expansion'] },
-  { student:'Sophia Patel',       hw:'Calculus: Differentiation Basics',  subject:'A-Level Maths', submitted:'3h ago',    confidence:85, score:74, draft:'Good attempt. You have the right method but made an arithmetic error in step 3 — check your sign when expanding the bracket.', strengths:['Correct method applied','Good attempt at product rule'], issues:['Sign error in bracket expansion on Q3','Notation unclear on Q5'] },
-  { student:'Ethan Huang',        hw:'Calculus: Differentiation Basics',  subject:'A-Level Maths', submitted:'5h ago',    confidence:88, score:83, draft:'Strong understanding. Notation could be cleaner — write dy/dx clearly throughout.', strengths:['Strong conceptual understanding','Correct answers on Q1–Q4'], issues:['Cleaner dy/dx notation needed','Q5 missing second derivative step'] },
-  { student:'Isabella Martinez',  hw:'Calculus: Differentiation Basics',  subject:'A-Level Maths', submitted:'Yesterday', confidence:95, score:96, draft:'Flawless. All six questions correct with clear working shown. Well done.', strengths:['Perfect score — all 6 correct','Exemplary working shown','Great exam technique'], issues:[] },
-  { student:'Emma Thompson',      hw:'Algebra: Simultaneous Equations',   subject:'GCSE Maths',    submitted:'Yesterday', confidence:83, score:78, draft:'Good work overall. The substitution method is well applied. Small arithmetic error on Q3 — double-check before submitting in an exam.', strengths:['Correct method throughout','Good presentation'], issues:['Arithmetic error on Q3','Check signs when substituting negative values'] },
-  { student:'Aiden Foster',       hw:'Algebra: Simultaneous Equations',   subject:'GCSE Maths',    submitted:'2 days ago',confidence:79, score:71, draft:'Solid attempt. You understood the elimination method well but struggled with Q4 which had fractional coefficients. Practice these — they appear often in GCSE papers.', strengths:['Elimination method applied correctly','Neat working'], issues:['Fractional coefficients caused errors on Q4 and Q5','Review multiplying equations by fractions'] },
-];
-
-const TeacherAIFeedbackPage = () => {
-  const [expanded, setExpanded] = React.useState(null);
-  const [editMap, setEditMap]   = React.useState({});
-  const [sentSet, setSentSet]   = React.useState(new Set());
-  const [filter, setFilter]     = React.useState('all');
-
-  const filtered = aiQueueFull.filter(item =>
-    filter === 'all'  ? true :
-    filter === 'sent' ? sentSet.has(item.student + item.hw) :
-    !sentSet.has(item.student + item.hw)
-  );
-
-  return (
-    <div style={{ padding:'32px' }}>
-      <PageHeader title="AI Feedback Queue" subtitle="Review, edit and send AI-drafted feedback to students" actions={[
-        <div key="badge" style={{ display:'flex', alignItems:'center', gap:6, fontSize:12, color:DS.accent, fontWeight:600 }}>
-          <Icon name="brain" size={14} />
-          {aiQueueFull.length - sentSet.size} awaiting review
-        </div>
-      ]} />
-
-      {/* How it works */}
-      <div style={{ background:DS.accentLight, border:`1px solid ${DS.accentBorder}`, borderRadius:10, padding:'16px 20px', marginBottom:20, display:'flex', alignItems:'flex-start', gap:14 }}>
-        <Icon name="brain" size={20} color={DS.accent} />
-        <div>
-          <div style={{ fontSize:13, fontWeight:600, color:DS.accent, marginBottom:3 }}>How AI Feedback works</div>
-          <div style={{ fontSize:13, color:DS.sub, lineHeight:1.6 }}>
-            When a student submits homework, TutorOS AI analyses their answers and generates a personalised feedback draft. You review, edit if needed, and send — it typically takes under 30 seconds per student.
-          </div>
-        </div>
-      </div>
-
-      {/* Filter */}
-      <div style={{ display:'flex', gap:6, marginBottom:20 }}>
-        {[['all','All'],['pending','Pending'],['sent','Sent']].map(([id,label]) => (
-          <button key={id} onClick={() => setFilter(id)} style={{
-            padding:'7px 14px', borderRadius:7, border:`1px solid ${filter===id ? DS.accentBorder : DS.border}`,
-            background: filter===id ? DS.accentLight : DS.bg,
-            color: filter===id ? DS.accent : DS.muted,
-            fontSize:13, fontWeight: filter===id ? 600 : 400, cursor:'pointer',
-          }}>{label}</button>
-        ))}
-      </div>
-
-      <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
-        {filtered.map((item, i) => {
-          const key = item.student + item.hw;
-          const isOpen = expanded === key;
-          const isSent = sentSet.has(key);
-          const feedbackText = editMap[key] !== undefined ? editMap[key] : item.draft;
-          const confColor = item.confidence >= 90 ? DS.success : item.confidence >= 80 ? DS.warning : DS.danger;
-
-          return (
-            <div key={key} style={{ background:DS.bg, border:`1px solid ${isSent ? DS.successBorder : DS.border}`, borderRadius:10, overflow:'hidden' }}>
-              <div style={{ padding:'16px 20px', cursor:'pointer', display:'flex', alignItems:'center', gap:14 }} onClick={() => setExpanded(isOpen ? null : key)}>
-                <Avatar name={item.student} size={36} />
-                <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ fontSize:13, fontWeight:600, color:DS.text }}>{item.student}</div>
-                  <div style={{ fontSize:12, color:DS.muted }}>{item.hw} · {item.subject}</div>
-                </div>
-                <div style={{ display:'flex', alignItems:'center', gap:10, flexShrink:0 }}>
-                  <span style={{ fontSize:12, color:DS.faint }}>{item.submitted}</span>
-                  <div style={{ display:'flex', alignItems:'center', gap:4 }}>
-                    <div style={{ width:6, height:6, borderRadius:'50%', background:confColor }} />
-                    <span style={{ fontSize:11, color:DS.muted }}>{item.confidence}% confidence</span>
-                  </div>
-                  <ScorePill score={item.score} />
-                  {isSent ? <Badge variant="success">Sent</Badge> : <Badge variant="accent">Draft ready</Badge>}
-                  <Icon name={isOpen ? 'chevron_d' : 'chevron_r'} size={14} color={DS.faint} />
-                </div>
-              </div>
-
-              {isOpen && (
-                <div style={{ borderTop:`1px solid ${DS.border}`, padding:'20px' }}>
-                  {/* Strengths & Issues */}
-                  <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
-                    <div>
-                      <div style={{ fontSize:11, fontWeight:600, color:DS.success, marginBottom:8 }}>✓ STRENGTHS DETECTED</div>
-                      {item.strengths.map((s,si) => (
-                        <div key={si} style={{ fontSize:12, color:DS.sub, padding:'5px 10px', background:DS.successBg, borderRadius:6, border:`1px solid ${DS.successBorder}`, marginBottom:5 }}>{s}</div>
-                      ))}
-                    </div>
-                    <div>
-                      <div style={{ fontSize:11, fontWeight:600, color:DS.warning, marginBottom:8 }}>
-                        {item.issues.length > 0 ? '⚠ AREAS TO IMPROVE' : '✓ NO ISSUES FOUND'}
-                      </div>
-                      {item.issues.length > 0
-                        ? item.issues.map((s,si) => (
-                          <div key={si} style={{ fontSize:12, color:DS.sub, padding:'5px 10px', background:DS.warningBg, borderRadius:6, border:`1px solid ${DS.warningBorder}`, marginBottom:5 }}>{s}</div>
-                        ))
-                        : <div style={{ fontSize:12, color:DS.success, fontStyle:'italic' }}>All questions answered correctly.</div>
-                      }
-                    </div>
-                  </div>
-
-                  {/* Draft text */}
-                  <div style={{ marginBottom:14 }}>
-                    <div style={{ fontSize:11, fontWeight:600, color:DS.accent, marginBottom:6, display:'flex', alignItems:'center', gap:5 }}>
-                      <Icon name="brain" size={11} /> AI DRAFT — EDIT BEFORE SENDING
-                    </div>
-                    <textarea
-                      rows={3}
-                      value={feedbackText}
-                      onChange={e => setEditMap(p => ({...p, [key]:e.target.value}))}
-                      disabled={isSent}
-                      style={{
-                        width:'100%', padding:'10px 12px', borderRadius:8,
-                        border:`1px solid ${DS.border}`, fontSize:13, color:DS.sub, lineHeight:1.65,
-                        background: isSent ? DS.surface : DS.bg,
-                        resize:'vertical', outline:'none', boxSizing:'border-box', fontFamily:'inherit',
-                      }}
-                    />
-                  </div>
-                  {!isSent && (
-                    <div style={{ display:'flex', gap:8 }}>
-                      <Btn variant="primary" icon="check" onClick={() => { setSentSet(p => new Set([...p, key])); setExpanded(null); }}>
-                        Send to student
-                      </Btn>
-                      <Btn variant="secondary" icon="edit">Edit draft</Btn>
-                      <Btn variant="ghost" icon="x">Discard draft</Btn>
-                    </div>
-                  )}
-                  {isSent && <Badge variant="success">Feedback sent to student</Badge>}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-};
+// ─── Teacher Reports Page ───────────────────────────────────────────────────────
+// The full reports surface lives in Reports.jsx (window.TeacherReports), loaded
+// before this file. Routed below via the `reports` page id.
 
 // ─── Tracking Page ──────────────────────────────────────────────────────────────
 const TRACKING_STORAGE_KEY = 'tutoros.tracking.v1';
@@ -1467,48 +1464,6 @@ const COLUMN_TYPES = [
 
 const GRADE_OPTIONS = ['A*', 'A', 'B', 'C', 'D', 'E', 'U'];
 
-const DEFAULT_TRACKERS = [
-  {
-    id: 't_hw',
-    name: 'Homework Scores',
-    description: 'Weekly homework marks per student',
-    classGroup: 'Year 10 – Group A',
-    columns: [
-      { id: 'c1', name: 'HW1: Algebra',       type: 'score', max: 20 },
-      { id: 'c2', name: 'HW2: Equations',     type: 'score', max: 20 },
-      { id: 'c3', name: 'HW3: Probability',   type: 'score', max: 25 },
-      { id: 'c4', name: 'On time?',           type: 'check' },
-      { id: 'c5', name: 'Notes',              type: 'text' },
-    ],
-    entries: {
-      'Emma Thompson':   { c1: 17, c2: 18, c3: 22, c4: true,  c5: 'Excellent presentation' },
-      'Oliver Chen':     { c1: 19, c2: 20, c3: 24, c4: true,  c5: '' },
-      'Sophia Patel':    { c1: 14, c2: 13, c3: 18, c4: false, c5: 'Late submission' },
-      'James Wilson':    { c1: 12, c2: 14, c3: 16, c4: true,  c5: '' },
-      'Aiden Foster':    { c1: 16, c2: 17, c3: 20, c4: true,  c5: '' },
-      'Mia Okonkwo':     { c1: 18, c2: 19, c3: 23, c4: true,  c5: '' },
-      'Liam Thornton':   { c1: 11, c2: 12, c3: 14, c4: false, c5: 'Needs support' },
-      'Zoe Patterson':   { c1: 15, c2: 16, c3: 19, c4: true,  c5: '' },
-    },
-  },
-  {
-    id: 't_test',
-    name: 'Test Scores',
-    description: 'Half-term assessments',
-    classGroup: 'Year 10 – Group A',
-    columns: [
-      { id: 'c1', name: 'Mock Paper 1',  type: 'score', max: 100 },
-      { id: 'c2', name: 'Mock Paper 2',  type: 'score', max: 100 },
-      { id: 'c3', name: 'Predicted',     type: 'grade' },
-    ],
-    entries: {
-      'Emma Thompson':   { c1: 76, c2: 81, c3: 'B'  },
-      'Oliver Chen':     { c1: 92, c2: 95, c3: 'A*' },
-      'Sophia Patel':    { c1: 64, c2: 68, c3: 'C'  },
-      'James Wilson':    { c1: 71, c2: 69, c3: 'B'  },
-    },
-  },
-];
 
 const loadTrackers = () => {
   try {
@@ -1528,6 +1483,252 @@ const newId = (prefix) => prefix + '_' + Math.random().toString(36).slice(2, 8);
 const getRosterForGroup = (group) => {
   const cls = teacherClasses.find(c => c.group === group);
   return cls ? cls.studentList : [];
+};
+
+// ─── Tracker grouping (for the switcher) ──────────────────────────────────────
+// Teachers can accumulate dozens of trackers, so the switcher lets them group by
+// one of these dimensions. Subject / year group are derived from the tracker's
+// class via teacherClasses, with graceful fallbacks for custom class groups.
+const TRACKER_GROUP_BY = [
+  { id: 'class',   label: 'Class',      icon: 'users' },
+  { id: 'subject', label: 'Subject',    icon: 'book' },
+  { id: 'year',    label: 'Year group', icon: 'folder' },
+];
+
+const subjectOfGroup = (group) => {
+  const cls = teacherClasses.find(c => c.group === group);
+  if (cls && cls.name) {
+    // "GCSE Mathematics" / "A-Level Mathematics" → "Mathematics"
+    return cls.name.replace(/^(GCSE|A-Level|IGCSE|BTEC|KS\d)\s+/i, '').trim() || cls.name;
+  }
+  return 'Other';
+};
+
+const yearOfGroup = (group) => {
+  const m = (group || '').match(/year\s*\d+/i);
+  if (m) return m[0].replace(/\s+/, ' ').replace(/year/i, 'Year');
+  return 'Other';
+};
+
+const trackerGroupKey = (tracker, groupBy) =>
+  groupBy === 'subject' ? subjectOfGroup(tracker.classGroup)
+  : groupBy === 'year'  ? yearOfGroup(tracker.classGroup)
+  : (tracker.classGroup || 'Unassigned');
+
+// Group + filter trackers into [{ key, items }] sections, sorted by key.
+const groupTrackers = (trackers, groupBy, query) => {
+  const q = query.trim().toLowerCase();
+  const match = (t) => !q || [t.name, t.description, t.classGroup]
+    .filter(Boolean).join(' ').toLowerCase().includes(q);
+  const buckets = new Map();
+  trackers.filter(match).forEach(t => {
+    const key = trackerGroupKey(t, groupBy);
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(t);
+  });
+  return Array.from(buckets.entries())
+    .map(([key, items]) => ({ key, items }))
+    .sort((a, b) => {
+      // Push "Other"/"Unassigned" buckets to the end, otherwise alphabetical.
+      const aOther = /^(other|unassigned)$/i.test(a.key);
+      const bOther = /^(other|unassigned)$/i.test(b.key);
+      if (aOther !== bOther) return aOther ? 1 : -1;
+      return a.key.localeCompare(b.key, undefined, { numeric: true });
+    });
+};
+
+// ─── Tracker Switcher ─────────────────────────────────────────────────────────
+// Replaces the flat row of tracker pills. Designed to stay usable with dozens of
+// trackers: a compact active-tracker bar that expands into a searchable, grouped
+// picker (group by class / subject / year group). Collapses back on selection.
+const TrackerSwitcher = ({ trackers, active, onSelect, onNew }) => {
+  const [open, setOpen] = React.useState(false);
+  const [query, setQuery] = React.useState('');
+  const [groupBy, setGroupBy] = React.useState('class');
+  const [collapsedKeys, setCollapsedKeys] = React.useState({});
+  const searchRef = React.useRef(null);
+
+  React.useEffect(() => {
+    if (open && searchRef.current) searchRef.current.focus();
+  }, [open]);
+
+  const sections = React.useMemo(
+    () => groupTrackers(trackers, groupBy, query),
+    [trackers, groupBy, query]
+  );
+  const totalMatches = sections.reduce((n, s) => n + s.items.length, 0);
+
+  const pick = (id) => { onSelect(id); setOpen(false); setQuery(''); };
+  const toggleSection = (key) =>
+    setCollapsedKeys(prev => ({ ...prev, [key]: !prev[key] }));
+
+  return (
+    <div style={{ marginBottom: 20 }}>
+      {/* Active-tracker bar */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 12,
+        padding: '10px 14px', borderRadius: 10,
+        border: `1px solid ${DS.border}`, background: DS.bg,
+      }}>
+        <div style={{
+          width: 32, height: 32, borderRadius: 8, flexShrink: 0,
+          background: DS.accentLight, color: DS.accent,
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <Icon name="star" size={15} />
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 11, color: DS.faint, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+            Tracker
+          </div>
+          {active ? (
+            <div style={{ fontSize: 14, fontWeight: 600, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {active.name}
+              <span style={{ fontSize: 12, fontWeight: 500, color: DS.muted }}> · {active.classGroup}</span>
+            </div>
+          ) : (
+            <div style={{ fontSize: 14, fontWeight: 600, color: DS.muted }}>No tracker selected</div>
+          )}
+        </div>
+        <span style={{ fontSize: 12, color: DS.faint, whiteSpace: 'nowrap' }}>
+          {trackers.length} tracker{trackers.length === 1 ? '' : 's'}
+        </span>
+        <Btn variant="secondary" icon={open ? 'chevron_d' : 'chevron_r'} small onClick={() => setOpen(o => !o)}>
+          {open ? 'Close' : 'Switch tracker'}
+        </Btn>
+      </div>
+
+      {/* Expandable picker */}
+      {open && (
+        <div style={{
+          marginTop: 8, borderRadius: 10, overflow: 'hidden',
+          border: `1px solid ${DS.border}`, background: DS.bg,
+        }}>
+          {/* Search + group-by controls */}
+          <div style={{
+            padding: '12px 14px', borderBottom: `1px solid ${DS.border}`, background: DS.surface,
+            display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+          }}>
+            <div style={{ position: 'relative', flex: 1, minWidth: 220 }}>
+              <div style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', display: 'flex' }}>
+                <Icon name="search" size={15} color={DS.faint} />
+              </div>
+              <input
+                ref={searchRef}
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                placeholder="Search trackers by name, class or description…"
+                style={{
+                  width: '100%', padding: '8px 12px 8px 34px', borderRadius: 8,
+                  border: `1px solid ${DS.border}`, fontSize: 13, outline: 'none',
+                  boxSizing: 'border-box', background: DS.bg, color: DS.text, fontFamily: 'inherit',
+                }}
+              />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 12, color: DS.muted, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <Icon name="filter" size={13} color={DS.faint} /> Group by
+              </span>
+              <div style={{ display: 'inline-flex', border: `1px solid ${DS.border}`, borderRadius: 8, overflow: 'hidden' }}>
+                {TRACKER_GROUP_BY.map((g, i) => {
+                  const isOn = groupBy === g.id;
+                  return (
+                    <button
+                      key={g.id}
+                      onClick={() => setGroupBy(g.id)}
+                      style={{
+                        padding: '6px 12px', cursor: 'pointer', fontSize: 12.5,
+                        fontWeight: isOn ? 600 : 500,
+                        border: 'none', borderLeft: i ? `1px solid ${DS.border}` : 'none',
+                        background: isOn ? DS.accentLight : DS.bg,
+                        color: isOn ? DS.accent : DS.sub,
+                        display: 'inline-flex', alignItems: 'center', gap: 6,
+                      }}
+                    >
+                      <Icon name={g.icon} size={12} color={isOn ? DS.accent : DS.muted} />
+                      {g.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          {/* Grouped list */}
+          <div style={{ maxHeight: 380, overflow: 'auto' }}>
+            {totalMatches === 0 ? (
+              <div style={{ padding: '28px 16px', textAlign: 'center', color: DS.muted, fontSize: 13 }}>
+                {trackers.length === 0
+                  ? 'No trackers yet — create one to get started.'
+                  : `No trackers match “${query}”.`}
+              </div>
+            ) : sections.map(section => {
+              const isCollapsed = !!collapsedKeys[section.key];
+              return (
+                <div key={section.key}>
+                  <button
+                    onClick={() => toggleSection(section.key)}
+                    style={{
+                      width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+                      padding: '8px 14px', cursor: 'pointer', textAlign: 'left',
+                      border: 'none', borderBottom: `1px solid ${DS.border}`,
+                      background: DS.surface, color: DS.muted,
+                      fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em',
+                    }}
+                  >
+                    <Icon name={isCollapsed ? 'chevron_r' : 'chevron_d'} size={12} color={DS.faint} />
+                    <span style={{ flex: 1 }}>{section.key}</span>
+                    <span style={{ fontWeight: 600, color: DS.faint }}>{section.items.length}</span>
+                  </button>
+                  {!isCollapsed && section.items.map(t => {
+                    const isActive = active && t.id === active.id;
+                    return (
+                      <button
+                        key={t.id}
+                        onClick={() => pick(t.id)}
+                        style={{
+                          width: '100%', display: 'flex', alignItems: 'center', gap: 12,
+                          padding: '10px 14px 10px 30px', cursor: 'pointer', textAlign: 'left',
+                          border: 'none', borderBottom: `1px solid ${DS.border}`,
+                          background: isActive ? DS.accentLight : DS.bg,
+                        }}
+                        onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = DS.surface; }}
+                        onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = DS.bg; }}
+                      >
+                        <Icon name="star" size={13} color={isActive ? DS.accent : DS.faint} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13.5, fontWeight: isActive ? 600 : 500, color: isActive ? DS.accent : DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {t.name}
+                          </div>
+                          <div style={{ fontSize: 11.5, color: DS.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {t.classGroup}{t.description ? ` · ${t.description}` : ''}
+                          </div>
+                        </div>
+                        {isActive && <Badge variant="accent">Open</Badge>}
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Footer */}
+          <div style={{
+            padding: '10px 14px', borderTop: `1px solid ${DS.border}`, background: DS.surface,
+            display: 'flex', alignItems: 'center', gap: 10,
+          }}>
+            <span style={{ fontSize: 12, color: DS.faint }}>
+              {totalMatches} of {trackers.length} shown
+            </span>
+            <Btn variant="primary" icon="plus" small style={{ marginLeft: 'auto' }} onClick={() => { setOpen(false); onNew(); }}>
+              New tracker
+            </Btn>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 };
 
 const TrackingCell = ({ col, value, onChange }) => {
@@ -1661,7 +1862,7 @@ const ColumnEditor = ({ col, onSave, onCancel, onDelete }) => {
   };
   return (
     <div style={{
-      background: DS.bg, border: `1px solid ${DS.border}`, borderRadius: 10,
+      background: DS.bg, border: `1px solid ${DS.cardBorder}`, borderRadius: 10,
       padding: 16, display: 'flex', flexDirection: 'column', gap: 10, width: 320,
     }}>
       <div style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>
@@ -1736,7 +1937,7 @@ const TrackerEditor = ({ tracker, onSave, onCancel }) => {
   };
   return (
     <div style={{
-      background: DS.bg, border: `1px solid ${DS.border}`, borderRadius: 10,
+      background: DS.bg, border: `1px solid ${DS.cardBorder}`, borderRadius: 10,
       padding: 16, display: 'flex', flexDirection: 'column', gap: 10, width: 360,
     }}>
       <div style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>
@@ -1925,35 +2126,13 @@ const TeacherTrackingPage = () => {
         ]}
       />
 
-      {/* Tracker tabs */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap', alignItems: 'center' }}>
-        {trackers.map(t => {
-          const isActive = active && t.id === active.id;
-          return (
-            <button
-              key={t.id}
-              onClick={() => setActiveId(t.id)}
-              style={{
-                padding: '8px 14px', borderRadius: 8, cursor: 'pointer',
-                border: `1px solid ${isActive ? DS.accentBorder : DS.border}`,
-                background: isActive ? DS.accentLight : DS.bg,
-                color: isActive ? DS.accent : DS.sub,
-                fontSize: 13, fontWeight: isActive ? 600 : 500,
-                display: 'inline-flex', alignItems: 'center', gap: 8,
-              }}
-            >
-              <Icon name="star" size={13} color={isActive ? DS.accent : DS.muted} />
-              {t.name}
-              <span style={{ fontSize: 11, color: isActive ? DS.accent : DS.faint, opacity: 0.7 }}>
-                · {t.classGroup}
-              </span>
-            </button>
-          );
-        })}
-        {trackers.length === 0 && (
-          <span style={{ fontSize: 13, color: DS.muted }}>No trackers yet — create one to get started.</span>
-        )}
-      </div>
+      {/* Tracker switcher — searchable + grouped (scales to dozens of trackers) */}
+      <TrackerSwitcher
+        trackers={trackers}
+        active={active}
+        onSelect={setActiveId}
+        onNew={() => setEditingTracker({})}
+      />
 
       {/* Inline new-tracker editor */}
       {editingTracker && !editingTracker.id && (
@@ -2156,13 +2335,14 @@ const TeacherTrackingPage = () => {
 };
 
 // ─── Router ─────────────────────────────────────────────────────────────────────
-const TeacherPages = ({ page, plannerArgs }) => {
+const TeacherPages = ({ page, plannerArgs, section }) => {
   if (page === 'classes')        return <TeacherClassesPage />;
-  if (page === 'homework')       return <TeacherHomework />;
+  if (page === 'timetable')      return <TeacherTimetablePage />;
+  if (page === 'homework')       return <TeacherHomework section={section} />;
   if (page === 'progress')       return <TeacherProgressPage />;
   if (page === 'attendance')     return <TeacherAttendancePage />;
   if (page === 'tracking')       return <TeacherTrackingPage />;
-  if (page === 'ai_queue')       return <TeacherAIFeedbackPage />;
+  if (page === 'reports')        return <TeacherReports />;
   if (page === 'lesson_planner') return <LessonPlannerPage
     initialGroup={plannerArgs && plannerArgs.group}
     initialDate={plannerArgs && plannerArgs.date}

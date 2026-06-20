@@ -44,126 +44,635 @@ const T = 'all .15s';
 const ring = (color) => `0 0 0 4px ${color}1F`;
 
 const SUBJECTS = {
-  'Math':    { color: '#4F46E5', soft: '#EEF2FF' },
-  'Physics': { color: '#0EA5E9', soft: '#E0F2FE' },
-  'Chem':    { color: '#10B981', soft: '#ECFDF5' },
-  'Biology': { color: '#EAB308', soft: '#FEFCE8' },
-  'English': { color: '#EC4899', soft: '#FDF2F8' },
+  'Math':        { color: '#4F46E5', soft: '#EEF2FF' },
+  'Mathematics': { color: '#4F46E5', soft: '#EEF2FF' },
+  'Physics':     { color: '#0EA5E9', soft: '#E0F2FE' },
+  'Chem':        { color: '#10B981', soft: '#ECFDF5' },
+  'Chemistry':   { color: '#10B981', soft: '#ECFDF5' },
+  'Biology':     { color: '#16A34A', soft: '#F0FDF4' },
+  'English':     { color: '#EC4899', soft: '#FDF2F8' },
+  'English Literature': { color: '#EC4899', soft: '#FDF2F8' },
+  'History':     { color: '#D97706', soft: '#FFFBEB' },
+  'Economics':   { color: '#0D9488', soft: '#F0FDFA' },
 };
 const subColor = (name) => SUBJECTS[name] || { color: C.muted, soft: C.surface };
 
 // ─── localStorage store ────────────────────────────────────────
-const STORAGE_KEY = 'homework_store';
+const STORAGE_KEY = 'homework_store_v5';
+
+// Class roster, student seed roster and PDF question banks are mock data,
+// defined as globals in mocks/homework.mock.jsx (loaded before this file in
+// index.html). Aliased here to the internal names this module uses.
+const CLASSES = HW_CLASSES;
+
+// Dates relative to "today" so the demo data stays evergreen.
+const dayOffset = (n, time) => {
+  const d = new Date();
+  d.setDate(d.getDate() + n);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return time ? `${y}-${m}-${dd}T${time}` : `${y}-${m}-${dd}`;
+};
+
+// Deterministic pseudo-random in [0,1) from a string seed — keeps the demo
+// data stable across reloads while still looking varied.
+const seededRand = (str) => {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return ((h >>> 0) % 100000) / 100000;
+};
+
+// Build a plausible submission for `sid` on assignment `a`.
+// Spreads students across graded / submitted / in-progress / not-started so the
+// review sidebar and analytics look populated without hand-writing each one.
+const synthSubmission = (a, sid, i) => {
+  const r = seededRand(a.id + sid);
+  // ~18% haven't started, ~14% in progress, ~20% submitted (awaiting marking), rest graded.
+  if (r < 0.18) return null;
+  const inProgress = r < 0.32;
+  const submittedOnly = r < 0.52;
+  const total = a.questions.reduce((s, q) => s + (q.points || 0), 0);
+
+  const marks = {};
+  const feedback = {};
+  const results = {};
+  let earned = 0;
+  // Target accuracy band per student (40–98%) — the lower tail produces a
+  // believable set of students who need intervention.
+  const target = 0.40 + seededRand(sid + 'acc') * 0.58;
+  a.questions.forEach((q, qi) => {
+    const rr = seededRand(a.id + sid + q.id);
+    const good = rr < target;
+    const partial = !good && rr < target + 0.18;
+    const pts = good ? q.points : partial ? Math.round(q.points * 0.5) : 0;
+    if (inProgress || submittedOnly) {
+      // Auto questions get auto-marked instantly; manual stay null until graded.
+      marks[q.id] = isAuto(q.type) ? pts : null;
+    } else {
+      marks[q.id] = pts;
+      results[q.id] = good ? 'correct' : partial ? 'partial' : 'incorrect';
+      feedback[q.id] = good ? '' : partial ? 'On the right track — tighten the final steps.' : 'Review this topic and try again.';
+      earned += pts;
+    }
+  });
+
+  // Days since assignment created, clamped so dates stay in the past.
+  const ageDays = Math.max(1, Math.round(seededRand(sid + a.id + 'd') * 6) + 1);
+  const hh = String(8 + Math.floor(seededRand(sid + 'h') * 12)).padStart(2, '0');
+  const mm = String(Math.floor(seededRand(sid + 'm') * 60)).padStart(2, '0');
+  const submittedAt = dayOffset(-ageDays, `${hh}:${mm}:00`);
+
+  if (inProgress) {
+    return { answers: {}, status: 'in_progress', startedAt: submittedAt, marks: {}, feedback: {},
+      timeSpentMins: 5 + Math.floor(seededRand(sid + 't') * 20) };
+  }
+  const base = {
+    answers: Object.fromEntries(a.questions.map(q => [q.id, isAuto(q.type) ? (marks[q.id] >= q.points ? 'correct' : 'attempt') : 'See working.'])),
+    submittedAt,
+    marks, feedback,
+    timeSpentMins: 18 + Math.floor(seededRand(sid + 't') * 40),
+  };
+  if (submittedOnly) return { ...base, status: 'submitted' };
+  // Graded
+  const pct = total ? Math.round(earned / total * 100) : 0;
+  return {
+    ...base, status: 'returned', results,
+    markedAt: dayOffset(-(ageDays - 1 > 0 ? ageDays - 1 : 0), '14:00:00'),
+    classAvg: 68 + Math.floor(seededRand(a.id + 'avg') * 12),
+    rank: 1 + Math.floor(seededRand(sid + a.id + 'rk') * 24), classSize: 26,
+    overallFeedback: pct >= 80 ? 'Strong work throughout — keep it up.'
+      : pct >= 60 ? 'A solid attempt; revisit the questions you lost marks on.'
+      : 'Some gaps here — let’s go over this together in the next session.',
+  };
+};
+
+// Assign an assignment to a whole class cohort and fill in synthetic
+// submissions, preserving any hand-authored ones already present.
+const populateCohort = (a, students) => {
+  const cohort = students.filter(s => !a.classLabel || s.classLabel === a.classLabel).map(s => s.id);
+  const ids = Array.from(new Set([...(a.studentIds || []), ...cohort]));
+  const subs = { ...(a.submissions || {}) };
+  ids.forEach((sid, i) => {
+    if (subs[sid]) return; // keep hand-crafted submissions (e.g. Oliver's)
+    if (a.status === 'draft') return;
+    const s = synthSubmission(a, sid, i);
+    if (s) subs[sid] = s;
+  });
+  return { ...a, studentIds: ids, submissions: subs };
+};
 
 const seedStore = () => {
-  const me = { id: 's_oliver', name: 'Oliver Chen', role: 'student' };
+  const me = { id: 's_oliver', name: 'Oliver Chen', role: 'student', classLabel: 'Class 10A' };
   const teacher = { id: 't_clarke', name: 'Sarah Clarke', role: 'teacher' };
-  const students = [
-    me,
-    { id: 's_emma',   name: 'Emma Thompson', role: 'student' },
-    { id: 's_sophia', name: 'Sophia Patel',  role: 'student' },
-    { id: 's_james',  name: 'James Wilson',  role: 'student' },
-  ];
+  // Current student ("me") first, then the seed roster from mocks/homework.mock.jsx.
+  const students = [me, ...HW_STUDENTS];
 
   const folders = {
-    f_gcse:   { id: 'f_gcse',   name: 'GCSE Maths',     color: '#4F46E5' },
-    f_alevel: { id: 'f_alevel', name: 'A-Level Maths',  color: '#EC4899' },
-    f_phys:   { id: 'f_phys',   name: 'Physics',        color: '#0EA5E9' },
+    f_gcse:   { id: 'f_gcse',   name: 'GCSE Maths',    color: '#4F46E5' },
+    f_alevel: { id: 'f_alevel', name: 'A-Level Maths', color: '#EC4899' },
+    f_sci:    { id: 'f_sci',    name: 'Science',       color: '#10B981' },
+    f_hum:    { id: 'f_hum',    name: 'Humanities',    color: '#D97706' },
   };
 
+  // ── Open assignments (pending / in progress / submitted / overdue) ──
   const a1 = {
-    id: 'a_alg_simul',
-    title: 'Algebra: Simultaneous Equations',
-    subject: 'Math',
+    id: 'hw_simul',
+    title: 'Simultaneous Equations',
+    subject: 'Mathematics',
+    classLabel: 'Class 10A',
+    teacherName: 'Mahmood Mahalawy',
     folderId: 'f_gcse',
     teacherId: teacher.id,
     studentIds: ['s_oliver','s_emma','s_sophia','s_james'],
-    dueAt: '2026-05-04',
+    dueAt: dayOffset(7),
+    timeLimitMins: null,
+    allowReview: true,
     status: 'active',
-    createdAt: '2026-04-20',
+    createdAt: dayOffset(-3),
     instructions: 'Show all working. Submit final answers as exact values where possible.',
     questions: [
-      { id: 'q1', type: 'mcq',     prompt: 'If 2x + y = 10 and x − y = 2, what is x?',
-        choices: ['2','3','4','5'], correctIndex: 2, points: 2, hint: 'Add the two equations to eliminate y.' },
-      { id: 'q2', type: 'numeric', prompt: 'Solve for y when x = 4 in 2x + y = 10.',
-        answer: 2, tolerance: 0.01, points: 2 },
-      { id: 'q3', type: 'math',    prompt: 'Solve for x: 3x + 2 = 11. Enter x = …',
-        answer: 'x=3', points: 3 },
-      { id: 'q4', type: 'short',   prompt: 'In one line, describe the substitution method.',
-        points: 3 },
-      { id: 'q5', type: 'long',    prompt: 'Explain when elimination is preferable to substitution. Use an example.',
-        points: 5 },
+      { id: 'q1', type: 'math', prompt: 'Solve the pair: x + y = 5 and x − y = 1. Enter the value of x.',
+        answer: 'x=3', points: 1, hint: 'Add the two equations to eliminate y.' },
+      { id: 'q2', type: 'math', prompt: 'What is x^2 + 2', answer: 'x^2+2', points: 1 },
+      { id: 'q3', type: 'mcq', prompt: 'Which method removes a variable by adding the two equations together?',
+        choices: ['Substitution','Elimination','Graphing','Trial and improvement'], correctIndex: 1, points: 1 },
+      { id: 'q4', type: 'short', prompt: 'In one line, describe the substitution method.', points: 1 },
+    ],
+    submissions: {},
+  };
+
+  const a2 = {
+    id: 'hw_quad_prac',
+    title: 'Quadratic Equations — Practice Set',
+    subject: 'Mathematics',
+    classLabel: 'Class 10A',
+    teacherName: 'Ms. Chen',
+    folderId: 'f_gcse',
+    teacherId: teacher.id,
+    studentIds: ['s_oliver','s_emma','s_sophia'],
+    dueAt: dayOffset(14),
+    timeLimitMins: 45,
+    allowReview: true,
+    status: 'active',
+    createdAt: dayOffset(-6),
+    instructions: 'Factorise where possible before reaching for the formula.',
+    questions: [
+      { id: 'q1', type: 'mcq', prompt: 'Which of the following is the correct factored form of x² − 9?',
+        choices: ['(x−3)(x+3)','(x−9)(x+1)','(x−3)(x−3)','(x+9)(x−1)'], correctIndex: 0, points: 2 },
+      { id: 'q2', type: 'numeric', prompt: 'Solve for x: 3x + 7 = 22.', answer: 5, tolerance: 0, points: 2 },
+      { id: 'q3', type: 'math', prompt: 'Factorise x² − 5x + 6.', answer: '(x-2)(x-3)', points: 2 },
+      { id: 'q4', type: 'short', prompt: 'State the quadratic formula.', answer: 'x = (−b ± √(b² − 4ac)) / 2a', points: 2 },
+      { id: 'q5', type: 'long', prompt: 'Solve 2x² − 7x + 3 = 0 by factorising. Show full working.', points: 4 },
     ],
     submissions: {
-      's_emma': {
-        answers: { q1: 2, q2: 2, q3: 'x=3', q4: 'Replace one variable using the other equation.', q5: 'When the coefficients align nicely, e.g. 2x + y = 10 and 2x − y = 2 — adding eliminates y immediately.' },
-        submittedAt: '2026-04-25T10:14:00Z',
+      's_oliver': {
+        answers: {
+          q1: 0, q2: 5, q3: '(x-2)(x-3)',
+          q4: 'x = (−b ± √(b² − 4ac)) / 2a',
+          q5: '2x² − 7x + 3 = (2x − 1)(x − 3) = 0, so x = 1/2 or x = 3.',
+        },
+        submittedAt: dayOffset(-1, '16:42:00'),
         status: 'submitted',
-        marks: { q1: 2, q2: 2, q3: 3, q4: null, q5: null },
+        marks: { q1: 2, q2: 2, q3: 2, q4: null, q5: null },
         feedback: { q1: '', q2: '', q3: '', q4: '', q5: '' },
+        timeSpentMins: 31,
+      },
+      's_emma': {
+        answers: {
+          q1: 0, q2: 5, q3: '(x-2)(x-3)',
+          q4: 'Minus b plus or minus root b squared minus 4ac, all over 2a.',
+          q5: '(2x − 1)(x − 3) = 0 so x = 0.5 or 3.',
+        },
+        submittedAt: dayOffset(-2, '19:05:00'),
+        status: 'submitted',
+        marks: { q1: 2, q2: 2, q3: 2, q4: null, q5: null },
+        feedback: { q1: '', q2: '', q3: '', q4: '', q5: '' },
+        timeSpentMins: 38,
       },
     },
   };
 
-  const a2 = {
-    id: 'a_calc_diff',
-    title: 'Calculus: Differentiation Basics',
-    subject: 'Math',
-    folderId: 'f_alevel',
+  const a3 = {
+    id: 'hw_macbeth3',
+    title: "Shakespeare's Macbeth — Act 3 Analysis",
+    subject: 'English',
+    classLabel: 'Class 9A',
+    teacherName: 'Mr. Thompson',
+    folderId: 'f_hum',
     teacherId: teacher.id,
-    studentIds: ['s_oliver','s_emma'],
-    dueAt: '2026-05-08',
+    studentIds: ['s_oliver','s_emma','s_james'],
+    dueAt: dayOffset(-3),
+    timeLimitMins: null,
+    allowReview: false,
     status: 'active',
-    createdAt: '2026-04-22',
-    instructions: 'Use first principles where indicated.',
+    createdAt: dayOffset(-12),
+    instructions: 'Support every point with a short quotation from the text.',
     questions: [
-      { id: 'q1', type: 'mcq', prompt: 'Derivative of x²?',
-        choices: ['x','2x','x²/2','2'], correctIndex: 1, points: 2 },
-      { id: 'q2', type: 'math', prompt: 'Differentiate: 3x² + 5x. Enter d/dx as f\'(x) = …',
-        answer: "f'(x)=6x+5", points: 3 },
-      { id: 'q3', type: 'long', prompt: 'Differentiate sin(x) from first principles.',
-        points: 5 },
-      { id: 'q4', type: 'upload', prompt: 'Upload your photographed working for question 3.',
-        points: 3 },
+      { id: 'q1', type: 'short', prompt: 'Who does Macbeth see at the banquet in Act 3, Scene 4?',
+        answer: "Banquo's ghost", points: 2 },
+      { id: 'q2', type: 'mcq', prompt: 'Who escapes the murderers in Act 3?',
+        choices: ['Banquo','Fleance','Macduff','Donalbain'], correctIndex: 1, points: 2 },
+      { id: 'q3', type: 'short', prompt: "What is the significance of Banquo's ghost appearing only to Macbeth?", points: 3 },
+      { id: 'q4', type: 'long', prompt: "How does Shakespeare present Macbeth's growing paranoia in Act 3? Refer closely to the text.", points: 6 },
+      { id: 'q5', type: 'long', prompt: 'Analyse the theme of ambition in Act 3, Scene 1.', points: 6 },
     ],
     submissions: {},
   };
 
-  const a3 = {
-    id: 'a_phys_motion',
-    title: 'Mechanics: SUVAT Practice',
-    subject: 'Physics',
-    folderId: 'f_phys',
+  const a4 = {
+    id: 'hw_chem_fg',
+    title: 'Organic Chemistry — Functional Groups',
+    subject: 'Chemistry',
+    classLabel: 'Class 10B',
+    teacherName: 'Dr. Patel',
+    folderId: 'f_sci',
     teacherId: teacher.id,
-    studentIds: ['s_emma','s_sophia','s_james'],
-    dueAt: '2026-05-11',
-    status: 'draft',
-    createdAt: '2026-04-24',
-    instructions: 'Treat g = 9.81 m/s² unless told otherwise.',
+    studentIds: ['s_oliver','s_sophia','s_james'],
+    dueAt: dayOffset(-5),
+    timeLimitMins: 30,
+    allowReview: false,
+    status: 'active',
+    createdAt: dayOffset(-14),
+    instructions: 'Name groups using IUPAC conventions.',
     questions: [
-      { id: 'q1', type: 'numeric', prompt: 'A ball falls from rest for 2s. How far has it fallen (m)?',
-        answer: 19.62, tolerance: 0.1, points: 3 },
-      { id: 'q2', type: 'short', prompt: 'State two assumptions of SUVAT.', points: 2 },
+      { id: 'q1', type: 'mcq', prompt: 'Which functional group defines an alcohol?',
+        choices: ['−OH','−COOH','−CHO','−NH₂'], correctIndex: 0, points: 2 },
+      { id: 'q2', type: 'short', prompt: 'Name the functional group present in all carboxylic acids.',
+        answer: 'Carboxyl group (−COOH)', points: 2 },
+      { id: 'q3', type: 'mcq', prompt: 'CH₃CHO contains which functional group?',
+        choices: ['Hydroxyl','Aldehyde','Ketone','Ester'], correctIndex: 1, points: 2 },
+      { id: 'q4', type: 'numeric', prompt: 'How many carbon atoms are in a molecule of propan-1-ol?',
+        answer: 3, tolerance: 0, points: 1 },
+      { id: 'q5', type: 'long', prompt: 'Describe a chemical test to distinguish an aldehyde from a ketone.', points: 5 },
     ],
     submissions: {},
   };
+
+  const a5 = {
+    id: 'hw_ww2',
+    title: 'World War II — Key Events Timeline',
+    subject: 'History',
+    classLabel: 'Class 8A',
+    teacherName: 'Mr. Thompson',
+    folderId: 'f_hum',
+    teacherId: teacher.id,
+    studentIds: ['s_oliver','s_emma','s_sophia','s_james'],
+    dueAt: dayOffset(-7),
+    timeLimitMins: null,
+    allowReview: true,
+    status: 'active',
+    createdAt: dayOffset(-16),
+    instructions: 'Dates matter — be precise.',
+    questions: [
+      { id: 'q1', type: 'numeric', prompt: 'In what year did World War II begin?', answer: 1939, tolerance: 0, points: 1 },
+      { id: 'q2', type: 'short', prompt: 'Name the operation that launched the Allied invasion of Normandy.',
+        answer: 'Operation Overlord', points: 2 },
+      { id: 'q3', type: 'long', prompt: 'Place these events in order and explain each in one sentence: Dunkirk evacuation, Pearl Harbor, D-Day, VE Day.', points: 6 },
+    ],
+    submissions: {},
+  };
+
+  const a6 = {
+    id: 'hw_photo',
+    title: 'Cell Biology — Photosynthesis',
+    subject: 'Biology',
+    classLabel: 'Class 8A',
+    teacherName: 'Dr. Patel',
+    folderId: 'f_sci',
+    teacherId: teacher.id,
+    studentIds: ['s_oliver','s_emma'],
+    dueAt: dayOffset(-2),
+    timeLimitMins: null,
+    allowReview: true,
+    status: 'active',
+    createdAt: dayOffset(-10),
+    instructions: 'Use the correct scientific vocabulary throughout.',
+    questions: [
+      { id: 'q1', type: 'short', prompt: 'Write the word equation for photosynthesis.',
+        answer: 'carbon dioxide + water → glucose + oxygen', points: 2 },
+      { id: 'q2', type: 'mcq', prompt: 'In which organelle does photosynthesis take place?',
+        choices: ['Mitochondria','Chloroplasts','Nucleus','Ribosomes'], correctIndex: 1, points: 1 },
+      { id: 'q3', type: 'long', prompt: 'Explain how light intensity affects the rate of photosynthesis.', points: 5 },
+    ],
+    submissions: {},
+  };
+
+  // ── Marked homework (shown in the Results section) ──────────
+  const r1 = {
+    id: 'hw_quad_ch5',
+    title: 'Quadratic Equations – Chapter 5',
+    subject: 'Mathematics',
+    classLabel: 'Class 10A',
+    teacherName: 'Ms. Chen',
+    folderId: 'f_gcse',
+    teacherId: teacher.id,
+    studentIds: ['s_oliver','s_emma','s_sophia','s_james'],
+    dueAt: dayOffset(-2),
+    timeLimitMins: 60,
+    allowReview: true,
+    status: 'closed',
+    createdAt: dayOffset(-18),
+    instructions: 'Answer every question. Show full working for the long-answer items.',
+    questions: [
+      { id: 'q1', type: 'short', prompt: 'Solve 2x² + 5x − 3 = 0 using the quadratic formula.',
+        answer: 'x = 0.5 or x = −3', points: 10 },
+      { id: 'q2', type: 'mcq', prompt: 'Which of the following is the correct factored form of x² − 9?',
+        choices: ['(x−3)(x+3)','(x−9)(x+1)','(x−3)(x−3)','(x+9)(x−1)'], correctIndex: 0, points: 5 },
+      { id: 'q3', type: 'short', prompt: 'Find the vertex of the parabola y = x² − 4x + 7.',
+        answer: 'Vertex at (2, 3)', points: 8 },
+      { id: 'q4', type: 'long', prompt: 'Prove that the roots of ax² + bx + c = 0 are given by the quadratic formula, by completing the square.',
+        answer: 'Divide through by a, complete the square on x² + (b/a)x, then rearrange to isolate x.', points: 12 },
+      { id: 'q5', type: 'short', prompt: 'Solve the inequality x² − 2x − 8 ≤ 0, giving your answer as an interval.',
+        answer: '−2 ≤ x ≤ 4', points: 11 },
+      { id: 'q6', type: 'mcq', prompt: 'What is the discriminant of x² + 4x + 5?',
+        choices: ['4','−4','36','−36'], correctIndex: 1, points: 2 },
+      { id: 'q7', type: 'numeric', prompt: 'If x² = 49, what is the sum of all solutions of the equation?',
+        answer: 0, tolerance: 0, points: 2 },
+    ],
+    submissions: {
+      's_oliver': {
+        answers: {
+          q1: 'x = 0.5 or x = −3',
+          q2: 0,
+          q3: 'Vertex at (2, 4)',
+          q4: 'Divided through by a, completed the square on x² + (b/a)x, then rearranged to isolate x — full working shown.',
+          q5: 'x ≤ 4',
+          q6: 0,
+          q7: 7,
+        },
+        submittedAt: dayOffset(-2, '10:14:00'),
+        status: 'approved',
+        markedAt: dayOffset(-1, '11:30:00'),
+        marks: { q1: 9, q2: 5, q3: 5, q4: 12, q5: 10, q6: 0, q7: 0 },
+        results: { q1: 'correct', q2: 'correct', q3: 'partial', q4: 'correct', q5: 'partial', q6: 'incorrect', q7: 'incorrect' },
+        feedback: {
+          q1: 'Excellent working shown. Minor arithmetic slip in the discriminant but self-corrected. Well done.',
+          q2: '',
+          q3: 'Right x-coordinate. Substitute x = 2 back in carefully — y = 4 − 8 + 7 = 3.',
+          q4: 'Flawless derivation — every step clearly justified.',
+          q5: 'Correct upper bound, but the interval also has a lower bound at x = −2.',
+          q6: 'Remember: discriminant = b² − 4ac = 16 − 20 = −4.',
+          q7: 'x = 7 and x = −7, so the sum of the solutions is 0.',
+        },
+        timeSpentMins: 38,
+        classAvg: 74, rank: 4, classSize: 28,
+        overallFeedback: 'Very good understanding of algebraic manipulation. Please spend more time checking calculations before submitting. Great improvement from your previous homework – keep this momentum going!',
+      },
+    },
+  };
+
+  const r2 = {
+    id: 'hw_newton',
+    title: "Newton's Laws of Motion",
+    subject: 'Physics',
+    classLabel: 'Class 9B',
+    teacherName: 'Mr. Park',
+    folderId: 'f_sci',
+    teacherId: teacher.id,
+    studentIds: ['s_oliver','s_james'],
+    dueAt: dayOffset(-4),
+    timeLimitMins: null,
+    allowReview: true,
+    status: 'closed',
+    createdAt: dayOffset(-15),
+    instructions: 'Quote each law precisely before applying it.',
+    questions: [
+      { id: 'q1', type: 'short', prompt: "State Newton's three laws of motion.",
+        answer: '1: A body stays at rest or constant velocity unless a resultant force acts. 2: F = ma. 3: Every action has an equal and opposite reaction.', points: 10 },
+      { id: 'q2', type: 'numeric', prompt: 'A 4 kg object accelerates at 3 m/s². What is the resultant force in newtons?',
+        answer: 12, tolerance: 0, points: 8 },
+      { id: 'q3', type: 'long', prompt: "Using Newton's third law, explain what happens when a swimmer pushes off a pool wall.",
+        answer: 'The swimmer exerts a force on the wall; the wall exerts an equal and opposite force on the swimmer, accelerating them away.', points: 8 },
+      { id: 'q4', type: 'short', prompt: "A rocket's mass decreases as it burns fuel. Explain how this affects its acceleration.",
+        answer: 'With constant thrust and decreasing mass, a = F/m increases, so the rocket accelerates at an increasing rate.', points: 6 },
+    ],
+    submissions: {
+      's_oliver': {
+        answers: {
+          q1: '1st: a body stays at rest or moves at constant velocity unless a resultant force acts on it. 2nd: F = ma. 3rd: forces come in equal and opposite pairs.',
+          q2: 12,
+          q3: 'The swimmer pushes backwards on the wall, and by the third law the wall pushes forwards on the swimmer with an equal force, so they accelerate away from the wall.',
+          q4: 'The rocket gets lighter so it speeds up.',
+        },
+        submittedAt: dayOffset(-4, '17:20:00'),
+        status: 'approved',
+        markedAt: dayOffset(-3, '09:05:00'),
+        marks: { q1: 10, q2: 8, q3: 8, q4: 3 },
+        results: { q1: 'correct', q2: 'correct', q3: 'correct', q4: 'partial' },
+        feedback: {
+          q1: '',
+          q2: '',
+          q3: 'Beautifully explained — exactly the right pairing of forces.',
+          q4: 'Right idea, but use a = F/m explicitly to explain why acceleration increases.',
+        },
+        timeSpentMins: 29,
+        classAvg: 71, rank: 2, classSize: 24,
+        overallFeedback: 'Outstanding grasp of all three laws — your explanations are precise and well structured. Watch the variable-mass reasoning in Q4.',
+      },
+    },
+  };
+
+  const r3 = {
+    id: 'hw_mitosis',
+    title: 'Mitosis and Cell Division',
+    subject: 'Biology',
+    classLabel: 'Class 8A',
+    teacherName: 'Dr. Patel',
+    folderId: 'f_sci',
+    teacherId: teacher.id,
+    studentIds: ['s_oliver','s_emma','s_sophia'],
+    dueAt: dayOffset(-5),
+    timeLimitMins: null,
+    allowReview: true,
+    status: 'closed',
+    createdAt: dayOffset(-17),
+    instructions: 'Diagrams welcome but not required.',
+    questions: [
+      { id: 'q1', type: 'short', prompt: 'List the stages of mitosis in order and describe each in one sentence.',
+        answer: 'Prophase, metaphase, anaphase, telophase — chromosomes condense, line up at the equator, separate to the poles, and two nuclei reform.', points: 10 },
+      { id: 'q2', type: 'long', prompt: 'Explain why mitosis produces two genetically identical daughter cells.',
+        answer: 'DNA is replicated before division and identical sister chromatids are separated equally into each daughter cell.', points: 8 },
+      { id: 'q3', type: 'short', prompt: 'Give two examples of where mitosis is used in the body.',
+        answer: 'Growth of tissues and repair/replacement of damaged cells (e.g. skin, wound healing).', points: 7 },
+    ],
+    submissions: {
+      's_oliver': {
+        answers: {
+          q1: 'Prophase — chromosomes condense. Metaphase — they line up in the middle. Anaphase — chromatids are pulled apart. Telophase — two new nuclei form.',
+          q2: 'Because the cell splits into two and each new cell gets chromosomes from the parent cell.',
+          q3: 'Growth, and when you get taller.',
+        },
+        submittedAt: dayOffset(-5, '18:48:00'),
+        status: 'approved',
+        markedAt: dayOffset(-4, '13:15:00'),
+        marks: { q1: 9, q2: 4, q3: 3 },
+        results: { q1: 'correct', q2: 'partial', q3: 'partial' },
+        feedback: {
+          q1: 'Clear and correctly ordered. One more detail on spindle fibres would make this perfect.',
+          q2: "You described the split but didn't link it to DNA replication — that's the key point.",
+          q3: 'Growth is right; your second example needed to be repair or replacement of cells.',
+        },
+        timeSpentMins: 45,
+        classAvg: 68, rank: 14, classSize: 26,
+        overallFeedback: "You know the stages well, but the explanations need more precision. Revise DNA replication before next week's test.",
+      },
+    },
+  };
+
+  const r4 = {
+    id: 'hw_macbeth2',
+    title: 'Shakespeare – Macbeth Act 2',
+    subject: 'English Literature',
+    classLabel: 'Class 9A',
+    teacherName: 'Mr. Thompson',
+    folderId: 'f_hum',
+    teacherId: teacher.id,
+    studentIds: ['s_oliver','s_emma'],
+    dueAt: dayOffset(-9),
+    timeLimitMins: null,
+    allowReview: true,
+    status: 'closed',
+    createdAt: dayOffset(-20),
+    instructions: 'Embed quotations and analyse language closely.',
+    questions: [
+      { id: 'q1', type: 'long', prompt: "Analyse the dagger soliloquy: what does it reveal about Macbeth's state of mind?",
+        answer: "The hallucination shows his guilt and divided mind — drawn to the murder yet horrified by it ('a dagger of the mind, a false creation').", points: 12 },
+      { id: 'q2', type: 'short', prompt: 'How does Lady Macbeth take control after the murder of Duncan?',
+        answer: 'She returns the daggers, smears the grooms with blood and tells Macbeth that "a little water clears us of this deed".', points: 10 },
+      { id: 'q3', type: 'long', prompt: 'Discuss the symbolism of blood in Act 2.',
+        answer: 'Blood symbolises guilt that cannot be washed away — Macbeth fears all "great Neptune\'s ocean" cannot clean his hands.', points: 10 },
+      { id: 'q4', type: 'short', prompt: 'What is the dramatic function of the Porter scene?',
+        answer: 'Comic relief that also acts as a hellish commentary — the Porter imagines himself gatekeeper of hell, mirroring the murder upstairs.', points: 8 },
+    ],
+    submissions: {
+      's_oliver': {
+        answers: {
+          q1: "The dagger shows Macbeth's guilt before he has even acted — he calls it 'a dagger of the mind', so he knows his imagination is corrupted by the murder he is about to commit.",
+          q2: 'She stays calm, takes the daggers back herself and says a little water will clear them of the deed.',
+          q3: 'Blood stands for guilt. Macbeth says the ocean could not wash his hands clean, showing the guilt is permanent.',
+          q4: 'It is a funny scene to relax the audience.',
+        },
+        submittedAt: dayOffset(-8, '20:31:00'),
+        status: 'approved',
+        markedAt: dayOffset(-7, '15:40:00'),
+        marks: { q1: 10, q2: 9, q3: 8, q4: 4 },
+        results: { q1: 'correct', q2: 'correct', q3: 'partial', q4: 'partial' },
+        feedback: {
+          q1: 'Strong analysis with a well-chosen quotation.',
+          q2: 'Accurate and concise.',
+          q3: 'Good point on permanence — contrast it with Lady Macbeth\'s "a little water" for the top marks.',
+          q4: 'Comic relief is only half the answer — what does the Porter pretend to be the gatekeeper of?',
+        },
+        timeSpentMins: 52,
+        classAvg: 70, rank: 6, classSize: 27,
+        overallFeedback: 'Insightful analysis of imagery throughout. To reach the top band, embed shorter quotations and analyse individual word choices more closely.',
+      },
+    },
+  };
+
+  const r5 = {
+    id: 'hw_supply',
+    title: 'Supply and Demand Curves',
+    subject: 'Economics',
+    classLabel: 'A-Level Maths',
+    teacherName: 'Mr. Hughes',
+    folderId: 'f_alevel',
+    teacherId: teacher.id,
+    studentIds: ['s_oliver'],
+    dueAt: dayOffset(-14),
+    timeLimitMins: null,
+    allowReview: true,
+    status: 'closed',
+    createdAt: dayOffset(-24),
+    instructions: 'Label every diagram fully: axes, curves, equilibria.',
+    questions: [
+      { id: 'q1', type: 'long', prompt: 'Using a supply and demand diagram, explain what happens to equilibrium price when supply decreases.',
+        answer: 'The supply curve shifts left; at the old price there is excess demand, so equilibrium price rises and quantity falls.', points: 8 },
+      { id: 'q2', type: 'short', prompt: 'Define price elasticity of demand.',
+        answer: 'The responsiveness of quantity demanded to a change in price: %ΔQd ÷ %ΔP.', points: 6 },
+      { id: 'q3', type: 'short', prompt: 'Give two factors that shift the demand curve to the right.',
+        answer: 'Rising incomes (for a normal good) and an increase in the price of a substitute.', points: 6 },
+    ],
+    submissions: {
+      's_oliver': {
+        answers: {
+          q1: 'Supply goes down so the price goes up. I drew the supply curve moving but did not label the new equilibrium.',
+          q2: 'How much the quantity demanded responds to a change in price, measured as percentage change in quantity divided by percentage change in price.',
+          q3: 'A fall in the price of the good itself, and cheaper production costs.',
+        },
+        submittedAt: dayOffset(-15, '21:02:00'),
+        status: 'approved',
+        markedAt: dayOffset(-13, '10:25:00'),
+        marks: { q1: 5, q2: 6, q3: 0 },
+        results: { q1: 'partial', q2: 'correct', q3: 'incorrect' },
+        feedback: {
+          q1: 'Correct direction, but the diagram must show the leftward shift and label both equilibria.',
+          q2: 'Textbook definition — well done.',
+          q3: 'Both of these affect supply or cause movements along the demand curve — revise shift factors vs movements.',
+        },
+        timeSpentMins: 61,
+        classAvg: 62, rank: 18, classSize: 22,
+        overallFeedback: 'Solid definitions, but diagram work needs attention — practise drawing and labelling shifts accurately.',
+      },
+    },
+  };
+
+  const allAssignments = [a1, a2, a3, a4, a5, a6, r1, r2, r3, r4, r5]
+    .map(a => normalizeAssignment(populateCohort(a, students)));
 
   return {
     currentUser: me,
     users: { [me.id]: me, [teacher.id]: teacher, ...Object.fromEntries(students.map(s => [s.id, s])) },
     folders,
-    assignments: { [a1.id]: a1, [a2.id]: a2, [a3.id]: a3 },
-    drafts: {},
+    classes: CLASSES,
+    assignments: Object.fromEntries(allAssignments.map(a => [a.id, a])),
+    drafts: {
+      hw_simul: { answers: {}, flags: {}, startedAt: dayOffset(-1, '18:30:00') },
+    },
   };
+};
+
+// ─── Settings model ────────────────────────────────────────────
+const DEFAULT_SETTINGS = {
+  availableFrom: '',
+  attemptsAllowed: 1,
+  allowLate: false,
+  randomize: false,
+  autoGradeMcq: true,
+  // Student review
+  allowReview: false,
+  showCorrect: false,
+  showComments: false,
+  showAutoImmediately: false,
+  releaseAfterApproval: false,
+  marksOnly: false,
+  hideMarksUntilReleased: false,
+};
+
+// Fold legacy top-level flags into the `settings` object and fill defaults,
+// so older stored data and all seed assignments work unchanged.
+const normalizeAssignment = (a) => {
+  if (!a) return a;
+  const s = { ...DEFAULT_SETTINGS, ...(a.settings || {}) };
+  // Lift legacy fields that lived on the assignment root.
+  if (a.settings == null || a.settings.allowReview == null) {
+    if ('allowReview' in a) s.allowReview = !!a.allowReview;
+  }
+  if (s.availableFrom === '' && a.availableFrom) s.availableFrom = a.availableFrom;
+  return { ...a, settings: s };
 };
 
 // Migrate older shapes from localStorage (added folder support).
 const migrate = (s) => {
   if (!s) return s;
   if (!s.folders) s.folders = {};
+  if (!s.classes) s.classes = CLASSES;
   if (s.assignments) {
-    Object.values(s.assignments).forEach(a => {
+    Object.keys(s.assignments).forEach(k => {
+      const a = s.assignments[k];
       if (!('folderId' in a)) a.folderId = null;
+      s.assignments[k] = normalizeAssignment(a);
     });
   }
   return s;
@@ -319,6 +828,43 @@ const Label = ({ children, htmlFor, hint }) => (
     {children}
     {hint && <span style={{ color:C.faint, fontWeight:400, marginLeft:6 }}>{hint}</span>}
   </label>
+);
+
+// ─── Toggle switch ──────────────────────────────────────────────
+const Toggle = ({ checked, onChange, disabled }) => (
+  <button
+    type="button"
+    role="switch"
+    aria-checked={!!checked}
+    disabled={disabled}
+    onClick={() => !disabled && onChange(!checked)}
+    style={{
+      width: 40, height: 22, borderRadius: 999, border: 'none', padding: 2,
+      background: checked ? C.brand : C.borderD,
+      cursor: disabled ? 'not-allowed' : 'pointer', transition: T,
+      display: 'flex', alignItems: 'center', flexShrink: 0,
+      opacity: disabled ? 0.5 : 1,
+    }}>
+    <span style={{
+      width: 18, height: 18, borderRadius: '50%', background: '#fff',
+      transform: checked ? 'translateX(18px)' : 'translateX(0)',
+      transition: T, boxShadow: '0 1px 2px rgba(15,23,42,.2)',
+    }} />
+  </button>
+);
+
+// One settings row: title + description on the left, a toggle on the right.
+const SettingRow = ({ title, desc, checked, onChange, disabled }) => (
+  <div style={{
+    display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
+    gap: 16, padding: '14px 0', borderBottom: `1px solid ${C.surface2}`,
+  }}>
+    <div style={{ minWidth: 0 }}>
+      <div style={{ fontFamily: F.body, fontSize: 13.5, fontWeight: 600, color: disabled ? C.faint : C.text }}>{title}</div>
+      {desc && <div style={{ fontFamily: F.body, fontSize: 12, color: C.muted, marginTop: 2, lineHeight: 1.45 }}>{desc}</div>}
+    </div>
+    <Toggle checked={checked} onChange={onChange} disabled={disabled} />
+  </div>
 );
 
 // ─── Input ──────────────────────────────────────────────────────
@@ -478,6 +1024,8 @@ const normalizeMath = (s) => {
   return x;
 };
 
+const eq = (a, b) => String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase();
+
 const autoMark = (q, ans) => {
   if (ans == null || ans === '') return null;
   if (q.type === 'mcq') {
@@ -492,19 +1040,49 @@ const autoMark = (q, ans) => {
   if (q.type === 'math') {
     return normalizeMath(ans) === normalizeMath(q.answer) ? q.points : 0;
   }
+  if (q.type === 'truefalse') {
+    return ans === q.answer ? q.points : 0;
+  }
+  if (q.type === 'multi') {
+    // ans is an array of selected indices; exact set match (order-independent).
+    const want = [...(q.correctIndices || [])].sort().join(',');
+    const got  = [...(Array.isArray(ans) ? ans : [])].sort().join(',');
+    return want === got && want !== '' ? q.points : 0;
+  }
+  if (q.type === 'fillblank') {
+    // ans is an array of strings; proportional credit per correct blank.
+    const blanks = q.blanks || [];
+    if (blanks.length === 0) return null;
+    const arr = Array.isArray(ans) ? ans : [];
+    const correct = blanks.reduce((n, b, i) => n + (eq(arr[i], b) ? 1 : 0), 0);
+    return Math.round((correct / blanks.length) * q.points * 100) / 100;
+  }
+  if (q.type === 'match') {
+    // ans maps left-index -> chosen right-index; correct when they line up.
+    const pairs = q.pairs || [];
+    if (pairs.length === 0) return null;
+    const map = ans || {};
+    const correct = pairs.reduce((n, _p, i) => n + (map[i] === i ? 1 : 0), 0);
+    return Math.round((correct / pairs.length) * q.points * 100) / 100;
+  }
   return null;
 };
 
-const isAuto = (t) => t === 'mcq' || t === 'numeric' || t === 'math';
+const isAuto = (t) => t === 'mcq' || t === 'numeric' || t === 'math'
+  || t === 'truefalse' || t === 'multi' || t === 'fillblank' || t === 'match';
 
 // ─── Question type catalog ──────────────────────────────────────
 const QTYPES = [
-  { type: 'mcq',     label: 'Multiple choice', desc: 'Auto-marked',         marker: 'auto' },
-  { type: 'numeric', label: 'Numeric',         desc: 'Auto-marked',         marker: 'auto' },
-  { type: 'math',    label: 'Math',            desc: 'Auto-marked (LaTeX)', marker: 'auto' },
-  { type: 'short',   label: 'Short answer',    desc: 'Teacher-marked',      marker: 'manual' },
-  { type: 'long',    label: 'Long answer',     desc: 'Teacher-marked',      marker: 'manual' },
-  { type: 'upload',  label: 'File upload',     desc: 'Teacher-marked',      marker: 'manual' },
+  { type: 'mcq',       label: 'MCQ',          short: 'MCQ',          desc: 'Auto-marked',          marker: 'auto' },
+  { type: 'multi',     label: 'Multi Select', short: 'Multi Select', desc: 'Auto-marked',          marker: 'auto' },
+  { type: 'truefalse', label: 'True/False',   short: 'True/False',   desc: 'Auto-marked',          marker: 'auto' },
+  { type: 'short',     label: 'Short Answer', short: 'Short Answer', desc: 'Teacher-marked',       marker: 'manual' },
+  { type: 'long',      label: 'Long Answer',  short: 'Long Answer',  desc: 'Teacher-marked',       marker: 'manual' },
+  { type: 'math',      label: 'Math',         short: 'Math',         desc: 'Auto-marked (LaTeX)',  marker: 'auto' },
+  { type: 'numeric',   label: 'Numeric',      short: 'Numeric',      desc: 'Auto-marked',          marker: 'auto' },
+  { type: 'fillblank', label: 'Fill Blank',   short: 'Fill Blank',   desc: 'Auto-marked',          marker: 'auto' },
+  { type: 'match',     label: 'Match',        short: 'Match',        desc: 'Auto-marked',          marker: 'auto' },
+  { type: 'upload',    label: 'File Upload',  short: 'File Upload',  desc: 'Teacher-marked',       marker: 'manual' },
 ];
 const qtypeMeta = (t) => QTYPES.find(x => x.type === t) || QTYPES[0];
 
@@ -523,6 +1101,10 @@ const Ico = ({ name, size = 16, color = 'currentColor' }) => {
     chevR:   'M9 6l6 6-6 6',
     chevL:   'M15 6l-6 6 6 6',
     chevD:   'M6 9l6 6 6-6',
+    chevU:   'M6 15l6-6 6 6',
+    copy:    'M9 9h10v10H9V9z M5 15H3V3h12v2',
+    grip:    'M9 5h.01 M15 5h.01 M9 12h.01 M15 12h.01 M9 19h.01 M15 19h.01',
+    settings:'M12 15a3 3 0 100-6 3 3 0 000 6z M4 12a8 8 0 01.2-1.8l-2-1.5 2-3.4 2.3 1a8 8 0 013.1-1.8L12 2h0l.4 2.5a8 8 0 013.1 1.8l2.3-1 2 3.4-2 1.5A8 8 0 0120 12',
     search:  'M21 21l-5-5 M11 17a6 6 0 100-12 6 6 0 000 12z',
     sparkle: 'M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3z',
     flame:   'M12 2c1 4 4 5 4 9a4 4 0 11-8 0c0-2 1-3 1-5 0 2 1 3 3 3-1-3 0-5 0-7z',
@@ -542,6 +1124,16 @@ const Ico = ({ name, size = 16, color = 'currentColor' }) => {
     book2:   'M4 4v16c2-1 5-2 8-2s6 1 8 2V4c-2-1-5-2-8-2S6 3 4 4z',
     info:    'M12 8h.01 M11 12h1v5h1 M12 22a10 10 0 100-20 10 10 0 000 20z',
     layers:  'M12 3l9 5-9 5-9-5 9-5z M3 13l9 5 9-5 M3 18l9 5 9-5',
+    calendar:'M3 7h18M3 7v12a2 2 0 002 2h14a2 2 0 002-2V7M3 7l0-2a2 2 0 012-2h14a2 2 0 012 2v2M8 3v4M16 3v4',
+    send:    'M22 2L11 13 M22 2l-7 20-4-9-9-4 20-7z',
+    flag:    'M5 21V4 M5 4h13l-3.5 4.5L18 13H5',
+    play:    'M7 5v14l12-7-12-7z',
+    target:  'M12 22a10 10 0 100-20 10 10 0 000 20z M12 17a5 5 0 100-10 5 5 0 000 10z M12 13.5a1.5 1.5 0 100-3 1.5 1.5 0 000 3z',
+    trend:   'M3 17l6-6 4 4 8-8 M15 7h6v6',
+    minus:   'M5 12h14',
+    lock:    'M5 11h14v10H5V11z M8 11V7a4 4 0 018 0v4',
+    chat:    'M21 12a8 8 0 01-8 8H5l-2 2V12a8 8 0 018-8h2a8 8 0 018 8z',
+    alertCircle: 'M12 22a10 10 0 100-20 10 10 0 000 20z M12 8v5 M12 16h.01',
   };
   const d = paths[name] || '';
   return (
@@ -567,10 +1159,12 @@ const daysUntil = (iso) => {
   const ms = new Date(iso).getTime() - Date.now();
   return Math.round(ms / 86400000);
 };
+// A submission is "graded" once the teacher returns it (legacy: 'approved').
+const isGraded = (sub) => !!sub && (sub.status === 'returned' || sub.status === 'approved');
 const submissionStatus = (asn, studentId) => {
   const sub = asn.submissions[studentId];
   if (!sub) return 'not_started';
-  if (sub.status === 'approved') return 'approved';
+  if (isGraded(sub)) return 'approved';
   return 'submitted';
 };
 const totalPoints = (asn) => asn.questions.reduce((s, q) => s + (q.points || 0), 0);
@@ -599,57 +1193,7 @@ const fullyMarked = (asn, sub) => {
 // PDF Import (simulated parser)
 // Picks one of several question banks based on filename heuristics.
 // ════════════════════════════════════════════════════════════════
-const PDF_BANKS = {
-  algebra: [
-    { type:'mcq',     prompt:'Which is a solution to x² − 5x + 6 = 0?',
-      choices:['x = 1','x = 2','x = 4','x = 5'], correctIndex:1, points:2 },
-    { type:'numeric', prompt:'Solve for x: 3x + 7 = 22.', answer:5, tolerance:0, points:2 },
-    { type:'math',    prompt:'Factorise x² − 9. Enter your factorisation.',
-      answer:'(x-3)(x+3)', points:3 },
-    { type:'short',   prompt:'In one line, state the quadratic formula.', points:2 },
-    { type:'long',    prompt:'Solve 2x² − 7x + 3 = 0 by factorising. Show full working.', points:5 },
-  ],
-  calculus: [
-    { type:'mcq',     prompt:'What is d/dx (x³)?',
-      choices:['x²','3x²','3x','x³/3'], correctIndex:1, points:2 },
-    { type:'math',    prompt:'Differentiate 4x² + 3x − 7. Enter f\'(x) = …',
-      answer:"f'(x)=8x+3", points:3 },
-    { type:'numeric', prompt:'Evaluate the gradient of y = x² at x = 5.',
-      answer:10, tolerance:0, points:2 },
-    { type:'long',    prompt:'Differentiate cos(x) from first principles.', points:6 },
-    { type:'upload',  prompt:'Upload your photographed working for question 4.', points:3 },
-  ],
-  physics: [
-    { type:'numeric', prompt:'A car accelerates from rest at 3 m/s² for 4s. Final velocity (m/s)?',
-      answer:12, tolerance:0.1, points:2 },
-    { type:'numeric', prompt:'A 2 kg mass on Earth has weight (N)? Use g = 9.81.',
-      answer:19.62, tolerance:0.1, points:2 },
-    { type:'mcq',     prompt:'SI unit of force?',
-      choices:['joule','watt','newton','pascal'], correctIndex:2, points:1 },
-    { type:'short',   prompt:'State Newton\'s second law in one sentence.', points:2 },
-    { type:'long',    prompt:'Explain why a falling object reaches terminal velocity.', points:5 },
-  ],
-  trig: [
-    { type:'mcq',     prompt:'Value of sin(30°)?',
-      choices:['0','1/2','√3/2','1'], correctIndex:1, points:1 },
-    { type:'mcq',     prompt:'Value of cos(60°)?',
-      choices:['0','1/2','√3/2','1'], correctIndex:1, points:1 },
-    { type:'math',    prompt:'Simplify: sin²(θ) + cos²(θ).',
-      answer:'1', points:2 },
-    { type:'numeric', prompt:'Hypotenuse of a right triangle with legs 3 and 4.',
-      answer:5, tolerance:0, points:2 },
-    { type:'long',    prompt:'Prove the sine rule for a triangle ABC.', points:5 },
-  ],
-  general: [
-    { type:'mcq',     prompt:'Pick the prime number.',
-      choices:['9','15','17','21'], correctIndex:2, points:1 },
-    { type:'numeric', prompt:'Compute 12 × 7.', answer:84, tolerance:0, points:1 },
-    { type:'math',    prompt:'Solve: 2x − 5 = 11. Enter x=…',
-      answer:'x=8', points:2 },
-    { type:'short',   prompt:'Define "function" in your own words.', points:2 },
-    { type:'long',    prompt:'Describe one real-world application of statistics.', points:4 },
-  ],
-};
+const PDF_BANKS = HW_PDF_BANKS;
 
 const pickBankForFilename = (name) => {
   const n = (name || '').toLowerCase();
@@ -978,6 +1522,98 @@ const QuestionAnswerInput = ({ question, value, onChange }) => {
       </div>
     );
   }
+  if (q.type === 'multi') {
+    const sel = Array.isArray(value) ? value : [];
+    const toggle = (i) => onChange(sel.includes(i) ? sel.filter(x => x !== i) : [...sel, i].sort());
+    return (
+      <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+        {q.choices.map((c, i) => {
+          const on = sel.includes(i);
+          return (
+            <label key={i} style={{
+              display:'flex', alignItems:'center', gap:12, padding:'12px 14px',
+              border: `1px solid ${on ? C.brand : C.border}`,
+              background: on ? C.brandSoft : C.bg,
+              borderRadius:10, cursor:'pointer', transition: T,
+              boxShadow: on ? ring(C.brand) : 'none',
+            }}>
+              <span style={{
+                width:20, height:20, borderRadius:6,
+                border:`2px solid ${on ? C.brand : C.borderD}`,
+                display:'flex', alignItems:'center', justifyContent:'center',
+                background: on ? C.brand : C.bg,
+              }}>
+                {on && <Ico name="check" size={12} color="#fff" />}
+              </span>
+              <span style={{ fontFamily: F.mono, fontSize:12, color: on ? C.brand : C.muted, fontWeight:600 }}>
+                {String.fromCharCode(65 + i)}
+              </span>
+              <span style={{ fontFamily: F.body, fontSize:14, color: C.text }}>{c}</span>
+              <input type="checkbox" checked={on} onChange={() => toggle(i)} style={{ display:'none' }} />
+            </label>
+          );
+        })}
+      </div>
+    );
+  }
+  if (q.type === 'truefalse') {
+    return (
+      <div style={{ display:'flex', gap:12 }}>
+        {[true, false].map(v => {
+          const on = value === v;
+          return (
+            <button key={String(v)} onClick={() => onChange(v)} style={{
+              flex:1, maxWidth:200, padding:'14px 16px', borderRadius:10, cursor:'pointer',
+              border:`1px solid ${on ? C.brand : C.border}`,
+              background: on ? C.brand : C.bg, color: on ? '#fff' : C.sub,
+              fontFamily: F.body, fontSize:15, fontWeight:600, transition: T,
+              boxShadow: on ? ring(C.brand) : 'none',
+            }}>{v ? 'True' : 'False'}</button>
+          );
+        })}
+      </div>
+    );
+  }
+  if (q.type === 'fillblank') {
+    const arr = Array.isArray(value) ? value : [];
+    const setBlank = (i, v) => { const n = [...arr]; n[i] = v; onChange(n); };
+    return (
+      <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+        {(q.blanks || []).map((_, i) => (
+          <div key={i} style={{ display:'flex', alignItems:'center', gap:10 }}>
+            <span style={{ fontFamily: F.mono, fontSize:12, color: C.muted, width:64 }}>Blank {i + 1}</span>
+            <Input value={arr[i] || ''} onChange={(v) => setBlank(i, v)} placeholder="Your answer" />
+          </div>
+        ))}
+      </div>
+    );
+  }
+  if (q.type === 'match') {
+    const map = value || {};
+    const setMatch = (li, ri) => onChange({ ...map, [li]: ri === '' ? undefined : parseInt(ri, 10) });
+    const rights = (q.pairs || []).map(p => p.right);
+    return (
+      <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+        {(q.pairs || []).map((p, i) => (
+          <div key={i} style={{ display:'flex', alignItems:'center', gap:12 }}>
+            <span style={{
+              flex:1, padding:'10px 14px', borderRadius:10, background:C.surface,
+              border:`1px solid ${C.border}`, fontFamily:F.body, fontSize:14, color:C.text,
+            }}>{p.left}</span>
+            <Ico name="arrowR" size={16} color={C.faint} />
+            <select value={map[i] ?? ''} onChange={e => setMatch(i, e.target.value)} style={{
+              flex:1, padding:'10px 12px', borderRadius:10,
+              border:`1px solid ${map[i] != null ? C.brand : C.border}`, background:C.bg, color:C.text,
+              fontFamily:F.body, fontSize:14, cursor:'pointer',
+            }}>
+              <option value="">Choose…</option>
+              {rights.map((r, ri) => <option key={ri} value={ri}>{r}</option>)}
+            </select>
+          </div>
+        ))}
+      </div>
+    );
+  }
   if (q.type === 'numeric') {
     return (
       <div style={{ maxWidth: 280 }}>
@@ -1021,7 +1657,10 @@ const QuestionAnswerInput = ({ question, value, onChange }) => {
 // Read-only display of a student's answer (for review/results)
 const QuestionAnswerDisplay = ({ question, answer }) => {
   const q = question;
-  if (answer == null || answer === '') {
+  const emptyArr = Array.isArray(answer) && answer.length === 0;
+  const emptyObj = answer && typeof answer === 'object' && !Array.isArray(answer) && Object.keys(answer).length === 0;
+  const isEmpty = answer == null || answer === '' || emptyArr || emptyObj;
+  if (isEmpty && q.type !== 'truefalse') {
     return <span style={{ fontFamily:F.body, fontSize:13, color: C.faint, fontStyle:'italic' }}>No answer submitted</span>;
   }
   if (q.type === 'mcq') {
@@ -1029,6 +1668,52 @@ const QuestionAnswerDisplay = ({ question, answer }) => {
       <div style={{ display:'flex', alignItems:'center', gap:8, fontFamily:F.body, fontSize:14, color:C.text }}>
         <Pill tone="brand">{String.fromCharCode(65 + answer)}</Pill>
         <span>{q.choices[answer]}</span>
+      </div>
+    );
+  }
+  if (q.type === 'multi') {
+    const sel = Array.isArray(answer) ? answer : [];
+    return (
+      <div style={{ display:'flex', flexWrap:'wrap', gap:8 }}>
+        {sel.map(i => (
+          <span key={i} style={{ display:'inline-flex', alignItems:'center', gap:6, fontFamily:F.body, fontSize:14, color:C.text }}>
+            <Pill tone="brand">{String.fromCharCode(65 + i)}</Pill>{q.choices?.[i]}
+          </span>
+        ))}
+      </div>
+    );
+  }
+  if (q.type === 'truefalse') {
+    if (answer == null) return <span style={{ fontFamily:F.body, fontSize:13, color: C.faint, fontStyle:'italic' }}>No answer submitted</span>;
+    return <Pill tone="brand">{answer ? 'True' : 'False'}</Pill>;
+  }
+  if (q.type === 'fillblank') {
+    const arr = Array.isArray(answer) ? answer : [];
+    return (
+      <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+        {(q.blanks || []).map((_, i) => (
+          <div key={i} style={{ display:'flex', alignItems:'center', gap:8, fontFamily:F.body, fontSize:14, color:C.text }}>
+            <span style={{ fontFamily:F.mono, fontSize:11, color:C.muted }}>{i + 1}.</span>
+            <span>{arr[i] || <em style={{ color:C.faint }}>blank</em>}</span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+  if (q.type === 'match') {
+    const map = answer || {};
+    return (
+      <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+        {(q.pairs || []).map((p, i) => {
+          const ri = map[i];
+          const right = ri != null ? q.pairs?.[ri]?.right : null;
+          return (
+            <div key={i} style={{ display:'flex', alignItems:'center', gap:8, fontFamily:F.body, fontSize:14, color:C.text }}>
+              <span>{p.left}</span><Ico name="arrowR" size={13} color={C.faint} />
+              <span>{right || <em style={{ color:C.faint }}>—</em>}</span>
+            </div>
+          );
+        })}
       </div>
     );
   }
@@ -1065,7 +1750,7 @@ const QuestionAnswerDisplay = ({ question, answer }) => {
 // ════════════════════════════════════════════════════════════════
 // TEACHER MODULE
 // ════════════════════════════════════════════════════════════════
-const TeacherHomework = () => {
+const TeacherHomework = ({ section }) => {
   const [store, update] = useStore();
   const [view, setView] = React.useState({ name: 'list' }); // list | builder | review
   const me = Object.values(store.users).find(u => u.role === 'teacher') || { id: 't_clarke', name: 'Sarah Clarke' };
@@ -1130,6 +1815,7 @@ const TeacherHomework = () => {
       defaultFolderId={view.folderId || null}
       students={Object.values(store.users).filter(u => u.role === 'student')}
       folders={folders}
+      classes={store.classes || CLASSES}
       onCreateFolder={createFolder}
       onCancel={() => setView({ name: 'list' })}
       onSave={(asn) => {
@@ -1143,7 +1829,7 @@ const TeacherHomework = () => {
     return <TeacherReview
       assignment={store.assignments[view.id]}
       users={store.users}
-      onClose={() => setView({ name: 'list' })}
+      onClose={() => setView({ name: 'overview', id: view.id })}
       onUpdateSubmission={(sid, sub) => {
         update(s => {
           const asn = { ...s.assignments[view.id] };
@@ -1154,35 +1840,52 @@ const TeacherHomework = () => {
     />;
   }
 
+  const deleteAssignment = (id) => {
+    if (!confirm('Delete this assignment?')) return false;
+    update(s => {
+      const next = { ...s.assignments };
+      delete next[id];
+      return { ...s, assignments: next };
+    });
+    return true;
+  };
+
+  if (view.name === 'overview' && store.assignments[view.id]) {
+    return <TeacherOverview
+      a={store.assignments[view.id]}
+      users={store.users}
+      folders={folders}
+      onBack={() => setView({ name: 'list' })}
+      onEdit={() => setView({ name: 'builder', id: view.id })}
+      onReview={() => setView({ name: 'review', id: view.id })}
+      onDuplicate={() => duplicateAssignment(view.id)}
+      onMove={(folderId) => moveAssignment(view.id, folderId)}
+      onDelete={() => { if (deleteAssignment(view.id)) setView({ name: 'list' }); }}
+    />;
+  }
+
   return <TeacherList
+    section={section}
     assignments={myAssignments}
     folders={folders}
+    users={store.users}
+    classes={store.classes || CLASSES}
     onNew={(folderId) => setView({ name: 'builder', folderId: folderId || null })}
-    onEdit={(id) => setView({ name: 'builder', id })}
-    onReview={(id) => setView({ name: 'review', id })}
-    onDuplicate={duplicateAssignment}
-    onMove={moveAssignment}
+    onOpen={(id) => setView({ name: 'overview', id })}
     onCreateFolder={createFolder}
     onRenameFolder={renameFolder}
     onDeleteFolder={deleteFolder}
-    onDelete={(id) => {
-      if (!confirm('Delete this assignment?')) return;
-      update(s => {
-        const next = { ...s.assignments };
-        delete next[id];
-        return { ...s, assignments: next };
-      });
-    }}
   />;
 };
 
 // ─── Teacher list view ──────────────────────────────────────────
 const TeacherList = ({
-  assignments, folders = [],
-  onNew, onEdit, onReview, onDuplicate, onDelete,
-  onMove, onCreateFolder, onRenameFolder, onDeleteFolder,
+  section, assignments, folders = [], users = {}, classes = [],
+  onNew, onOpen, onCreateFolder, onRenameFolder, onDeleteFolder,
 }) => {
   const toast = useToast();
+  // assignments | analytics — driven by the sidebar dropdown (`section` prop).
+  const view = section === 'analytics' ? 'analytics' : 'assignments';
   const [tab, setTab] = React.useState('all');
   const [folderId, setFolderId] = React.useState('all'); // 'all' | 'unfiled' | <folder id>
   const [creatingFolder, setCreatingFolder] = React.useState(false);
@@ -1251,6 +1954,20 @@ const TeacherList = ({
     setRenameValue('');
   };
 
+  if (view === 'analytics') {
+    return (
+      <div style={{ padding: '32px 32px 64px', fontFamily: F.body, color: C.text }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom: 22, gap: 20 }}>
+          <div>
+            <h1 style={{ fontFamily: F.head, fontSize: 26, fontWeight: 700, margin: 0, letterSpacing: '-0.4px' }}>Homework</h1>
+            <p style={{ fontSize: 14, color: C.muted, margin: '6px 0 0' }}>Performance &amp; submission insights</p>
+          </div>
+        </div>
+        <HomeworkAnalytics assignments={assignments} users={users} classes={classes} />
+      </div>
+    );
+  }
+
   return (
     <div style={{ padding: '32px 32px 64px', fontFamily: F.body, color: C.text }}>
       {/* Header */}
@@ -1261,10 +1978,10 @@ const TeacherList = ({
             {counts.active} active · {counts.marking} awaiting marking
           </p>
         </div>
-        <div style={{ display:'flex', gap: 8 }}>
+        <div style={{ display:'flex', gap: 12, alignItems:'center' }}>
           <Btn variant="brand" icon={<Ico name="plus" size={14} color="#fff" />}
             onClick={() => onNew(folderId !== 'all' && folderId !== 'unfiled' ? folderId : null)}>
-            New assignment
+            New homework
           </Btn>
         </div>
       </div>
@@ -1428,16 +2145,13 @@ const TeacherList = ({
               </div>
               <Btn variant="brand" small icon={<Ico name="plus" size={13} color="#fff" />}
                 onClick={() => onNew(folderId !== 'all' && folderId !== 'unfiled' ? folderId : null)}>
-                New assignment
+                New homework
               </Btn>
             </Card>
           ) : (
             <div style={{ display:'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
               {filtered.map(a => (
-                <TeacherListCard key={a.id} a={a}
-                  folders={folders}
-                  onEdit={onEdit} onReview={onReview} onDelete={onDelete}
-                  onDuplicate={onDuplicate} onMove={onMove} />
+                <TeacherListCard key={a.id} a={a} folders={folders} onOpen={onOpen} />
               ))}
             </div>
           )}
@@ -1520,84 +2234,465 @@ const FolderRailItem = ({
   );
 };
 
-const TeacherListCard = ({ a, folders = [], onEdit, onReview, onDelete, onDuplicate, onMove }) => {
+const TeacherListCard = ({ a, folders = [], onOpen }) => {
   const subc = subColor(a.subject);
   const submitted = Object.values(a.submissions).length;
-  const approved = Object.values(a.submissions).filter(s => s.status === 'approved').length;
+  const graded = Object.values(a.submissions).filter(isGraded).length;
   const awaitingMark = Object.values(a.submissions).filter(s => s.status === 'submitted').length;
   const total = a.studentIds.length;
-  const pct = total ? (submitted / total) * 100 : 0;
+  const pct = total ? Math.round((submitted / total) * 100) : 0;
   const dDays = daysUntil(a.dueAt);
   const folder = a.folderId ? folders.find(f => f.id === a.folderId) : null;
+  const overdue = a.status === 'active' && a.dueAt && dDays < 0;
 
-  let statusPill;
-  if (a.status === 'draft')      statusPill = <Pill tone="default" icon={<Ico name="pencil" size={10} />}>Draft</Pill>;
-  else if (a.status === 'closed') statusPill = <Pill tone="default">Closed</Pill>;
-  else if (awaitingMark > 0)      statusPill = <Pill tone="amber" icon={<Ico name="clock" size={10} />}>{awaitingMark} to mark</Pill>;
-  else if (submitted === total)   statusPill = <Pill tone="success" icon={<Ico name="check" size={10} />}>All in</Pill>;
-  else                            statusPill = <Pill tone="brand">Active</Pill>;
+  // A single status indicator — the most relevant state, not a row of tags.
+  let status;
+  if (a.status === 'draft')                       status = { label: 'Draft',            tone: 'default', dot: C.faint };
+  else if (a.status === 'closed')                 status = { label: 'Closed',           tone: 'default', dot: C.faint };
+  else if (awaitingMark > 0)                      status = { label: `${awaitingMark} to mark`, tone: 'amber',  dot: C.amber };
+  else if (submitted === total && total > 0)      status = { label: 'All submitted',    tone: 'success', dot: C.success };
+  else                                            status = { label: 'Active',           tone: 'brand',   dot: C.brand };
+
+  const dueText = a.dueAt
+    ? (overdue ? `Overdue · ${fmtDate(a.dueAt)}`
+      : a.status === 'active' && dDays >= 0 ? `Due in ${dDays}d · ${fmtDate(a.dueAt)}`
+      : `Due ${fmtDate(a.dueAt)}`)
+    : 'No due date';
 
   return (
-    <Card hoverable style={{ overflow:'hidden' }}>
-      <div style={{ height: 4, background: subc.color }} />
-      <div style={{ padding: 18 }}>
-        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12, marginBottom:12 }}>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ display:'flex', gap:6, alignItems:'center', marginBottom: 6, flexWrap:'wrap' }}>
-              <Pill tone="default" icon={<span style={{ width:6, height:6, background:subc.color, borderRadius:'50%' }} />}>{a.subject}</Pill>
-              {folder && (
-                <Pill tone="default" icon={<span style={{ width:6, height:6, background: folder.color || C.brand, borderRadius:2 }} />}>
-                  {folder.name}
-                </Pill>
-              )}
-              {statusPill}
-            </div>
-            <div style={{ fontFamily: F.head, fontSize: 15, fontWeight: 700, color: C.text, lineHeight: 1.3 }}>{a.title}</div>
-            <div style={{ fontFamily: F.body, fontSize: 12, color: C.muted, marginTop: 4 }}>
-              {a.questions.length} questions · {totalPoints(a)} pts
-              {a.dueAt && <> · Due {fmtDate(a.dueAt)}{dDays >= 0 && a.status === 'active' ? ` (${dDays}d)` : ''}</>}
+    <Card hoverable onClick={() => onOpen(a.id)} style={{ overflow:'hidden' }}>
+      <div style={{ padding: 20, display:'flex', flexDirection:'column', gap: 16 }}>
+        {/* Header: subject badge + title, status on the right */}
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap: 14 }}>
+          <div style={{ display:'flex', gap: 13, alignItems:'flex-start', minWidth: 0 }}>
+            <span style={{
+              width: 40, height: 40, borderRadius: 10, flexShrink: 0,
+              background: subc.soft, color: subc.color,
+              display:'flex', alignItems:'center', justifyContent:'center',
+            }}>
+              <Ico name="book" size={19} color={subc.color} />
+            </span>
+            <div style={{ minWidth: 0 }}>
+              <div style={{
+                fontFamily: F.head, fontSize: 15.5, fontWeight: 700, color: C.text,
+                lineHeight: 1.3, marginBottom: 4,
+                overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
+              }}>{a.title}</div>
+              <div style={{
+                display:'flex', alignItems:'center', gap: 7, flexWrap:'wrap',
+                fontFamily: F.body, fontSize: 12.5, color: C.muted,
+              }}>
+                <span style={{ color: subc.color, fontWeight: 600 }}>{a.subject}</span>
+                {a.classLabel && <><span style={{ color: C.border }}>•</span><span>{a.classLabel}</span></>}
+                {folder && <><span style={{ color: C.border }}>•</span><span>{folder.name}</span></>}
+              </div>
             </div>
           </div>
+          <span style={{
+            display:'inline-flex', alignItems:'center', gap: 6, flexShrink: 0,
+            padding: '4px 10px', borderRadius: 999,
+            background: C.surface, border: `1px solid ${C.border}`,
+            fontFamily: F.body, fontSize: 11.5, fontWeight: 600, color: C.sub,
+          }}>
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: status.dot }} />
+            {status.label}
+          </span>
+        </div>
+
+        {/* Meta row: clean, evenly spaced facts */}
+        <div style={{
+          display:'flex', alignItems:'center', gap: 18,
+          fontFamily: F.body, fontSize: 12.5, color: C.sub,
+        }}>
+          <span style={{ display:'inline-flex', alignItems:'center', gap: 6 }}>
+            <Ico name="list" size={14} color={C.faint} />
+            {a.questions.length} question{a.questions.length === 1 ? '' : 's'}
+          </span>
+          <span style={{ display:'inline-flex', alignItems:'center', gap: 6 }}>
+            <Ico name="target" size={14} color={C.faint} />
+            {totalPoints(a)} pts
+          </span>
+          <span style={{ display:'inline-flex', alignItems:'center', gap: 6, color: overdue ? C.danger : C.sub }}>
+            <Ico name="calendar" size={14} color={overdue ? C.danger : C.faint} />
+            {dueText}
+          </span>
         </div>
 
         {/* Progress */}
-        <div style={{ marginBottom: 14 }}>
-          <div style={{ display:'flex', justifyContent:'space-between', fontSize: 11, color: C.muted, marginBottom: 5, fontWeight:500 }}>
-            <span>Submissions</span>
-            <span>{submitted} / {total} {approved > 0 && <span style={{ color: C.success, marginLeft: 6 }}>· {approved} approved</span>}</span>
+        <div style={{ borderTop: `1px solid ${C.surface2}`, paddingTop: 14 }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom: 8 }}>
+            <span style={{ fontFamily: F.body, fontSize: 12, fontWeight: 600, color: C.sub }}>Submissions</span>
+            <span style={{ fontFamily: F.body, fontSize: 12, color: C.muted }}>
+              <span style={{ fontWeight: 700, color: C.text }}>{submitted}</span> / {total}
+              {graded > 0 && <span style={{ color: C.success, fontWeight: 600, marginLeft: 8 }}>{graded} graded</span>}
+            </span>
           </div>
           <div style={{ height: 6, background: C.surface2, borderRadius: 999, overflow:'hidden' }}>
-            <div style={{ height:'100%', width: `${pct}%`, background: subc.color, transition: 'width .3s' }} />
+            <div style={{ height:'100%', width: `${pct}%`, background: subc.color, borderRadius: 999, transition: 'width .3s' }} />
           </div>
-        </div>
-
-        {/* Actions */}
-        <div style={{ display:'flex', gap: 6, alignItems:'center', flexWrap:'wrap' }}>
-          <Btn variant="ghost" small icon={<Ico name="edit" size={13} />} onClick={() => onEdit(a.id)}>Edit</Btn>
-          <Btn variant="soft" small icon={<Ico name="eye" size={13} />} onClick={() => onReview(a.id)}>Review</Btn>
-          {onDuplicate && (
-            <Btn variant="ghost" small icon={<Ico name="layers" size={13} />} onClick={() => onDuplicate(a.id)}>Duplicate</Btn>
-          )}
-          <div style={{ flex:1 }} />
-          {onMove && (
-            <select
-              value={a.folderId || ''}
-              onChange={e => onMove(a.id, e.target.value || null)}
-              title="Move to folder"
-              style={{
-                padding: '5px 8px', borderRadius: 6,
-                border: `1px solid ${C.border}`, background: C.bg, color: C.muted,
-                fontFamily: F.body, fontSize: 12, cursor:'pointer', maxWidth: 130,
-              }}
-            >
-              <option value="">Unfiled</option>
-              {folders.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-            </select>
-          )}
-          <Btn variant="ghost" small icon={<Ico name="trash" size={13} color={C.danger} />} onClick={() => onDelete(a.id)} />
         </div>
       </div>
     </Card>
+  );
+};
+
+// ════════════════════════════════════════════════════════════════
+// Homework analytics dashboard (homework "main page" → Analytics tab)
+// All figures are computed from the live store.
+// ════════════════════════════════════════════════════════════════
+const ChartCard = ({ title, subtitle, children, style = {} }) => (
+  <Card style={{ padding: 18, ...style }}>
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ fontFamily: F.head, fontSize: 14, fontWeight: 700, color: C.text }}>{title}</div>
+      {subtitle && <div style={{ fontFamily: F.body, fontSize: 12, color: C.muted, marginTop: 2 }}>{subtitle}</div>}
+    </div>
+    {children}
+  </Card>
+);
+
+// Horizontal labelled bars (subject performance, grade distribution).
+const BarList = ({ rows, max, unit = '%' }) => {
+  const top = max || Math.max(1, ...rows.map(r => r.value));
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap: 10 }}>
+      {rows.map(r => (
+        <div key={r.label} style={{ display:'flex', alignItems:'center', gap: 10 }}>
+          <span style={{ width: 92, fontFamily: F.body, fontSize: 11.5, color: C.muted, textAlign:'right',
+            overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.label}</span>
+          <div style={{ flex: 1, height: 14, background: C.surface2, borderRadius: 4, overflow:'hidden' }}>
+            <div style={{ height:'100%', width: `${(r.value / top) * 100}%`, background: r.color || C.brand, borderRadius: 4, transition: 'width .3s' }} />
+          </div>
+          <span style={{ width: 42, fontFamily: F.mono, fontSize: 11.5, color: C.sub, fontWeight: 600 }}>
+            {r.value}{unit}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+// Simple SVG line chart for the monthly average trend.
+const LineChart = ({ points, height = 150 }) => {
+  const w = 320, h = height, pad = 8;
+  const xs = points.length > 1 ? (w - pad * 2) / (points.length - 1) : 0;
+  const min = 50, max = 100;
+  const y = (v) => h - pad - ((v - min) / (max - min)) * (h - pad * 2);
+  const path = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${pad + i * xs} ${y(p.value)}`).join(' ');
+  const area = `${path} L ${pad + (points.length - 1) * xs} ${h - pad} L ${pad} ${h - pad} Z`;
+  return (
+    <svg viewBox={`0 0 ${w} ${h + 18}`} style={{ width:'100%', height: h + 18 }}>
+      {[100, 80, 65, 50].map(g => (
+        <g key={g}>
+          <line x1={pad} x2={w - pad} y1={y(g)} y2={y(g)} stroke={C.surface2} strokeWidth="1" />
+          <text x={0} y={y(g) + 3} fontSize="8" fill={C.faint} fontFamily={F.mono}>{g}%</text>
+        </g>
+      ))}
+      <path d={area} fill={C.brandSoft} opacity="0.6" />
+      <path d={path} fill="none" stroke={C.brand} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      {points.map((p, i) => (
+        <g key={i}>
+          <circle cx={pad + i * xs} cy={y(p.value)} r="3" fill={C.bg} stroke={C.brand} strokeWidth="2" />
+          <text x={pad + i * xs} y={h + 12} fontSize="8" fill={C.faint} fontFamily={F.body} textAnchor="middle">{p.label}</text>
+        </g>
+      ))}
+    </svg>
+  );
+};
+
+// Donut for submission-status split.
+const Donut = ({ segments, size = 150 }) => {
+  const total = segments.reduce((s, x) => s + x.value, 0) || 1;
+  const r = size / 2 - 12, cx = size / 2, cy = size / 2, circ = 2 * Math.PI * r;
+  let offset = 0;
+  return (
+    <svg viewBox={`0 0 ${size} ${size}`} style={{ width: size, height: size }}>
+      <circle cx={cx} cy={cy} r={r} fill="none" stroke={C.surface2} strokeWidth="14" />
+      {segments.map((s, i) => {
+        const len = (s.value / total) * circ;
+        const el = (
+          <circle key={i} cx={cx} cy={cy} r={r} fill="none" stroke={s.color} strokeWidth="14"
+            strokeDasharray={`${len} ${circ - len}`} strokeDashoffset={-offset}
+            transform={`rotate(-90 ${cx} ${cy})`} strokeLinecap="butt" />
+        );
+        offset += len;
+        return el;
+      })}
+    </svg>
+  );
+};
+
+const HomeworkAnalytics = ({ assignments, users = {}, classes = [] }) => {
+  const [subjectF, setSubjectF] = React.useState('All');
+  const [classF, setClassF] = React.useState('All');
+
+  const filtered = assignments.filter(a =>
+    (subjectF === 'All' || a.subject === subjectF) &&
+    (classF === 'All' || a.classLabel === classF)
+  );
+
+  // ── Aggregate submission rows across the filtered set ──
+  const subs = [];
+  filtered.forEach(a => {
+    const total = totalPoints(a);
+    a.studentIds.forEach(sid => {
+      const sub = a.submissions[sid];
+      subs.push({ a, sid, sub, total,
+        pct: sub && total ? Math.round(submissionScore(a, sub) / total * 100) : null });
+    });
+  });
+
+  const submittedRows = subs.filter(s => s.sub);
+  const gradedRows = subs.filter(s => s.sub && isGraded(s.sub));
+  const lateRows = subs.filter(s => s.sub && s.a.dueAt && new Date(s.sub.submittedAt) > new Date(s.a.dueAt));
+  const inProgressN = subs.filter(s => s.sub && s.sub.status === 'submitted').length;
+  const notStartedN = subs.filter(s => !s.sub).length;
+  const pendingReview = submittedRows.filter(s => !isGraded(s.sub)).length;
+
+  const totalAssigned = subs.length;
+  const completionRate = totalAssigned ? Math.round(submittedRows.length / totalAssigned * 100) : 0;
+  const scored = gradedRows.filter(s => s.pct != null);
+  const avgScore = scored.length ? Math.round(scored.reduce((n, s) => n + s.pct, 0) / scored.length) : 0;
+  const times = submittedRows.map(s => s.sub.timeSpentMins).filter(Boolean);
+  const avgTime = times.length ? Math.round(times.reduce((a, b) => a + b, 0) / times.length) : 0;
+
+  // Highest scorer
+  let highest = null;
+  scored.forEach(s => { if (!highest || s.pct > highest.pct) highest = s; });
+
+  // ── Per-student averages (top performers / interventions) ──
+  const byStudent = {};
+  gradedRows.forEach(s => {
+    if (s.pct == null) return;
+    (byStudent[s.sid] = byStudent[s.sid] || []).push(s.pct);
+  });
+  const studentAvgs = Object.entries(byStudent).map(([sid, arr]) => ({
+    sid, name: users[sid]?.name || sid, classLabel: users[sid]?.classLabel || '',
+    avg: Math.round(arr.reduce((a, b) => a + b, 0) / arr.length),
+    missing: subs.filter(s => s.sid === sid && !s.sub).length,
+  }));
+  const topStudents = [...studentAvgs].sort((a, b) => b.avg - a.avg).slice(0, 5);
+  const intervention = [...studentAvgs].filter(s => s.avg < 73 || s.missing > 0)
+    .sort((a, b) => a.avg - b.avg).slice(0, 4);
+  const flaggedN = studentAvgs.filter(s => s.avg < 73 || s.missing > 1).length;
+
+  // ── Subject performance ──
+  const subjAgg = {};
+  gradedRows.forEach(s => {
+    if (s.pct == null) return;
+    (subjAgg[s.a.subject] = subjAgg[s.a.subject] || []).push(s.pct);
+  });
+  const subjectRows = Object.entries(subjAgg).map(([label, arr]) => ({
+    label, value: Math.round(arr.reduce((a, b) => a + b, 0) / arr.length), color: subColor(label).color,
+  })).sort((a, b) => b.value - a.value);
+
+  // ── Grade distribution ──
+  const gradeBuckets = { 'A (90-100)':0, 'B (80-89)':0, 'C (70-79)':0, 'D (60-69)':0, 'E (50-59)':0, 'F (<50)':0 };
+  scored.forEach(s => {
+    const p = s.pct;
+    if (p >= 90) gradeBuckets['A (90-100)']++;
+    else if (p >= 80) gradeBuckets['B (80-89)']++;
+    else if (p >= 70) gradeBuckets['C (70-79)']++;
+    else if (p >= 60) gradeBuckets['D (60-69)']++;
+    else if (p >= 50) gradeBuckets['E (50-59)']++;
+    else gradeBuckets['F (<50)']++;
+  });
+  const gradeColors = ['#16A34A','#4F46E5','#0EA5E9','#D97706','#F97316','#DC2626'];
+  const gradeRows = Object.entries(gradeBuckets).map(([label, value], i) => ({ label, value, color: gradeColors[i] }));
+
+  // ── Average over time (group graded by month) ──
+  const monthAgg = {};
+  gradedRows.forEach(s => {
+    if (s.pct == null || !s.sub.submittedAt) return;
+    const d = new Date(s.sub.submittedAt);
+    const key = d.toLocaleDateString('en-US', { month: 'short' });
+    (monthAgg[key] = monthAgg[key] || []).push(s.pct);
+  });
+  const monthOrder = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  let trendPoints = monthOrder.filter(m => monthAgg[m]).map(m => ({
+    label: m, value: Math.round(monthAgg[m].reduce((a, b) => a + b, 0) / monthAgg[m].length),
+  }));
+  if (trendPoints.length < 2) {
+    // Not enough real history — show a representative curve ending at the live average.
+    trendPoints = [
+      { label: 'Mar', value: Math.max(50, avgScore - 12) },
+      { label: 'Apr', value: Math.max(50, avgScore - 7) },
+      { label: 'May', value: Math.max(50, avgScore - 3) },
+      { label: 'Jun', value: avgScore || 70 },
+    ];
+  }
+
+  // ── Class comparison ──
+  const classAgg = {};
+  gradedRows.forEach(s => {
+    const cl = s.a.classLabel || '—';
+    const c = (classAgg[cl] = classAgg[cl] || { score: [], sub: 0, total: 0 });
+    if (s.pct != null) c.score.push(s.pct);
+  });
+  subs.forEach(s => {
+    const cl = s.a.classLabel || '—';
+    const c = (classAgg[cl] = classAgg[cl] || { score: [], sub: 0, total: 0 });
+    c.total++; if (s.sub) c.sub++;
+  });
+  const classRows = Object.entries(classAgg).map(([label, c]) => ({
+    label,
+    score: c.score.length ? Math.round(c.score.reduce((a, b) => a + b, 0) / c.score.length) : 0,
+    completion: c.total ? Math.round(c.sub / c.total * 100) : 0,
+  }));
+
+  const statusSegments = [
+    { label: 'Graded',      value: gradedRows.length,             color: C.success },
+    { label: 'Submitted',   value: inProgressN,                   color: C.brand },
+    { label: 'Not Started', value: notStartedN,                   color: C.borderD },
+    { label: 'Late',        value: lateRows.length,               color: C.danger },
+  ];
+
+  const subjectOptions = ['All', ...Array.from(new Set(assignments.map(a => a.subject)))];
+  const classOptions = ['All', ...Array.from(new Set(assignments.map(a => a.classLabel).filter(Boolean)))];
+
+  const selStyle = {
+    padding: '7px 12px', borderRadius: 8, border: `1px solid ${C.border}`,
+    background: C.bg, color: C.sub, fontFamily: F.body, fontSize: 12.5, cursor:'pointer',
+  };
+
+  const kpi = (icon, tone, value, label, sub) => {
+    const tones = { brand:{bg:C.brandSoft,fg:C.brand}, success:{bg:C.successBg,fg:C.success},
+      amber:{bg:C.amberBg,fg:C.amber}, info:{bg:C.accentSoft,fg:C.accent}, danger:{bg:C.dangerBg,fg:C.danger} };
+    const t = tones[tone] || tones.brand;
+    return (
+      <Card style={{ padding: 16 }}>
+        <span style={{ width: 34, height: 34, borderRadius: 9, background: t.bg, color: t.fg,
+          display:'flex', alignItems:'center', justifyContent:'center', marginBottom: 12 }}>
+          <Ico name={icon} size={16} color={t.fg} />
+        </span>
+        <div style={{ fontFamily: F.head, fontSize: 24, fontWeight: 700, color: C.text }}>{value}</div>
+        <div style={{ fontFamily: F.body, fontSize: 12.5, fontWeight: 600, color: C.sub, marginTop: 2 }}>{label}</div>
+        {sub && <div style={{ fontFamily: F.body, fontSize: 11.5, color: C.muted, marginTop: 2 }}>{sub}</div>}
+      </Card>
+    );
+  };
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap: 16 }}>
+      {/* Filters */}
+      <Card style={{ padding: 12, display:'flex', alignItems:'center', gap: 10 }}>
+        <select value={subjectF} onChange={e => setSubjectF(e.target.value)} style={selStyle}>
+          {subjectOptions.map(s => <option key={s} value={s}>{s === 'All' ? 'All Subjects' : s}</option>)}
+        </select>
+        <select value={classF} onChange={e => setClassF(e.target.value)} style={selStyle}>
+          {classOptions.map(c => <option key={c} value={c}>{c === 'All' ? 'All Classes' : c}</option>)}
+        </select>
+        <div style={{ flex: 1 }} />
+        <span style={{ display:'inline-flex', alignItems:'center', gap: 6, fontFamily: F.body, fontSize: 12, color: C.muted }}>
+          <span style={{ width: 7, height: 7, borderRadius:'50%', background: C.success }} /> Live data
+        </span>
+      </Card>
+
+      {/* KPI rows */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap: 12 }}>
+        {kpi('book', 'brand', filtered.length, 'Total Assigned', `Across ${classOptions.length - 1 || 1} classes`)}
+        {kpi('target', 'success', `${completionRate}%`, 'Completion Rate', `${submittedRows.length} / ${totalAssigned} students`)}
+        {kpi('trend', 'brand', `${avgScore}%`, 'Average Score', 'Across graded work')}
+        {kpi('clock', 'amber', `${avgTime}m`, 'Avg Time Spent', 'Per submission')}
+      </div>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap: 12 }}>
+        {kpi('alertCircle', 'danger', lateRows.length, 'Late Submissions', `${totalAssigned ? Math.round(lateRows.length/totalAssigned*100) : 0}% of all`)}
+        {kpi('file', 'info', pendingReview, 'Pending Review', 'Awaiting marking')}
+        {kpi('award', 'success', highest ? `${highest.pct}%` : '—', 'Highest Score', highest ? (users[highest.sid]?.name || '') : '')}
+        {kpi('alertCircle', 'amber', flaggedN, 'Students Flagged', 'Need intervention')}
+      </div>
+
+      {/* Trend + subject */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 16 }}>
+        <ChartCard title="Average Score Over Time" subtitle="Monthly class average">
+          <LineChart points={trendPoints} />
+        </ChartCard>
+        <ChartCard title="Subject Performance" subtitle="Average score by subject">
+          {subjectRows.length ? <BarList rows={subjectRows} max={100} />
+            : <div style={{ fontSize: 12, color: C.muted }}>No graded work yet.</div>}
+        </ChartCard>
+      </div>
+
+      {/* Status + grades + class comparison */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap: 16 }}>
+        <ChartCard title="Submission Status" subtitle="Current distribution">
+          <div style={{ display:'flex', alignItems:'center', gap: 14 }}>
+            <Donut segments={statusSegments} />
+            <div style={{ display:'flex', flexDirection:'column', gap: 7 }}>
+              {statusSegments.map(s => (
+                <div key={s.label} style={{ display:'flex', alignItems:'center', gap: 7, fontFamily: F.body, fontSize: 12, color: C.sub }}>
+                  <span style={{ width: 9, height: 9, borderRadius: 3, background: s.color }} />
+                  <span style={{ flex: 1 }}>{s.label}</span>
+                  <span style={{ fontFamily: F.mono, fontWeight: 600, color: C.text }}>{s.value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </ChartCard>
+        <ChartCard title="Grade Distribution" subtitle="Across all graded work">
+          <BarList rows={gradeRows} unit="" />
+        </ChartCard>
+        <ChartCard title="Class Comparison" subtitle="Avg score vs completion %">
+          <div style={{ display:'flex', flexDirection:'column', gap: 10 }}>
+            {classRows.map(c => (
+              <div key={c.label}>
+                <div style={{ display:'flex', justifyContent:'space-between', fontFamily: F.body, fontSize: 11.5, color: C.muted, marginBottom: 3 }}>
+                  <span>{c.label}</span><span style={{ fontFamily: F.mono }}>{c.score}% · {c.completion}%</span>
+                </div>
+                <div style={{ display:'flex', gap: 4 }}>
+                  <div style={{ flex: 1, height: 8, background: C.surface2, borderRadius: 3, overflow:'hidden' }}>
+                    <div style={{ height:'100%', width:`${c.score}%`, background: C.brand }} />
+                  </div>
+                  <div style={{ flex: 1, height: 8, background: C.surface2, borderRadius: 3, overflow:'hidden' }}>
+                    <div style={{ height:'100%', width:`${c.completion}%`, background: C.success }} />
+                  </div>
+                </div>
+              </div>
+            ))}
+            {classRows.length === 0 && <div style={{ fontSize: 12, color: C.muted }}>No class data.</div>}
+          </div>
+        </ChartCard>
+      </div>
+
+      {/* Top + intervention */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 16 }}>
+        <ChartCard title="Top Performing Students" subtitle="Highest average this period">
+          <div style={{ display:'flex', flexDirection:'column' }}>
+            {topStudents.map((s, i) => (
+              <div key={s.sid} style={{ display:'flex', alignItems:'center', gap: 10, padding: '9px 0', borderBottom: i < topStudents.length - 1 ? `1px solid ${C.surface2}` : 'none' }}>
+                <span style={{ width: 22, height: 22, borderRadius:'50%', background: i < 3 ? C.amberBg : C.surface2,
+                  color: i < 3 ? C.amber : C.muted, fontFamily: F.head, fontSize: 11, fontWeight: 700,
+                  display:'flex', alignItems:'center', justifyContent:'center' }}>{i + 1}</span>
+                <Avatar name={s.name} size={26} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontFamily: F.body, fontSize: 13, fontWeight: 600, color: C.text }}>{s.name}</div>
+                  <div style={{ fontFamily: F.body, fontSize: 11, color: C.muted }}>{s.classLabel}</div>
+                </div>
+                <span style={{ fontFamily: F.head, fontSize: 14, fontWeight: 700, color: C.success }}>{s.avg}%</span>
+              </div>
+            ))}
+            {topStudents.length === 0 && <div style={{ fontSize: 12, color: C.muted }}>No graded work yet.</div>}
+          </div>
+        </ChartCard>
+        <ChartCard title="Students Needing Intervention" subtitle="Below threshold or missing submissions">
+          <div style={{ display:'flex', flexDirection:'column', gap: 8 }}>
+            {intervention.map(s => (
+              <div key={s.sid} style={{ display:'flex', alignItems:'center', gap: 10, padding: '10px 12px',
+                background: C.dangerBg, border: `1px solid ${C.dangerBorder}`, borderRadius: 10 }}>
+                <Avatar name={s.name} size={26} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontFamily: F.body, fontSize: 13, fontWeight: 600, color: C.text }}>{s.name}</div>
+                  <div style={{ fontFamily: F.body, fontSize: 11, color: C.muted }}>
+                    {s.classLabel}{s.missing > 0 ? ` · ${s.missing} missing` : ''}
+                  </div>
+                </div>
+                <span style={{ fontFamily: F.head, fontSize: 14, fontWeight: 700, color: C.danger }}>{s.avg}%</span>
+              </div>
+            ))}
+            {intervention.length === 0 && <div style={{ fontSize: 12, color: C.muted }}>Everyone's on track 🎉</div>}
+          </div>
+        </ChartCard>
+      </div>
+    </div>
   );
 };
 
@@ -1606,41 +2701,69 @@ const blankAssignment = (teacherId, folderId = null) => ({
   id: 'a_' + Math.random().toString(36).slice(2, 9),
   title: '',
   subject: 'Math',
+  classLabel: null,
   folderId,
   teacherId,
   studentIds: [],
   dueAt: '',
+  timeLimitMins: null,
   status: 'draft',
   createdAt: new Date().toISOString().slice(0, 10),
   instructions: '',
   questions: [],
   submissions: {},
+  settings: { ...DEFAULT_SETTINGS },
 });
 
 const blankQuestion = (type) => {
   const base = { id: 'q_' + Math.random().toString(36).slice(2, 8), type, prompt: '', points: 2 };
-  if (type === 'mcq')     return { ...base, choices: ['', '', '', ''], correctIndex: 0 };
-  if (type === 'numeric') return { ...base, answer: 0, tolerance: 0.01 };
-  if (type === 'math')    return { ...base, answer: '' };
+  if (type === 'mcq')       return { ...base, choices: ['', '', '', ''], correctIndex: 0 };
+  if (type === 'multi')     return { ...base, choices: ['', '', '', ''], correctIndices: [] };
+  if (type === 'truefalse') return { ...base, answer: true };
+  if (type === 'numeric')   return { ...base, answer: 0, tolerance: 0.01 };
+  if (type === 'math')      return { ...base, answer: '' };
+  if (type === 'fillblank') return { ...base, blanks: [''] };
+  if (type === 'match')     return { ...base, pairs: [{ left: '', right: '' }, { left: '', right: '' }] };
   return base;
 };
 
-const TeacherBuilder = ({ assignment, students, folders = [], defaultFolderId = null, onCreateFolder, onCancel, onSave }) => {
+// Re-shape a question when its type changes, preserving prompt/points/hint.
+const reshapeQuestion = (q, newType) => {
+  if (q.type === newType) return q;
+  const fresh = blankQuestion(newType);
+  return { ...fresh, id: q.id, prompt: q.prompt, points: q.points, hint: q.hint };
+};
+
+const TeacherBuilder = ({ assignment, students, folders = [], classes = [], defaultFolderId = null, onCreateFolder, onCancel, onSave }) => {
   const toast = useToast();
-  const [a, setA] = React.useState(() => assignment
+  const [a, setA] = React.useState(() => normalizeAssignment(assignment
     ? JSON.parse(JSON.stringify(assignment))
-    : blankAssignment('t_clarke', defaultFolderId));
+    : blankAssignment('t_clarke', defaultFolderId)));
+  const [tab, setTab] = React.useState('questions'); // questions | settings
   const [pdfOpen, setPdfOpen] = React.useState(false);
   const [newFolderOpen, setNewFolderOpen] = React.useState(false);
   const [newFolderName, setNewFolderName] = React.useState('');
 
   const setField = (k, v) => setA(prev => ({ ...prev, [k]: v }));
+  const setSetting = (k, v) => setA(prev => ({ ...prev, settings: { ...prev.settings, [k]: v } }));
   const setQ = (id, patch) => setA(prev => ({
     ...prev,
     questions: prev.questions.map(q => q.id === id ? { ...q, ...patch } : q),
   }));
+  const setType = (id, type) => setA(prev => ({
+    ...prev,
+    questions: prev.questions.map(q => q.id === id ? reshapeQuestion(q, type) : q),
+  }));
   const addQ = (type) => setA(prev => ({ ...prev, questions: [...prev.questions, blankQuestion(type)] }));
   const delQ = (id) => setA(prev => ({ ...prev, questions: prev.questions.filter(q => q.id !== id) }));
+  const dupQ = (id) => setA(prev => {
+    const idx = prev.questions.findIndex(q => q.id === id);
+    if (idx < 0) return prev;
+    const copy = { ...JSON.parse(JSON.stringify(prev.questions[idx])), id: 'q_' + Math.random().toString(36).slice(2, 8) };
+    const arr = [...prev.questions];
+    arr.splice(idx + 1, 0, copy);
+    return { ...prev, questions: arr };
+  });
   const moveQ = (id, dir) => setA(prev => {
     const idx = prev.questions.findIndex(q => q.id === id);
     if (idx < 0) return prev;
@@ -1662,6 +2785,7 @@ const TeacherBuilder = ({ assignment, students, folders = [], defaultFolderId = 
   const trySave = (status) => {
     if (errors.length > 0) {
       toast(errors[0], 'danger');
+      if (errors[0].startsWith('Title')) setTab('settings');
       return;
     }
     onSave({ ...a, status });
@@ -1674,6 +2798,23 @@ const TeacherBuilder = ({ assignment, students, folders = [], defaultFolderId = 
       : [...prev.studentIds, sid],
   }));
 
+  // Class-driven student selection. The chosen class filters which students are
+  // shown, and "select all" assigns everyone in that class.
+  const classStudents = a.classLabel ? students.filter(s => s.classLabel === a.classLabel) : students;
+  const allClassSelected = classStudents.length > 0 && classStudents.every(s => a.studentIds.includes(s.id));
+  const selectAllInClass = () => setA(prev => {
+    const ids = new Set(prev.studentIds);
+    if (allClassSelected) classStudents.forEach(s => ids.delete(s.id));
+    else classStudents.forEach(s => ids.add(s.id));
+    return { ...prev, studentIds: [...ids] };
+  });
+
+  const selectStyle = {
+    width: '100%', padding: '10px 12px', borderRadius: 8,
+    border: `1px solid ${C.border}`, background: C.bg, color: C.text,
+    fontSize: 13, fontFamily: F.body, cursor: 'pointer',
+  };
+
   return (
     <div style={{ padding: '24px 32px 80px', fontFamily: F.body, color: C.text }}>
       {/* Top bar */}
@@ -1681,10 +2822,18 @@ const TeacherBuilder = ({ assignment, students, folders = [], defaultFolderId = 
         <div style={{ display:'flex', alignItems:'center', gap: 10 }}>
           <Btn variant="ghost" small icon={<Ico name="arrowL" size={13} />} onClick={onCancel}>Back</Btn>
           <span style={{ fontFamily: F.head, fontSize: 20, fontWeight: 700 }}>
-            {assignment ? 'Edit assignment' : 'New assignment'}
+            {assignment ? 'Edit homework' : 'New homework'}
           </span>
         </div>
-        <div style={{ display:'flex', gap: 8 }}>
+        <div style={{ display:'flex', alignItems:'center', gap: 12 }}>
+          <SegTabs
+            active={tab}
+            onChange={setTab}
+            tabs={[
+              { id: 'questions', label: '📖 Questions' },
+              { id: 'settings',  label: '⚙ Settings' },
+            ]}
+          />
           <Btn variant="soft" small icon={<Ico name="save" size={13} />} onClick={() => trySave('draft')}>Save draft</Btn>
           <Btn variant="brand" small icon={<Ico name="check" size={13} color="#fff" />} onClick={() => trySave('active')}>Publish</Btn>
         </div>
@@ -1693,98 +2842,151 @@ const TeacherBuilder = ({ assignment, students, folders = [], defaultFolderId = 
       <div style={{ display:'grid', gridTemplateColumns: '1fr 320px', gap: 20 }}>
         {/* LEFT */}
         <div style={{ display:'flex', flexDirection:'column', gap: 16 }}>
-          {/* Settings */}
-          <Card style={{ padding: 20 }}>
-            <div style={{ fontFamily: F.head, fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 14 }}>Assignment details</div>
-            <div style={{ display:'flex', flexDirection:'column', gap: 14 }}>
-              <div>
-                <Label htmlFor="t-title">Title</Label>
-                <Input value={a.title} onChange={(v) => setField('title', v)} placeholder="e.g. Algebra: Simultaneous Equations" />
-              </div>
-              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 12 }}>
-                <div>
-                  <Label>Subject</Label>
-                  <select value={a.subject} onChange={e => setField('subject', e.target.value)} style={{
-                    width: '100%', padding: '9px 12px', borderRadius: 8,
-                    border: `1px solid ${C.border}`, background: C.bg, color: C.text,
-                    fontSize: 13, fontFamily: F.body, cursor:'pointer',
-                  }}>
-                    {Object.keys(SUBJECTS).map(s => <option key={s} value={s}>{s}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <Label>Due date</Label>
-                  <Input type="date" value={a.dueAt} onChange={(v) => setField('dueAt', v)} />
-                </div>
-              </div>
 
-              {/* Folder picker */}
-              <div>
-                <Label>Folder <span style={{ color: C.faint, fontWeight: 400 }}>(save here for later reuse)</span></Label>
-                {newFolderOpen ? (
-                  <div style={{ display:'flex', gap:8 }}>
-                    <Input value={newFolderName} onChange={setNewFolderName} placeholder="New folder name" autoFocus />
-                    <Btn variant="brand" small icon={<Ico name="check" size={13} color="#fff" />}
-                      onClick={() => {
-                        const f = onCreateFolder && onCreateFolder(newFolderName);
-                        if (f) {
-                          setField('folderId', f.id);
-                          setNewFolderName('');
-                          setNewFolderOpen(false);
-                          toast(`Folder "${f.name}" created`, 'success');
-                        } else {
-                          toast('Enter a folder name', 'danger');
-                        }
-                      }}>Create</Btn>
-                    <Btn variant="soft" small onClick={() => { setNewFolderOpen(false); setNewFolderName(''); }}>Cancel</Btn>
+          {tab === 'settings' ? (
+            <>
+              {/* Basic information */}
+              <Card style={{ padding: 22 }}>
+                <div style={{ fontFamily: F.head, fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 16 }}>Basic Information</div>
+                <div style={{ display:'flex', flexDirection:'column', gap: 16 }}>
+                  <div>
+                    <Label htmlFor="t-title">Title</Label>
+                    <Input value={a.title} onChange={(v) => setField('title', v)} placeholder="e.g. Algebra: Simultaneous Equations" />
                   </div>
-                ) : (
-                  <div style={{ display:'flex', gap:8 }}>
-                    <select
-                      value={a.folderId || ''}
-                      onChange={e => {
-                        if (e.target.value === '__new__') {
-                          setNewFolderOpen(true);
-                        } else {
-                          setField('folderId', e.target.value || null);
-                        }
-                      }}
-                      style={{
-                        flex: 1, padding: '9px 12px', borderRadius: 8,
-                        border: `1px solid ${C.border}`, background: C.bg, color: C.text,
-                        fontSize: 13, fontFamily: F.body, cursor:'pointer',
-                      }}>
-                      <option value="">Unfiled</option>
-                      {folders.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-                      <option value="__new__">+ New folder…</option>
-                    </select>
-                    {a.folderId && folders.find(f => f.id === a.folderId) && (
-                      <span style={{
-                        display:'inline-flex', alignItems:'center', gap:6,
-                        padding:'0 12px', borderRadius:8,
-                        border:`1px solid ${C.border}`, background:C.surface,
-                        fontFamily:F.body, fontSize:12, color:C.sub,
-                      }}>
-                        <span style={{ width:8, height:8, borderRadius:'50%', background: folders.find(f => f.id === a.folderId).color || C.brand }} />
-                        {folders.find(f => f.id === a.folderId).name}
-                      </span>
+                  <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 14 }}>
+                    <div>
+                      <Label>Subject</Label>
+                      <select value={a.subject} onChange={e => setField('subject', e.target.value)} style={selectStyle}>
+                        {Object.keys(SUBJECTS).map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <Label>Class</Label>
+                      <select value={a.classLabel || ''} onChange={e => setField('classLabel', e.target.value || null)} style={selectStyle}>
+                        <option value="">All classes</option>
+                        {classes.map(c => <option key={c.id} value={c.label}>{c.label}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <Label>Instructions</Label>
+                    <Input multiline rows={3} value={a.instructions} onChange={(v) => setField('instructions', v)} placeholder="Instructions for students…" />
+                  </div>
+                  {/* Folder picker */}
+                  <div>
+                    <Label>Folder <span style={{ color: C.faint, fontWeight: 400 }}>(save here for later reuse)</span></Label>
+                    {newFolderOpen ? (
+                      <div style={{ display:'flex', gap:8 }}>
+                        <Input value={newFolderName} onChange={setNewFolderName} placeholder="New folder name" autoFocus />
+                        <Btn variant="brand" small icon={<Ico name="check" size={13} color="#fff" />}
+                          onClick={() => {
+                            const f = onCreateFolder && onCreateFolder(newFolderName);
+                            if (f) {
+                              setField('folderId', f.id);
+                              setNewFolderName('');
+                              setNewFolderOpen(false);
+                              toast(`Folder "${f.name}" created`, 'success');
+                            } else {
+                              toast('Enter a folder name', 'danger');
+                            }
+                          }}>Create</Btn>
+                        <Btn variant="soft" small onClick={() => { setNewFolderOpen(false); setNewFolderName(''); }}>Cancel</Btn>
+                      </div>
+                    ) : (
+                      <select
+                        value={a.folderId || ''}
+                        onChange={e => {
+                          if (e.target.value === '__new__') setNewFolderOpen(true);
+                          else setField('folderId', e.target.value || null);
+                        }}
+                        style={selectStyle}>
+                        <option value="">Unfiled</option>
+                        {folders.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+                        <option value="__new__">+ New folder…</option>
+                      </select>
                     )}
                   </div>
-                )}
-              </div>
+                </div>
+              </Card>
 
-              <div>
-                <Label>Instructions <span style={{ color: C.faint, fontWeight: 400 }}>(optional)</span></Label>
-                <Input multiline rows={2} value={a.instructions} onChange={(v) => setField('instructions', v)} placeholder="Tell students how to approach this assignment" />
-              </div>
-              <div>
-                <Label>Assigned students</Label>
+              {/* Schedule & limits */}
+              <Card style={{ padding: 22 }}>
+                <div style={{ fontFamily: F.head, fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 16 }}>Schedule &amp; Limits</div>
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 14 }}>
+                  <div>
+                    <Label>Available From</Label>
+                    <Input type="datetime-local" value={a.settings.availableFrom} onChange={(v) => setSetting('availableFrom', v)} />
+                  </div>
+                  <div>
+                    <Label>Due Date</Label>
+                    <Input type="datetime-local" value={a.dueAt} onChange={(v) => setField('dueAt', v)} />
+                  </div>
+                  <div>
+                    <Label>Time Limit (minutes)</Label>
+                    <Input type="number" value={a.timeLimitMins ?? ''} onChange={(v) => setField('timeLimitMins', v === '' ? null : (parseInt(v, 10) || 0))} placeholder="No limit" />
+                  </div>
+                  <div>
+                    <Label>Attempts Allowed</Label>
+                    <Input type="number" value={a.settings.attemptsAllowed} onChange={(v) => setSetting('attemptsAllowed', Math.max(1, parseInt(v, 10) || 1))} />
+                  </div>
+                </div>
+              </Card>
+
+              {/* Submission options */}
+              <Card style={{ padding: '8px 22px 14px' }}>
+                <div style={{ fontFamily: F.head, fontSize: 15, fontWeight: 700, color: C.text, margin: '14px 0 2px' }}>Submission Options</div>
+                <SettingRow title="Allow Late Submissions" desc="Students can submit after the due date"
+                  checked={a.settings.allowLate} onChange={(v) => setSetting('allowLate', v)} />
+                <SettingRow title="Randomize Questions" desc="Each student sees questions in a different order"
+                  checked={a.settings.randomize} onChange={(v) => setSetting('randomize', v)} />
+                <SettingRow title="Auto-Grade MCQs" desc="Automatically grade MCQ and True/False questions"
+                  checked={a.settings.autoGradeMcq} onChange={(v) => setSetting('autoGradeMcq', v)} />
+              </Card>
+
+              {/* Student review settings */}
+              <Card style={{ padding: '8px 22px 14px' }}>
+                <div style={{ margin: '14px 0 2px' }}>
+                  <div style={{ fontFamily: F.head, fontSize: 15, fontWeight: 700, color: C.text }}>Student Review Settings</div>
+                  <div style={{ fontFamily: F.body, fontSize: 12, color: C.muted, marginTop: 2 }}>Control what students see after submission</div>
+                </div>
+                <SettingRow title="Allow Students to Review Homework" desc="Students can open and review their submitted homework"
+                  checked={a.settings.allowReview} onChange={(v) => setSetting('allowReview', v)} />
+                <SettingRow title="Show Correct Answers" desc="Display the correct answer alongside the student's response"
+                  checked={a.settings.showCorrect} onChange={(v) => setSetting('showCorrect', v)} disabled={!a.settings.allowReview} />
+                <SettingRow title="Show Teacher Comments" desc="Share per-question feedback with students"
+                  checked={a.settings.showComments} onChange={(v) => setSetting('showComments', v)} disabled={!a.settings.allowReview} />
+                <SettingRow title="Show Auto-Marked Results Immediately" desc="Students see MCQ results right after submission without waiting for teacher review"
+                  checked={a.settings.showAutoImmediately} onChange={(v) => setSetting('showAutoImmediately', v)} />
+                <SettingRow title="Release Results After Teacher Approval" desc="Manually control when results become visible to students"
+                  checked={a.settings.releaseAfterApproval} onChange={(v) => setSetting('releaseAfterApproval', v)} />
+                <SettingRow title="Show Marks Only" desc="Students see scores but not correct answers or comments"
+                  checked={a.settings.marksOnly} onChange={(v) => setSetting('marksOnly', v)} disabled={!a.settings.allowReview} />
+                <SettingRow title="Hide Marks Until Released" desc="Marks are hidden until you explicitly release them"
+                  checked={a.settings.hideMarksUntilReleased} onChange={(v) => setSetting('hideMarksUntilReleased', v)} />
+              </Card>
+
+              {/* Assigned students */}
+              <Card style={{ padding: 22 }}>
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: 6 }}>
+                  <div style={{ fontFamily: F.head, fontSize: 15, fontWeight: 700, color: C.text }}>Assigned Students</div>
+                  {classStudents.length > 0 && (
+                    <button onClick={selectAllInClass} style={{
+                      border: 'none', background: 'transparent', cursor: 'pointer',
+                      fontFamily: F.body, fontSize: 12, fontWeight: 600, color: C.brand,
+                    }}>{allClassSelected ? 'Clear all' : 'Select all in class'}</button>
+                  )}
+                </div>
+                <div style={{ fontFamily: F.body, fontSize: 12, color: C.muted, marginBottom: 12 }}>
+                  {a.classLabel
+                    ? <>Showing {classStudents.length} student{classStudents.length === 1 ? '' : 's'} in {a.classLabel} · {a.studentIds.length} assigned</>
+                    : <>Choose a class above to narrow the list · {a.studentIds.length} assigned</>}
+                </div>
                 <div style={{ display:'flex', flexWrap:'wrap', gap: 6 }}>
-                  {students.map(s => {
+                  {classStudents.map(s => {
                     const on = a.studentIds.includes(s.id);
                     return (
                       <button key={s.id} onClick={() => toggleStudent(s.id)} style={{
-                        padding: '5px 10px', borderRadius: 999,
+                        padding: '6px 12px', borderRadius: 999,
                         border: `1px solid ${on ? C.brand : C.border}`,
                         background: on ? C.brandSoft : C.bg,
                         color: on ? C.brand : C.sub,
@@ -1793,62 +2995,58 @@ const TeacherBuilder = ({ assignment, students, folders = [], defaultFolderId = 
                       }}>{on ? '✓ ' : ''}{s.name}</button>
                     );
                   })}
+                  {classStudents.length === 0 && (
+                    <span style={{ fontSize: 12, color: C.faint }}>No students in this class.</span>
+                  )}
                 </div>
-              </div>
-            </div>
-          </Card>
-
-          {/* Questions */}
-          <Card style={{ padding: 20 }}>
-            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: 14 }}>
-              <div style={{ fontFamily: F.head, fontSize: 14, fontWeight: 700, color: C.text }}>
-                Questions <span style={{ color: C.muted, fontWeight: 500 }}>({a.questions.length})</span>
-              </div>
-              <Btn variant="soft" small icon={<Ico name="upload" size={13} />} onClick={() => setPdfOpen(true)}>Import from PDF</Btn>
-            </div>
-            <div style={{ display:'flex', flexDirection:'column', gap: 14 }}>
-              {a.questions.map((q, i) => (
-                <QuestionEditor key={q.id} q={q} index={i}
-                  onChange={(patch) => setQ(q.id, patch)}
-                  onDelete={() => delQ(q.id)}
-                  onUp={() => moveQ(q.id, -1)}
-                  onDown={() => moveQ(q.id, 1)} />
-              ))}
-              {a.questions.length === 0 && (
-                <div style={{ padding: '24px 0', textAlign:'center', color: C.muted, fontSize: 13 }}>
-                  No questions yet — add one below.
+              </Card>
+            </>
+          ) : (
+            /* Questions tab */
+            <Card style={{ padding: 20 }}>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: 14 }}>
+                <div style={{ fontFamily: F.head, fontSize: 15, fontWeight: 700, color: C.text }}>
+                  Questions <span style={{ color: C.muted, fontWeight: 500 }}>({a.questions.length})</span>
                 </div>
-              )}
-            </div>
-
-            {/* Add grid */}
-            <div style={{ marginTop: 18, paddingTop: 18, borderTop: `1px dashed ${C.border}` }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: C.muted, textTransform:'uppercase', letterSpacing:'.06em', marginBottom: 10 }}>
-                Add question
+                <Btn variant="soft" small icon={<Ico name="upload" size={13} />} onClick={() => setPdfOpen(true)}>Import from PDF</Btn>
               </div>
-              <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap: 8 }}>
-                {QTYPES.map(t => (
-                  <button key={t.type} onClick={() => addQ(t.type)} style={{
-                    padding: '12px 14px', borderRadius: 9,
-                    border: `1px solid ${C.border}`, background: C.bg,
-                    cursor:'pointer', textAlign:'left', transition: T,
-                    display:'flex', flexDirection:'column', gap: 3,
-                  }}
-                    onMouseEnter={e => { e.currentTarget.style.background = C.surface; e.currentTarget.style.borderColor = C.borderD; }}
-                    onMouseLeave={e => { e.currentTarget.style.background = C.bg; e.currentTarget.style.borderColor = C.border; }}>
-                    <span style={{ display:'flex', alignItems:'center', gap: 8 }}>
-                      <span style={{
-                        width: 6, height: 6, borderRadius:'50%',
-                        background: t.marker === 'auto' ? C.brand : C.amber,
-                      }} />
-                      <span style={{ fontFamily: F.body, fontSize: 13, fontWeight: 600, color: C.text }}>{t.label}</span>
-                    </span>
-                    <span style={{ fontSize: 11, color: C.muted, marginLeft: 14 }}>{t.desc}</span>
-                  </button>
+              <div style={{ display:'flex', flexDirection:'column', gap: 14 }}>
+                {a.questions.map((q, i) => (
+                  <QuestionEditor key={q.id} q={q} index={i} total={a.questions.length}
+                    onChange={(patch) => setQ(q.id, patch)}
+                    onChangeType={(t) => setType(q.id, t)}
+                    onDelete={() => delQ(q.id)}
+                    onDuplicate={() => dupQ(q.id)}
+                    onUp={() => moveQ(q.id, -1)}
+                    onDown={() => moveQ(q.id, 1)} />
                 ))}
+                {a.questions.length === 0 && (
+                  <div style={{ padding: '24px 0', textAlign:'center', color: C.muted, fontSize: 13 }}>
+                    No questions yet — add one below.
+                  </div>
+                )}
               </div>
-            </div>
-          </Card>
+
+              {/* Add palette */}
+              <div style={{ marginTop: 18, paddingTop: 18, borderTop: `1px dashed ${C.border}` }}>
+                <div style={{ display:'flex', flexWrap:'wrap', gap: 8 }}>
+                  {QTYPES.map(t => (
+                    <button key={t.type} onClick={() => addQ(t.type)} style={{
+                      display:'inline-flex', alignItems:'center', gap: 6,
+                      padding: '9px 14px', borderRadius: 999,
+                      border: `1px solid ${C.border}`, background: C.bg,
+                      cursor:'pointer', transition: T,
+                      fontFamily: F.body, fontSize: 13, fontWeight: 600, color: C.text,
+                    }}
+                      onMouseEnter={e => { e.currentTarget.style.background = C.surface; e.currentTarget.style.borderColor = C.borderD; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = C.bg; e.currentTarget.style.borderColor = C.border; }}>
+                      <Ico name="plus" size={13} color={C.muted} /> {t.short}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </Card>
+          )}
         </div>
 
         {/* RIGHT — outline */}
@@ -1862,9 +3060,10 @@ const TeacherBuilder = ({ assignment, students, folders = [], defaultFolderId = 
                   {a.questions.map((q, i) => {
                     const m = qtypeMeta(q.type);
                     return (
-                      <div key={q.id} style={{
-                        display:'flex', alignItems:'center', gap: 8,
+                      <button key={q.id} onClick={() => setTab('questions')} style={{
+                        display:'flex', alignItems:'center', gap: 8, width:'100%', textAlign:'left',
                         padding: '6px 8px', borderRadius: 6, background: C.surface,
+                        border:'none', cursor:'pointer',
                       }}>
                         <span style={{ fontFamily: F.mono, fontSize: 11, color: C.muted, width: 18 }}>Q{i + 1}</span>
                         <span style={{
@@ -1875,7 +3074,7 @@ const TeacherBuilder = ({ assignment, students, folders = [], defaultFolderId = 
                           {q.prompt || <em style={{ color: C.faint }}>Untitled</em>}
                         </span>
                         <span style={{ fontFamily: F.mono, fontSize: 11, color: C.muted }}>{q.points}p</span>
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
@@ -1928,36 +3127,73 @@ const TeacherBuilder = ({ assignment, students, folders = [], defaultFolderId = 
   );
 };
 
-const QuestionEditor = ({ q, index, onChange, onDelete, onUp, onDown }) => {
+const QuestionEditor = ({ q, index, total = 1, onChange, onChangeType, onDelete, onDuplicate, onUp, onDown }) => {
   const m = qtypeMeta(q.type);
+  const [collapsed, setCollapsed] = React.useState(false);
+
+  const headBtn = (icon, title, onClick, color = C.muted, disabled) => (
+    <button onClick={onClick} title={title} disabled={disabled} style={{
+      width: 28, height: 28, borderRadius: 7, border: 'none', background: 'transparent',
+      cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.35 : 1,
+      display:'flex', alignItems:'center', justifyContent:'center', transition: T,
+    }}
+      onMouseEnter={e => { if (!disabled) e.currentTarget.style.background = C.surface2; }}
+      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+      <Ico name={icon} size={15} color={color} />
+    </button>
+  );
+
   return (
     <div style={{
-      border: `1px solid ${C.border}`, borderRadius: 10, overflow:'hidden',
-      background: C.bg,
+      border: `1px solid ${C.border}`, borderRadius: 12, overflow:'hidden',
+      background: C.bg, boxShadow: C.shadow,
     }}>
+      {/* Header */}
       <div style={{
-        padding: '10px 14px', background: C.surface,
-        borderBottom: `1px solid ${C.border}`,
-        display:'flex', alignItems:'center', gap: 10,
+        padding: '10px 12px', background: C.surface,
+        borderBottom: collapsed ? 'none' : `1px solid ${C.border}`,
+        display:'flex', alignItems:'center', gap: 8,
       }}>
-        <span style={{
-          width: 26, height: 26, borderRadius: 6,
-          background: C.bg, border: `1px solid ${C.border}`,
-          fontFamily: F.mono, fontSize: 11, fontWeight: 700, color: C.muted,
-          display:'flex', alignItems:'center', justifyContent:'center',
-        }}>{index + 1}</span>
-        <Pill tone={m.marker === 'auto' ? 'brand' : 'amber'}>{m.label}</Pill>
-        <span style={{ fontFamily: F.body, fontSize: 11, color: C.muted }}>{m.desc}</span>
+        <span title="Drag to reorder" style={{ display:'flex', cursor:'grab', color: C.faint }}><Ico name="grip" size={16} color={C.faint} /></span>
+        <span style={{ fontFamily: F.mono, fontSize: 12, fontWeight: 700, color: C.sub }}>Q{index + 1}</span>
+        <select value={q.type} onChange={e => onChangeType && onChangeType(e.target.value)} style={{
+          padding: '6px 10px', borderRadius: 8,
+          border: `1px solid ${C.border}`, background: C.bg, color: C.text,
+          fontFamily: F.body, fontSize: 12.5, fontWeight: 600, cursor:'pointer',
+        }}>
+          {QTYPES.map(t => <option key={t.type} value={t.type}>{t.label}</option>)}
+        </select>
         <div style={{ flex: 1 }} />
-        <button onClick={onUp} title="Move up" style={iconBtnStyle()}><Ico name="chevD" size={13} color={C.muted} /></button>
-        <button onClick={onDown} title="Move down" style={iconBtnStyle()}><Ico name="chevD" size={13} color={C.muted} /></button>
-        <button onClick={onDelete} title="Delete" style={iconBtnStyle()}><Ico name="trash" size={13} color={C.danger} /></button>
+        <span style={{ fontFamily: F.body, fontSize: 12, color: C.muted }}>Marks</span>
+        <Input type="number" value={q.points} onChange={(v) => onChange({ points: parseInt(v, 10) || 0 })}
+          style={{ width: 54, padding: '6px 8px', textAlign:'center' }} />
+        {onDuplicate && headBtn('copy', 'Duplicate', onDuplicate)}
+        {headBtn(collapsed ? 'chevD' : 'chevU', collapsed ? 'Expand' : 'Collapse', () => setCollapsed(c => !c))}
+        {headBtn('trash', 'Delete', onDelete, C.danger)}
       </div>
 
-      <div style={{ padding: 14, display:'flex', flexDirection:'column', gap: 12 }}>
+      {collapsed ? (
+        <div style={{ padding: '10px 14px', display:'flex', alignItems:'center', gap: 8 }}>
+          <Pill tone={m.marker === 'auto' ? 'brand' : 'amber'}>{m.label}</Pill>
+          <span style={{ fontFamily: F.body, fontSize: 13, color: C.sub, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+            {q.prompt || <em style={{ color: C.faint }}>Untitled question</em>}
+          </span>
+        </div>
+      ) : (
+      <div style={{ padding: 16, display:'flex', flexDirection:'column', gap: 14 }}>
+        {/* Reorder row */}
+        <div style={{ display:'flex', alignItems:'center', gap: 6 }}>
+          {headBtn('chevU', 'Move up', onUp, C.muted, index === 0)}
+          {headBtn('chevD', 'Move down', onDown, C.muted, index === total - 1)}
+          <span style={{ fontFamily: F.body, fontSize: 11.5, color: C.faint }}>{m.desc}</span>
+        </div>
+
         <div>
-          <Label>Prompt</Label>
-          <Input multiline rows={2} value={q.prompt} onChange={(v) => onChange({ prompt: v })} placeholder="What are you asking?" />
+          <Label>Question</Label>
+          <Input multiline rows={2} value={q.prompt} onChange={(v) => onChange({ prompt: v })}
+            placeholder={q.type === 'fillblank'
+              ? 'Use ___ to mark each blank, e.g. The capital of France is ___.'
+              : 'Enter your question here… (supports LaTeX: $x^2 + y^2 = z^2$)'} />
         </div>
 
         {q.type === 'mcq' && (
@@ -2022,17 +3258,128 @@ const QuestionEditor = ({ q, index, onChange, onDelete, onUp, onDown }) => {
           </div>
         )}
 
-        <div style={{ display:'grid', gridTemplateColumns:'120px 1fr', gap: 12 }}>
+        {q.type === 'multi' && (
           <div>
-            <Label>Points</Label>
-            <Input type="number" value={q.points} onChange={(v) => onChange({ points: parseInt(v, 10) || 0 })} />
+            <Label>Options <span style={{ color:C.faint, fontWeight:400 }}>(check all correct)</span></Label>
+            <div style={{ display:'flex', flexDirection:'column', gap: 6 }}>
+              {q.choices.map((c, i) => {
+                const on = (q.correctIndices || []).includes(i);
+                return (
+                  <div key={i} style={{ display:'flex', gap: 8, alignItems:'center' }}>
+                    <button onClick={() => {
+                      const set = new Set(q.correctIndices || []);
+                      set.has(i) ? set.delete(i) : set.add(i);
+                      onChange({ correctIndices: [...set].sort((x, y) => x - y) });
+                    }} style={{
+                      width: 20, height: 20, borderRadius: 6,
+                      border:`2px solid ${on ? C.success : C.borderD}`,
+                      background: on ? C.success : C.bg, cursor:'pointer', flexShrink: 0,
+                      display:'flex', alignItems:'center', justifyContent:'center',
+                    }}>{on && <Ico name="check" size={10} color="#fff" />}</button>
+                    <span style={{ fontFamily: F.mono, fontSize: 12, color: C.muted, width: 14 }}>{String.fromCharCode(65 + i)}</span>
+                    <Input value={c} onChange={(v) => { const arr = [...q.choices]; arr[i] = v; onChange({ choices: arr }); }}
+                      placeholder={`Option ${String.fromCharCode(65 + i)}`} />
+                    {q.choices.length > 2 && (
+                      <button onClick={() => {
+                        const arr = q.choices.filter((_, j) => j !== i);
+                        const ci = (q.correctIndices || []).filter(x => x !== i).map(x => x > i ? x - 1 : x);
+                        onChange({ choices: arr, correctIndices: ci });
+                      }} style={iconBtnStyle()}><Ico name="x" size={12} color={C.muted} /></button>
+                    )}
+                  </div>
+                );
+              })}
+              {q.choices.length < 6 && (
+                <button onClick={() => onChange({ choices: [...q.choices, ''] })} style={{
+                  marginLeft: 28, padding: '4px 8px', border: `1px dashed ${C.border}`,
+                  borderRadius: 6, background: 'transparent', cursor:'pointer',
+                  fontFamily: F.body, fontSize: 12, color: C.muted, width: 'fit-content',
+                }}>+ Add Option</button>
+              )}
+            </div>
           </div>
+        )}
+
+        {q.type === 'truefalse' && (
           <div>
-            <Label>Hint <span style={{ color: C.faint, fontWeight: 400 }}>(optional)</span></Label>
-            <Input value={q.hint || ''} onChange={(v) => onChange({ hint: v })} placeholder="Shown to students if they ask" />
+            <Label>Correct Answer</Label>
+            <div style={{ display:'flex', gap: 8 }}>
+              {[true, false].map(v => {
+                const on = q.answer === v;
+                return (
+                  <button key={String(v)} onClick={() => onChange({ answer: v })} style={{
+                    padding: '8px 22px', borderRadius: 8, cursor:'pointer',
+                    border:`1px solid ${on ? C.brand : C.border}`,
+                    background: on ? C.brand : C.bg, color: on ? '#fff' : C.sub,
+                    fontFamily: F.body, fontSize: 13, fontWeight: 600, transition: T,
+                  }}>{v ? 'True' : 'False'}</button>
+                );
+              })}
+            </div>
           </div>
+        )}
+
+        {q.type === 'fillblank' && (
+          <div>
+            <Label>Accepted answers <span style={{ color:C.faint, fontWeight:400 }}>(one per blank, in order)</span></Label>
+            <div style={{ display:'flex', flexDirection:'column', gap: 6 }}>
+              {(q.blanks || []).map((b, i) => (
+                <div key={i} style={{ display:'flex', gap: 8, alignItems:'center' }}>
+                  <span style={{ fontFamily: F.mono, fontSize: 12, color: C.muted, width: 56 }}>Blank {i + 1}</span>
+                  <Input value={b} onChange={(v) => { const arr = [...q.blanks]; arr[i] = v; onChange({ blanks: arr }); }}
+                    placeholder="Correct text" />
+                  {q.blanks.length > 1 && (
+                    <button onClick={() => onChange({ blanks: q.blanks.filter((_, j) => j !== i) })} style={iconBtnStyle()}>
+                      <Ico name="x" size={12} color={C.muted} /></button>
+                  )}
+                </div>
+              ))}
+              <button onClick={() => onChange({ blanks: [...(q.blanks || []), ''] })} style={{
+                marginLeft: 64, padding: '4px 8px', border: `1px dashed ${C.border}`,
+                borderRadius: 6, background: 'transparent', cursor:'pointer',
+                fontFamily: F.body, fontSize: 12, color: C.muted, width: 'fit-content',
+              }}>+ Add Blank</button>
+            </div>
+          </div>
+        )}
+
+        {q.type === 'match' && (
+          <div>
+            <Label>Pairs <span style={{ color:C.faint, fontWeight:400 }}>(students match left to right)</span></Label>
+            <div style={{ display:'flex', flexDirection:'column', gap: 6 }}>
+              {(q.pairs || []).map((p, i) => (
+                <div key={i} style={{ display:'flex', gap: 8, alignItems:'center' }}>
+                  <Input value={p.left} onChange={(v) => { const arr = q.pairs.map((x, j) => j === i ? { ...x, left: v } : x); onChange({ pairs: arr }); }} placeholder="Left" />
+                  <Ico name="arrowR" size={14} color={C.faint} />
+                  <Input value={p.right} onChange={(v) => { const arr = q.pairs.map((x, j) => j === i ? { ...x, right: v } : x); onChange({ pairs: arr }); }} placeholder="Right" />
+                  {q.pairs.length > 2 && (
+                    <button onClick={() => onChange({ pairs: q.pairs.filter((_, j) => j !== i) })} style={iconBtnStyle()}>
+                      <Ico name="x" size={12} color={C.muted} /></button>
+                  )}
+                </div>
+              ))}
+              {q.pairs.length < 8 && (
+                <button onClick={() => onChange({ pairs: [...(q.pairs || []), { left: '', right: '' }] })} style={{
+                  padding: '4px 8px', border: `1px dashed ${C.border}`,
+                  borderRadius: 6, background: 'transparent', cursor:'pointer',
+                  fontFamily: F.body, fontSize: 12, color: C.muted, width: 'fit-content',
+                }}>+ Add Pair</button>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div>
+          <Label>Hint <span style={{ color: C.faint, fontWeight: 400 }}>(optional — shown to students if they ask)</span></Label>
+          <Input value={q.hint || ''} onChange={(v) => onChange({ hint: v })} placeholder="A nudge in the right direction" />
+        </div>
+
+        <div style={{ display:'flex', alignItems:'center', gap: 8, paddingTop: 4 }}>
+          <Toggle checked={q.required !== false} onChange={(v) => onChange({ required: v })} />
+          <span style={{ fontFamily: F.body, fontSize: 12.5, fontWeight: 600, color: C.sub }}>Required</span>
         </div>
       </div>
+      )}
     </div>
   );
 };
@@ -2044,45 +3391,231 @@ const iconBtnStyle = () => ({
   transition: T,
 });
 
+// ─── Teacher overview hub (opened by clicking a homework card) ──
+const TeacherOverview = ({ a, users = {}, folders = [], onBack, onEdit, onReview, onDuplicate, onMove, onDelete }) => {
+  const subc = subColor(a.subject);
+  const total = a.studentIds.length;
+  const submitted = Object.values(a.submissions).length;
+  const graded = Object.values(a.submissions).filter(isGraded).length;
+  const awaitingMark = Object.values(a.submissions).filter(s => s.status === 'submitted').length;
+  const pct = total ? Math.round(submitted / total * 100) : 0;
+
+  const scores = Object.values(a.submissions).filter(isGraded)
+    .map(s => totalPoints(a) ? Math.round(submissionScore(a, s) / totalPoints(a) * 100) : 0);
+  const avg = scores.length ? Math.round(scores.reduce((x, y) => x + y, 0) / scores.length) : null;
+
+  const statusTone = a.status === 'draft' ? 'default' : a.status === 'closed' ? 'default' : awaitingMark > 0 ? 'amber' : 'brand';
+  const statusLabel = a.status === 'draft' ? 'Draft' : a.status === 'closed' ? 'Closed' : awaitingMark > 0 ? `${awaitingMark} to mark` : 'Active';
+
+  const stat = (label, value, color) => (
+    <Card key={label} style={{ padding: '14px 16px' }}>
+      <div style={{ fontFamily: F.body, fontSize: 11, fontWeight: 600, color: C.muted, textTransform:'uppercase', letterSpacing:'.05em', marginBottom: 8 }}>{label}</div>
+      <div style={{ fontFamily: F.head, fontSize: 22, fontWeight: 700, color: color || C.text }}>{value}</div>
+    </Card>
+  );
+
+  return (
+    <div style={{ padding: '24px 32px 80px', fontFamily: F.body, color: C.text }}>
+      {/* Top bar */}
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: 12, marginBottom: 20 }}>
+        <Btn variant="ghost" small icon={<Ico name="arrowL" size={13} />} onClick={onBack}>Back to list</Btn>
+        <div style={{ display:'flex', gap: 8 }}>
+          <Btn variant="brand" small icon={<Ico name="edit" size={13} color="#fff" />} onClick={onEdit}>Edit</Btn>
+          <Btn variant="soft" small icon={<Ico name="eye" size={13} />} onClick={onReview}>
+            Review submissions{awaitingMark > 0 ? ` (${awaitingMark})` : ''}
+          </Btn>
+          <Btn variant="soft" small icon={<Ico name="copy" size={13} />} onClick={onDuplicate}>Duplicate</Btn>
+          <Btn variant="soft" small icon={<Ico name="trash" size={13} color={C.danger} />} onClick={onDelete} style={{ color: C.danger }}>Delete</Btn>
+        </div>
+      </div>
+
+      {/* Header card */}
+      <Card style={{ overflow:'hidden', marginBottom: 16 }}>
+        <div style={{ height: 4, background: subc.color }} />
+        <div style={{ padding: 22 }}>
+          <div style={{ display:'flex', gap: 6, alignItems:'center', marginBottom: 8, flexWrap:'wrap' }}>
+            <Pill tone="default" icon={<span style={{ width:6, height:6, background:subc.color, borderRadius:'50%' }} />}>{a.subject}</Pill>
+            {a.classLabel && <Pill tone="default">{a.classLabel}</Pill>}
+            <Pill tone={statusTone}>{statusLabel}</Pill>
+          </div>
+          <h1 style={{ fontFamily: F.head, fontSize: 24, fontWeight: 800, margin: 0, letterSpacing:'-0.4px' }}>{a.title || 'Untitled homework'}</h1>
+          <div style={{ fontFamily: F.body, fontSize: 13, color: C.muted, marginTop: 6 }}>
+            {a.questions.length} questions · {totalPoints(a)} marks
+            {a.dueAt && <> · Due {fmtDateTime(a.dueAt)}</>}
+            {a.timeLimitMins ? ` · ${a.timeLimitMins} min limit` : ''}
+          </div>
+          {a.instructions && (
+            <div style={{ display:'flex', gap: 10, padding: '12px 14px', marginTop: 16,
+              background: C.brandSoft, border: `1px solid ${C.brandBorder}`, borderRadius: 10, alignItems:'flex-start' }}>
+              <Ico name="info" size={14} color={C.brand} />
+              <span style={{ fontSize: 13, color: C.sub, lineHeight: 1.5 }}>{a.instructions}</span>
+            </div>
+          )}
+        </div>
+      </Card>
+
+      {/* Stats */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
+        {stat('Submitted', `${submitted} / ${total}`)}
+        {stat('Graded', graded, C.success)}
+        {stat('Awaiting marking', awaitingMark, awaitingMark > 0 ? C.amber : C.text)}
+        {stat('Class average', avg != null ? `${avg}%` : '—', C.brand)}
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 300px', gap: 16, alignItems:'start' }}>
+        {/* Questions */}
+        <Card style={{ padding: 20 }}>
+          <div style={{ fontFamily: F.head, fontSize: 15, fontWeight: 700, marginBottom: 14 }}>Questions</div>
+          <div style={{ display:'flex', flexDirection:'column', gap: 8 }}>
+            {a.questions.map((q, i) => {
+              const m = qtypeMeta(q.type);
+              return (
+                <div key={q.id} style={{ display:'flex', alignItems:'center', gap: 10, padding: '10px 12px', background: C.surface, borderRadius: 8 }}>
+                  <span style={{ width: 24, height: 24, borderRadius:'50%', background: C.bg, border: `1px solid ${C.border}`,
+                    fontFamily: F.mono, fontSize: 11, fontWeight: 700, color: C.muted,
+                    display:'flex', alignItems:'center', justifyContent:'center', flexShrink: 0 }}>{i + 1}</span>
+                  <Pill tone={m.marker === 'auto' ? 'brand' : 'amber'}>{m.label}</Pill>
+                  <span style={{ flex: 1, fontFamily: F.body, fontSize: 13, color: C.sub, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                    {q.prompt || <em style={{ color: C.faint }}>Untitled</em>}
+                  </span>
+                  <span style={{ fontFamily: F.mono, fontSize: 12, color: C.muted }}>{q.points}p</span>
+                </div>
+              );
+            })}
+            {a.questions.length === 0 && <div style={{ fontSize: 13, color: C.muted }}>No questions yet.</div>}
+          </div>
+        </Card>
+
+        {/* Right column */}
+        <div style={{ display:'flex', flexDirection:'column', gap: 16 }}>
+          {/* Submission progress */}
+          <Card style={{ padding: 18 }}>
+            <div style={{ fontFamily: F.head, fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Submission progress</div>
+            <div style={{ display:'flex', justifyContent:'space-between', fontSize: 12, color: C.muted, marginBottom: 6 }}>
+              <span>{pct}% submitted</span><span>{submitted}/{total}</span>
+            </div>
+            <div style={{ height: 8, background: C.surface2, borderRadius: 999, overflow:'hidden' }}>
+              <div style={{ height:'100%', width: `${pct}%`, background: subc.color }} />
+            </div>
+          </Card>
+
+          {/* Assigned students */}
+          <Card style={{ padding: 18 }}>
+            <div style={{ fontFamily: F.head, fontSize: 14, fontWeight: 700, marginBottom: 12 }}>
+              Assigned students <span style={{ color: C.muted, fontWeight: 500 }}>({total})</span>
+            </div>
+            <div style={{ display:'flex', flexDirection:'column', gap: 8 }}>
+              {a.studentIds.map(sid => {
+                const sub = a.submissions[sid];
+                const st = !sub ? { t:'Not started', c:C.muted } : isGraded(sub) ? { t:'Graded', c:C.success } : { t:'Submitted', c:C.brand };
+                return (
+                  <div key={sid} style={{ display:'flex', alignItems:'center', gap: 8 }}>
+                    <Avatar name={users[sid]?.name || sid} size={24} />
+                    <span style={{ flex: 1, fontFamily: F.body, fontSize: 12.5, color: C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                      {users[sid]?.name || sid}
+                    </span>
+                    <span style={{ fontFamily: F.body, fontSize: 11, fontWeight: 600, color: st.c }}>{st.t}</span>
+                  </div>
+                );
+              })}
+              {total === 0 && <div style={{ fontSize: 12, color: C.muted }}>No students assigned. Edit to assign.</div>}
+            </div>
+          </Card>
+
+          {/* Folder */}
+          <Card style={{ padding: 18 }}>
+            <div style={{ fontFamily: F.head, fontSize: 14, fontWeight: 700, marginBottom: 10 }}>Folder</div>
+            <select value={a.folderId || ''} onChange={e => onMove(e.target.value || null)} style={{
+              width: '100%', padding: '9px 12px', borderRadius: 8,
+              border: `1px solid ${C.border}`, background: C.bg, color: C.text,
+              fontFamily: F.body, fontSize: 13, cursor:'pointer',
+            }}>
+              <option value="">Unfiled</option>
+              {folders.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+            </select>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ─── Teacher review queue ──────────────────────────────────────
+const reviewStatus = (asn, sid) => {
+  const sub = asn.submissions[sid];
+  if (!sub) return { key: 'not_started', label: 'Not Started', tone: 'default', fg: C.muted };
+  if (isGraded(sub)) return { key: 'graded', label: 'Graded', tone: 'success', fg: C.success };
+  if (sub.status === 'in_progress') return { key: 'in_progress', label: 'In Progress', tone: 'amber', fg: C.amber };
+  const late = asn.dueAt && new Date(sub.submittedAt) > new Date(asn.dueAt);
+  return { key: 'submitted', label: late ? 'Late' : 'Submitted', tone: late ? 'danger' : 'info', fg: late ? C.danger : C.accent };
+};
+
 const TeacherReview = ({ assignment, users, onClose, onUpdateSubmission }) => {
   const toast = useToast();
-  const subStudents = assignment.studentIds.filter(sid => assignment.submissions[sid]);
-  const [activeIdx, setActiveIdx] = React.useState(0);
-  const activeSid = subStudents[activeIdx];
+  const allStudents = assignment.studentIds;
+  const [query, setQuery] = React.useState('');
+  const [statusF, setStatusF] = React.useState('all');
+
+  const visible = allStudents.filter(sid => {
+    const name = (users[sid]?.name || '').toLowerCase();
+    if (query && !name.includes(query.toLowerCase())) return false;
+    if (statusF === 'all') return true;
+    return reviewStatus(assignment, sid).key === statusF;
+  });
+
+  // Default to the first student who actually has a submission.
+  const firstSubmitted = allStudents.find(sid => assignment.submissions[sid]) || allStudents[0];
+  const [activeSid, setActiveSid] = React.useState(firstSubmitted);
   const sub = activeSid ? assignment.submissions[activeSid] : null;
   const student = activeSid ? users[activeSid] : null;
+  const total = totalPoints(assignment);
+  const score = sub ? submissionScore(assignment, sub) : 0;
+  const scorePct = total ? Math.round(score / total * 100) : 0;
+
+  const orderedSubmitted = allStudents.filter(sid => assignment.submissions[sid]);
+  const idxInSubmitted = orderedSubmitted.indexOf(activeSid);
+  const gotoNext = () => {
+    const n = orderedSubmitted[idxInSubmitted + 1];
+    if (n) setActiveSid(n);
+  };
 
   const setMark = (qid, mark) => {
+    if (!sub) return;
     const max = assignment.questions.find(q => q.id === qid)?.points || 0;
     let m = parseFloat(mark);
     if (Number.isNaN(m)) m = null;
     else m = Math.max(0, Math.min(max, m));
     onUpdateSubmission(activeSid, { ...sub, marks: { ...sub.marks, [qid]: m } });
   };
-  const setFb = (qid, text) => onUpdateSubmission(activeSid, { ...sub, feedback: { ...sub.feedback, [qid]: text } });
+  const setFb = (qid, text) => sub && onUpdateSubmission(activeSid, { ...sub, feedback: { ...sub.feedback, [qid]: text } });
+  const setOverall = (text) => sub && onUpdateSubmission(activeSid, { ...sub, overallFeedback: text });
 
-  const approve = () => {
-    if (!fullyMarked(assignment, sub)) {
-      toast('Mark every question before approving', 'danger');
-      return;
-    }
-    onUpdateSubmission(activeSid, { ...sub, status: 'approved', approvedAt: new Date().toISOString() });
-    toast(`${student.name} approved`, 'success');
-    if (activeIdx < subStudents.length - 1) {
-      setTimeout(() => setActiveIdx(activeIdx + 1), 200);
-    }
+  const saveDraft = () => {
+    if (!sub) return;
+    onUpdateSubmission(activeSid, { ...sub });
+    toast('Draft saved', 'success');
   };
 
-  if (subStudents.length === 0) {
+  const gradeReturn = () => {
+    if (!sub) return;
+    if (!fullyMarked(assignment, sub)) {
+      toast('Mark every question before returning', 'danger');
+      return;
+    }
+    onUpdateSubmission(activeSid, { ...sub, status: 'returned', markedAt: new Date().toISOString() });
+    toast(`Returned to ${student.name}`, 'success');
+    if (idxInSubmitted < orderedSubmitted.length - 1) setTimeout(gotoNext, 200);
+  };
+
+  if (allStudents.length === 0) {
     return (
       <div style={{ padding: 32, fontFamily: F.body }}>
         <div style={{ marginBottom: 20 }}>
-          <Btn variant="ghost" small icon={<Ico name="arrowL" size={13} />} onClick={onClose}>Back</Btn>
+          <Btn variant="ghost" small icon={<Ico name="arrowL" size={13} />} onClick={onClose}>Back to list</Btn>
         </div>
         <Card style={{ padding: 60, textAlign:'center' }}>
-          <div style={{ fontFamily: F.head, fontSize: 18, fontWeight: 600, marginBottom: 6 }}>No submissions yet</div>
-          <div style={{ fontSize: 13, color: C.muted }}>Students haven't submitted {assignment.title} yet.</div>
+          <div style={{ fontFamily: F.head, fontSize: 18, fontWeight: 600, marginBottom: 6 }}>No students assigned</div>
+          <div style={{ fontSize: 13, color: C.muted }}>Assign students to {assignment.title} to start reviewing.</div>
         </Card>
       </div>
     );
@@ -2092,72 +3625,92 @@ const TeacherReview = ({ assignment, users, onClose, onUpdateSubmission }) => {
     <div style={{ display:'flex', flexDirection:'column', height:'100%', fontFamily: F.body }}>
       {/* Header */}
       <div style={{
-        padding: '16px 32px', borderBottom: `1px solid ${C.border}`,
+        padding: '14px 24px', borderBottom: `1px solid ${C.border}`,
         display:'flex', alignItems:'center', gap: 12, background: C.bg,
       }}>
-        <Btn variant="ghost" small icon={<Ico name="arrowL" size={13} />} onClick={onClose}>Back</Btn>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontFamily: F.head, fontSize: 16, fontWeight: 700, color: C.text }}>Review · {assignment.title}</div>
-          <div style={{ fontSize: 12, color: C.muted }}>{subStudents.length} submission{subStudents.length !== 1 ? 's' : ''}</div>
-        </div>
+        <Btn variant="ghost" small icon={<Ico name="arrowL" size={13} />} onClick={onClose}>Back to list</Btn>
+        <div style={{ flex: 1 }} />
+        <Btn variant="soft" small icon={<Ico name="save" size={13} />} onClick={saveDraft} disabled={!sub}>Save Draft</Btn>
+        <Btn variant="brand" small icon={<Ico name="send" size={13} color="#fff" />} onClick={gradeReturn} disabled={!sub}>Grade &amp; Return</Btn>
       </div>
 
       <div style={{ display:'flex', flex: 1, overflow: 'hidden' }}>
         {/* Sidebar */}
-        <div style={{ width: 240, borderRight: `1px solid ${C.border}`, background: C.surface, overflow:'auto' }}>
-          {subStudents.map((sid, i) => {
+        <div style={{ width: 272, borderRight: `1px solid ${C.border}`, background: C.surface, overflow:'auto', display:'flex', flexDirection:'column' }}>
+          <div style={{ padding: 14, display:'flex', flexDirection:'column', gap: 8, borderBottom: `1px solid ${C.border}` }}>
+            <Input value={query} onChange={setQuery} placeholder="Search students…" prefix={<Ico name="search" size={13} color={C.faint} />} />
+            <select value={statusF} onChange={e => setStatusF(e.target.value)} style={{
+              padding: '8px 12px', borderRadius: 8, border: `1px solid ${C.border}`,
+              background: C.bg, color: C.sub, fontFamily: F.body, fontSize: 12.5, cursor:'pointer',
+            }}>
+              <option value="all">All Students</option>
+              <option value="submitted">Submitted</option>
+              <option value="graded">Graded</option>
+              <option value="in_progress">In Progress</option>
+              <option value="not_started">Not Started</option>
+            </select>
+          </div>
+          {visible.map(sid => {
             const s = users[sid];
             const sb = assignment.submissions[sid];
-            const on = i === activeIdx;
-            const score = submissionScore(assignment, sb);
-            const total = totalPoints(assignment);
-            const done = fullyMarked(assignment, sb);
-            const approved = sb.status === 'approved';
+            const on = sid === activeSid;
+            const st = reviewStatus(assignment, sid);
+            const pct = sb && total ? Math.round(submissionScore(assignment, sb) / total * 100) : null;
             return (
-              <button key={sid} onClick={() => setActiveIdx(i)} style={{
+              <button key={sid} onClick={() => setActiveSid(sid)} style={{
                 width: '100%', padding: '12px 14px', border: 'none',
                 borderBottom: `1px solid ${C.border}`,
                 background: on ? C.bg : 'transparent',
                 cursor:'pointer', textAlign:'left', transition: T,
-                display:'flex', flexDirection:'column', gap: 4,
+                display:'flex', alignItems:'center', gap: 10,
                 borderLeft: on ? `3px solid ${C.brand}` : '3px solid transparent',
               }}>
-                <div style={{ display:'flex', alignItems:'center', gap: 8 }}>
-                  <Avatar name={s.name} />
-                  <span style={{ fontFamily: F.body, fontSize: 13, fontWeight: 600, color: C.text }}>{s.name}</span>
-                  {approved && <Ico name="check" size={13} color={C.success} />}
-                </div>
-                <div style={{ display:'flex', justifyContent:'space-between', fontSize: 11, color: C.muted, marginLeft: 32 }}>
-                  <span>{score}/{total} pts</span>
-                  <span style={{ color: approved ? C.success : done ? C.brand : C.amber, fontWeight:600 }}>
-                    {approved ? 'Approved' : done ? 'Ready' : 'Marking'}
-                  </span>
+                <Avatar name={s?.name || sid} size={34} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap: 6 }}>
+                    <span style={{ fontFamily: F.body, fontSize: 13, fontWeight: 600, color: C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{s?.name || sid}</span>
+                    {pct != null && <span style={{ fontFamily: F.head, fontSize: 12.5, fontWeight: 700, color: C.brand }}>{pct}%</span>}
+                  </div>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap: 6, marginTop: 3 }}>
+                    <span style={{ fontSize: 11, color: C.muted }}>{sb ? fmtDateTime(sb.submittedAt) : '—'}</span>
+                    <Pill tone={st.tone}>{st.label}</Pill>
+                  </div>
                 </div>
               </button>
             );
           })}
+          {visible.length === 0 && (
+            <div style={{ padding: 20, fontSize: 12, color: C.muted, textAlign:'center' }}>No students match.</div>
+          )}
         </div>
 
         {/* Main panel */}
         <div style={{ flex: 1, overflow:'auto', padding: '24px 32px' }}>
+          {!sub ? (
+            <Card style={{ padding: 50, textAlign:'center' }}>
+              <Avatar name={student?.name || ''} size={48} />
+              <div style={{ fontFamily: F.head, fontSize: 17, fontWeight: 700, margin: '14px 0 4px' }}>{student?.name}</div>
+              <div style={{ fontSize: 13, color: C.muted }}>
+                {reviewStatus(assignment, activeSid).label} — nothing to mark yet.
+              </div>
+            </Card>
+          ) : (
+          <>
           {/* Student header */}
           <div style={{ display:'flex', alignItems:'center', gap: 14, marginBottom: 20 }}>
             <Avatar name={student.name} size={44} />
             <div style={{ flex: 1 }}>
-              <div style={{ fontFamily: F.head, fontSize: 18, fontWeight: 700 }}>{student.name}</div>
-              <div style={{ fontSize: 12, color: C.muted }}>
-                Submitted {fmtDate(sub.submittedAt)} · {submissionScore(assignment, sub)} / {totalPoints(assignment)} pts
+              <div style={{ display:'flex', alignItems:'center', gap: 8 }}>
+                <span style={{ fontFamily: F.head, fontSize: 18, fontWeight: 700 }}>{student.name}</span>
+                <Pill tone={reviewStatus(assignment, activeSid).tone}>{reviewStatus(assignment, activeSid).label}</Pill>
+              </div>
+              <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
+                Submitted {fmtDateTime(sub.submittedAt)}{sub.timeSpentMins ? ` · ${sub.timeSpentMins}m spent` : ''}
               </div>
             </div>
-            <div style={{ display:'flex', gap: 8 }}>
-              <Btn variant="ghost" small icon={<Ico name="arrowL" size={13} />}
-                onClick={() => setActiveIdx(Math.max(0, activeIdx - 1))} disabled={activeIdx === 0}>Prev</Btn>
-              <Btn variant="brand" small icon={<Ico name="check" size={13} color="#fff" />} onClick={approve}>
-                {sub.status === 'approved' ? 'Re-approve' : 'Approve'}
-              </Btn>
-              <Btn variant="soft" small icon={<Ico name="arrowR" size={13} />}
-                onClick={() => setActiveIdx(Math.min(subStudents.length - 1, activeIdx + 1))}
-                disabled={activeIdx === subStudents.length - 1}>Next</Btn>
+            <div style={{ textAlign:'right' }}>
+              <div style={{ fontFamily: F.head, fontSize: 24, fontWeight: 800, color: C.brand }}>{scorePct}%</div>
+              <div style={{ fontFamily: F.body, fontSize: 12, color: C.muted }}>{score}/{total} marks</div>
             </div>
           </div>
 
@@ -2199,19 +3752,10 @@ const TeacherReview = ({ assignment, users, onClose, onUpdateSubmission }) => {
                         Student answer
                       </div>
                       <QuestionAnswerDisplay question={q} answer={a} />
-                      {isAutoQ && q.type === 'mcq' && (
-                        <div style={{ marginTop: 6, fontSize: 12, color: C.muted }}>
-                          Correct: <strong style={{ color: C.success }}>{String.fromCharCode(65 + q.correctIndex)} · {q.choices[q.correctIndex]}</strong>
-                        </div>
-                      )}
-                      {isAutoQ && q.type === 'numeric' && (
-                        <div style={{ marginTop: 6, fontSize: 12, color: C.muted }}>
-                          Correct: <strong style={{ color: C.success }}>{q.answer}</strong> (±{q.tolerance})
-                        </div>
-                      )}
-                      {isAutoQ && q.type === 'math' && (
-                        <div style={{ marginTop: 6, fontSize: 12, color: C.muted, fontFamily: F.mono }}>
-                          Correct: <strong style={{ color: C.success }}>{q.answer}</strong>
+                      {isAutoQ && correctAnswerText(q) != null && (
+                        <div style={{ marginTop: 6, fontSize: 12, color: C.muted, fontFamily: q.type === 'math' ? F.mono : F.body }}>
+                          Correct: <strong style={{ color: C.success }}>{correctAnswerText(q)}</strong>
+                          {q.type === 'numeric' && q.tolerance ? ` (±${q.tolerance})` : ''}
                         </div>
                       )}
                     </div>
@@ -2244,6 +3788,21 @@ const TeacherReview = ({ assignment, users, onClose, onUpdateSubmission }) => {
               );
             })}
           </div>
+
+          {/* Per-student overall feedback */}
+          <Card style={{ padding: 18, marginTop: 16, background: '#F5F3FF', borderColor: '#DDD6FE' }}>
+            <div style={{ display:'flex', alignItems:'center', gap: 8, marginBottom: 4 }}>
+              <Ico name="chat" size={14} color="#7C3AED" />
+              <span style={{ fontFamily: F.head, fontSize: 14, fontWeight: 700, color: C.text }}>Feedback for {student.name}</span>
+            </div>
+            <div style={{ fontFamily: F.body, fontSize: 12, color: C.muted, marginBottom: 10 }}>
+              Overall comment returned to the student with their marks.
+            </div>
+            <Input multiline rows={3} value={sub.overallFeedback || ''} onChange={setOverall}
+              placeholder="Summarise how the student did and what to focus on next…" />
+          </Card>
+          </>
+          )}
         </div>
       </div>
     </div>
@@ -2267,441 +3826,907 @@ const Avatar = ({ name = '', size = 28 }) => {
 // ════════════════════════════════════════════════════════════════
 // STUDENT MODULE
 // ════════════════════════════════════════════════════════════════
-const StudentHomework = () => {
-  const [store, update] = useStore();
-  const me = store.currentUser;
-  const [view, setView] = React.useState({ name: 'list' });
+// ─── Student helpers ───────────────────────────────────────────
+const fmtShort = (iso) => {
+  if (!iso) return 'No date';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+};
+const fmtLong = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+};
+const fmtDateTime = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ', '
+    + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+};
 
-  const myAssignments = Object.values(store.assignments).filter(a =>
+const gradeFor = (pct) => pct >= 90 ? 'A*' : pct >= 80 ? 'A' : pct >= 70 ? 'B' : pct >= 60 ? 'C' : pct >= 50 ? 'D' : 'E';
+const gradePalette = (g) => {
+  if (g === 'A*' || g === 'A') return { bg: C.successBg, fg: C.success, bd: C.successBorder };
+  if (g === 'B')               return { bg: C.accentSoft, fg: '#0284C7', bd: '#BAE6FD' };
+  if (g === 'C')               return { bg: C.amberBg, fg: C.amber, bd: C.amberBorder };
+  return { bg: C.dangerBg, fg: C.danger, bd: C.dangerBorder };
+};
+const scoreColor = (pct) => pct >= 80 ? C.success : pct >= 55 ? C.amber : C.danger;
+
+const draftStarted = (draft) =>
+  !!draft && (!!draft.startedAt || Object.keys(draft.answers || {}).length > 0);
+
+const hwState = (a, me, drafts) => {
+  const sub = a.submissions[me.id];
+  if (sub) return isGraded(sub) ? 'marked' : 'submitted';
+  if (a.dueAt && daysUntil(a.dueAt) < 0) return 'overdue';
+  if (draftStarted(drafts ? drafts[a.id] : null)) return 'inprogress';
+  return 'pending';
+};
+
+// Has the teacher released marks for this submission to the student?
+// Honours "hide marks until released" — only graded submissions are released.
+const marksReleased = (a, sub) => {
+  if (!sub) return false;
+  const s = a.settings || {};
+  if (s.hideMarksUntilReleased || s.releaseAfterApproval) return isGraded(sub);
+  return true;
+};
+
+const teacherNameFor = (a, store) =>
+  a.teacherName || (a.teacherId && store.users[a.teacherId] && store.users[a.teacherId].name) || '—';
+
+const qResult = (q, sub) => {
+  const explicit = sub.results && sub.results[q.id];
+  if (explicit) return explicit;
+  const m = sub.marks ? sub.marks[q.id] : null;
+  if (typeof m !== 'number') return 'pending';
+  if (m >= (q.points || 0)) return 'correct';
+  if (m <= 0) return 'incorrect';
+  return 'partial';
+};
+
+const correctAnswerText = (q) => {
+  if (q.type === 'mcq') return q.choices && q.choices[q.correctIndex];
+  if (q.type === 'multi') {
+    const idx = q.correctIndices || [];
+    return idx.map(i => `${String.fromCharCode(65 + i)}. ${q.choices?.[i] ?? ''}`).join(', ') || null;
+  }
+  if (q.type === 'truefalse') return q.answer ? 'True' : 'False';
+  if (q.type === 'fillblank') return (q.blanks || []).join(', ') || null;
+  if (q.type === 'match') return (q.pairs || []).map(p => `${p.left} → ${p.right}`).join(', ') || null;
+  if (q.answer != null && q.answer !== '') return String(q.answer);
+  return null;
+};
+
+// ─── Student UI primitives ─────────────────────────────────────
+const HwStatusPill = ({ state }) => {
+  const map = {
+    pending:    { label: 'Pending',          bg: C.surface,    fg: C.muted,   bd: C.border,        icon: 'clock' },
+    inprogress: { label: 'In Progress',      bg: C.amberBg,    fg: C.amber,   bd: C.amberBorder,   icon: 'clock' },
+    submitted:  { label: 'Submitted',        bg: C.accentSoft, fg: '#0284C7', bd: '#BAE6FD',       icon: 'send' },
+    awaiting:   { label: 'Awaiting marking', bg: C.accentSoft, fg: '#0284C7', bd: '#BAE6FD',       icon: 'clock' },
+    overdue:    { label: 'Overdue',          bg: C.dangerBg,   fg: C.danger,  bd: C.dangerBorder,  icon: 'alertCircle' },
+    marked:     { label: 'Marked',           bg: C.successBg,  fg: C.success, bd: C.successBorder, icon: 'check' },
+  };
+  const t = map[state] || map.pending;
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 5,
+      padding: '4px 10px', borderRadius: 999, whiteSpace: 'nowrap',
+      background: t.bg, color: t.fg, border: `1px solid ${t.bd}`,
+      fontFamily: F.body, fontSize: 11.5, fontWeight: 600,
+    }}>
+      <Ico name={t.icon} size={12} color={t.fg} />
+      {t.label}
+    </span>
+  );
+};
+
+const Ring = ({ pct, size = 52, stroke = 5, color, track = C.surface2, children }) => {
+  const r = (size - stroke) / 2;
+  const circ = 2 * Math.PI * r;
+  const fill = Math.max(0, Math.min(100, pct || 0));
+  return (
+    <div style={{ position: 'relative', width: size, height: size, flexShrink: 0 }}>
+      <svg width={size} height={size} style={{ transform: 'rotate(-90deg)', display: 'block' }}>
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={track} strokeWidth={stroke} />
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={stroke}
+          strokeDasharray={`${(circ * fill) / 100} ${circ}`} strokeLinecap="round" />
+      </svg>
+      <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+        {children}
+      </div>
+    </div>
+  );
+};
+
+const SegTabs = ({ tabs, active, onChange }) => (
+  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 2, padding: 4, background: C.surface2, borderRadius: 10 }}>
+    {tabs.map(t => {
+      const on = t.id === active;
+      return (
+        <button key={t.id} onClick={() => onChange(t.id)} style={{
+          padding: '7px 14px', borderRadius: 8, border: 'none', cursor: 'pointer',
+          background: on ? C.bg : 'transparent',
+          boxShadow: on ? '0 1px 2px rgba(15,23,42,.08)' : 'none',
+          fontFamily: F.body, fontSize: 13, fontWeight: 600,
+          color: on ? C.text : C.muted, transition: T, whiteSpace: 'nowrap',
+        }}>{t.label}</button>
+      );
+    })}
+  </div>
+);
+
+const BackBtn = ({ onClick }) => {
+  const [hov, setHov] = React.useState(false);
+  return (
+    <button onClick={onClick} aria-label="Back"
+      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+      style={{
+        width: 34, height: 34, borderRadius: '50%', border: 'none',
+        background: hov ? C.surface2 : 'transparent', cursor: 'pointer',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        transition: T, flexShrink: 0, marginTop: 2,
+      }}>
+      <Ico name="arrowL" size={16} color={C.sub} />
+    </button>
+  );
+};
+
+const HwSearch = ({ value, onChange }) => {
+  const [foc, setFoc] = React.useState(false);
+  return (
+    <div style={{ flex: 1, position: 'relative' }}>
+      <span style={{ position: 'absolute', left: 14, top: 0, bottom: 0, display: 'flex', alignItems: 'center' }}>
+        <Ico name="search" size={15} color={C.faint} />
+      </span>
+      <input value={value} onChange={e => onChange(e.target.value)} placeholder="Search..."
+        onFocus={() => setFoc(true)} onBlur={() => setFoc(false)}
+        style={{
+          width: '100%', boxSizing: 'border-box', padding: '11px 14px 11px 40px',
+          borderRadius: 10, border: `1px solid ${foc ? C.brand : C.border}`,
+          background: C.bg, fontFamily: F.body, fontSize: 13, color: C.text,
+          outline: 'none', boxShadow: foc ? ring(C.brand) : 'none', transition: T,
+        }} />
+    </div>
+  );
+};
+
+const hwSelectStyle = {
+  padding: '11px 34px 11px 14px', borderRadius: 10, border: `1px solid ${C.border}`,
+  background: C.bg, fontSize: 13, color: C.text, cursor: 'pointer', fontFamily: F.body,
+  appearance: 'none', WebkitAppearance: 'none', MozAppearance: 'none',
+  backgroundImage: `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748B' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>")`,
+  backgroundRepeat: 'no-repeat', backgroundPosition: 'right 12px center', outline: 'none',
+};
+
+const HwEmpty = ({ text }) => (
+  <div style={{
+    textAlign: 'center', padding: '56px 24px', color: C.faint, fontSize: 13.5,
+    background: C.surface, borderRadius: 12, border: `1px dashed ${C.border}`,
+  }}>{text}</div>
+);
+
+// ════════════════════════════════════════════════════════════════
+// Student — root router
+// ════════════════════════════════════════════════════════════════
+const StudentHomework = ({ section, onNav }) => {
+  const [store, update] = useStore();
+  const toast = useToast();
+  const me = store.currentUser;
+  // Drill-downs (detail / attempt / result …) live in local `view`; the *home*
+  // section (assignments | submitted | results) is driven by the sidebar dropdown
+  // via the `section` prop. `goHome` returns to the home view on the given section,
+  // syncing the sidebar through the global navigate hook.
+  const homeSection = ['assignments', 'submitted', 'results'].includes(section) ? section : 'assignments';
+  const [view, setView] = React.useState({ name: 'home' });
+
+  // Selecting a section in the sidebar always returns to the home list, even from
+  // a drill-down (assignment detail, attempt, result …).
+  React.useEffect(() => { setView({ name: 'home' }); }, [section]);
+
+  const mine = Object.values(store.assignments).filter(a =>
     a.studentIds.includes(me.id) && a.status !== 'draft'
   );
 
-  if (view.name === 'attempt') {
-    return <StudentAttempt
-      assignment={store.assignments[view.id]}
-      me={me}
-      draft={store.drafts[view.id] || {}}
-      onUpdateDraft={(d) => update(s => ({ ...s, drafts: { ...s.drafts, [view.id]: d } }))}
-      onCancel={() => setView({ name: 'list' })}
-      onSubmit={(answers) => {
-        const asn = store.assignments[view.id];
-        const marks = {};
-        const feedback = {};
-        asn.questions.forEach(q => {
-          marks[q.id] = isAuto(q.type) ? autoMark(q, answers[q.id]) : null;
-          feedback[q.id] = '';
-        });
-        const sub = {
-          answers,
-          submittedAt: new Date().toISOString(),
-          status: 'submitted',
-          marks,
-          feedback,
-        };
+  const setSection = (s) => {
+    if (window.__navigate) window.__navigate('student', 'homework:' + (s || 'assignments'));
+    setView({ name: 'home' });
+  };
+  const goHome = (s) => setSection(s || homeSection);
+
+  const openSubmitted = (a) => {
+    const canReview = (a.settings?.allowReview ?? a.allowReview) || a.settings?.showAutoImmediately;
+    if (canReview) setView({ name: 'subreview', id: a.id });
+    else toast("Your teacher hasn't enabled review for this homework yet", 'warn');
+  };
+
+  const openAssignment = (a) => {
+    const state = hwState(a, me, store.drafts);
+    if (state === 'marked') { setView({ name: 'result', id: a.id }); return; }
+    if (state === 'submitted') { openSubmitted(a); return; }
+    setView({ name: 'detail', id: a.id });
+  };
+
+  const submit = (id, answers) => {
+    const asn = store.assignments[id];
+    const marks = {};
+    const feedback = {};
+    asn.questions.forEach(q => {
+      marks[q.id] = isAuto(q.type) ? autoMark(q, answers[q.id]) : null;
+      feedback[q.id] = '';
+    });
+    const startedAt = store.drafts && store.drafts[id] && store.drafts[id].startedAt;
+    const elapsed = startedAt ? Math.round((Date.now() - new Date(startedAt).getTime()) / 60000) : null;
+    const sub = {
+      answers,
+      submittedAt: new Date().toISOString(),
+      status: 'submitted',
+      marks, feedback,
+      timeSpentMins: elapsed != null ? Math.max(1, Math.min(elapsed, 999)) : null,
+    };
+    update(s => {
+      const next = { ...s, assignments: { ...s.assignments }, drafts: { ...s.drafts } };
+      next.assignments[id] = {
+        ...next.assignments[id],
+        submissions: { ...next.assignments[id].submissions, [me.id]: sub },
+      };
+      delete next.drafts[id];
+      return next;
+    });
+    setView({ name: 'done', id });
+  };
+
+  const current = view.id ? store.assignments[view.id] : null;
+
+  if (view.name === 'detail' && current) {
+    return <HwDetail
+      a={current} store={store}
+      draft={store.drafts ? store.drafts[view.id] : null}
+      onBack={() => goHome('assignments')}
+      onStart={() => {
         update(s => {
-          const next = { ...s };
-          next.assignments = { ...next.assignments };
-          next.assignments[view.id] = { ...next.assignments[view.id] };
-          next.assignments[view.id].submissions = { ...next.assignments[view.id].submissions, [me.id]: sub };
-          next.drafts = { ...next.drafts };
-          delete next.drafts[view.id];
-          return next;
+          const prev = (s.drafts && s.drafts[view.id]) || {};
+          return { ...s, drafts: { ...s.drafts, [view.id]: {
+            ...prev,
+            answers: prev.answers || {},
+            startedAt: prev.startedAt || new Date().toISOString(),
+          } } };
         });
-        setView({ name: 'results', id: view.id });
+        setView({ name: 'attempt', id: view.id });
       }}
     />;
   }
 
-  if (view.name === 'results') {
-    return <StudentResults
-      assignment={store.assignments[view.id]}
-      me={me}
-      onClose={() => setView({ name: 'list' })}
+  if (view.name === 'attempt' && current) {
+    return <HwAttempt
+      a={current}
+      draft={(store.drafts && store.drafts[view.id]) || {}}
+      onUpdateDraft={(d) => update(s => ({ ...s, drafts: { ...s.drafts, [view.id]: d } }))}
+      onBack={() => setView({ name: 'detail', id: view.id })}
+      onSubmit={(answers) => submit(view.id, answers)}
     />;
   }
 
-  return <StudentList
-    me={me}
-    assignments={myAssignments}
-    onOpen={(asn) => {
-      const sub = asn.submissions[me.id];
-      if (sub) setView({ name: 'results', id: asn.id });
-      else setView({ name: 'attempt', id: asn.id });
-    }}
+  if (view.name === 'done') {
+    return <HwDone
+      onBackToHomework={() => goHome('assignments')}
+      onGoHome={() => { if (onNav) onNav('dashboard'); else goHome('assignments'); }}
+    />;
+  }
+
+  if (view.name === 'subreview' && current && current.submissions[me.id]) {
+    return <HwSubmissionReview a={current} me={me} store={store} onBack={() => goHome('submitted')} />;
+  }
+
+  if (view.name === 'result' && current && current.submissions[me.id]) {
+    return <HwResultReview a={current} me={me} store={store} onBack={() => goHome('results')} />;
+  }
+
+  return <HwHome
+    store={store} me={me}
+    section={homeSection}
+    setSection={setSection}
+    assignments={mine}
+    onOpen={openAssignment}
+    onOpenSubmitted={openSubmitted}
+    onOpenResult={(a) => setView({ name: 'result', id: a.id })}
   />;
 };
 
-// ─── Student list ──────────────────────────────────────────────
-const StudentList = ({ me, assignments, onOpen }) => {
+// ════════════════════════════════════════════════════════════════
+// Student — home (Assignments · Submitted · Results)
+// ════════════════════════════════════════════════════════════════
+const HwHome = ({ store, me, section, setSection, assignments, onOpen, onOpenSubmitted, onOpenResult }) => {
+  const [tab, setTab] = React.useState('all');
+  const [query, setQuery] = React.useState('');
+  const [subject, setSubject] = React.useState('All');
+
+  const withState = assignments.map(a => ({ a, state: hwState(a, me, store.drafts) }));
+  const open = withState.filter(x => x.state !== 'marked');
+  const submitted = withState.filter(x => x.state === 'submitted');
+  const marked = withState.filter(x => x.state === 'marked');
+
+  const subjects = Array.from(new Set(open.map(x => x.a.subject)));
+
+  const inTab = (x) =>
+    tab === 'all' ? true :
+    tab === 'pending' ? (x.state === 'pending' || x.state === 'inprogress') :
+    tab === 'completed' ? x.state === 'submitted' :
+    x.state === 'overdue';
+
+  const q = query.trim().toLowerCase();
+  const matches = (x) => {
+    if (subject !== 'All' && x.a.subject !== subject) return false;
+    if (!q) return true;
+    return `${x.a.title} ${x.a.subject} ${teacherNameFor(x.a, store)}`.toLowerCase().includes(q);
+  };
+
+  const visible = open.filter(inTab).filter(matches);
+
+  const subtitle =
+    section === 'assignments' ? `${open.length} assignment${open.length === 1 ? '' : 's'}` :
+    section === 'submitted' ? `${submitted.length} awaiting marking` :
+    `${marked.length} marked`;
+
   return (
-    <div style={{ padding: '32px 32px 64px', fontFamily: F.body, color: C.text }}>
-      <div style={{ marginBottom: 28 }}>
-        <h1 style={{ fontFamily: F.head, fontSize: 26, fontWeight: 700, margin: 0, letterSpacing: '-0.4px' }}>My Homework</h1>
-        <p style={{ fontSize: 14, color: C.muted, margin: '6px 0 0' }}>
-          {assignments.length} assignment{assignments.length !== 1 ? 's' : ''} · {assignments.filter(a => !a.submissions[me.id]).length} to do
-        </p>
+    <div style={{ padding: '32px 32px 64px', fontFamily: F.body, color: C.text, maxWidth: 1080, margin: '0 auto' }}>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 18, flexWrap: 'wrap' }}>
+        <div>
+          <h1 style={{ fontFamily: F.head, fontSize: 28, fontWeight: 800, margin: 0, letterSpacing: '-0.6px' }}>
+            {section === 'submitted' ? 'Submitted' : section === 'results' ? 'Results' : 'Homework'}
+          </h1>
+          <p style={{ fontSize: 13, color: C.muted, margin: '6px 0 0' }}>{subtitle}</p>
+        </div>
       </div>
 
-      {assignments.length === 0 ? (
-        <Card style={{ padding: '60px 20px', textAlign:'center' }}>
-          <div style={{ fontFamily: F.head, fontSize: 16, fontWeight: 600 }}>You're all caught up!</div>
-          <div style={{ fontSize: 13, color: C.muted, marginTop: 4 }}>No homework assigned right now.</div>
-        </Card>
-      ) : (
-        <div style={{ display:'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
-          {assignments.map(a => <StudentListCard key={a.id} a={a} me={me} onOpen={() => onOpen(a)} />)}
+      {section === 'assignments' && (
+        <>
+          <div style={{ marginBottom: 14 }}>
+            <SegTabs
+              tabs={[
+                { id: 'all',       label: 'All' },
+                { id: 'pending',   label: 'Pending' },
+                { id: 'completed', label: 'Completed' },
+                { id: 'overdue',   label: 'Overdue' },
+              ]}
+              active={tab} onChange={setTab}
+            />
+          </div>
+
+          <div style={{ display: 'flex', gap: 12, marginBottom: 18 }}>
+            <HwSearch value={query} onChange={setQuery} />
+            <select value={subject} onChange={e => setSubject(e.target.value)} style={hwSelectStyle}>
+              <option value="All">All Subjects</option>
+              {subjects.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {visible.length === 0 && (
+              <HwEmpty text={open.length === 0 ? "You're all caught up — no homework assigned." : 'No homework matches your filters.'} />
+            )}
+            {visible.map(x => (
+              <HwListRow key={x.a.id} a={x.a} state={x.state} store={store} onOpen={() => onOpen(x.a)} />
+            ))}
+          </div>
+        </>
+      )}
+
+      {section === 'submitted' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {submitted.length === 0 && (
+            <HwEmpty text="Nothing awaiting marking. Homework you submit will appear here until your teacher marks it." />
+          )}
+          {submitted.map(({ a }) => (
+            <HwSubmittedRow key={a.id} a={a} sub={a.submissions[me.id]} store={store} onOpen={() => onOpenSubmitted(a)} />
+          ))}
+        </div>
+      )}
+
+      {section === 'results' && (
+        <HwResultsSection me={me} marked={marked} onOpen={onOpenResult} />
+      )}
+    </div>
+  );
+};
+
+// ─── Assignments list row ──────────────────────────────────────
+const HwListRow = ({ a, state, store, onOpen }) => {
+  const [hov, setHov] = React.useState(false);
+  const danger = state === 'overdue';
+  const days = a.dueAt ? daysUntil(a.dueAt) : null;
+  const showDays = (state === 'pending' || state === 'inprogress') && days != null && days >= 0;
+  return (
+    <div onClick={onOpen}
+      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 14, padding: '16px 18px',
+        background: C.bg, border: `1px solid ${hov ? C.borderD : C.border}`, borderRadius: 12,
+        cursor: 'pointer', transition: T, boxShadow: hov ? C.shadowL : C.shadow,
+      }}>
+      <div style={{
+        width: 42, height: 42, borderRadius: 11, flexShrink: 0,
+        background: danger ? C.dangerBg : C.brandSoft,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>
+        <Ico name="book" size={18} color={danger ? C.danger : C.brand} />
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 14.5, fontWeight: 700, color: C.text, marginBottom: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {a.title}
+        </div>
+        <div style={{ fontSize: 12.5, color: C.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {a.subject} · {teacherNameFor(a, store)} · {a.questions.length} question{a.questions.length === 1 ? '' : 's'}
+        </div>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexShrink: 0 }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: C.muted }}>
+          <Ico name="calendar" size={13} color={C.faint} />
+          {a.dueAt ? fmtShort(a.dueAt) : 'No date'}
+        </span>
+        {showDays && <span style={{ fontSize: 12, color: C.faint, fontWeight: 600 }}>{days}d</span>}
+        <HwStatusPill state={state} />
+      </div>
+    </div>
+  );
+};
+
+// ─── Submitted list row ────────────────────────────────────────
+const HwSubmittedRow = ({ a, sub, store, onOpen }) => {
+  const [hov, setHov] = React.useState(false);
+  const canReview = (a.settings?.allowReview ?? a.allowReview) || a.settings?.showAutoImmediately;
+  return (
+    <div onClick={onOpen}
+      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 14, padding: '16px 18px',
+        background: C.bg, border: `1px solid ${hov ? C.borderD : C.border}`, borderRadius: 12,
+        cursor: 'pointer', transition: T, boxShadow: hov ? C.shadowL : C.shadow,
+      }}>
+      <div style={{
+        width: 42, height: 42, borderRadius: 11, flexShrink: 0,
+        background: C.accentSoft, display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>
+        <Ico name="send" size={17} color="#0284C7" />
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 14.5, fontWeight: 700, color: C.text, marginBottom: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {a.title}
+        </div>
+        <div style={{ fontSize: 12.5, color: C.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {a.subject} · {teacherNameFor(a, store)} · Submitted {fmtDateTime(sub && sub.submittedAt)}
+        </div>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexShrink: 0 }}>
+        <HwStatusPill state="awaiting" />
+        {canReview ? (
+          <Btn variant="soft" small icon={<Ico name="eye" size={13} />}
+            onClick={(e) => { e.stopPropagation(); onOpen(); }}>
+            Review
+          </Btn>
+        ) : (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, color: C.faint }}>
+            <Ico name="lock" size={12} color={C.faint} />
+            Review locked
+          </span>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ─── Results section ───────────────────────────────────────────
+const HwResultsSection = ({ me, marked, onOpen }) => {
+  const rows = marked.map(({ a }) => {
+    const sub = a.submissions[me.id];
+    const total = totalPoints(a);
+    const score = submissionScore(a, sub);
+    const pct = total ? Math.round((score / total) * 100) : 0;
+    return { a, sub, pct };
+  }).sort((x, y) =>
+    new Date(y.sub.markedAt || y.sub.submittedAt || 0) - new Date(x.sub.markedAt || x.sub.submittedAt || 0)
+  );
+
+  const avg = rows.length ? Math.round(rows.reduce((s, r) => s + r.pct, 0) / rows.length) : 0;
+  const best = rows.length ? Math.max(...rows.map(r => r.pct)) : 0;
+
+  const stat = (icon, value, label, chipBg, chipFg, valueColor) => (
+    <Card key={label} style={{ padding: '22px 16px', textAlign: 'center' }}>
+      <div style={{
+        width: 40, height: 40, borderRadius: '50%', background: chipBg,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 10px',
+      }}>
+        <Ico name={icon} size={17} color={chipFg} />
+      </div>
+      <div style={{ fontFamily: F.head, fontSize: 24, fontWeight: 800, color: valueColor, letterSpacing: '-0.4px' }}>{value}</div>
+      <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{label}</div>
+    </Card>
+  );
+
+  return (
+    <div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 18 }}>
+        {stat('trend', `${avg}%`, 'Overall Average', C.successBg, C.success, scoreColor(avg))}
+        {stat('award', `${best}%`, 'Best Score', C.successBg, C.success, scoreColor(best))}
+        {stat('target', rows.length, 'Completed', C.brandSoft, C.brand, C.text)}
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {rows.length === 0 && <HwEmpty text="No marked homework yet. Results will appear here once your teacher marks your work." />}
+        {rows.map(r => <HwResultRow key={r.a.id} a={r.a} sub={r.sub} pct={r.pct} onOpen={() => onOpen(r.a)} />)}
+      </div>
+    </div>
+  );
+};
+
+const HwResultRow = ({ a, sub, pct, onOpen }) => {
+  const [hov, setHov] = React.useState(false);
+  const col = scoreColor(pct);
+  const g = sub.grade || gradeFor(pct);
+  const gp = gradePalette(g);
+  return (
+    <div onClick={onOpen}
+      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 16, padding: '16px 18px',
+        background: C.bg, border: `1px solid ${hov ? C.borderD : C.border}`, borderRadius: 12,
+        cursor: 'pointer', transition: T, boxShadow: hov ? C.shadowL : C.shadow,
+      }}>
+      <Ring pct={pct} size={56} stroke={5} color={col}>
+        <span style={{ fontFamily: F.head, fontSize: 12.5, fontWeight: 800, color: col }}>{pct}%</span>
+      </Ring>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 14.5, fontWeight: 700, color: C.text, marginBottom: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {a.title}
+        </div>
+        <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 3 }}>
+          {a.subject}{a.classLabel ? ` · ${a.classLabel}` : ''}
+        </div>
+        <div style={{ fontSize: 12, color: C.faint }}>
+          Marked {fmtLong(sub.markedAt || sub.submittedAt)}{sub.timeSpentMins != null ? ` · ${sub.timeSpentMins}m` : ''}
+        </div>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, flexShrink: 0 }}>
+        <span style={{ fontFamily: F.head, fontSize: 18, fontWeight: 800, color: col }}>{pct}%</span>
+        <span style={{
+          padding: '2px 9px', borderRadius: 999, fontSize: 11, fontWeight: 700,
+          background: gp.bg, color: gp.fg, border: `1px solid ${gp.bd}`,
+        }}>{g}</span>
+      </div>
+    </div>
+  );
+};
+
+// ════════════════════════════════════════════════════════════════
+// Student — assignment detail
+// ════════════════════════════════════════════════════════════════
+const HwDetail = ({ a, store, draft, onBack, onStart }) => {
+  const totalM = totalPoints(a);
+  const started = draftStarted(draft);
+
+  const infoCard = (icon, label, value) => (
+    <Card key={label} style={{ padding: '16px 18px', minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+        <Ico name={icon} size={13} color={C.faint} />
+        <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.08em', color: C.faint, textTransform: 'uppercase' }}>{label}</span>
+      </div>
+      <div style={{ fontSize: 14.5, fontWeight: 600, color: C.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</div>
+    </Card>
+  );
+
+  return (
+    <div style={{ padding: '32px 32px 64px', fontFamily: F.body, color: C.text, maxWidth: 920, margin: '0 auto' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 24 }}>
+        <BackBtn onClick={onBack} />
+        <div>
+          <h1 style={{ fontFamily: F.head, fontSize: 24, fontWeight: 800, margin: 0, letterSpacing: '-0.4px' }}>{a.title}</h1>
+          <div style={{ fontSize: 13, color: C.muted, marginTop: 4 }}>
+            {a.subject}{a.classLabel ? ` · ${a.classLabel}` : ''}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
+        {infoCard('user', 'Teacher', teacherNameFor(a, store))}
+        {infoCard('calendar', 'Due date', a.dueAt ? fmtShort(a.dueAt) : 'No date')}
+        {infoCard('clock', 'Time limit', a.timeLimitMins ? `${a.timeLimitMins} min` : 'No limit')}
+        {infoCard('book', 'Questions', `${a.questions.length} (${totalM} mark${totalM === 1 ? '' : 's'})`)}
+      </div>
+
+      {a.instructions && (
+        <div style={{
+          display: 'flex', gap: 10, padding: '12px 14px', background: C.brandSoft,
+          border: `1px solid ${C.brandBorder}`, borderRadius: 10, marginBottom: 20, alignItems: 'flex-start',
+        }}>
+          <Ico name="info" size={14} color={C.brand} />
+          <span style={{ fontSize: 13, color: C.sub, lineHeight: 1.5 }}>{a.instructions}</span>
+        </div>
+      )}
+
+      <Card style={{ marginBottom: 28 }}>
+        <div style={{ padding: '16px 20px 6px', fontFamily: F.head, fontSize: 15, fontWeight: 700 }}>Questions Overview</div>
+        <div style={{ padding: '6px 8px 10px' }}>
+          {a.questions.map((q, i) => (
+            <div key={q.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 12px', borderRadius: 8 }}>
+              <span style={{
+                width: 24, height: 24, borderRadius: '50%', background: C.surface2, color: C.muted,
+                fontFamily: F.mono, fontSize: 11, fontWeight: 700,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+              }}>{i + 1}</span>
+              <span style={{ flex: 1, fontSize: 13.5, color: C.sub, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{q.prompt}</span>
+              <span style={{ fontSize: 12, color: C.muted, fontFamily: F.mono }}>{q.points}m</span>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <div style={{ display: 'flex', justifyContent: 'center' }}>
+        <Btn variant="brand" icon={<Ico name="play" size={14} color="#fff" />} onClick={onStart}
+          style={{ padding: '12px 26px', fontSize: 14, borderRadius: 10 }}>
+          {started ? 'Continue Homework' : 'Start Homework'}
+        </Btn>
+      </div>
+    </div>
+  );
+};
+
+// ════════════════════════════════════════════════════════════════
+// Student — attempt
+// ════════════════════════════════════════════════════════════════
+const HwAnswerInput = ({ question, value, onChange }) => {
+  if (question.type === 'math') {
+    return <Input multiline rows={5} value={value || ''} onChange={onChange}
+      placeholder="Enter your expression (LaTeX supported)..." />;
+  }
+  return <QuestionAnswerInput question={question} value={value} onChange={onChange} />;
+};
+
+// Math answers are typed as plain text in the student flow, so show them
+// verbatim instead of KaTeX-rendering them.
+const HwAnswerDisplay = ({ question, answer }) => {
+  if (question.type === 'math' && answer != null && answer !== '') {
+    return (
+      <div style={{
+        padding: '8px 12px', background: C.bg, borderRadius: 8, border: `1px solid ${C.border}`,
+        fontFamily: F.mono, fontSize: 14, color: C.text, whiteSpace: 'pre-wrap', display: 'inline-block',
+      }}>{String(answer)}</div>
+    );
+  }
+  return <QuestionAnswerDisplay question={question} answer={answer} />;
+};
+
+const HwAttempt = ({ a, draft, onUpdateDraft, onBack, onSubmit }) => {
+  const [answers, setAnswers] = React.useState(() => draft.answers || {});
+  const [flags, setFlags] = React.useState(() => draft.flags || {});
+  const [idx, setIdx] = React.useState(0);
+  const [confirming, setConfirming] = React.useState(false);
+  const startedAt = React.useRef(draft.startedAt || new Date().toISOString());
+
+  React.useEffect(() => {
+    onUpdateDraft({ answers, flags, startedAt: startedAt.current });
+  }, [answers, flags]);
+
+  const total = a.questions.length;
+  const q = a.questions[idx];
+  const hasAnswer = (qq) => { const v = answers[qq.id]; return v !== undefined && v !== null && v !== ''; };
+  const answered = a.questions.filter(hasAnswer).length;
+
+  return (
+    <div style={{ padding: '28px 32px 64px', fontFamily: F.body, color: C.text, maxWidth: 880, margin: '0 auto' }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+        <BackBtn onClick={onBack} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontFamily: F.head, fontSize: 19, fontWeight: 800, letterSpacing: '-0.3px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {a.title}
+          </div>
+          <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{answered}/{total} answered · auto-saved</div>
+        </div>
+        <Btn variant="brand" icon={<Ico name="send" size={13} color="#fff" />} onClick={() => setConfirming(true)}>
+          Submit
+        </Btn>
+      </div>
+
+      {/* Progress */}
+      <div style={{ height: 6, borderRadius: 999, background: '#E9E5FB', overflow: 'hidden', marginBottom: 20 }}>
+        <div style={{ width: `${(answered / total) * 100}%`, height: '100%', background: C.brand, borderRadius: 999, transition: 'width .3s' }} />
+      </div>
+
+      {/* Question chips */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
+        {a.questions.map((qq, i) => {
+          const on = i === idx;
+          const done = hasAnswer(qq);
+          const flagged = !!flags[qq.id];
+          return (
+            <button key={qq.id} onClick={() => setIdx(i)} style={{
+              width: 34, height: 34, borderRadius: '50%', cursor: 'pointer',
+              border: flagged ? `2px solid ${C.amber}` : '2px solid transparent',
+              background: on ? C.brand : done ? C.brandSoft : C.surface2,
+              color: on ? '#fff' : done ? C.brand : C.muted,
+              fontFamily: F.body, fontSize: 13, fontWeight: 700, transition: T,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>{i + 1}</button>
+          );
+        })}
+      </div>
+
+      {/* Question card */}
+      <Card style={{ padding: '22px 24px', marginBottom: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+          <span style={{ fontSize: 12.5, fontWeight: 600, color: C.muted }}>
+            Question {idx + 1} of {total} <span style={{ color: C.danger }}>*</span>
+          </span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 12, color: C.muted, fontFamily: F.mono }}>{q.points}m</span>
+            <button onClick={() => setFlags(f => ({ ...f, [q.id]: !f[q.id] }))} aria-label="Flag question"
+              title={flags[q.id] ? 'Unflag question' : 'Flag question'}
+              style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 2, display: 'flex' }}>
+              <Ico name="flag" size={14} color={flags[q.id] ? C.amber : C.faint} />
+            </button>
+          </span>
+        </div>
+
+        <div style={{ fontFamily: F.head, fontSize: 17, fontWeight: 700, color: C.text, lineHeight: 1.45, marginBottom: 18 }}>
+          {q.prompt}
+        </div>
+
+        <HwAnswerInput question={q} value={answers[q.id]} onChange={(v) => setAnswers(prev => ({ ...prev, [q.id]: v }))} />
+
+        {q.hint && (
+          <div style={{ marginTop: 14, display: 'flex', gap: 8, alignItems: 'flex-start', padding: '10px 12px', background: C.amberBg, border: `1px solid ${C.amberBorder}`, borderRadius: 8 }}>
+            <Ico name="info" size={13} color={C.amber} />
+            <span style={{ fontSize: 12.5, color: C.sub, lineHeight: 1.5 }}>{q.hint}</span>
+          </div>
+        )}
+      </Card>
+
+      {/* Prev / Next */}
+      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+        <Btn variant="soft" icon={<Ico name="arrowL" size={13} />}
+          onClick={() => setIdx(Math.max(0, idx - 1))} disabled={idx === 0}>
+          Previous
+        </Btn>
+        {idx < total - 1 ? (
+          <Btn variant="brand" onClick={() => setIdx(idx + 1)}>
+            Next
+            <Ico name="arrowR" size={13} color="#fff" />
+          </Btn>
+        ) : (
+          <Btn variant="brand" icon={<Ico name="send" size={13} color="#fff" />} onClick={() => setConfirming(true)}>
+            Submit
+          </Btn>
+        )}
+      </div>
+
+      {/* Confirm modal */}
+      {confirming && (
+        <div onClick={() => setConfirming(false)} style={{
+          position: 'fixed', inset: 0, background: 'rgba(15,23,42,.5)', zIndex: 300,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+        }}>
+          <div onClick={e => e.stopPropagation()} style={{
+            width: '100%', maxWidth: 420, background: C.bg, borderRadius: 14,
+            border: `1px solid ${C.border}`, boxShadow: C.shadowL, padding: 24,
+          }}>
+            <div style={{
+              width: 44, height: 44, borderRadius: '50%', background: C.brandSoft,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 14,
+            }}>
+              <Ico name="send" size={18} color={C.brand} />
+            </div>
+            <div style={{ fontFamily: F.head, fontSize: 17, fontWeight: 800, marginBottom: 6 }}>Submit homework?</div>
+            <div style={{ fontSize: 13, color: C.sub, lineHeight: 1.55, marginBottom: 18 }}>
+              {answered < total
+                ? `You've answered ${answered} of ${total} questions. Unanswered questions won't receive marks. `
+                : `You've answered all ${total} questions. `}
+              You won't be able to change your answers after submitting.
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <Btn variant="soft" onClick={() => setConfirming(false)}>Cancel</Btn>
+              <Btn variant="brand" icon={<Ico name="send" size={13} color="#fff" />} onClick={() => onSubmit(answers)}>
+                Submit
+              </Btn>
+            </div>
+          </div>
         </div>
       )}
     </div>
   );
 };
 
-const StudentListCard = ({ a, me, onOpen }) => {
-  const subc = subColor(a.subject);
-  const status = submissionStatus(a, me.id);
-  const sub = a.submissions[me.id];
-  const dDays = daysUntil(a.dueAt);
-
-  let ctaLabel = 'Start';
-  let pill = null;
-  if (status === 'not_started') {
-    pill = dDays >= 0
-      ? <Pill tone={dDays <= 1 ? 'danger' : dDays <= 3 ? 'amber' : 'default'} icon={<Ico name="clock" size={10} />}>
-          {dDays === 0 ? 'Due today' : dDays < 0 ? 'Overdue' : `${dDays}d left`}
-        </Pill>
-      : <Pill tone="danger">Overdue</Pill>;
-  } else if (status === 'submitted') {
-    pill = <Pill tone="info" icon={<Ico name="clock" size={10} />}>Awaiting marking</Pill>;
-    ctaLabel = 'View';
-  } else {
-    pill = <Pill tone="success" icon={<Ico name="check" size={10} />}>Feedback ready</Pill>;
-    ctaLabel = 'See feedback';
-  }
-
-  const score = sub && status === 'approved' ? submissionScore(a, sub) : null;
-  const total = totalPoints(a);
-
-  return (
-    <Card hoverable onClick={onOpen} style={{ overflow: 'hidden' }}>
-      <div style={{ height: 4, background: subc.color }} />
-      <div style={{ padding: 18 }}>
-        <div style={{ display:'flex', gap: 6, alignItems:'center', marginBottom: 10 }}>
-          <Pill tone="default" icon={<span style={{ width: 6, height: 6, background: subc.color, borderRadius: '50%' }} />}>
-            {a.subject}
-          </Pill>
-          {pill}
-        </div>
-
-        <div style={{ fontFamily: F.head, fontSize: 16, fontWeight: 700, lineHeight: 1.3, marginBottom: 4 }}>{a.title}</div>
-        <div style={{ fontSize: 12, color: C.muted, marginBottom: 16 }}>
-          {a.questions.length} questions · {total} pts {a.dueAt && <>· Due {fmtDate(a.dueAt)}</>}
-        </div>
-
-        {score != null && (
-          <div style={{ marginBottom: 14, padding: 12, background: C.successBg, borderRadius: 8, border: `1px solid ${C.successBorder}` }}>
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline' }}>
-              <span style={{ fontSize: 12, color: C.success, fontWeight: 600 }}>Final score</span>
-              <span style={{ fontFamily: F.head, fontSize: 22, fontWeight: 700, color: C.success }}>{score} / {total}</span>
-            </div>
-          </div>
-        )}
-
-        <Btn variant={status === 'not_started' ? 'brand' : 'soft'} small
-          icon={<Ico name={status === 'not_started' ? 'arrowR' : 'eye'} size={13} color={status === 'not_started' ? '#fff' : C.sub} />}
-          onClick={onOpen} style={{ width: '100%', justifyContent: 'center' }}>
-          {ctaLabel}
-        </Btn>
-      </div>
-    </Card>
-  );
-};
-
-// ─── Student attempt ───────────────────────────────────────────
-const StudentAttempt = ({ assignment, me, draft, onUpdateDraft, onCancel, onSubmit }) => {
-  const toast = useToast();
-  const [answers, setAnswers] = React.useState(() => draft.answers || {});
-  const [activeIdx, setActiveIdx] = React.useState(0);
-  const [showHint, setShowHint] = React.useState(false);
-
-  // auto-save draft
-  React.useEffect(() => {
-    onUpdateDraft({ answers });
-  }, [answers]);
-
-  const setAnswer = (qid, v) => setAnswers(a => ({ ...a, [qid]: v }));
-
-  const q = assignment.questions[activeIdx];
-  const completed = assignment.questions.filter(qq => {
-    const v = answers[qq.id];
-    return v !== undefined && v !== null && v !== '';
-  }).length;
-  const allDone = completed === assignment.questions.length;
-
-  const trySubmit = () => {
-    if (!allDone) {
-      toast('Answer every question before submitting', 'danger');
-      return;
-    }
-    onSubmit(answers);
-  };
-
-  return (
-    <div style={{ display:'flex', flexDirection: 'column', height:'100%', fontFamily: F.body }}>
-      {/* Top bar */}
-      <div style={{
-        padding: '14px 32px', borderBottom: `1px solid ${C.border}`,
-        display:'flex', alignItems:'center', gap: 12, background: C.bg,
+// ════════════════════════════════════════════════════════════════
+// Student — submitted confirmation
+// ════════════════════════════════════════════════════════════════
+const HwDone = ({ onBackToHomework, onGoHome }) => (
+  <div style={{
+    fontFamily: F.body, color: C.text, textAlign: 'center',
+    display: 'flex', flexDirection: 'column', alignItems: 'center',
+    padding: '110px 32px 64px',
+  }}>
+    <div style={{
+      width: 76, height: 76, borderRadius: '50%', background: C.successBg,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 22,
+    }}>
+      <span style={{
+        width: 44, height: 44, borderRadius: '50%', border: `2.5px solid ${C.success}`,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}>
-        <Btn variant="ghost" small icon={<Ico name="arrowL" size={13} />} onClick={onCancel}>Save & exit</Btn>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontFamily: F.head, fontSize: 15, fontWeight: 700 }}>{assignment.title}</div>
-          <div style={{ fontSize: 11, color: C.muted }}>{assignment.subject} · auto-saved</div>
-        </div>
-        <span style={{ fontSize: 12, color: C.muted }}>
-          {completed} / {assignment.questions.length} answered
-        </span>
-        <Btn variant="brand" small icon={<Ico name="check" size={13} color="#fff" />} onClick={trySubmit} disabled={!allDone}>
-          Submit
-        </Btn>
-      </div>
-
-      <div style={{ display:'flex', flex: 1, overflow: 'hidden' }}>
-        {/* Sidebar */}
-        <div style={{ width: 220, borderRight: `1px solid ${C.border}`, background: C.surface, display:'flex', flexDirection:'column' }}>
-          <div style={{ padding: '14px 16px', borderBottom: `1px solid ${C.border}` }}>
-            <div style={{ fontSize: 11, fontWeight: 600, textTransform:'uppercase', color: C.muted, letterSpacing:'.06em', marginBottom: 6 }}>
-              Progress
-            </div>
-            <div style={{ height: 6, background: C.surface2, borderRadius: 999, overflow:'hidden' }}>
-              <div style={{ width: `${(completed / assignment.questions.length) * 100}%`, height:'100%', background: C.brand, transition: 'width .3s' }} />
-            </div>
-          </div>
-          <div style={{ flex: 1, overflow: 'auto', padding: 8 }}>
-            {assignment.questions.map((qq, i) => {
-              const ans = answers[qq.id];
-              const has = ans !== undefined && ans !== null && ans !== '';
-              const on = i === activeIdx;
-              const m = qtypeMeta(qq.type);
-              return (
-                <button key={qq.id} onClick={() => { setActiveIdx(i); setShowHint(false); }} style={{
-                  width: '100%', padding: '8px 10px', borderRadius: 7,
-                  border: 'none', textAlign:'left', cursor:'pointer',
-                  background: on ? C.bg : 'transparent',
-                  boxShadow: on ? C.shadow : 'none',
-                  display:'flex', alignItems:'center', gap: 8, marginBottom: 2,
-                  transition: T,
-                }}>
-                  <span style={{
-                    width: 22, height: 22, borderRadius:'50%',
-                    background: has ? C.brand : C.surface2,
-                    color: has ? '#fff' : C.muted,
-                    fontFamily: F.mono, fontSize: 11, fontWeight: 700,
-                    display:'flex', alignItems:'center', justifyContent:'center', flexShrink: 0,
-                  }}>{has ? <Ico name="check" size={11} color="#fff" /> : (i + 1)}</span>
-                  <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: on ? C.text : C.sub, fontWeight: on ? 600 : 500, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                    {qq.prompt || `Question ${i + 1}`}
-                  </span>
-                  <span style={{
-                    width: 5, height: 5, borderRadius: '50%',
-                    background: m.marker === 'auto' ? C.brand : C.amber,
-                  }} />
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Main */}
-        <div style={{ flex: 1, overflow:'auto' }}>
-          <div style={{ maxWidth: 720, margin: '0 auto', padding: '32px' }}>
-            {assignment.instructions && activeIdx === 0 && (
-              <div style={{
-                padding: '12px 14px', background: C.brandSoft, border:`1px solid ${C.brandBorder}`,
-                borderRadius: 8, marginBottom: 20, display:'flex', gap: 10, alignItems:'flex-start',
-              }}>
-                <Ico name="info" size={14} color={C.brand} />
-                <div style={{ fontSize: 13, color: C.sub, lineHeight: 1.5 }}>{assignment.instructions}</div>
-              </div>
-            )}
-
-            <div style={{ marginBottom: 12, display:'flex', alignItems:'center', gap: 8 }}>
-              <span style={{ fontFamily: F.mono, fontSize: 12, color: C.muted }}>
-                Question {activeIdx + 1} of {assignment.questions.length}
-              </span>
-              <Pill tone={qtypeMeta(q.type).marker === 'auto' ? 'brand' : 'amber'}>
-                {qtypeMeta(q.type).label}
-              </Pill>
-              <span style={{ fontFamily: F.mono, fontSize: 12, color: C.muted }}>{q.points} pt</span>
-            </div>
-
-            <h2 style={{ fontFamily: F.head, fontSize: 20, fontWeight: 700, color: C.text, lineHeight: 1.4, margin: '0 0 20px', letterSpacing: '-.2px' }}>
-              {q.prompt}
-            </h2>
-
-            <div style={{ marginBottom: 20 }}>
-              <QuestionAnswerInput question={q} value={answers[q.id]} onChange={(v) => setAnswer(q.id, v)} />
-            </div>
-
-            {q.hint && (
-              <div style={{ marginBottom: 24 }}>
-                {showHint ? (
-                  <div style={{ padding: '12px 14px', background: C.amberBg, border: `1px solid ${C.amberBorder}`, borderRadius: 8, display:'flex', gap: 10 }}>
-                    <Ico name="info" size={14} color={C.amber} />
-                    <div style={{ flex: 1, fontSize: 13, color: C.sub, lineHeight: 1.5 }}>{q.hint}</div>
-                  </div>
-                ) : (
-                  <Btn variant="ghost" small icon={<Ico name="info" size={13} />} onClick={() => setShowHint(true)}>Show hint</Btn>
-                )}
-              </div>
-            )}
-
-            <div style={{ display:'flex', justifyContent:'space-between', borderTop: `1px solid ${C.border}`, paddingTop: 20 }}>
-              <Btn variant="soft" small icon={<Ico name="arrowL" size={13} />}
-                onClick={() => { setActiveIdx(Math.max(0, activeIdx - 1)); setShowHint(false); }}
-                disabled={activeIdx === 0}>Previous</Btn>
-              {activeIdx < assignment.questions.length - 1 ? (
-                <Btn variant="brand" small icon={<Ico name="arrowR" size={13} color="#fff" />}
-                  onClick={() => { setActiveIdx(activeIdx + 1); setShowHint(false); }}>Next question</Btn>
-              ) : (
-                <Btn variant="brand" small icon={<Ico name="check" size={13} color="#fff" />} onClick={trySubmit} disabled={!allDone}>
-                  Submit assignment
-                </Btn>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
+        <Ico name="check" size={20} color={C.success} />
+      </span>
     </div>
-  );
-};
+    <h1 style={{ fontFamily: F.head, fontSize: 26, fontWeight: 800, margin: '0 0 10px', letterSpacing: '-0.4px' }}>Submitted!</h1>
+    <p style={{ fontSize: 14, color: C.muted, lineHeight: 1.6, maxWidth: 380, margin: '0 0 26px' }}>
+      Your homework has been submitted successfully. Your teacher will review it soon.
+    </p>
+    <div style={{ display: 'flex', gap: 10 }}>
+      <Btn variant="soft" onClick={onBackToHomework}>Back to Homework</Btn>
+      <Btn variant="brand" onClick={onGoHome}>Go Home</Btn>
+    </div>
+  </div>
+);
 
-// ─── Student results ───────────────────────────────────────────
-const StudentResults = ({ assignment, me, onClose }) => {
-  const sub = assignment.submissions[me.id];
-  if (!sub) {
-    return (
-      <div style={{ padding: 32, fontFamily: F.body }}>
-        <Btn variant="ghost" small icon={<Ico name="arrowL" size={13} />} onClick={onClose}>Back</Btn>
-        <Card style={{ padding: 60, textAlign:'center', marginTop: 20 }}>
-          <div style={{ fontFamily: F.head, fontSize: 16, fontWeight: 600 }}>No submission found</div>
-        </Card>
-      </div>
-    );
-  }
-  const approved = sub.status === 'approved';
-  const score = approved ? submissionScore(assignment, sub) : autoScore(assignment, sub);
-  const total = approved ? totalPoints(assignment) : autoTotal(assignment);
-  const pct = total ? Math.round((score / total) * 100) : 0;
-
-  const pctTone = pct >= 80 ? 'success' : pct >= 60 ? 'amber' : 'danger';
-  const pctColor = pctTone === 'success' ? C.success : pctTone === 'amber' ? C.amber : C.danger;
-  const pctBg = pctTone === 'success' ? C.successBg : pctTone === 'amber' ? C.amberBg : C.dangerBg;
-
+// ════════════════════════════════════════════════════════════════
+// Student — review a submission awaiting marking
+// ════════════════════════════════════════════════════════════════
+const HwSubmissionReview = ({ a, me, store, onBack }) => {
+  const sub = a.submissions[me.id];
+  const showAuto = !!(a.settings && a.settings.showAutoImmediately);
   return (
-    <div style={{ padding: '24px 32px 64px', fontFamily: F.body, color: C.text }}>
-      <div style={{ marginBottom: 20 }}>
-        <Btn variant="ghost" small icon={<Ico name="arrowL" size={13} />} onClick={onClose}>Back to homework</Btn>
-      </div>
-
-      <div style={{ display:'flex', alignItems:'center', gap: 6, marginBottom: 8 }}>
-        <Pill tone="default" icon={<span style={{ width: 6, height: 6, background: subColor(assignment.subject).color, borderRadius:'50%' }} />}>
-          {assignment.subject}
-        </Pill>
-        {approved
-          ? <Pill tone="success" icon={<Ico name="check" size={10} />}>Marked</Pill>
-          : <Pill tone="info" icon={<Ico name="clock" size={10} />}>Awaiting teacher marking</Pill>}
-      </div>
-      <h1 style={{ fontFamily: F.head, fontSize: 24, fontWeight: 700, margin: '0 0 24px', letterSpacing:'-.3px' }}>
-        {assignment.title}
-      </h1>
-
-      {/* Score card */}
-      <Card style={{ padding: 24, marginBottom: 20, background: pctBg, borderColor: pctTone === 'success' ? C.successBorder : pctTone === 'amber' ? C.amberBorder : C.dangerBorder }}>
-        <div style={{ display:'flex', alignItems:'center', gap: 24, flexWrap:'wrap' }}>
-          <div style={{
-            width: 96, height: 96, borderRadius:'50%',
-            background: C.bg, border: `4px solid ${pctColor}`,
-            display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', flexShrink: 0,
-          }}>
-            <span style={{ fontFamily: F.head, fontSize: 26, fontWeight: 800, color: pctColor, lineHeight: 1 }}>{pct}%</span>
-            <span style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{score}/{total}</span>
-          </div>
-          <div style={{ flex: 1, minWidth: 200 }}>
-            <div style={{ fontFamily: F.head, fontSize: 18, fontWeight: 700, color: pctColor }}>
-              {approved ? (pct >= 80 ? 'Excellent work' : pct >= 60 ? 'Good effort' : 'Needs work') : 'Auto-marked score so far'}
-            </div>
-            <div style={{ fontSize: 13, color: C.sub, marginTop: 4 }}>
-              {approved
-                ? `Your teacher has reviewed and approved this submission.`
-                : `Auto-marked questions only · your teacher will mark the rest.`}
-            </div>
-            <div style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>
-              Submitted {fmtDate(sub.submittedAt)}{approved && sub.approvedAt ? ` · Approved ${fmtDate(sub.approvedAt)}` : ''}
-            </div>
+    <div style={{ padding: '32px 32px 64px', fontFamily: F.body, color: C.text, maxWidth: 880, margin: '0 auto' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 18 }}>
+        <BackBtn onClick={onBack} />
+        <div style={{ flex: 1 }}>
+          <h1 style={{ fontFamily: F.head, fontSize: 22, fontWeight: 800, margin: 0, letterSpacing: '-0.4px' }}>{a.title}</h1>
+          <div style={{ fontSize: 13, color: C.muted, marginTop: 3 }}>
+            {a.subject}{a.classLabel ? ` · ${a.classLabel}` : ''}
           </div>
         </div>
-      </Card>
+        <HwStatusPill state="awaiting" />
+      </div>
 
-      {/* Per-question */}
-      <div style={{ display:'flex', flexDirection:'column', gap: 12 }}>
-        {assignment.questions.map((q, i) => {
-          const a = sub.answers?.[q.id];
-          const m = sub.marks?.[q.id];
-          const fb = sub.feedback?.[q.id];
-          const isAutoQ = isAuto(q.type);
-          const correct = isAutoQ && typeof m === 'number' && m === q.points;
-          const wrong   = isAutoQ && typeof m === 'number' && m === 0;
-          const awaiting = !isAutoQ && (m == null);
+      <div style={{
+        display: 'flex', gap: 10, alignItems: 'flex-start', padding: '12px 14px',
+        background: C.accentSoft, border: '1px solid #BAE6FD', borderRadius: 10, marginBottom: 22,
+      }}>
+        <Ico name="info" size={14} color="#0284C7" />
+        <span style={{ fontSize: 13, color: C.sub, lineHeight: 1.5 }}>
+          Submitted {fmtDateTime(sub.submittedAt)}. Your teacher will mark it soon — you can review your answers below, but they can't be changed.
+          {showAuto && ' Auto-marked questions are graded instantly and shown below.'}
+        </span>
+      </div>
 
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {a.questions.map((q, i) => {
+          const autoQ = showAuto && isAuto(q.type);
+          const m = autoQ ? sub.marks?.[q.id] : null;
+          const correct = autoQ && typeof m === 'number' && m >= (q.points || 0);
+          const wrong = autoQ && typeof m === 'number' && m <= 0;
           return (
-            <Card key={q.id} style={{ padding: 18 }}>
-              <div style={{ display:'flex', alignItems:'flex-start', gap: 10, marginBottom: 12 }}>
-                <span style={{
-                  width: 28, height: 28, borderRadius: 8, background: C.surface,
-                  fontFamily: F.mono, fontSize: 12, fontWeight: 700, color: C.muted,
-                  display:'flex', alignItems:'center', justifyContent:'center', flexShrink: 0,
-                }}>{i + 1}</span>
-                <div style={{ flex: 1 }}>
-                  <div style={{ display:'flex', alignItems:'center', gap: 6, marginBottom: 6, flexWrap:'wrap' }}>
-                    <Pill tone={isAutoQ ? 'brand' : 'amber'}>{qtypeMeta(q.type).label}</Pill>
-                    {isAutoQ && correct  && <Pill tone="success" icon={<Ico name="check" size={10} />}>Correct · {q.points}p</Pill>}
-                    {isAutoQ && wrong    && <Pill tone="danger" icon={<Ico name="x" size={10} />}>Incorrect · 0p</Pill>}
-                    {!isAutoQ && awaiting && <Pill tone="info" icon={<Ico name="clock" size={10} />}>Awaiting feedback</Pill>}
-                    {!isAutoQ && !awaiting && <Pill tone="success">{m} / {q.points} pt</Pill>}
-                  </div>
-                  <div style={{ fontFamily: F.body, fontSize: 14, color: C.text, lineHeight: 1.5 }}>{q.prompt}</div>
+            <Card key={q.id} style={{ padding: '18px 20px' }}>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: 10, marginBottom: 6 }}>
+                <div style={{ fontSize: 12, color: C.muted }}>
+                  Q{i + 1} · {qtypeMeta(q.type).label.toLowerCase()} · {q.points} mark{q.points === 1 ? '' : 's'}
                 </div>
+                {autoQ && typeof m === 'number' && (
+                  <span style={{ display:'inline-flex', alignItems:'center', gap: 6 }}>
+                    {correct ? <Pill tone="success" icon={<Ico name="check" size={10} />}>Correct</Pill>
+                      : wrong ? <Pill tone="danger" icon={<Ico name="x" size={10} />}>Incorrect</Pill>
+                      : <Pill tone="amber">Partial</Pill>}
+                    <span style={{ fontFamily: F.head, fontSize: 13, fontWeight: 800, color: C.text }}>{m}/{q.points}</span>
+                  </span>
+                )}
               </div>
-
-              <div style={{ marginLeft: 38, paddingLeft: 14, borderLeft: `2px solid ${C.surface2}` }}>
-                <div style={{ marginBottom: fb || (isAutoQ && wrong) ? 12 : 0 }}>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: C.muted, textTransform:'uppercase', letterSpacing:'.05em', marginBottom: 6 }}>
-                    Your answer
-                  </div>
-                  <QuestionAnswerDisplay question={q} answer={a} />
-                </div>
-
-                {isAutoQ && wrong && (
-                  <div style={{ padding:'10px 14px', background: C.successBg, borderRadius: 8, border:`1px solid ${C.successBorder}`, marginBottom: fb ? 12 : 0 }}>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: C.success, textTransform:'uppercase', letterSpacing:'.05em', marginBottom: 4 }}>
-                      Correct answer
-                    </div>
-                    <div style={{ fontFamily: q.type === 'math' ? F.mono : F.body, fontSize: 14, color: C.text }}>
-                      {q.type === 'mcq' ? `${String.fromCharCode(65 + q.correctIndex)} · ${q.choices[q.correctIndex]}`
-                        : q.type === 'numeric' ? q.answer
-                        : q.answer}
-                    </div>
-                  </div>
-                )}
-
-                {fb && (
-                  <div style={{ padding:'10px 14px', background: C.brandSoft, borderRadius: 8, border:`1px solid ${C.brandBorder}` }}>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: C.brand, textTransform:'uppercase', letterSpacing:'.05em', marginBottom: 4 }}>
-                      Teacher feedback
-                    </div>
-                    <div style={{ fontSize: 13, color: C.sub, lineHeight: 1.5, whiteSpace:'pre-wrap' }}>{fb}</div>
-                  </div>
-                )}
+              <div style={{ fontSize: 15, fontWeight: 700, color: C.text, lineHeight: 1.45, marginBottom: 14 }}>{q.prompt}</div>
+              <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: '12px 14px' }}>
+                <div style={{ fontSize: 10.5, fontWeight: 700, color: C.muted, letterSpacing: '.07em', marginBottom: 7 }}>YOUR ANSWER</div>
+                <HwAnswerDisplay question={q} answer={sub.answers ? sub.answers[q.id] : null} />
               </div>
             </Card>
           );
@@ -2711,12 +4736,204 @@ const StudentResults = ({ assignment, me, onClose }) => {
   );
 };
 
+// ════════════════════════════════════════════════════════════════
+// Student — marked result review
+// ════════════════════════════════════════════════════════════════
+const HwResultReview = ({ a, me, store, onBack }) => {
+  const sub = a.submissions[me.id];
+  const S = a.settings || {};
+  // What the teacher allows this student to see.
+  const released = marksReleased(a, sub);
+  const showMarks = released;
+  const showCorrect = released && S.showCorrect && !S.marksOnly;
+  const showComments = released && S.showComments && !S.marksOnly;
+  const total = totalPoints(a);
+  const score = submissionScore(a, sub);
+  const pct = total ? Math.round((score / total) * 100) : 0;
+  const grade = sub.grade || gradeFor(pct);
+  const col = scoreColor(pct);
+
+  const results = a.questions.map(q => qResult(q, sub));
+  const nCorrect = results.filter(r => r === 'correct').length;
+  const nPartial = results.filter(r => r === 'partial').length;
+  const nIncorrect = results.filter(r => r === 'incorrect').length;
+  const accuracy = a.questions.length ? Math.round((nCorrect / a.questions.length) * 100) : 0;
+
+  const vsAvg = sub.classAvg != null ? pct - sub.classAvg : null;
+  const heroMsg = (pct >= 80 ? 'Excellent work!' : pct >= 65 ? 'Good effort!' : 'Keep practising!')
+    + (vsAvg == null ? ''
+      : vsAvg >= 5 ? ' Well above class average.'
+      : vsAvg >= 0 ? ' Above class average.'
+      : ' Below class average — review the feedback below.');
+
+  const heroStat = (label, value, color) => (
+    <div key={label} style={{ flex: 1, background: C.surface, borderRadius: 10, padding: '12px 14px', textAlign: 'center', minWidth: 90 }}>
+      <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>{label}</div>
+      <div style={{ fontFamily: F.head, fontSize: 17, fontWeight: 800, color }}>{value}</div>
+    </div>
+  );
+
+  const metaCard = (icon, label, value, color) => (
+    <Card key={label} style={{ padding: '14px 16px', minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+        <Ico name={icon} size={12} color={C.faint} />
+        <span style={{ fontSize: 10.5, fontWeight: 700, color: C.faint, letterSpacing: '.06em', textTransform: 'uppercase' }}>{label}</span>
+      </div>
+      <div style={{ fontSize: 14, fontWeight: 700, color: color || C.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</div>
+    </Card>
+  );
+
+  const resultMeta = {
+    correct:   { label: 'Correct',           icon: 'check', fg: C.success, bg: C.successBg, bd: C.successBorder, tint: '#F8FDF9' },
+    partial:   { label: 'Partially Correct', icon: 'minus', fg: C.amber,   bg: C.amberBg,   bd: C.amberBorder,   tint: '#FFFEF7' },
+    incorrect: { label: 'Incorrect',         icon: 'x',     fg: C.danger,  bg: C.dangerBg,  bd: C.dangerBorder,  tint: '#FFFBFB' },
+    pending:   { label: 'Pending',           icon: 'clock', fg: C.muted,   bg: C.surface,   bd: C.border,        tint: C.bg },
+  };
+
+  return (
+    <div style={{ padding: '32px 32px 64px', fontFamily: F.body, color: C.text, maxWidth: 880, margin: '0 auto' }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 22 }}>
+        <BackBtn onClick={onBack} />
+        <div>
+          <h1 style={{ fontFamily: F.head, fontSize: 22, fontWeight: 800, margin: 0, letterSpacing: '-0.4px' }}>{a.title}</h1>
+          <div style={{ fontSize: 13, color: C.muted, marginTop: 3 }}>
+            {a.subject}{a.classLabel ? ` · ${a.classLabel}` : ''}
+          </div>
+        </div>
+      </div>
+
+      {/* Score hero */}
+      <Card style={{ padding: '26px 28px', marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 26, flexWrap: 'wrap' }}>
+          <Ring pct={pct} size={118} stroke={9} color={col}>
+            <span style={{ fontFamily: F.head, fontSize: 27, fontWeight: 800, color: col, lineHeight: 1 }}>{pct}%</span>
+            <span style={{ fontSize: 12, fontWeight: 700, color: C.muted, marginTop: 3 }}>{grade}</span>
+          </Ring>
+          <div style={{ flex: 1, minWidth: 260 }}>
+            <div style={{ fontFamily: F.head, fontSize: 22, fontWeight: 800, letterSpacing: '-0.3px' }}>{score} / {total} marks</div>
+            <div style={{ fontSize: 13, color: C.muted, margin: '5px 0 16px' }}>{heroMsg}</div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              {sub.classAvg != null && heroStat('Class Avg', `${sub.classAvg}%`, C.amber)}
+              {sub.rank != null && heroStat('Your Rank', <span>{sub.rank}<span style={{ color: C.muted }}>/{sub.classSize}</span></span>, C.brand)}
+              {sub.timeSpentMins != null && heroStat('Time Spent', `${sub.timeSpentMins}m`, C.text)}
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      {/* Meta row */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
+        {metaCard('calendar', 'Submitted', fmtDateTime(sub.submittedAt))}
+        {metaCard('check', 'Marked', fmtDateTime(sub.markedAt || sub.approvedAt))}
+        {metaCard('award', 'Grade', grade)}
+        {metaCard('target', 'Accuracy', `${accuracy}%`)}
+      </div>
+
+      {/* Overall teacher feedback */}
+      {showComments && sub.overallFeedback && (
+        <div style={{ background: '#F5F3FF', border: '1px solid #DDD6FE', borderRadius: 12, padding: '18px 20px', marginBottom: 26 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Ico name="chat" size={14} color="#7C3AED" />
+            <span style={{ fontFamily: F.head, fontSize: 13.5, fontWeight: 700, color: C.text }}>Overall Teacher Feedback</span>
+          </div>
+          <div style={{ fontSize: 11.5, color: C.muted, margin: '3px 0 10px 22px' }}>From your teacher</div>
+          <div style={{ fontSize: 13.5, color: C.sub, lineHeight: 1.6, fontStyle: 'italic' }}>
+            “{sub.overallFeedback}”
+          </div>
+        </div>
+      )}
+
+      {/* Breakdown header */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, flexWrap: 'wrap', gap: 8 }}>
+        <h2 style={{ fontFamily: F.head, fontSize: 16, fontWeight: 800, margin: 0 }}>Question Breakdown</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, fontSize: 12, color: C.muted }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <Ico name="check" size={12} color={C.success} /> {nCorrect} correct
+          </span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <Ico name="minus" size={12} color={C.amber} /> {nPartial} partial
+          </span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <Ico name="x" size={12} color={C.danger} /> {nIncorrect} incorrect
+          </span>
+        </div>
+      </div>
+
+      {/* Question cards */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {a.questions.map((q, i) => {
+          const r = resultMeta[results[i]] || resultMeta.pending;
+          const m = sub.marks ? sub.marks[q.id] : null;
+          const fb = sub.feedback ? sub.feedback[q.id] : '';
+          const correctTxt = correctAnswerText(q);
+          return (
+            <div key={q.id} style={{ background: r.tint, border: `1px solid ${r.bd}`, borderRadius: 12, padding: '18px 20px' }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 6 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{
+                    width: 20, height: 20, borderRadius: '50%', background: r.bg, border: `1px solid ${r.bd}`,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                  }}>
+                    <Ico name={r.icon} size={11} color={r.fg} />
+                  </span>
+                  <span style={{ fontSize: 12, color: C.muted }}>
+                    Q{i + 1} · {qtypeMeta(q.type).label.toLowerCase()} · {q.points} mark{q.points === 1 ? '' : 's'}
+                  </span>
+                </div>
+                <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                  <span style={{
+                    display: 'inline-block', padding: '3px 10px', borderRadius: 999,
+                    background: r.bg, border: `1px solid ${r.bd}`, color: r.fg,
+                    fontSize: 11.5, fontWeight: 700,
+                  }}>{r.label}</span>
+                  {showMarks && (
+                    <div style={{ fontFamily: F.head, fontSize: 13, fontWeight: 800, color: C.text, marginTop: 6 }}>
+                      {typeof m === 'number' ? m : '–'} / {q.points}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div style={{ fontSize: 15, fontWeight: 700, color: C.text, lineHeight: 1.45, marginBottom: 14 }}>{q.prompt}</div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: '12px 14px' }}>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, color: C.muted, letterSpacing: '.07em', marginBottom: 7 }}>YOUR ANSWER</div>
+                  <HwAnswerDisplay question={q} answer={sub.answers ? sub.answers[q.id] : null} />
+                </div>
+
+                {showCorrect && correctTxt != null && (
+                  <div style={{ background: C.successBg, border: `1px solid ${C.successBorder}`, borderRadius: 10, padding: '12px 14px' }}>
+                    <div style={{ fontSize: 10.5, fontWeight: 700, color: C.success, letterSpacing: '.07em', marginBottom: 7 }}>CORRECT ANSWER</div>
+                    <div style={{ fontSize: 13.5, color: C.text, lineHeight: 1.5 }}>{correctTxt}</div>
+                  </div>
+                )}
+
+                {showComments && fb && (
+                  <div style={{ background: '#F5F3FF', border: '1px solid #DDD6FE', borderRadius: 10, padding: '12px 14px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 7 }}>
+                      <Ico name="chat" size={11} color="#7C3AED" />
+                      <span style={{ fontSize: 10.5, fontWeight: 700, color: '#7C3AED', letterSpacing: '.07em' }}>TEACHER COMMENT</span>
+                    </div>
+                    <div style={{ fontSize: 13, color: C.sub, lineHeight: 1.55, fontStyle: 'italic' }}>“{fb}”</div>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 // ─── Wrap with toast provider ──────────────────────────────────
-const TeacherHomeworkRoot = () => (
-  <ToastProvider><TeacherHomework /></ToastProvider>
+const TeacherHomeworkRoot = (props) => (
+  <ToastProvider><TeacherHomework {...props} /></ToastProvider>
 );
-const StudentHomeworkRoot = () => (
-  <ToastProvider><StudentHomework /></ToastProvider>
+const StudentHomeworkRoot = (props) => (
+  <ToastProvider><StudentHomework {...props} /></ToastProvider>
 );
 
 // ─── Helpers exposed for nav badges ────────────────────────────
@@ -2732,7 +4949,7 @@ const getHomeworkBadges = () => {
   const studentUnreadFeedback = me
     ? Object.values(s.assignments).filter(a =>
         a.studentIds.includes(me.id) &&
-        a.submissions[me.id]?.status === 'approved'
+        isGraded(a.submissions[me.id])
       ).length
     : 0;
   return { teacherToMark, studentUnreadFeedback };

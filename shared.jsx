@@ -28,6 +28,16 @@ const DS = {
   info:         '#0284C7',
   infoBg:       '#F0F9FF',
   sidebarW:     '232px',
+  sidebarWmin:  '64px',
+  // Page chrome: the content area is white, so white cards can't lift off it
+  // with shadow alone. Cards get a visible (slightly darker than DS.border)
+  // outline plus a soft shadow so each surface reads as distinct on white.
+  page:         '#FFFFFF',
+  sidebarBg:    '#F9FAFB',
+  card:         '#FFFFFF',
+  cardBorder:   '#DADDE3',
+  cardShadow:   '0 1px 2px rgba(16,24,40,0.04), 0 1px 3px rgba(16,24,40,0.08)',
+  cardShadowHi: '0 1px 2px rgba(16,24,40,0.05), 0 6px 16px rgba(16,24,40,0.10)',
 };
 
 // ─── Icon Library ─────────────────────────────────────────────────────────────
@@ -63,6 +73,30 @@ const PATHS = {
   download:    'M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4',
   zap:         'M13 10V3L4 14h7v7l9-11h-7z',
   edit:        'M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z',
+  mail:        'M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z',
+  phone:       'M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z',
+  copy:        'M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z',
+  link:        'M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1',
+  filter:      'M3 4a1 1 0 011-1h16a1 1 0 011 1v2a1 1 0 01-.293.707L14 13.414V19a1 1 0 01-.553.894l-4 2A1 1 0 018 21v-7.586L3.293 6.707A1 1 0 013 6V4z',
+  dots:        'M5 12h.01M12 12h.01M19 12h.01',
+  graduation:  'M12 14l9-5-9-5-9 5 9 5zm0 0v6m-6-3.5V11l6 3 6-3v2.5',
+  pin:         'M17.657 16.657L13.414 20.9a2 2 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0zM15 11a3 3 0 11-6 0 3 3 0 016 0z',
+  folder:      'M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z',
+  folder_open: 'M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v1H3V7zm0 3h18l-1.5 7a2 2 0 01-2 1.6H6.5a2 2 0 01-2-1.6L3 10z',
+  archive:     'M4 7h16M5 7l1 12a2 2 0 002 2h8a2 2 0 002-2l1-12M9 11h6M4 7l1.5-3h13L20 7',
+  tag:         'M7 7h.01M7 3h5a2 2 0 011.414.586l7 7a2 2 0 010 2.828l-5 5a2 2 0 01-2.828 0l-7-7A2 2 0 013 7V5a2 2 0 012-2z',
+  print:       'M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2M6 14h12v8H6v-8z',
+  file:        'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zM14 2v6h6M9 13h6M9 17h6',
+  trash:       'M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m2 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14z',
+  grid:        'M4 4h7v7H4V4zm9 0h7v7h-7V4zM4 13h7v7H4v-7zm9 0h7v7h-7v-7z',
+  list:        'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',
+  bold:        'M6 4h7a4 4 0 010 8H6V4zm0 8h8a4 4 0 010 8H6v-8z',
+  heading:     'M6 4v16M18 4v16M6 12h12',
+  bullet:      'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',
+  flag:        'M4 21V4h13l-2 4 2 4H4',
+  send:        'M12 19l9 2-9-18-9 18 9-2zm0 0v-8',
+  megaphone:   'M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z',
+  sidebar:     'M4 5a1 1 0 011-1h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5z M9 4v16',
 };
 
 const Icon = ({ name, size = 16, color = 'currentColor', strokeWidth = 1.5 }) => (
@@ -120,7 +154,8 @@ const Avatar = ({ name = '', size = 32, color }) => {
 // ─── KPI Card ──────────────────────────────────────────────────────────────────
 const KPICard = ({ label, value, sub, trend, trendDir, icon, iconBg, accent }) => (
   <div style={{
-    background: DS.bg, border: `1px solid ${DS.border}`,
+    background: DS.card, boxShadow: DS.cardShadow,
+    border: `1px solid ${DS.cardBorder}`,
     borderRadius: 10, padding: '20px 24px',
     display: 'flex', flexDirection: 'column', gap: 12, flex: 1,
     minWidth: 0,
@@ -160,6 +195,30 @@ const KPICard = ({ label, value, sub, trend, trendDir, icon, iconBg, accent }) =
 );
 
 // ─── Sidebar ───────────────────────────────────────────────────────────────────
+// Settings is one shared tabbed page per role: a role-specific first tab, then the
+// common Notifications / Appearance / Account tabs. Build the sidebar sub-items so
+// the dropdown mirrors that tab order. Tab ids must match Settings.jsx ROLE_TABS.
+const SETTINGS_ROLE_TAB = {
+  superadmin: { id: 'platform', label: 'Platform Defaults' },
+  admin:      { id: 'centre',   label: 'Centre' },
+  teacher:    { id: 'teaching', label: 'Teaching' },
+  student:    { id: 'learning', label: 'Learning' },
+};
+const SETTINGS_SUB = (role) => {
+  const first = SETTINGS_ROLE_TAB[role] || SETTINGS_ROLE_TAB.admin;
+  return [first, { id: 'notifications', label: 'Notifications' }, { id: 'appearance', label: 'Appearance' }, { id: 'account', label: 'Account' }]
+    .map(t => ({ id: `settings:${t.id}`, label: t.label }));
+};
+
+// Communications is one shared module across roles (announcements feed + inbox).
+// Both sections appear for every role; the composer is gated inside the page by
+// the permission helpers (students/parents are receive-only). Compound ids follow
+// the `<parent>:<section>` dropdown convention.
+const COMMS_SUB = [
+  { id: 'comms:announcements', label: 'Announcements' },
+  { id: 'comms:inbox',         label: 'Inbox' },
+];
+
 const NAV_CONFIG = {
   superadmin: {
     label: 'Platform Owner',
@@ -171,11 +230,14 @@ const NAV_CONFIG = {
       { id: 'revenue',       icon: 'invoice',     label: 'Revenue' },
       { id: 'engagement',    icon: 'chart',       label: 'Engagement' },
       { id: 'system',        icon: 'zap',         label: 'System Health' },
-      { id: 'comms',         icon: 'message',     label: 'Communications' },
+      { id: 'comms',         icon: 'message',     label: 'Communications', sub: [
+        ...COMMS_SUB,
+        { id: 'comms:support', label: 'Support' },
+      ] },
       { id: 'security',      icon: 'alert',       label: 'Security & Audit' },
       { id: 'controls',      icon: 'settings',    label: 'Platform Controls' },
     ],
-    bottom: [{ id: 'settings', icon: 'settings', label: 'Settings' }],
+    bottom: [{ id: 'settings', icon: 'settings', label: 'Settings', sub: SETTINGS_SUB('superadmin') }],
   },
   admin: {
     label: 'Centre Admin',
@@ -183,114 +245,282 @@ const NAV_CONFIG = {
     items: [
       { id: 'dashboard', icon: 'dashboard', label: 'Dashboard' },
       { id: 'students',  icon: 'users',    label: 'Students' },
-      { id: 'classes',   icon: 'book',     label: 'Classes' },
+      { id: 'classes',   icon: 'book',     label: 'Classes', sub: [
+        { id: 'classes:classes',  label: 'Classes' },
+        { id: 'classes:subjects', label: 'Subjects' },
+      ] },
       { id: 'teachers',  icon: 'user',     label: 'Teachers' },
       { id: 'schedule',  icon: 'calendar', label: 'Schedule' },
       { id: 'invoices',  icon: 'invoice',  label: 'Invoices' },
-      { id: 'reports',   icon: 'chart',    label: 'Reports' },
+      { id: 'reports',   icon: 'chart',    label: 'Reports', sub: [
+        { id: 'reports:overview', label: 'Overview' },
+        { id: 'reports:browse',   label: 'All Reports' },
+        { id: 'reports:generate', label: 'Generate' },
+        { id: 'reports:settings', label: 'Settings' },
+      ] },
+      { id: 'comms',     icon: 'message',  label: 'Communications', sub: COMMS_SUB },
     ],
-    bottom: [{ id: 'settings', icon: 'settings', label: 'Settings' }],
+    bottom: [{ id: 'settings', icon: 'settings', label: 'Settings', sub: SETTINGS_SUB('admin') }],
   },
   teacher: {
     label: 'Teacher',
     color: '#0891B2',
     items: [
       { id: 'dashboard',       icon: 'dashboard', label: 'Dashboard' },
-      { id: 'classes',         icon: 'calendar',  label: 'My Classes' },
+      { id: 'classes',         icon: 'book',      label: 'My Classes' },
+      { id: 'timetable',       icon: 'calendar',  label: 'Timetable' },
       { id: 'lesson_planner',  icon: 'edit',      label: 'Lesson Planner' },
-      { id: 'homework',        icon: 'clip',      label: 'Homework' },
+      { id: 'homework',        icon: 'clip',      label: 'Homework', sub: [
+        { id: 'homework:assignments', label: 'Assignments' },
+        { id: 'homework:analytics',   label: 'Analytics' },
+      ] },
       { id: 'attendance',      icon: 'check',     label: 'Attendance' },
       { id: 'progress',        icon: 'chart',     label: 'Progress' },
       { id: 'tracking',        icon: 'star',      label: 'Tracking' },
-      { id: 'ai_queue',        icon: 'brain',     label: 'AI Feedback' },
+      { id: 'reports',         icon: 'file',      label: 'Reports' },
+      { id: 'comms',           icon: 'message',   label: 'Communications', sub: COMMS_SUB },
     ],
-    bottom: [{ id: 'settings', icon: 'settings', label: 'Settings' }],
+    bottom: [{ id: 'settings', icon: 'settings', label: 'Settings', sub: SETTINGS_SUB('teacher') }],
   },
   student: {
     label: 'Student',
     color: '#43b190',
     items: [
       { id: 'dashboard', icon: 'home',      label: 'Overview'   },
-      { id: 'homework',  icon: 'clip',      label: 'Homework'   },
+      { id: 'homework',  icon: 'clip',      label: 'Homework', sub: [
+        { id: 'homework:assignments', label: 'Assignments' },
+        { id: 'homework:submitted',   label: 'Submitted' },
+        { id: 'homework:results',     label: 'Results' },
+      ] },
       { id: 'progress',  icon: 'chart',     label: 'My Progress'},
       { id: 'sessions',  icon: 'calendar',  label: 'Sessions'   },
-      { id: 'feedback',  icon: 'brain',     label: 'AI Feedback'},
+      { id: 'reports',   icon: 'file',      label: 'Reports'},
+      { id: 'comms',     icon: 'message',   label: 'Communications', sub: COMMS_SUB },
     ],
-    bottom: [{ id: 'settings', icon: 'settings', label: 'Settings' }],
+    bottom: [{ id: 'settings', icon: 'settings', label: 'Settings', sub: SETTINGS_SUB('student') }],
   },
 };
 
-const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch }) => {
+// The page id is the part before any `:` — sub-sections use a `<parent>:<sub>`
+// convention (e.g. reports:browse) while ordinary sub-pages use `<id>_<detail>`
+// (e.g. students_add). Both fold back to the parent for nav highlighting.
+const navParentId = (active) => (active || '').split(':')[0].split('_')[0];
+
+// Hover states on the grey sidebar need a *lighter* (white-ish) wash than the
+// page primitives' DS.surfaceHover, which is nearly the same grey as the bar.
+const SIDE_HOVER = 'rgba(255,255,255,0.7)';
+
+const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, collapsed = false }) => {
   const cfg = NAV_CONFIG[role];
   const [hoveredItem, setHoveredItem] = React.useState(null);
+  // Which parent dropdowns are open. Keyed by item id; the parent owning the
+  // active section starts expanded so the current page is always visible.
+  const activeParent = navParentId(active);
+  const [expanded, setExpanded] = React.useState(() => ({ [activeParent]: true }));
+  React.useEffect(() => { setExpanded(e => ({ ...e, [activeParent]: true })); }, [activeParent]);
+
+  // When collapsed the bar is icon-only; hovering an item reveals a floating
+  // flyout (its label, or the sub-item menu for parents). Tracks which item's
+  // flyout is open + a small close delay so travelling into the flyout is smooth.
+  const [flyout, setFlyout] = React.useState(null);
+  const flyoutTimer = React.useRef(null);
+  const openFlyout = (id) => { clearTimeout(flyoutTimer.current); setFlyout(id); };
+  const closeFlyout = () => { flyoutTimer.current = setTimeout(() => setFlyout(null), 120); };
+
+  const itemIsActive = (item) => {
+    const base = navParentId(active);
+    return active === item.id || base === item.id || base + 's' === item.id;
+  };
 
   const NavItem = ({ item }) => {
-    const isActive = active === item.id;
+    const hasSub = Array.isArray(item.sub) && item.sub.length > 0;
+    const isActive = itemIsActive(item);
     const isHovered = hoveredItem === item.id;
+    const isOpen = hasSub && !!expanded[item.id];
+    const badgeCount = badges && badges[item.id] ? badges[item.id] : 0;
+    const showFlyout = collapsed && flyout === item.id;
+
+    // Clicking a parent with sub-items expands it and navigates to its first
+    // section; clicking the chevron only toggles the dropdown.
+    const onParentClick = () => {
+      if (hasSub) {
+        setExpanded(e => ({ ...e, [item.id]: true }));
+        if (!isActive) onNav && onNav(item.sub[0].id);
+      } else {
+        onNav && onNav(item.id);
+      }
+    };
+    const onChevron = (e) => { e.stopPropagation(); setExpanded(ex => ({ ...ex, [item.id]: !isOpen })); };
+
+    return (
+      <div
+        style={{ position: 'relative' }}
+        onMouseEnter={() => collapsed && openFlyout(item.id)}
+        onMouseLeave={() => collapsed && closeFlyout()}
+      >
+        <button
+          onClick={onParentClick}
+          onMouseEnter={() => setHoveredItem(item.id)}
+          onMouseLeave={() => setHoveredItem(null)}
+          title={collapsed ? item.label : undefined}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 10,
+            padding: collapsed ? '9px 0' : '8px 12px',
+            justifyContent: collapsed ? 'center' : 'flex-start',
+            borderRadius: 7, width: '100%',
+            border: 'none', background: isActive ? DS.accentLight : isHovered ? SIDE_HOVER : 'transparent',
+            color: isActive ? DS.accent : DS.sub,
+            cursor: 'pointer', fontSize: 14, fontWeight: isActive ? 600 : 400,
+            textAlign: 'left', transition: 'background 0.12s', position: 'relative',
+          }}
+        >
+          <Icon name={item.icon} size={16} color={isActive ? DS.accent : DS.muted} />
+          {!collapsed && <span style={{ flex: 1, minWidth: 0 }}>{item.label}</span>}
+          {/* When collapsed, surface unread counts as a small corner dot */}
+          {collapsed && badgeCount > 0 && (
+            <span style={{
+              position: 'absolute', top: 5, right: 9,
+              width: 7, height: 7, borderRadius: '50%',
+              background: DS.danger, border: `1.5px solid ${DS.sidebarBg}`,
+            }} />
+          )}
+          {!collapsed && badgeCount > 0 && (
+            <span style={{
+              minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9,
+              background: DS.danger, color: '#fff', fontSize: 10.5, fontWeight: 700,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', marginLeft: 'auto',
+            }}>{badgeCount > 9 ? '9+' : badgeCount}</span>
+          )}
+          {!collapsed && (hasSub ? (
+            <span
+              onClick={onChevron}
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                marginLeft: 'auto', padding: 2, borderRadius: 4,
+                transform: isOpen ? 'rotate(0deg)' : 'rotate(-90deg)',
+                transition: 'transform 0.15s ease',
+              }}
+            >
+              <Icon name="chevron_d" size={15} color={isActive ? DS.accent : DS.faint} />
+            </span>
+          ) : isActive && (
+            <div style={{
+              width: 5, height: 5, borderRadius: '50%',
+              background: DS.accent, marginLeft: 'auto',
+            }} />
+          ))}
+        </button>
+
+        {/* Expanded sub-items — indented under a vertical guide line */}
+        {!collapsed && hasSub && isOpen && (
+          <div style={{
+            position: 'relative', margin: '2px 0 4px',
+            paddingLeft: 23, display: 'flex', flexDirection: 'column', gap: 1,
+          }}>
+            <div style={{
+              position: 'absolute', left: 13, top: 4, bottom: 4,
+              width: 1, background: DS.border,
+            }} />
+            {item.sub.map(s => <SubNavItem key={s.id} sub={s} />)}
+          </div>
+        )}
+
+        {/* Collapsed flyout — label-only for leaf items, a sub-menu for parents */}
+        {showFlyout && (
+          <div
+            onMouseEnter={() => openFlyout(item.id)}
+            onMouseLeave={closeFlyout}
+            style={{
+              position: 'absolute', left: '100%', top: -2, marginLeft: 10, zIndex: 50,
+              minWidth: hasSub ? 184 : 'auto', padding: hasSub ? 6 : 0,
+              background: DS.bg, border: `1px solid ${DS.border}`, borderRadius: 10,
+              boxShadow: DS.cardShadowHi,
+              animation: 'tos-fade 0.1s ease',
+            }}
+          >
+            <div style={{
+              padding: hasSub ? '6px 10px 8px' : '8px 12px',
+              fontSize: 13, fontWeight: 600, color: DS.text,
+              whiteSpace: 'nowrap',
+              borderBottom: hasSub ? `1px solid ${DS.border}` : 'none',
+              cursor: 'pointer',
+            }} onClick={onParentClick}>{item.label}</div>
+            {hasSub && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 1, paddingTop: 4 }}>
+                {item.sub.map(s => <SubNavItem key={s.id} sub={s} flyout />)}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const SubNavItem = ({ sub, flyout: inFlyout }) => {
+    const isActive = active === sub.id;
+    const isHovered = hoveredItem === sub.id;
     return (
       <button
-        onClick={() => onNav && onNav(item.id)}
-        onMouseEnter={() => setHoveredItem(item.id)}
+        onClick={() => onNav && onNav(sub.id)}
+        onMouseEnter={() => setHoveredItem(sub.id)}
         onMouseLeave={() => setHoveredItem(null)}
         style={{
-          display: 'flex', alignItems: 'center', gap: 10,
-          padding: '8px 12px', borderRadius: 7, width: '100%',
-          border: 'none', background: isActive ? DS.accentLight : isHovered ? DS.surfaceHover : 'transparent',
-          color: isActive ? DS.accent : DS.sub,
-          cursor: 'pointer', fontSize: 14, fontWeight: isActive ? 600 : 400,
-          textAlign: 'left', transition: 'background 0.12s',
+          display: 'flex', alignItems: 'center', width: '100%',
+          padding: '7px 10px', borderRadius: 6, border: 'none',
+          background: isActive ? DS.accentLight : isHovered ? (inFlyout ? DS.surfaceHover : SIDE_HOVER) : 'transparent',
+          color: isActive ? DS.accent : DS.muted,
+          cursor: 'pointer', fontSize: 13.5, fontWeight: isActive ? 600 : 400,
+          textAlign: 'left', transition: 'background 0.12s', whiteSpace: 'nowrap',
         }}
       >
-        <Icon name={item.icon} size={16} color={isActive ? DS.accent : DS.muted} />
-        {item.label}
-        {isActive && (
-          <div style={{
-            width: 5, height: 5, borderRadius: '50%',
-            background: DS.accent, marginLeft: 'auto',
-          }} />
-        )}
+        {sub.label}
       </button>
     );
   };
 
+  const userName = role === 'superadmin' ? 'Marcus Hale' : role === 'admin' ? 'Lisa Chen' : role === 'teacher' ? 'Sarah Clarke' : 'Oliver Chen';
+
   return (
     <div style={{
-      width: DS.sidebarW, flexShrink: 0,
+      width: collapsed ? DS.sidebarWmin : DS.sidebarW, flexShrink: 0,
       height: '100vh', position: 'sticky', top: 0,
-      background: DS.bg, borderRight: `1px solid ${DS.border}`,
+      background: DS.sidebarBg, borderRight: `1px solid ${DS.border}`,
       display: 'flex', flexDirection: 'column',
-      padding: '0 12px',
+      padding: collapsed ? '0 10px' : '0 12px',
+      transition: 'width 0.16s ease',
     }}>
       {/* Logo */}
       <div style={{
-        padding: '20px 4px 16px',
+        padding: collapsed ? '20px 0 16px' : '20px 4px 16px',
         borderBottom: `1px solid ${DS.border}`,
         marginBottom: 8,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-start', gap: 10 }}>
           <div style={{
-            width: 32, height: 32, borderRadius: 8,
+            width: 32, height: 32, borderRadius: 8, flexShrink: 0,
             background: DS.accent,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}>
             <span style={{ color: '#fff', fontSize: 14, fontWeight: 800, letterSpacing: '-0.5px' }}>T</span>
           </div>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: DS.text, letterSpacing: '-0.3px' }}>TutorOS</div>
-            <div style={{ fontSize: 10, color: DS.muted, marginTop: 1 }}>{cfg.label}</div>
-          </div>
+          {!collapsed && (
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: DS.text, letterSpacing: '-0.3px' }}>TutorOS</div>
+              <div style={{ fontSize: 10, color: DS.muted, marginTop: 1 }}>{cfg.label}</div>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Role switcher (demo) */}
-      {onRoleSwitch && (
+      {/* Role switcher (demo) — hidden while collapsed */}
+      {onRoleSwitch && !collapsed && (
         <div style={{ marginBottom: 12 }}>
           <div style={{ fontSize: 10, color: DS.faint, padding: '4px 4px 6px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Switch view</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
             {[['superadmin','Owner'],['admin','Admin'],['teacher','Teacher'],['student','Student']].map(([r,lbl]) => (
               <button key={r} onClick={() => onRoleSwitch(r)} style={{
                 padding: '4px 6px', borderRadius: 5, border: `1px solid ${role === r ? DS.accentBorder : DS.border}`,
-                background: role === r ? DS.accentLight : DS.surface,
+                background: role === r ? DS.accentLight : DS.bg,
                 color: role === r ? DS.accent : DS.muted,
                 fontSize: 10, fontWeight: role === r ? 600 : 400, cursor: 'pointer',
               }}>{lbl}</button>
@@ -300,21 +530,26 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch }) => {
       )}
 
       {/* Nav items */}
-      <nav style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <nav style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2, overflow: collapsed ? 'visible' : 'auto' }}>
         {cfg.items.map(item => <NavItem key={item.id} item={item} />)}
       </nav>
 
       {/* Bottom items */}
       <div style={{ paddingBottom: 12, borderTop: `1px solid ${DS.border}`, paddingTop: 8 }}>
         {cfg.bottom.map(item => <NavItem key={item.id} item={item} />)}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', marginTop: 4 }}>
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-start',
+          gap: 10, padding: collapsed ? '8px 0' : '8px 12px', marginTop: 4,
+        }} title={collapsed ? userName : undefined}>
           <Avatar name="User" size={28} color={cfg.color} />
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 13, fontWeight: 500, color: DS.sub, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {role === 'superadmin' ? 'Marcus Hale' : role === 'admin' ? 'Lisa Chen' : role === 'teacher' ? 'Sarah Clarke' : 'Oliver Chen'}
+          {!collapsed && (
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 500, color: DS.sub, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {userName}
+              </div>
+              <div style={{ fontSize: 11, color: DS.faint }}>{cfg.label}</div>
             </div>
-            <div style={{ fontSize: 11, color: DS.faint }}>{cfg.label}</div>
-          </div>
+          )}
         </div>
       </div>
     </div>
@@ -336,7 +571,7 @@ const PageHeader = ({ title, subtitle, actions }) => (
 );
 
 // ─── Button ────────────────────────────────────────────────────────────────────
-const Btn = ({ variant = 'primary', children, icon, onClick, small }) => {
+const Btn = ({ variant = 'primary', children, icon, onClick, small, style = {} }) => {
   const [hov, setHov] = React.useState(false);
   const styles = {
     primary: {
@@ -369,7 +604,7 @@ const Btn = ({ variant = 'primary', children, icon, onClick, small }) => {
         background: s.bg, color: s.color,
         fontSize: small ? 13 : 14, fontWeight: 500,
         cursor: 'pointer', whiteSpace: 'nowrap',
-        transition: 'background 0.12s',
+        transition: 'background 0.12s', ...style,
       }}
     >
       {icon && <Icon name={icon} size={14} color={s.color} />}
@@ -379,18 +614,22 @@ const Btn = ({ variant = 'primary', children, icon, onClick, small }) => {
 };
 
 // ─── Card ──────────────────────────────────────────────────────────────────────
-const Card = ({ children, style = {}, title, actions }) => (
+const Card = ({ children, style = {}, title, subtitle, actions }) => (
   <div style={{
-    background: DS.bg, border: `1px solid ${DS.border}`,
+    background: DS.card, boxShadow: DS.cardShadow,
+    border: `1px solid ${DS.cardBorder}`,
     borderRadius: 10, overflow: 'hidden', ...style,
   }}>
     {(title || actions) && (
       <div style={{
         padding: '16px 20px', borderBottom: `1px solid ${DS.border}`,
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
       }}>
-        <span style={{ fontSize: 14, fontWeight: 600, color: DS.text }}>{title}</span>
-        {actions && <div style={{ display: 'flex', gap: 6 }}>{actions}</div>}
+        <div style={{ minWidth: 0 }}>
+          <span style={{ fontSize: 14, fontWeight: 600, color: DS.text }}>{title}</span>
+          {subtitle && <div style={{ fontSize: 12, color: DS.muted, marginTop: 2 }}>{subtitle}</div>}
+        </div>
+        {actions && <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>{actions}</div>}
       </div>
     )}
     {children}
@@ -635,6 +874,228 @@ const ScorePill = ({ score }) => {
   );
 };
 
+// ─── Modal ─────────────────────────────────────────────────────────────────────
+// Centred dialog with backdrop, header, scrollable body and a sticky footer.
+const Modal = ({ open, onClose, title, subtitle, icon, iconColor, width = 520, footer, children }) => {
+  React.useEffect(() => {
+    if (!open) return;
+    const onKey = e => { if (e.key === 'Escape') onClose && onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+  if (!open) return null;
+  const ic = iconColor || DS.accent;
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 1000,
+        background: 'rgba(17,24,39,0.45)', backdropFilter: 'blur(2px)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
+        animation: 'tos-fade 0.12s ease',
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          width, maxWidth: '100%', maxHeight: '90vh',
+          background: DS.bg, borderRadius: 14, border: `1px solid ${DS.border}`,
+          boxShadow: '0 24px 64px rgba(17,24,39,0.22), 0 2px 8px rgba(17,24,39,0.08)',
+          display: 'flex', flexDirection: 'column', overflow: 'hidden',
+          animation: 'tos-pop 0.14s cubic-bezier(0.16,1,0.3,1)',
+        }}
+      >
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14, padding: '20px 22px 16px' }}>
+          {icon && (
+            <div style={{
+              width: 40, height: 40, borderRadius: 10, flexShrink: 0,
+              background: ic + '18', color: ic,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <Icon name={icon} size={19} />
+            </div>
+          )}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: DS.text, letterSpacing: '-0.2px' }}>{title}</div>
+            {subtitle && <div style={{ fontSize: 13, color: DS.muted, marginTop: 2, lineHeight: 1.5 }}>{subtitle}</div>}
+          </div>
+          <button onClick={onClose} style={{
+            background: 'none', border: 'none', cursor: 'pointer', color: DS.faint,
+            padding: 4, borderRadius: 6, display: 'flex', flexShrink: 0,
+          }}>
+            <Icon name="x" size={18} />
+          </button>
+        </div>
+        {/* Body */}
+        <div style={{ padding: '4px 22px 20px', overflow: 'auto', flex: 1 }}>{children}</div>
+        {/* Footer */}
+        {footer && (
+          <div style={{
+            display: 'flex', justifyContent: 'flex-end', gap: 8,
+            padding: '14px 22px', borderTop: `1px solid ${DS.border}`, background: DS.surface,
+          }}>{footer}</div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ─── Form field primitives ───────────────────────────────────────────────────────
+const Field = ({ label, hint, required, error, children, style }) => (
+  <div style={{ marginBottom: 16, ...style }}>
+    {label && (
+      <label style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
+        <span style={{ fontSize: 12.5, fontWeight: 600, color: DS.sub }}>{label}</span>
+        {required && <span style={{ color: DS.danger, fontSize: 12 }}>*</span>}
+      </label>
+    )}
+    {children}
+    {error
+      ? <div style={{ fontSize: 11.5, color: DS.danger, marginTop: 5 }}>{error}</div>
+      : hint && <div style={{ fontSize: 11.5, color: DS.faint, marginTop: 5 }}>{hint}</div>}
+  </div>
+);
+
+const inputBase = (invalid, focused) => ({
+  width: '100%', padding: '9px 12px', borderRadius: 8, boxSizing: 'border-box',
+  border: `1px solid ${invalid ? DS.dangerBorder : focused ? DS.accent : DS.border}`,
+  boxShadow: focused ? `0 0 0 3px ${DS.accentLight}` : 'none',
+  fontSize: 13.5, color: DS.text, background: DS.bg, outline: 'none',
+  transition: 'border-color 0.12s, box-shadow 0.12s', fontFamily: 'inherit',
+});
+
+const Input = ({ invalid, icon, style, ...props }) => {
+  const [focused, setFocused] = React.useState(false);
+  const input = (
+    <input
+      {...props}
+      onFocus={e => { setFocused(true); props.onFocus && props.onFocus(e); }}
+      onBlur={e => { setFocused(false); props.onBlur && props.onBlur(e); }}
+      style={{ ...inputBase(invalid, focused), ...(icon ? { paddingLeft: 36 } : {}), ...style }}
+    />
+  );
+  if (!icon) return input;
+  return (
+    <div style={{ position: 'relative' }}>
+      <div style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: DS.faint, display: 'flex' }}>
+        <Icon name={icon} size={15} />
+      </div>
+      {input}
+    </div>
+  );
+};
+
+const Textarea = ({ invalid, style, ...props }) => {
+  const [focused, setFocused] = React.useState(false);
+  return (
+    <textarea
+      {...props}
+      onFocus={e => { setFocused(true); props.onFocus && props.onFocus(e); }}
+      onBlur={e => { setFocused(false); props.onBlur && props.onBlur(e); }}
+      style={{ ...inputBase(invalid, focused), resize: 'vertical', minHeight: 76, ...style }}
+    />
+  );
+};
+
+const Select = ({ invalid, style, children, ...props }) => {
+  const [focused, setFocused] = React.useState(false);
+  return (
+    <div style={{ position: 'relative' }}>
+      <select
+        {...props}
+        onFocus={e => { setFocused(true); props.onFocus && props.onFocus(e); }}
+        onBlur={e => { setFocused(false); props.onBlur && props.onBlur(e); }}
+        style={{
+          ...inputBase(invalid, focused), appearance: 'none', paddingRight: 34,
+          cursor: 'pointer',
+          // never wrap the selected value — clip with an ellipsis when the control is narrow
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          ...style,
+        }}
+      >{children}</select>
+      <div style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', color: DS.faint, pointerEvents: 'none', display: 'flex' }}>
+        <Icon name="chevron_d" size={15} />
+      </div>
+    </div>
+  );
+};
+
+// ─── Segmented control ───────────────────────────────────────────────────────────
+const Segmented = ({ options, value, onChange, fullWidth }) => (
+  <div style={{
+    display: fullWidth ? 'flex' : 'inline-flex', width: fullWidth ? '100%' : undefined, padding: 3, gap: 2,
+    background: DS.surface, border: `1px solid ${DS.border}`, borderRadius: 9,
+  }}>
+    {options.map(o => {
+      const id = o.id ?? o.value ?? o;
+      const label = o.label ?? o;
+      const active = value === id;
+      return (
+        <button key={id} onClick={() => onChange(id)} style={{
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+          flex: fullWidth ? 1 : undefined,
+          padding: '6px 13px', borderRadius: 7, border: 'none',
+          background: active ? DS.bg : 'transparent',
+          boxShadow: active ? '0 1px 2px rgba(17,24,39,0.08)' : 'none',
+          color: active ? DS.text : DS.muted,
+          fontSize: 13, fontWeight: active ? 600 : 500, cursor: 'pointer',
+          transition: 'all 0.12s', whiteSpace: 'nowrap',
+        }}>
+          {label}
+          {o.count != null && (
+            <span style={{
+              fontSize: 11, fontWeight: 600, padding: '0 6px', borderRadius: 10,
+              background: active ? DS.accentLight : DS.border,
+              color: active ? DS.accent : DS.muted, minWidth: 18, textAlign: 'center',
+            }}>{o.count}</span>
+          )}
+        </button>
+      );
+    })}
+  </div>
+);
+
+// ─── Search input ────────────────────────────────────────────────────────────────
+const SearchInput = ({ value, onChange, placeholder = 'Search…', style }) => {
+  const [focused, setFocused] = React.useState(false);
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 8, flex: 1,
+      background: DS.bg, borderRadius: 8, padding: '8px 12px',
+      border: `1px solid ${focused ? DS.accent : DS.border}`,
+      boxShadow: focused ? `0 0 0 3px ${DS.accentLight}` : 'none',
+      transition: 'border-color 0.12s, box-shadow 0.12s', ...style,
+    }}>
+      <Icon name="search" size={15} color={DS.faint} />
+      <input
+        value={value} onChange={onChange} placeholder={placeholder}
+        onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+        style={{ border: 'none', outline: 'none', fontSize: 13.5, color: DS.text, flex: 1, background: 'transparent' }}
+      />
+    </div>
+  );
+};
+
+// ─── Empty state ─────────────────────────────────────────────────────────────────
+const EmptyState = ({ icon = 'search', title, message, action }) => (
+  <div style={{
+    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+    padding: '56px 24px', textAlign: 'center',
+  }}>
+    <div style={{
+      width: 52, height: 52, borderRadius: 14, marginBottom: 16,
+      background: DS.surface, border: `1px solid ${DS.border}`,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', color: DS.faint,
+    }}>
+      <Icon name={icon} size={22} />
+    </div>
+    <div style={{ fontSize: 15, fontWeight: 600, color: DS.text }}>{title}</div>
+    {message && <div style={{ fontSize: 13, color: DS.muted, marginTop: 4, maxWidth: 320, lineHeight: 1.5 }}>{message}</div>}
+    {action && <div style={{ marginTop: 18 }}>{action}</div>}
+  </div>
+);
+
 // ─── Divider ───────────────────────────────────────────────────────────────────
 const Divider = ({ margin = '16px 0' }) => (
   <div style={{ borderTop: `1px solid ${DS.border}`, margin }} />
@@ -643,5 +1104,6 @@ const Divider = ({ margin = '16px 0' }) => (
 // ─── Export ────────────────────────────────────────────────────────────────────
 Object.assign(window, {
   DS, Icon, Badge, Avatar, KPICard, Sidebar, PageHeader, Btn, Card,
-  Table, TableRow, Sparkline, LineChart, BarChart, ScorePill, Divider, NAV_CONFIG,
+  Table, TableRow, Sparkline, LineChart, BarChart, ScorePill, Divider, NAV_CONFIG, navParentId,
+  Modal, Field, Input, Textarea, Select, Segmented, SearchInput, EmptyState,
 });

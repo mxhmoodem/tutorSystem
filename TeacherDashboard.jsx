@@ -2,51 +2,10 @@
 //  TutorOS — Teacher Dashboard
 // ══════════════════════════════════════════════════════════════
 
-const todaySchedule = [
-  { time: '09:00', subject: 'GCSE Mathematics', group: 'Year 10 – Group A', room: 'Room 3', students: 8, status: 'completed' },
-  { time: '10:30', subject: 'GCSE Mathematics', group: 'Year 11 – Group B', room: 'Room 3', students: 7, status: 'current'   },
-  { time: '13:00', subject: 'A-Level Maths',    group: 'Year 12 – Group A', room: 'Room 5', students: 5, status: 'upcoming'  },
-  { time: '15:00', subject: 'GCSE Mathematics', group: 'Year 9 – Group C',  room: 'Room 3', students: 9, status: 'upcoming'  },
-];
-
-const homeworkItems = [
-  { title: 'Algebra: Simultaneous Equations',   class: 'Yr 10 Group A', due: '22 Apr', submitted: 8,  total: 8,  toMark: 3,  status: 'marking'   },
-  { title: 'Calculus: Differentiation Basics',  class: 'Yr 12 Group A', due: '24 Apr', submitted: 4,  total: 5,  toMark: 4,  status: 'marking'   },
-  { title: 'Trigonometry: Sine & Cosine Rules', class: 'Yr 11 Group B', due: '27 Apr', submitted: 2,  total: 7,  toMark: 0,  status: 'open'      },
-  { title: 'Statistics: Probability Trees',     class: 'Yr 10 Group A', due: '29 Apr', submitted: 0,  total: 8,  toMark: 0,  status: 'open'      },
-];
-
-const studentProgress = [
-  { name: 'Emma Thompson',    scores: [72, 76, 74, 80, 83], predicted: 'B',  trend: 'up'   },
-  { name: 'Oliver Chen',      scores: [88, 90, 87, 92, 94], predicted: 'A*', trend: 'up'   },
-  { name: 'Sophia Patel',     scores: [65, 63, 68, 66, 70], predicted: 'C',  trend: 'up'   },
-  { name: 'James Wilson',     scores: [79, 75, 72, 71, 69], predicted: 'B',  trend: 'down' },
-  { name: 'Amelia Roberts',   scores: [55, 50, 48, 52, 49], predicted: 'D',  trend: 'down' },
-  { name: 'Noah Fitzgerald',  scores: [70, 68, 60, 55, 52], predicted: 'D',  trend: 'down' },
-  { name: 'Isabella Martinez',scores: [82, 85, 88, 90, 91], predicted: 'A',  trend: 'up'   },
-  { name: 'Ethan Huang',      scores: [77, 79, 80, 78, 83], predicted: 'B',  trend: 'up'   },
-];
-
-const aiQueue = [
-  { student: 'Oliver Chen',       hw: 'Calculus: Differentiation Basics', submitted: '2h ago',   confidence: 92, draft: 'Excellent work — your chain rule application is correct. Consider showing intermediate steps for full marks in the exam.' },
-  { student: 'Sophia Patel',      hw: 'Calculus: Differentiation Basics', submitted: '3h ago',   confidence: 85, draft: 'Good attempt. You have the right method but made an arithmetic error in step 3 — check your sign when expanding the bracket.' },
-  { student: 'Ethan Huang',       hw: 'Calculus: Differentiation Basics', submitted: '5h ago',   confidence: 88, draft: 'Strong understanding of the concept. Your notation could be cleaner — remember to write dy/dx clearly throughout.' },
-  { student: 'Isabella Martinez', hw: 'Calculus: Differentiation Basics', submitted: 'Yesterday', confidence: 95, draft: 'Flawless. All six questions correct with clear working shown. Well done.' },
-];
-
-const attendanceClass = {
-  group: 'Year 11 – Group B',
-  subject: 'GCSE Mathematics',
-  students: [
-    { name: 'Emma Thompson',  status: 'present' },
-    { name: 'Oliver Chen',    status: 'present' },
-    { name: 'Sophia Patel',   status: null },
-    { name: 'James Wilson',   status: null },
-    { name: 'Amelia Roberts', status: 'absent' },
-    { name: 'Noah Fitzgerald',status: null },
-    { name: 'Ethan Huang',    status: null },
-  ],
-};
+// Mock data (todaySchedule, homeworkItems, studentProgress,
+// attendanceClass) lives in mocks/teacherDashboard.mock.jsx, loaded
+// before this file in index.html. Report drafts come from the shared
+// reports store (window.useReportsStore from Reports.jsx).
 
 const TODAY_ISO = '2026-04-25';
 
@@ -72,9 +31,36 @@ const TeacherDashboard = () => {
     Object.fromEntries(attendanceClass.students.map(s => [s.name, s.status]))
   );
   const [attendanceSaved, setAttendanceSaved] = React.useState(false);
-  const [expandedAI, setExpandedAI] = React.useState(null);
-  const [editingFeedback, setEditingFeedback] = React.useState({});
-  const [sentFeedback, setSentFeedback] = React.useState({});
+  const reportsStore = useReportsStore();
+  const reportConfig = reportsStore.store.config;
+  const reportDrafts = reportsStore.reportsArr.filter(r => r.status === 'draft');
+
+  // ── "Reports due" — derived live from the resolved reporting rules ──
+  // For each of this teacher's students, resolve the effective policy; skip OFF;
+  // compute a due date from the cadence + the last published report; flag overdue.
+  const TEACHER_NAME = 'Sarah Clarke';   // logged-in teacher in the demo
+  const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+  const fmtDue = (iso) => new Date(iso + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  const reportsDue = (() => {
+    if (typeof resolveForStudent !== 'function' || typeof reportStudents !== 'function') return [];
+    const myClassIds = (typeof reportClasses === 'function' ? reportClasses() : [])
+      .filter(c => c.teacher === TEACHER_NAME).map(c => c.id);
+    const mine = reportStudents().filter(s => (s.classIds || []).some(id => myClassIds.includes(id)));
+    return mine.map(s => {
+      const pol = resolveForStudent(s, reportConfig);
+      if (pol.requirement === 'OFF') return null;
+      const name = `${s.firstName} ${s.lastName}`;
+      const last = reportsStore.reportsArr
+        .filter(r => r.studentName === name && r.status === 'published' && r.datePublished)
+        .sort((a, b) => b.datePublished.localeCompare(a.datePublished))[0];
+      const base = last ? last.datePublished : '2026-03-15';   // notional last cycle
+      const due = addDays(base, rptFreqDays(pol.frequency));
+      const tpl = reportsStore.store.templates.find(t => t.id === pol.templateId);
+      return { id: s.id, name, requirement: pol.requirement, frequency: pol.frequency,
+        templateName: tpl ? tpl.name : 'report', due, overdue: due < TODAY_ISO, source: pol.source };
+    }).filter(Boolean).sort((a, b) => (a.overdue === b.overdue ? a.due.localeCompare(b.due) : a.overdue ? -1 : 1));
+  })();
+  const dueOverdue = reportsDue.filter(d => d.overdue).length;
 
   const markAttendance = (name, status) => {
     setAttendance(prev => ({ ...prev, [name]: status }));
@@ -298,83 +284,38 @@ const TeacherDashboard = () => {
         </Card>
       </div>
 
-      {/* ── AI Feedback Queue ─────────────────────────────────────── */}
+      {/* ── Reports due (driven by the centre's resolved reporting rules) ── */}
       <Card
-        title="AI Feedback Queue"
+        title="Reports due"
         actions={[
-          <Badge key="b" variant="accent"><Icon name="brain" size={11} /> 4 awaiting review</Badge>,
-          <Btn key="v" variant="ghost" icon="eye" small>View all</Btn>,
+          dueOverdue > 0
+            ? <Badge key="o" variant="danger"><Icon name="flag" size={11} /> {dueOverdue} overdue</Badge>
+            : reportsDue.length > 0
+              ? <Badge key="b" variant="accent"><Icon name="clock" size={11} /> {reportsDue.length} upcoming</Badge>
+              : <Badge key="b" variant="success"><Icon name="check" size={11} /> Nothing due</Badge>,
+          reportDrafts.length > 0 && <Badge key="d" variant="warning"><Icon name="edit" size={11} /> {reportDrafts.length} draft{reportDrafts.length !== 1 ? 's' : ''}</Badge>,
+          <Btn key="v" variant="ghost" icon="eye" small onClick={() => window.__navigate && window.__navigate('teacher', 'reports')}>View all</Btn>,
         ]}
       >
         <div>
-          {aiQueue.map((item, i) => {
-            const isExpanded = expandedAI === i;
-            const hasSent = sentFeedback[i];
-            const feedbackText = editingFeedback[i] !== undefined ? editingFeedback[i] : item.draft;
-
-            return (
-              <div key={i} style={{ borderBottom: i < aiQueue.length - 1 ? `1px solid ${DS.border}` : 'none' }}>
-                <div
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px',
-                    cursor: 'pointer',
-                  }}
-                  onClick={() => setExpandedAI(isExpanded ? null : i)}
-                >
-                  <Avatar name={item.student} size={32} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 500, color: DS.text }}>{item.student}</div>
-                    <div style={{ fontSize: 12, color: DS.muted }}>{item.hw}</div>
-                  </div>
-                  <div style={{ display: 'flex', align: 'center', gap: 10, flexShrink: 0 }}>
-                    <span style={{ fontSize: 12, color: DS.faint }}>{item.submitted}</span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <div style={{ width: 6, height: 6, borderRadius: '50%', background: item.confidence > 90 ? DS.success : DS.warning }} />
-                      <span style={{ fontSize: 11, color: DS.muted }}>{item.confidence}% confidence</span>
-                    </div>
-                    {hasSent
-                      ? <Badge variant="success">Sent</Badge>
-                      : <Badge variant="accent">Draft ready</Badge>
-                    }
-                    <Icon name={isExpanded ? 'chevron_d' : 'chevron_r'} size={14} color={DS.faint} />
-                  </div>
-                </div>
-
-                {isExpanded && (
-                  <div style={{ padding: '0 16px 16px 60px' }}>
-                    <div style={{
-                      background: DS.surface, border: `1px solid ${DS.border}`,
-                      borderRadius: 8, padding: '12px 14px', marginBottom: 12,
-                    }}>
-                      <div style={{ fontSize: 11, color: DS.accent, fontWeight: 600, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 5 }}>
-                        <Icon name="brain" size={11} /> AI DRAFT
-                      </div>
-                      <textarea
-                        rows={3}
-                        value={feedbackText}
-                        onChange={e => setEditingFeedback(prev => ({ ...prev, [i]: e.target.value }))}
-                        style={{
-                          width: '100%', fontSize: 13, color: DS.sub, lineHeight: 1.6,
-                          border: 'none', background: 'transparent', resize: 'none',
-                          outline: 'none', boxSizing: 'border-box', fontFamily: 'inherit',
-                        }}
-                      />
-                    </div>
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      <Btn variant="primary" icon="check" small onClick={() => {
-                        setSentFeedback(prev => ({ ...prev, [i]: true }));
-                        setExpandedAI(null);
-                      }}>
-                        Send to parent
-                      </Btn>
-                      <Btn variant="secondary" icon="edit" small>Edit</Btn>
-                      <Btn variant="ghost" icon="x" small>Reject draft</Btn>
-                    </div>
-                  </div>
-                )}
+          {reportsDue.length === 0 && (
+            <div style={{ padding: '18px 16px', fontSize: 13, color: DS.muted }}>No reports due — every student you teach resolves to optional or off, or is already up to date.</div>
+          )}
+          {reportsDue.slice(0, 6).map((d, i, arr) => (
+            <div key={d.id} onClick={() => window.__navigate && window.__navigate('teacher', 'reports')}
+              style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', cursor: 'pointer',
+                borderBottom: i < Math.min(arr.length, 6) - 1 ? `1px solid ${DS.border}` : 'none' }}>
+              <Avatar name={d.name} size={32} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 500, color: DS.text }}>{rptFreqLabel(d.frequency)} report — {d.name}</div>
+                <div style={{ fontSize: 12, color: DS.muted }}>{d.templateName} · {d.source}{d.requirement === 'OPTIONAL' ? ' · optional' : ''}</div>
               </div>
-            );
-          })}
+              {d.overdue
+                ? <Badge variant="danger">Overdue · was {fmtDue(d.due)}</Badge>
+                : <Badge variant="default">Due {fmtDue(d.due)}</Badge>}
+              <Icon name="chevron_r" size={14} color={DS.faint} />
+            </div>
+          ))}
         </div>
       </Card>
     </div>

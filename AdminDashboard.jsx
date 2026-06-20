@@ -2,29 +2,8 @@
 //  TutorOS — Admin Dashboard
 // ══════════════════════════════════════════════════════════════
 
-const atRiskStudents = [
-  { name: 'Noah Fitzgerald',   subject: 'Mathematics',        reason: '3 consecutive absences',       lastSeen: '8 Apr',  severity: 'danger'  },
-  { name: 'Amelia Roberts',    subject: 'English Literature', reason: 'Homework completion below 35%', lastSeen: '14 Apr', severity: 'danger'  },
-  { name: 'Liam Thornton',     subject: 'Science',            reason: 'Test score dropped 22 pts',     lastSeen: '17 Apr', severity: 'warning' },
-  { name: 'Zoe Patterson',     subject: 'Chemistry',          reason: 'No submissions in 2 weeks',     lastSeen: '10 Apr', severity: 'warning' },
-  { name: 'Isaac Okafor',      subject: 'Mathematics',        reason: 'Engagement score: Low',         lastSeen: '21 Apr', severity: 'warning' },
-];
-
-const revenueData = {
-  labels: ['Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar'],
-  series: [
-    { label: 'Revenue (£)', data: [8200, 9400, 8800, 10200, 11500, 12400], color: DS.accent },
-    { label: 'Enrolments',  data: [98, 107, 103, 118, 131, 142],            color: '#0891B2' },
-  ],
-};
-
-const recentActivity = [
-  { type: 'enrol',   text: 'Sophia Patel enrolled in GCSE Maths',         time: '2h ago'  },
-  { type: 'invoice', text: 'Invoice #INV-0284 sent to Williams family',    time: '4h ago'  },
-  { type: 'alert',   text: 'Noah Fitzgerald flagged as at-risk',           time: '6h ago'  },
-  { type: 'enrol',   text: 'James Wilson enrolled in A-Level Chemistry',   time: 'Yesterday' },
-  { type: 'invoice', text: 'Invoice #INV-0283 paid — £320',                time: 'Yesterday' },
-];
+// Mock data (atRiskStudents, revenueData, recentActivity) lives in
+// mocks/adminDashboard.mock.jsx, loaded before this file in index.html.
 
 const AdminDashboard = () => {
   const [announcementOpen, setAnnouncementOpen] = React.useState(false);
@@ -49,7 +28,7 @@ const AdminDashboard = () => {
   ];
 
   return (
-    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: DS.surface }}>
+    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: DS.bg }}>
       <div style={{ display: 'flex', flex: 1, overflow: 'auto' }}>
         {/* Main content */}
         <div style={{ flex: 1, padding: '32px 32px 32px', overflow: 'auto', minWidth: 0 }}>
