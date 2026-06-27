@@ -142,10 +142,28 @@ const SetGrid = ({ children, cols = 2 }) => (
 
 // ─── Shared tabs (every role) ────────────────────────────────────────────────────
 
-const AccountTab = ({ data, set, roleLabel }) => {
+const AccountTab = ({ data, set, roleLabel, viewRoles = [], currentRole, onSwitchView }) => {
   const a = data.account || {};
+  // A staff identity granted more than one role at this centre (e.g. admin AND
+  // teacher) gets a view switch — the two are different apps. Membership-driven,
+  // so it only shows for genuinely dual-role users.
+  const dualRole = viewRoles.length > 1;
   return (
     <div>
+      {dualRole && (
+        <SettingsSection title="View" subtitle="You hold more than one role at this centre" icon="users">
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '8px 0 4px', flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 13, color: DS.sub, lineHeight: 1.5, maxWidth: 440 }}>
+              You're an <b>admin</b> and a <b>teacher</b> here — they're two different views. Choose which one to use; you can switch back anytime.
+            </div>
+            <Segmented
+              value={currentRole}
+              onChange={r => r !== currentRole && onSwitchView && onSwitchView(r)}
+              options={viewRoles.map(r => ({ id: r, label: r.charAt(0).toUpperCase() + r.slice(1) }))}
+            />
+          </div>
+        </SettingsSection>
+      )}
       <SettingsSection title="Profile" subtitle={`Your ${roleLabel} account details`} icon="user">
         <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 0', borderBottom: `1px solid ${DS.border}` }}>
           <Avatar name={a.name} size={56} />
@@ -611,6 +629,352 @@ const LearningTab = ({ data, set }) => {
   );
 };
 
+// Admin → Comms (safety posture). Reads/writes the lifted comms config via the
+// `comms` object threaded down from App (the same one that backs Announcements /
+// Messages / the bell), so changing a preset here updates messaging behaviour live.
+// Preset data comes from window.COMMS_PRESETS (Communications.jsx, loaded after us).
+const CommsTab = ({ comms }) => {
+  if (!comms) return <SettingsSection title="Communications" icon="message"><div style={{ padding: '14px 0', fontSize: 13, color: DS.muted }}>Communications module is still loading…</div></SettingsSection>;
+  const PRESETS = window.COMMS_PRESETS || {};
+  const cfg = comms.config || {};
+  const centreId = comms.ctx.centreId;
+  const users = (typeof COMMS_USERS !== 'undefined' ? COMMS_USERS : []);
+  const staff = users.filter(u => u.centreId === centreId && (u.role === 'admin' || u.role === 'teacher'));
+
+  const [wordInput, setWordInput] = React.useState('');
+  const addWord = () => {
+    const w = wordInput.trim().toLowerCase();
+    if (!w || (cfg.wordlist || []).includes(w)) { setWordInput(''); return; }
+    comms.setConfig({ wordlist: [...(cfg.wordlist || []), w] });
+    setWordInput('');
+  };
+  const removeWord = (w) => comms.setConfig({ wordlist: (cfg.wordlist || []).filter(x => x !== w) });
+
+  return (
+    <div>
+      {/* Safety preset */}
+      <SettingsSection title="Safety preset" subtitle="Choose a preset, then fine-tune. These apply to every conversation in your centre." icon="alert">
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, padding: '12px 0' }}>
+          {['locked', 'standard', 'open'].map(pid => {
+            const p = PRESETS[pid]; if (!p) return null;
+            const active = cfg.preset === pid;
+            const accent = pid === 'locked' ? DS.success : pid === 'standard' ? DS.accent : DS.warning;
+            return (
+              <button key={pid} onClick={() => comms.applyPreset(pid)} style={{
+                textAlign: 'left', cursor: 'pointer', borderRadius: 12, padding: '16px 16px 14px',
+                borderStyle: 'solid', borderWidth: '1.5px', borderColor: active ? accent : DS.border,
+                borderTopWidth: '3px', borderTopColor: accent, background: active ? `${accent}0F` : DS.bg,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  <Icon name={p.icon} size={16} color={accent} />
+                  <span style={{ fontSize: 14.5, fontWeight: 700, color: DS.text }}>{p.label}</span>
+                  {pid === 'locked' && <span style={{ marginLeft: 'auto', fontSize: 10.5, fontWeight: 700, color: '#fff', background: DS.success, padding: '2px 7px', borderRadius: 6 }}>Recommended</span>}
+                </div>
+                <div style={{ fontSize: 12, color: DS.muted, lineHeight: 1.45, marginBottom: 10 }}>{p.blurb}</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  {p.lines.map((l, i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: DS.sub }}>
+                      <Icon name="check" size={12} color={active ? accent : DS.faint} />{l}
+                    </div>
+                  ))}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </SettingsSection>
+
+      {/* Advanced overrides */}
+      <SettingsSection title="Messaging" subtitle="Fine-tune the posture set by your preset" icon="message">
+        <SettingRow title="1:1 student ↔ staff messaging" desc="When off, students use class channels only — no private DMs."
+          checked={!!cfg.dmEnabled} onToggle={v => comms.setConfig({ dmEnabled: v })} />
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 20, padding: '14px 0', borderBottom: `1px solid ${DS.border}` }}>
+          <div>
+            <div style={{ fontSize: 13.5, fontWeight: 600, color: DS.text }}>Quiet hours</div>
+            <div style={{ fontSize: 12, color: DS.muted, marginTop: 3 }}>Messaging students is paused during this window.</div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+            <Input type="time" value={cfg.quietFrom || '21:00'} onChange={e => comms.setConfig({ quietFrom: e.target.value })} style={{ width: 120 }} />
+            <span style={{ fontSize: 13, color: DS.muted }}>to</span>
+            <Input type="time" value={cfg.quietTo || '07:00'} onChange={e => comms.setConfig({ quietTo: e.target.value })} style={{ width: 120 }} />
+          </div>
+        </div>
+        <SettingRow title="Allow image attachments" desc="Photos of handwritten working, etc."
+          checked={!!cfg.images} onToggle={v => comms.setConfig({ images: v })} last />
+      </SettingsSection>
+
+      {/* Safeguarding leads */}
+      <SettingsSection title="Safeguarding oversight" subtitle="Who can see staff↔student conversations, and for how long they're kept" icon="shield">
+        <SetGrid>
+          <Field label="Designated Safeguarding Lead">
+            <Select value={cfg.dslLeadId || ''} onChange={e => comms.setConfig({ dslLeadId: e.target.value || null })}>
+              <option value="">— Select —</option>
+              {staff.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+            </Select>
+          </Field>
+          <Field label="Deputy DSL">
+            <Select value={cfg.dslDeputyId || ''} onChange={e => comms.setConfig({ dslDeputyId: e.target.value || null })}>
+              <option value="">— None —</option>
+              {staff.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+            </Select>
+          </Field>
+        </SetGrid>
+        <SettingRow title="DSL observer on every thread" desc="Your DSL can read all staff↔student conversations."
+          checked={!!cfg.dslObserver} onToggle={v => comms.setConfig({ dslObserver: v })} />
+        <SettingRow title="Message retention"
+          desc="Retained securely for safeguarding and audit. Aligns with Keeping Children Safe in Education guidance."
+          control={
+            <Select value={cfg.retention || '3y'} onChange={e => comms.setConfig({ retention: e.target.value })} style={{ width: 200 }}>
+              <option value="1y">Keep for 1 year</option>
+              <option value="3y">Keep for 3 years (recommended)</option>
+              <option value="7y">Keep for 7 years</option>
+              <option value="forever">Keep indefinitely</option>
+            </Select>
+          } last />
+      </SettingsSection>
+
+      {/* Safeguarding wordlist */}
+      <SettingsSection title="Safeguarding wordlist" subtitle="Messages containing these are quietly surfaced to your DSL — senders aren't blocked or shamed." icon="filter">
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: '12px 0' }}>
+          {(cfg.wordlist || []).map(w => (
+            <span key={w} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: DS.warning, background: DS.warningBg, border: `1px solid ${DS.warning}33`, borderRadius: 7, padding: '4px 8px', fontFamily: 'monospace' }}>
+              {w}
+              <button onClick={() => removeWord(w)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: DS.warning, display: 'flex', padding: 0 }}><Icon name="x" size={12} color={DS.warning} /></button>
+            </span>
+          ))}
+          {(cfg.wordlist || []).length === 0 && <span style={{ fontSize: 12.5, color: DS.faint }}>No words yet.</span>}
+        </div>
+        <div style={{ display: 'flex', gap: 8, padding: '4px 0 10px' }}>
+          <Input value={wordInput} onChange={e => setWordInput(e.target.value)} placeholder="Add a word or phrase…"
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addWord(); } }} style={{ maxWidth: 280 }} />
+          <Btn variant="secondary" small onClick={addWord}>Add</Btn>
+        </div>
+      </SettingsSection>
+
+      {/* Announcements policy */}
+      <SettingsSection title="Announcements" subtitle="Who can broadcast to your centre" icon="megaphone">
+        <SettingRow title="Who can author centre-wide announcements"
+          control={
+            <Segmented value={cfg.announceAuthors || 'admins'} onChange={v => comms.setConfig({ announceAuthors: v })}
+              options={[{ id: 'admins', label: 'Admins only' }, { id: 'senior', label: 'Admins & senior staff' }, { id: 'all', label: 'All staff' }]} />
+          } />
+        <SettingRow title="Approval workflow for centre-wide notices" desc="An admin must approve before a staff announcement goes out."
+          checked={!!cfg.approvalWorkflow} onToggle={v => comms.setConfig({ approvalWorkflow: v })} last />
+      </SettingsSection>
+    </div>
+  );
+};
+
+// Admin → Billing (subscription plan · override code · billing details).
+// Reads the account-scoped subscription store (Centres.jsx) + live plan catalogue
+// (Plans.jsx) via window — both load AFTER Settings.jsx, so resolve at render time.
+const BillingTab = () => {
+  const sub = window.useSubscriptionStore ? window.useSubscriptionStore() : null;
+  const plansStore = window.usePlansStore ? window.usePlansStore() : null;
+  const [codeInput, setCodeInput] = React.useState('');
+  const [codeMsg, setCodeMsg] = React.useState(null);   // { ok, text }
+  const [histSearch, setHistSearch] = React.useState('');
+
+  if (!sub || !plansStore) {
+    return <div style={{ padding: 20, fontSize: 13, color: DS.muted }}>Billing isn’t available in this view.</div>;
+  }
+
+  const fmtDate = d => d ? new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+  const plans = plansStore.plans.filter(p => !p.archived);
+  const plan = sub.plan;
+  const ov = sub.override || {};
+  const ownedCentres = (sub.centres || []).length;
+  const overCap = plan.maxCentres < ownedCentres;
+  const b = sub.billing || {};
+  const setB = (k, v) => sub.setBilling({ [k]: v });
+  // Per-plan glyph + colour (mirrors SuperAdmin's plan cards).
+  const planVis = id => ({ starter: { color: '#9CA3AF', icon: 'book' }, growth: { color: DS.accent, icon: 'chart' }, scale: { color: '#7C3AED', icon: 'zap' } }[id] || { color: DS.accent, icon: 'invoice' });
+
+  const onApply = () => {
+    const res = sub.applyCode(codeInput.trim());
+    if (res.ok) { setCodeMsg({ ok: true, text: `Applied — ${window.planCodeSummary(res.code)}` }); setCodeInput(''); }
+    else setCodeMsg({ ok: false, text: res.reason });
+  };
+
+  // Synthesised billing history — the last 9 monthly invoices for the current plan.
+  // The current month reflects any active override (free trial → £0).
+  const history = React.useMemo(() => {
+    const rows = []; const now = new Date();
+    for (let i = 0; i < 9; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      rows.push({
+        id: i,
+        label: `${plan.name} Plan — ${d.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })}`,
+        amount: (i === 0 && ov.active) ? sub.effectivePrice : plan.price,
+        date: d,
+        status: (i === 2 || i === 6) ? 'declined' : 'paid',
+      });
+    }
+    return rows;
+  }, [plan.name, plan.price, sub.effectivePrice, ov.active]);
+  const filteredHist = history.filter(h => h.label.toLowerCase().includes(histSearch.toLowerCase()));
+
+  const downloadText = (filename, text, type = 'text/plain') => {
+    try {
+      const url = URL.createObjectURL(new Blob([text], { type }));
+      const a = document.createElement('a'); a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {}
+  };
+  const downloadInvoice = h => downloadText(h.label.replace(/[^\w]+/g, '_') + '.txt',
+    `TutorOS subscription invoice\n${h.label}\nAmount: £${h.amount}\nDate: ${fmtDate(h.date)}\nStatus: ${h.status === 'paid' ? 'Paid' : 'Declined'}\n`);
+  const downloadAll = () => downloadText('tutoros-billing-history.csv',
+    'Invoice,Amount,Date,Status\n' + history.map(h => `"${h.label}",£${h.amount},${fmtDate(h.date)},${h.status === 'paid' ? 'Paid' : 'Declined'}`).join('\n'), 'text/csv');
+
+  return (
+    <div>
+      {/* Plan picker — selectable cards (current plan is checked) */}
+      <SettingsSection title="Your plan" subtitle="Pick the plan for your centre group — switches immediately" icon="invoice">
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, padding: '10px 0 4px' }}>
+          {plans.map(p => {
+            const sel = p.id === sub.planId; const vis = planVis(p.id);
+            return (
+              <div key={p.id} onClick={() => sub.setPlan(p.id)} role="button" style={{
+                border: `2px solid ${sel ? vis.color : DS.border}`, background: sel ? vis.color + '0D' : DS.bg,
+                borderRadius: 12, padding: 16, cursor: 'pointer', transition: 'border-color .12s, background .12s',
+                display: 'flex', flexDirection: 'column', gap: 10,
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                    <div style={{ width: 28, height: 28, borderRadius: 8, flexShrink: 0, background: vis.color + '1A', color: vis.color, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <Icon name={vis.icon} size={15} />
+                    </div>
+                    <span style={{ fontSize: 14, fontWeight: 700, color: DS.text }}>{p.name}</span>
+                  </div>
+                  <div style={{ width: 20, height: 20, borderRadius: '50%', flexShrink: 0, border: `2px solid ${sel ? vis.color : DS.borderDark}`, background: sel ? vis.color : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    {sel && <Icon name="check" size={12} color="#fff" />}
+                  </div>
+                </div>
+                <div>
+                  <span style={{ fontSize: 24, fontWeight: 800, color: DS.text, letterSpacing: '-0.5px' }}>£{p.price}</span>
+                  <span style={{ fontSize: 12, color: DS.muted }}> /mo</span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  {(p.features || []).slice(0, 3).map(f => (
+                    <div key={f} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: DS.sub }}>
+                      <Icon name="check" size={12} color={vis.color} />{f}
+                    </div>
+                  ))}
+                </div>
+                {sel && (
+                  <div style={{ marginTop: 'auto', paddingTop: 4 }}>
+                    <Badge variant={ov.active ? 'warning' : 'accent'}>{ov.active ? 'Limited time price' : 'Current plan'}</Badge>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        {ov.active && (
+          <div style={{ marginTop: 10, padding: '10px 14px', borderRadius: 8, background: DS.successBg, border: `1px solid ${DS.successBorder}`, fontSize: 12.5, color: DS.success, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Icon name="zap" size={14} color={DS.success} />
+            <span>{ov.label} — you’re paying <b>£{sub.effectivePrice}/mo</b> instead of £{plan.price}/mo until {fmtDate(ov.until)}.</span>
+          </div>
+        )}
+        {overCap && (
+          <div style={{ marginTop: 10, padding: '10px 14px', borderRadius: 8, background: DS.warningBg, border: `1px solid ${DS.warningBorder}`, fontSize: 12.5, color: DS.warning }}>
+            You currently run {ownedCentres} centres, but {plan.name} allows {plan.maxCentres}. Choose a larger plan or archive a centre.
+          </div>
+        )}
+      </SettingsSection>
+
+      {/* Payment method + promo code, side by side */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 20, alignItems: 'stretch' }}>
+        <Card title="Payment method" icon="lock">
+          <div style={{ padding: 18 }}>
+            <div style={{ borderRadius: 12, padding: '16px 18px', background: `linear-gradient(135deg, ${DS.accent}, ${DS.accentHover})`, color: '#fff', marginBottom: 16 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: '0.02em' }}>{b.cardBrand || 'Card'}</span>
+                <Icon name="lock" size={14} color="#fff" />
+              </div>
+              <div style={{ fontSize: 16, letterSpacing: '3px', marginTop: 20, fontFamily: 'JetBrains Mono, monospace' }}>•••• •••• •••• {b.cardLast4 || '––––'}</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 14, fontSize: 11.5, opacity: 0.92 }}>
+                <span>{b.cardName || 'Name on card'}</span>
+                <span>{b.cardExpiry || 'MM/YY'}</span>
+              </div>
+            </div>
+            <SetGrid>
+              <Field label="Name on card"><Input value={b.cardName || ''} onChange={e => setB('cardName', e.target.value)} /></Field>
+              <Field label="Card ending"><Input value={b.cardLast4 || ''} onChange={e => setB('cardLast4', e.target.value.replace(/\D/g, '').slice(-4))} placeholder="4242" /></Field>
+              <Field label="Expiry"><Input value={b.cardExpiry || ''} onChange={e => setB('cardExpiry', e.target.value)} placeholder="MM/YY" /></Field>
+              <Field label="Card brand"><Input value={b.cardBrand || ''} onChange={e => setB('cardBrand', e.target.value)} placeholder="Visa" /></Field>
+            </SetGrid>
+            <div style={{ fontSize: 11, color: DS.faint }}>Demo only — no real payment is taken.</div>
+          </div>
+        </Card>
+
+        <Card title="Promo & trial code" icon="zap">
+          <div style={{ padding: 18 }}>
+            {sub.redeemedCode ? (
+              <div style={{ borderRadius: 10, border: `1px solid ${ov.active ? DS.successBorder : DS.border}`, background: ov.active ? DS.successBg : DS.surface, padding: 14 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                  <code style={{ fontSize: 12.5, fontFamily: 'JetBrains Mono, monospace', background: DS.bg, border: `1px solid ${DS.border}`, borderRadius: 6, padding: '4px 10px', color: DS.accent, fontWeight: 600 }}>{sub.redeemedCode.code}</code>
+                  <Badge variant={ov.active ? 'success' : 'default'}>{ov.active ? 'Active' : 'Expired'}</Badge>
+                </div>
+                <div style={{ fontSize: 13, color: DS.text, marginTop: 10, fontWeight: 600 }}>{window.planCodeSummary(sub.redeemedCode)}</div>
+                <div style={{ fontSize: 12, color: DS.muted, marginTop: 2 }}>{ov.active ? `Applies until ${fmtDate(ov.until)}` : 'No longer active'}</div>
+                <Btn variant="secondary" small onClick={sub.removeCode} style={{ marginTop: 12 }}>Remove code</Btn>
+              </div>
+            ) : (
+              <div>
+                <div style={{ fontSize: 12.5, color: DS.muted, marginBottom: 12 }}>Have a promo or free-trial code from TutorOS? Enter it to update your price.</div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <Input value={codeInput} onChange={e => { setCodeInput(e.target.value.toUpperCase()); setCodeMsg(null); }} placeholder="Enter code" style={{ flex: 1 }} />
+                  <Btn variant="primary" small icon="check" onClick={onApply}>Apply</Btn>
+                </div>
+                {codeMsg && <div style={{ fontSize: 12.5, color: codeMsg.ok ? DS.success : DS.danger, marginTop: 10 }}>{codeMsg.text}</div>}
+              </div>
+            )}
+          </div>
+        </Card>
+      </div>
+
+      {/* Billing details */}
+      <SettingsSection title="Billing details" subtitle="Shown on your TutorOS subscription invoices" icon="book">
+        <SetGrid>
+          <Field label="Company / billing name">
+            <Input value={b.company || ''} onChange={e => setB('company', e.target.value)} />
+          </Field>
+          <Field label="Billing email">
+            <Input type="email" value={b.email || ''} onChange={e => setB('email', e.target.value)} />
+          </Field>
+          <Field label="VAT number">
+            <Input value={b.vat || ''} onChange={e => setB('vat', e.target.value)} />
+          </Field>
+        </SetGrid>
+        <Field label="Billing address" style={{ padding: '0 0 10px' }}>
+          <Textarea value={b.address || ''} onChange={e => setB('address', e.target.value)} style={{ minHeight: 60 }} />
+        </Field>
+      </SettingsSection>
+
+      {/* Purchase history */}
+      <Card title="Purchase history" icon="invoice" style={{ marginBottom: 20 }}
+        actions={[<Btn key="dl" variant="secondary" small icon="download" onClick={downloadAll}>Download all</Btn>]}>
+        <div style={{ padding: '12px 16px', borderBottom: `1px solid ${DS.border}` }}>
+          <Input value={histSearch} onChange={e => setHistSearch(e.target.value)} placeholder="Search invoices…" icon="search" style={{ maxWidth: 280 }} />
+        </div>
+        <Table
+          cols={['Invoice', 'Amount', 'Date', 'Status', '']}
+          rows={filteredHist.map(h => [
+            <span style={{ fontSize: 13, fontWeight: 500, color: DS.text }}>{h.label}</span>,
+            <span style={{ fontSize: 13, color: DS.sub }}>£{h.amount}</span>,
+            <span style={{ fontSize: 12, color: DS.muted }}>{fmtDate(h.date)}</span>,
+            <Badge variant={h.status === 'paid' ? 'success' : 'danger'}>{h.status === 'paid' ? 'Paid' : 'Declined'}</Badge>,
+            <button onClick={() => downloadInvoice(h)} title="Download invoice" style={{ background: 'none', border: 'none', cursor: 'pointer', color: DS.faint, display: 'flex', padding: 4 }}><Icon name="download" size={15} /></button>,
+          ])}
+        />
+        {filteredHist.length === 0 && <div style={{ padding: '24px 16px', textAlign: 'center', fontSize: 13, color: DS.muted }}>No invoices match your search.</div>}
+      </Card>
+    </div>
+  );
+};
+
 // ─── Tab registry per role ──────────────────────────────────────────────────────────
 const ROLE_TABS = {
   superadmin: { label: 'Platform Owner', tab: { id: 'platform', label: 'Platform Defaults', Comp: PlatformTab } },
@@ -628,12 +992,32 @@ const SettingsPage = ({ role = 'admin', section }) => {
   const roleMeta = ROLE_TABS[role] || ROLE_TABS.admin;
   const [saved, setSaved] = React.useState(false);
 
-  // Role-specific tab first, then the common tabs.
+  // The signed-in staff identity may hold both admin + teacher at the active
+  // centre — if so, the Account tab offers a view switch. Resolved from the same
+  // onboarding membership list that drives the sidebar centre switcher.
+  const onb = window.useOnboardingStore ? window.useOnboardingStore() : null;
+  const activeCentreId = window.__getCentre ? window.__getCentre() : ((window.ONB_CENTRE && window.ONB_CENTRE.id) || 'bm');
+  const viewRoles = React.useMemo(() => {
+    if ((role !== 'admin' && role !== 'teacher') || !window.ONB_SESSION) return [];
+    const email = window.ONB_SESSION.email.toLowerCase();
+    const roles = [];
+    // Use the canonical constant so newly-seeded memberships show without a cache
+    // clear (the onboarding store reads from localStorage which may be stale).
+    const memberships = window.ONB_MEMBERSHIPS || (onb && onb.memberships) || [];
+    memberships.forEach(m => {
+      if ((m.email || '').toLowerCase() !== email || m.centreId !== activeCentreId) return;
+      if ((m.role === 'admin' || m.role === 'teacher') && !roles.includes(m.role)) roles.push(m.role);
+    });
+    return roles;
+  }, [role, activeCentreId]);
+
   const tabs = [
     { id: roleMeta.tab.id, label: roleMeta.tab.label, render: () => <roleMeta.tab.Comp data={data} set={set} /> },
+    // Admins get a 2nd role-specific tab: plan change · override code · billing details.
+    ...(role === 'admin' ? [{ id: 'billing', label: 'Plans & Billing', render: () => <BillingTab /> }] : []),
     { id: 'notifications', label: 'Notifications', render: () => <NotificationsTab data={data} set={set} /> },
     { id: 'appearance',    label: 'Appearance',    render: () => <AppearanceTab data={data} set={set} role={role} /> },
-    { id: 'account',       label: 'Account',       render: () => <AccountTab data={data} set={set} roleLabel={roleMeta.label} /> },
+    { id: 'account',       label: 'Account',       render: () => <AccountTab data={data} set={set} roleLabel={roleMeta.label} viewRoles={viewRoles} currentRole={role} onSwitchView={r => window.__navigate && window.__navigate(r, 'dashboard')} /> },
   ];
   const active = tabs.find(t => t.id === section) || tabs[0];
 
@@ -659,9 +1043,9 @@ const SettingsPage = ({ role = 'admin', section }) => {
 };
 
 Object.assign(window, {
-  useSettingsStore, SettingsPage,
+  useSettingsStore, SettingsPage, CommsTab,
   AccountTab, NotificationsTab, AppearanceTab,
-  PlatformTab, CentreTab, TeachingTab, LearningTab,
+  PlatformTab, CentreTab, TeachingTab, LearningTab, BillingTab,
 });
 
 })();

@@ -758,7 +758,7 @@ const ReportEditor = ({ report, store, onBack, onSaved }) => {
   return (
     <div>
       {/* sticky action bar */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 0', position: 'sticky', top: 0, background: DS.surface, zIndex: 5 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 0', position: 'sticky', top: 52, background: DS.surface, zIndex: 5 }}>
         <button onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'none', border: 'none', cursor: 'pointer', color: DS.muted, fontSize: 13 }}>
           ← Back to reports
         </button>
@@ -1363,7 +1363,7 @@ const StudentReports = () => {
       ]} />
 
       {/* Filters stay pinned to the top while the list scrolls under them. */}
-      <div style={{ position: 'sticky', top: 0, zIndex: 5, background: DS.surfaceAlt || DS.bg, display: 'flex', alignItems: 'center', gap: 10, padding: '12px 0', marginBottom: 6, flexWrap: 'wrap' }}>
+      <div style={{ position: 'sticky', top: 52, zIndex: 5, background: DS.surfaceAlt || DS.bg, display: 'flex', alignItems: 'center', gap: 10, padding: '12px 0', marginBottom: 6, flexWrap: 'wrap' }}>
         <SearchInput value={search} onChange={e => setSearch(e.target.value)} placeholder="Search reports…" style={{ width: 240 }} />
         <Select value={subjectF} onChange={e => setSubjectF(e.target.value)} style={{ width: 150 }}>
           <option value="all">All subjects</option>{subjects.map(s => <option key={s} value={s}>{s}</option>)}

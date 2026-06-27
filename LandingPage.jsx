@@ -2,7 +2,12 @@
 //  TutorOS — Landing / Marketing Page
 // ══════════════════════════════════════════════════════════════
 
-const LandingPage = ({ onEnterApp }) => {
+const LandingPage = ({ onEnterApp, onGetStarted, onLogin }) => {
+  // "Get started" CTAs open the public Signup page (create centre + first admin);
+  // "Log in" opens the public Login page; "View live demo" drops straight into the
+  // app. Each falls back to onEnterApp when its dedicated handler isn't supplied.
+  const startSignup = onGetStarted || onEnterApp;
+  const goLogin = onLogin || onEnterApp;
   const [hovNav, setHovNav] = React.useState(null);
   const [hovPlan, setHovPlan] = React.useState(null);
   const [mobileMenuOpen, setMobileMenuOpen] = React.useState(false);
@@ -160,8 +165,8 @@ const LandingPage = ({ onEnterApp }) => {
             ))}
           </nav>
           <div style={{ display: 'flex', gap: 8 }}>
-            <Btn variant="secondary" onClick={onEnterApp} small>Log in</Btn>
-            <Btn variant="primary" onClick={onEnterApp} small>Get started free</Btn>
+            <Btn variant="secondary" onClick={goLogin} small>Log in</Btn>
+            <Btn variant="primary" onClick={startSignup} small>Get started free</Btn>
           </div>
         </div>
       </header>
@@ -200,7 +205,7 @@ const LandingPage = ({ onEnterApp }) => {
         </p>
 
         <div style={{ display: 'flex', justifyContent: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <Btn variant="primary" icon="arrow_right" onClick={onEnterApp}>
+          <Btn variant="primary" icon="arrow_right" onClick={startSignup}>
             Start free — no card required
           </Btn>
           <Btn variant="secondary" onClick={onEnterApp}>
@@ -419,7 +424,7 @@ const LandingPage = ({ onEnterApp }) => {
 
               <Btn
                 variant={p.highlight ? 'primary' : 'secondary'}
-                onClick={onEnterApp}
+                onClick={startSignup}
               >{p.cta}</Btn>
             </div>
           ))}
@@ -441,7 +446,7 @@ const LandingPage = ({ onEnterApp }) => {
           <p style={{ fontSize: 16, color: '#9CA3AF', margin: '0 0 36px' }}>
             Join 200+ tuition centres already on TutorOS.
           </p>
-          <Btn variant="primary" onClick={onEnterApp}>Start your free 14-day trial</Btn>
+          <Btn variant="primary" onClick={startSignup}>Start your free 14-day trial</Btn>
         </div>
       </section>
 

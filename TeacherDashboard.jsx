@@ -1,16 +1,136 @@
 // ══════════════════════════════════════════════════════════════
-//  TutorOS — Teacher Dashboard
+//  TutorOS — Teacher Dashboard  (triage layout: today-first)
 // ══════════════════════════════════════════════════════════════
 
 // Mock data (todaySchedule, homeworkItems, studentProgress,
 // attendanceClass) lives in mocks/teacherDashboard.mock.jsx, loaded
 // before this file in index.html. Report drafts come from the shared
 // reports store (window.useReportsStore from Reports.jsx).
+//
+// Presentation refactor only — all data sources, the live "Reports due"
+// derivation, attendance state and the lesson-planner globals are kept
+// as they were. New layout order: today (hero + later) → action items →
+// quick actions → KPIs → two-up preview lists. Blocks with no source yet
+// render an empty/TODO state rather than inventing data.
 
 const TODAY_ISO = '2026-04-25';
 
+// ── Thresholds (brief-defined; reuse if equivalents appear later) ──
+const ABSENCE_STREAK  = 3;
+const COMPLETION_MIN  = 50;
+const SCORE_DROP      = 10;
+const UP_NEXT_WINDOW  = 120;   // minutes
+
+// Subject → dot colour for session / class items. Local helper following
+// the existing per-file convention (no shared exported subjectColor).
+const teacherSubjectColor = (subj = '') =>
+  subj.includes('A-Level') ? '#7C3AED' :
+  subj.includes('Physics') ? '#0891B2' :
+  subj.includes('Science') ? '#0891B2' :
+  subj.includes('English') ? '#D97706' :
+  DS.accent;
+
+// ── Small presentational subcomponents ─────────────────────────────
+
+// "See all →" footer link, used at the foot of preview lists.
+const TSeeAll = ({ label = 'See all', onClick }) => {
+  const [hov, setHov] = React.useState(false);
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+      style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, width: '100%',
+        padding: '10px 16px', border: 'none', borderTop: `1px solid ${DS.border}`,
+        background: hov ? DS.surface : 'transparent', cursor: 'pointer',
+        fontSize: 12.5, fontWeight: 500, color: DS.accent, transition: 'background 0.12s',
+      }}
+    >
+      {label} <Icon name="chevron_r" size={13} />
+    </button>
+  );
+};
+
+// A small "Later today" session card (right column of the hero block).
+const SessionCard = ({ s, onClick }) => (
+  <button onClick={onClick} style={{
+    display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left',
+    padding: '11px 12px', borderRadius: 9, cursor: 'pointer',
+    background: DS.bg, border: `1px solid ${DS.border}`,
+  }}>
+    <span style={{ fontSize: 12.5, fontWeight: 500, color: DS.text, width: 42, flexShrink: 0 }}>{s.time}</span>
+    <span style={{ width: 8, height: 8, borderRadius: '50%', background: teacherSubjectColor(s.subject), flexShrink: 0 }} />
+    <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ fontSize: 12.5, fontWeight: 500, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.group}</div>
+      <div style={{ fontSize: 11, color: DS.muted }}>{s.room} · {s.students} students</div>
+    </div>
+  </button>
+);
+
+// One action-item tile (to mark / AI feedback / attendance / messages).
+// Quiet by default — colour shows only when there's something to act on, so a
+// zero reads as "done" rather than an alert.
+const ActionTile = ({ icon, count, label, tone = 'accent', onClick }) => {
+  const tones = { accent: DS.accent, warning: DS.warning, danger: DS.danger, info: DS.info };
+  const active = count > 0;
+  const toneColor = tones[tone] || DS.accent;
+  const [hov, setHov] = React.useState(false);
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+      style={{
+        flex: '1 1 160px', minWidth: 0, display: 'flex', alignItems: 'center', gap: 12,
+        padding: '15px 18px', borderRadius: 12, textAlign: 'left', cursor: 'pointer',
+        background: DS.card, border: `1px solid ${hov ? DS.borderDark : DS.cardBorder}`,
+        boxShadow: DS.cardShadow, transition: 'border-color 0.14s ease',
+      }}
+    >
+      <div style={{
+        width: 36, height: 36, borderRadius: 9, flexShrink: 0,
+        background: DS.surface, color: active ? toneColor : DS.faint,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>
+        <Icon name={icon} size={17} />
+      </div>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 21, fontWeight: 700, color: active ? DS.text : DS.faint, lineHeight: 1, letterSpacing: '-0.4px' }}>{count}</div>
+        <div style={{ fontSize: 12.5, color: DS.muted, marginTop: 4 }}>{label}</div>
+      </div>
+    </button>
+  );
+};
+
+// One row in the quick-actions list. Its own component so the hover hook is
+// stable regardless of whether the parent section is toggled on/off (avoids a
+// Rules-of-Hooks violation that would otherwise crash when toggling the section).
+const QuickActionRow = ({ action, divider }) => {
+  const [hov, setHov] = React.useState(false);
+  return (
+    <button
+      onClick={action.onClick}
+      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+      style={{
+        flex: '1 1 160px', minWidth: 0, display: 'flex', alignItems: 'center', gap: 10,
+        padding: '14px 16px', border: 'none', background: hov ? DS.surface : 'transparent',
+        cursor: 'pointer', textAlign: 'left',
+        borderRight: divider ? `1px solid ${DS.border}` : 'none',
+        transition: 'background 0.1s',
+      }}
+    >
+      <div style={{
+        width: 32, height: 32, borderRadius: 7, flexShrink: 0,
+        background: DS.accentLight, color: DS.accent,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>
+        <Icon name={action.icon} size={14} />
+      </div>
+      <span style={{ fontSize: 13, fontWeight: 500, color: DS.text }}>{action.label}</span>
+    </button>
+  );
+};
+
 const TeacherDashboard = () => {
-  const [hwTab, setHwTab] = React.useState('marking');
   // Tick when a plan is created/edited elsewhere so badges update on return.
   const [, setPlanTick] = React.useState(0);
   React.useEffect(() => {
@@ -27,10 +147,11 @@ const TeacherDashboard = () => {
       window.__openLessonPlanner(group, TODAY_ISO, hasPlan(group) ? 'view' : 'edit');
     }
   };
+  const go = (pg) => window.__navigate && window.__navigate('teacher', pg);
+
   const [attendance, setAttendance] = React.useState(
     Object.fromEntries(attendanceClass.students.map(s => [s.name, s.status]))
   );
-  const [attendanceSaved, setAttendanceSaved] = React.useState(false);
   const reportsStore = useReportsStore();
   const reportConfig = reportsStore.store.config;
   const reportDrafts = reportsStore.reportsArr.filter(r => r.status === 'draft');
@@ -62,229 +183,305 @@ const TeacherDashboard = () => {
   })();
   const dueOverdue = reportsDue.filter(d => d.overdue).length;
 
-  const markAttendance = (name, status) => {
-    setAttendance(prev => ({ ...prev, [name]: status }));
-    setAttendanceSaved(false);
-  };
+  // ── Today — hero (current/next) + later-today ──────────────────────
+  // todaySchedule carries status completed/current/upcoming. The hero shows
+  // the current session, else the next upcoming one. "Later" = the rest.
+  const classesToday = todaySchedule.length;
+  const currentIdx = todaySchedule.findIndex(c => c.status === 'current');
+  const heroIdx = currentIdx !== -1 ? currentIdx : todaySchedule.findIndex(c => c.status === 'upcoming');
+  const hero = heroIdx !== -1 ? todaySchedule[heroIdx] : null;
+  const laterSessions = hero
+    ? todaySchedule.filter((c, i) => i > heroIdx && c.status !== 'completed')
+    : [];
+  const heroIsNow = hero && hero.status === 'current';
 
-  const saveAttendance = () => {
-    setAttendanceSaved(true);
-    setTimeout(() => setAttendanceSaved(false), 2000);
-  };
+  // Homework due today — aggregate from homeworkItems whose due date is today.
+  const fmtToday = new Date(TODAY_ISO + 'T00:00:00').toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+  const dueTodayHw = homeworkItems.filter(h => h.due === fmtToday);
+  const hwDueToday = dueTodayHw.reduce(
+    (acc, h) => ({ submitted: acc.submitted + h.submitted, total: acc.total + h.total }),
+    { submitted: 0, total: 0 }
+  );
+  const hwHasDueToday = hwDueToday.total > 0;
 
-  const statusConfig = {
-    completed: { label: 'Done',    bg: DS.successBg,  color: DS.success, border: DS.successBorder },
-    current:   { label: 'Now',     bg: DS.accentLight, color: DS.accent,  border: DS.accentBorder  },
-    upcoming:  { label: 'Upcoming',bg: DS.surface,     color: DS.muted,   border: DS.border        },
-  };
+  // ── Action items (4 tiles) ─────────────────────────────────────────
+  const toMarkCount    = homeworkItems.reduce((n, h) => n + (h.toMark || 0), 0);
+  const attendanceToDo = Object.values(attendance).filter(v => !v).length;
+  const aiFeedbackToReview = reportDrafts.length;   // closest wired proxy: draft reports awaiting review
+  const unreadMessages = 0;   // TODO: comms unread isn't passed to this page; wire when available
+  const actionItems = [
+    { icon: 'edit',    count: toMarkCount,        label: 'to mark',           tone: 'accent',  onClick: () => go('homework') },
+    { icon: 'file',    count: aiFeedbackToReview, label: 'feedback to review', tone: 'warning', onClick: () => go('reports') },
+    { icon: 'check',   count: attendanceToDo,     label: 'attendance to take', tone: 'info',    onClick: () => go('attendance') },
+    { icon: 'message', count: unreadMessages,     label: 'unread messages',    tone: 'danger',  onClick: () => go('comms') },
+  ];
+
+  const quickActions = [
+    { icon: 'plus',    label: 'New homework',     onClick: () => go('homework') },
+    { icon: 'message', label: 'Message class',    onClick: () => go('comms') },
+    { icon: 'check',   label: 'Mark register',     onClick: () => go('attendance') },
+    { icon: 'bell',    label: 'Send announcement', onClick: () => go('comms') },
+  ];
+
+  // ── KPIs (4) ───────────────────────────────────────────────────────
+  const myStudents = studentProgress.length;
+  const hwTotals = homeworkItems.reduce(
+    (acc, h) => ({ submitted: acc.submitted + h.submitted, total: acc.total + h.total }),
+    { submitted: 0, total: 0 }
+  );
+  const hwCompletion = hwTotals.total ? Math.round((hwTotals.submitted / hwTotals.total) * 100) : 0;
+  const activeAssignments = homeworkItems.filter(h => h.status === 'open' || h.toMark > 0).length;
+  const dueThisWeek = homeworkItems.length;   // every listed assignment is in the current window
+  const kpis = [
+    { label: 'My students',        value: String(myStudents), sub: 'across my classes', icon: 'users', iconBg: DS.accentLight, accent: DS.accent },
+    { label: 'HW completion',      value: `${hwCompletion}%`,  trend: '-4% vs last wk',  trendDir: 'down', icon: 'clip', iconBg: DS.warningBg, accent: DS.warning },
+    { label: 'Avg attendance',     value: '—',                 sub: 'awaiting register',  icon: 'check', iconBg: DS.successBg, accent: DS.success }, // TODO: wire avg attendance
+    { label: 'Active assignments', value: String(activeAssignments), sub: `${dueThisWeek} due this week`, icon: 'calendar', iconBg: DS.infoBg, accent: DS.info },
+  ];
+
+  // ── Students needing attention — reason chip via thresholds ────────
+  // Score drop is computable from the score series. Completion/absence
+  // per-student data isn't in studentProgress, so we only flag what we can
+  // honestly derive (a real score drop ≥ SCORE_DROP) without inventing data.
+  const needsAttention = studentProgress.map(s => {
+    const n = s.scores.length;
+    const drop = n >= 2 ? s.scores[n - 2] - s.scores[n - 1] : 0;
+    if (s.trend === 'down' && drop >= SCORE_DROP) return { ...s, reason: 'score drop', tone: 'danger' };
+    if (s.trend === 'down') return { ...s, reason: 'declining', tone: 'warning' };
+    return null;
+  }).filter(Boolean);
+
+  // ── Recent submissions — no per-submission source yet ──────────────
+  const recentSubmissions = [];   // TODO: wire recent homework submissions
+
+  // ── Per-user customisation — toggle which sections appear ───────
+  const SECTIONS = [
+    { id: 'today',    label: 'Today',                     hint: 'Current session & later-today' },
+    { id: 'actions',  label: 'Action items',              hint: 'To mark, attendance, messages…' },
+    { id: 'quick',    label: 'Quick actions',             hint: 'Common shortcuts' },
+    { id: 'kpis',     label: 'Key metrics',               hint: 'Students, completion, attendance…' },
+    { id: 'attention',label: 'Students needing attention' },
+    { id: 'submissions', label: 'Recent submissions' },
+    { id: 'reports',  label: 'Reports due' },
+  ];
+  const prefs = useDashboardPrefs('tutoros.dash.teacher.v1', SECTIONS);
+  const [customiseOpen, setCustomiseOpen] = React.useState(false);
+  const show = prefs.isOn;
 
   return (
-    <div style={{ flex: 1, padding: '32px', overflow: 'auto', minWidth: 0 }}>
+    <div style={{ padding: '32px' }}>
       <PageHeader
-        title="Dashboard"
-        subtitle="Friday, 25 April 2026 · 4 classes today"
+        title={`Good morning, ${TEACHER_NAME.split(' ')[0]}`}
+        subtitle={`Friday, 25 April 2026 · ${classesToday} ${classesToday === 1 ? 'class' : 'classes'} today`}
         actions={[
-          <Btn key="hw" variant="secondary" icon="clip" small>Set Homework</Btn>,
-          <Btn key="mark" variant="primary" icon="edit" small>Mark Submissions</Btn>,
+          <Btn key="cust" variant="secondary" icon="settings" small onClick={() => setCustomiseOpen(true)}>Customise</Btn>,
         ]}
       />
 
-      {/* ── Today's Schedule ─────────────────────────────────────── */}
-      <Card title="Today's Schedule" style={{ marginBottom: 20 }} actions={[
-        <Badge key="b" variant="accent">4 classes</Badge>
-      ]}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)' }}>
-          {todaySchedule.map((cls, i) => {
-            const sc = statusConfig[cls.status];
-            return (
-              <div key={i} style={{
-                padding: '16px 20px',
-                borderRight: i < todaySchedule.length - 1 ? `1px solid ${DS.border}` : 'none',
-                borderTop: `2px solid ${cls.status === 'current' ? DS.accent : 'transparent'}`,
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: DS.text }}>{cls.time}</span>
+      {/* ── Today — hero + later-today ─────────────────────────────── */}
+      {show('today') && (
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 20, marginBottom: 24 }}>
+        {/* Hero — current / next session. Stands out via elevation + type, not colour. */}
+        <div style={{ flex: '2 1 300px', minWidth: 0 }}>
+          <Card style={{ height: '100%', boxShadow: hero ? DS.cardShadowHi : DS.cardShadow }}>
+            {hero ? (
+              <div style={{ padding: '22px 24px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
                   <span style={{
-                    fontSize: 10, fontWeight: 600, padding: '2px 7px', borderRadius: 20,
-                    background: sc.bg, color: sc.color, border: `1px solid ${sc.border}`,
-                  }}>{sc.label}</span>
+                    display: 'inline-flex', alignItems: 'center', gap: 5,
+                    fontSize: 11.5, fontWeight: 600, padding: '3px 10px', borderRadius: 20,
+                    background: DS.accentLight, color: DS.accent, border: `1px solid ${DS.accentBorder}`,
+                  }}>
+                    <Icon name="clock" size={12} />
+                    {heroIsNow ? 'Now' : 'Up next'}
+                  </span>
+                  <span style={{ fontSize: 12.5, color: DS.muted }}>{hero.time} · {hero.room}</span>
                 </div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: DS.text, marginBottom: 3 }}>{cls.subject}</div>
-                <div style={{ fontSize: 12, color: DS.muted, marginBottom: 8 }}>{cls.group}</div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: DS.faint, marginBottom: 10 }}>
-                  <span>{cls.room}</span>
-                  <span>{cls.students} students</span>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+                  <span style={{ width: 9, height: 9, borderRadius: '50%', background: teacherSubjectColor(hero.subject), flexShrink: 0 }} />
+                  <span style={{ fontSize: 20, fontWeight: 700, color: DS.text, letterSpacing: '-0.4px' }}>{hero.subject}</span>
                 </div>
-                {(() => {
-                  const planned = hasPlan(cls.group);
-                  return (
-                    <button
-                      onClick={() => openPlanner(cls.group)}
-                      style={{
-                        width: '100%', padding: '6px 10px', borderRadius: 6,
-                        border: `1px solid ${planned ? DS.accentBorder : DS.border}`,
-                        background: planned ? DS.accentLight : DS.surface,
-                        color: planned ? DS.accent : DS.sub,
-                        fontSize: 12, fontWeight: 600, cursor: 'pointer',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-                      }}
-                    >
-                      <Icon name={planned ? 'eye' : 'edit'} size={12} />
-                      {planned ? 'View Plan' : 'Make Plan'}
-                    </button>
-                  );
-                })()}
+                <div style={{ fontSize: 13.5, color: DS.muted, marginBottom: 18 }}>
+                  {hero.group} · {hero.students} students
+                </div>
+
+                {/* Homework due today progress strip */}
+                {hwHasDueToday ? (
+                  <div style={{
+                    padding: '12px 14px', borderRadius: 10, marginBottom: 18,
+                    background: DS.surface, border: `1px solid ${DS.border}`,
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                      <span style={{ fontSize: 12.5, fontWeight: 500, color: DS.sub }}>Homework due today</span>
+                      <span style={{ fontSize: 12.5, fontWeight: 600, color: DS.text }}>{hwDueToday.submitted}/{hwDueToday.total} submitted</span>
+                    </div>
+                    <div style={{ height: 6, background: DS.border, borderRadius: 3, overflow: 'hidden' }}>
+                      <div style={{
+                        width: `${Math.round((hwDueToday.submitted / hwDueToday.total) * 100)}%`,
+                        height: '100%', background: DS.accent, borderRadius: 3,
+                      }} />
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{
+                    padding: '11px 14px', borderRadius: 10, marginBottom: 18,
+                    background: DS.surface, border: `1px solid ${DS.border}`,
+                    fontSize: 12.5, color: DS.muted,
+                  }}>No homework due today for this class.</div>
+                )}
+
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <Btn variant="primary" icon="check" onClick={() => go('attendance')}>Take attendance</Btn>
+                  <Btn variant="secondary" icon={hasPlan(hero.group) ? 'eye' : 'edit'} onClick={() => openPlanner(hero.group)}>
+                    Open lesson
+                  </Btn>
+                </div>
               </div>
-            );
-          })}
+            ) : (
+              <EmptyState
+                icon="calendar"
+                title="Done for today"
+                message="You have no more sessions scheduled today."
+              />
+            )}
+          </Card>
+        </div>
+
+        {/* Later today */}
+        <div style={{ flex: '1 1 200px', minWidth: 0 }}>
+          <Card title="Later today" style={{ height: '100%' }}>
+            <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {laterSessions.length === 0 ? (
+                <div style={{ padding: '20px 6px', textAlign: 'center', fontSize: 12.5, color: DS.muted }}>
+                  Done for today
+                </div>
+              ) : (
+                <>
+                  {laterSessions.slice(0, 3).map((s, i) => (
+                    <SessionCard key={i} s={s} onClick={() => openPlanner(s.group)} />
+                  ))}
+                  {laterSessions.length > 3 && (
+                    <button onClick={() => go('timetable')} style={{
+                      border: 'none', background: 'transparent', cursor: 'pointer',
+                      fontSize: 12.5, fontWeight: 500, color: DS.accent, padding: '6px 4px',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
+                    }}>
+                      +{laterSessions.length - 3} more <Icon name="chevron_r" size={13} />
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+          </Card>
+        </div>
+      </div>
+      )}
+
+      {/* ── Action items (4 tiles) ─────────────────────────────────── */}
+      {show('actions') && (
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 24 }}>
+        {actionItems.map((a, i) => <ActionTile key={i} {...a} />)}
+      </div>
+      )}
+
+      {/* ── Quick actions row ──────────────────────────────────────── */}
+      {show('quick') && (
+      <Card title="Quick actions" style={{ marginBottom: 24 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap' }}>
+          {quickActions.map((a, i) => (
+            <QuickActionRow key={a.label} action={a} divider={i < quickActions.length - 1} />
+          ))}
         </div>
       </Card>
+      )}
 
-      {/* ── Three-column layout ───────────────────────────────────── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 20, marginBottom: 20 }}>
-
-        {/* Attendance Widget */}
-        <Card title={`Attendance — ${attendanceClass.group}`} actions={[
-          attendanceSaved
-            ? <Badge key="saved" variant="success">Saved</Badge>
-            : <Btn key="save" variant="primary" small onClick={saveAttendance}>Save</Btn>
-        ]}>
-          <div style={{ padding: '8px 0' }}>
-            {attendanceClass.students.map((s, i) => {
-              const status = attendance[s.name];
-              return (
-                <div key={s.name} style={{
-                  display: 'flex', alignItems: 'center', gap: 10, padding: '8px 16px',
-                  borderBottom: i < attendanceClass.students.length - 1 ? `1px solid ${DS.border}` : 'none',
-                }}>
-                  <Avatar name={s.name} size={28} />
-                  <span style={{ flex: 1, fontSize: 13, color: DS.sub }}>{s.name}</span>
-                  <div style={{ display: 'flex', gap: 4 }}>
-                    {['present', 'absent', 'late'].map(st => (
-                      <button
-                        key={st}
-                        onClick={() => markAttendance(s.name, st)}
-                        style={{
-                          width: 28, height: 28, borderRadius: 6, border: `1px solid`,
-                          cursor: 'pointer', fontSize: 11, fontWeight: 600,
-                          transition: 'all 0.1s',
-                          borderColor: status === st
-                            ? st === 'present' ? DS.successBorder : st === 'absent' ? DS.dangerBorder : DS.warningBorder
-                            : DS.border,
-                          background: status === st
-                            ? st === 'present' ? DS.successBg : st === 'absent' ? DS.dangerBg : DS.warningBg
-                            : DS.surface,
-                          color: status === st
-                            ? st === 'present' ? DS.success : st === 'absent' ? DS.danger : DS.warning
-                            : DS.faint,
-                        }}
-                      >
-                        {st === 'present' ? 'P' : st === 'absent' ? 'A' : 'L'}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          <div style={{ padding: '10px 16px', background: DS.surface, borderTop: `1px solid ${DS.border}` }}>
-            <div style={{ display: 'flex', gap: 16, fontSize: 12 }}>
-              {['present','absent','late'].map(st => {
-                const count = Object.values(attendance).filter(v => v === st).length;
-                const colors = { present: DS.success, absent: DS.danger, late: DS.warning };
-                return (
-                  <span key={st} style={{ color: colors[st], fontWeight: 600 }}>
-                    {count} {st}
-                  </span>
-                );
-              })}
-              <span style={{ color: DS.faint, marginLeft: 'auto' }}>
-                {Object.values(attendance).filter(Boolean).length}/{attendanceClass.students.length} marked
-              </span>
-            </div>
-          </div>
-        </Card>
-
-        {/* Homework Panel */}
-        <Card title="Homework" actions={[
-          <Btn key="new" variant="primary" icon="plus" small>Set New</Btn>
-        ]}>
-          {/* Tabs */}
-          <div style={{ display: 'flex', borderBottom: `1px solid ${DS.border}`, padding: '0 16px' }}>
-            {[['marking','To Mark'], ['open', 'Open']].map(([id, label]) => (
-              <button
-                key={id}
-                onClick={() => setHwTab(id)}
-                style={{
-                  padding: '9px 12px', border: 'none', background: 'none',
-                  cursor: 'pointer', fontSize: 13, fontWeight: hwTab === id ? 600 : 400,
-                  color: hwTab === id ? DS.accent : DS.muted,
-                  borderBottom: `2px solid ${hwTab === id ? DS.accent : 'transparent'}`,
-                  marginBottom: -1,
-                }}
-              >
-                {label}
-                {id === 'marking' && (
-                  <span style={{
-                    marginLeft: 6, fontSize: 10, fontWeight: 700, padding: '1px 6px',
-                    borderRadius: 10, background: DS.accent, color: '#fff',
-                  }}>7</span>
-                )}
-              </button>
-            ))}
-          </div>
-          <div style={{ padding: '8px 0' }}>
-            {homeworkItems.filter(h => hwTab === 'marking' ? h.status === 'marking' : h.status === 'open').map((hw, i, arr) => (
-              <div key={hw.title} style={{
-                padding: '12px 16px',
-                borderBottom: i < arr.length - 1 ? `1px solid ${DS.border}` : 'none',
-              }}>
-                <div style={{ fontSize: 13, fontWeight: 500, color: DS.text, marginBottom: 4 }}>{hw.title}</div>
-                <div style={{ fontSize: 12, color: DS.muted, marginBottom: 8 }}>{hw.class} · Due {hw.due}</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <div style={{ flex: 1, height: 5, background: DS.surface, borderRadius: 3, overflow: 'hidden' }}>
-                    <div style={{
-                      width: `${(hw.submitted / hw.total) * 100}%`,
-                      height: '100%', background: hw.submitted === hw.total ? DS.success : DS.accent,
-                      borderRadius: 3,
-                    }} />
-                  </div>
-                  <span style={{ fontSize: 11, color: DS.muted, whiteSpace: 'nowrap' }}>
-                    {hw.submitted}/{hw.total} in
-                  </span>
-                  {hw.toMark > 0 && (
-                    <Badge variant="warning">{hw.toMark} to mark</Badge>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </Card>
-
-        {/* Student Progress */}
-        <Card title="Student Progress" actions={[<Badge key="b" variant="default">Yr 10 Group A</Badge>]}>
-          <div style={{ padding: '8px 0' }}>
-            {studentProgress.slice(0, 6).map((s, i) => (
-              <div key={s.name} style={{
-                display: 'flex', alignItems: 'center', gap: 10, padding: '9px 16px',
-                borderBottom: i < 5 ? `1px solid ${DS.border}` : 'none',
-              }}>
-                <Avatar name={s.name} size={28} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 12, fontWeight: 500, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {s.name}
-                  </div>
-                  <div style={{ fontSize: 11, color: DS.muted }}>Predicted: {s.predicted}</div>
-                </div>
-                <Sparkline data={s.scores} color={s.trend === 'up' ? DS.success : DS.danger} />
-                <ScorePill score={s.scores[s.scores.length - 1]} />
-              </div>
-            ))}
-          </div>
-        </Card>
+      {/* ── KPI cards (4) ──────────────────────────────────────────── */}
+      {show('kpis') && (
+      <div style={{
+        display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+        gap: 16, marginBottom: 24,
+      }}>
+        {kpis.map(k => <StatCard key={k.label} {...k} />)}
       </div>
+      )}
+
+      {/* ── Two-up: needs attention · recent submissions ───────────── */}
+      {(show('attention') || show('submissions')) && (
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 20, marginBottom: 24 }}>
+        {/* Students needing attention */}
+        {show('attention') && (
+        <div style={{ flex: '1 1 320px', minWidth: 0 }}>
+          <Card title="Students needing attention" actions={[
+            needsAttention.length > 0 && <Badge key="c" variant="warning">{needsAttention.length}</Badge>,
+            <Btn key="v" variant="ghost" icon="chevron_r" small onClick={() => go('progress')}>See all</Btn>,
+          ].filter(Boolean)}>
+            {needsAttention.length === 0 ? (
+              <div style={{ padding: '18px 16px', fontSize: 13, color: DS.muted }}>
+                No students currently flagged — scores are holding steady.
+              </div>
+            ) : (
+              <>
+                {needsAttention.slice(0, 6).map((s, i, arr) => (
+                  <div key={s.name} onClick={() => go('progress')} style={{
+                    display: 'flex', alignItems: 'center', gap: 11, padding: '11px 16px', cursor: 'pointer',
+                    borderBottom: i < Math.min(arr.length, 6) - 1 ? `1px solid ${DS.border}` : 'none',
+                  }}>
+                    <Avatar name={s.name} size={30} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 500, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.name}</div>
+                      <div style={{ fontSize: 11.5, color: DS.muted }}>Predicted {s.predicted}</div>
+                    </div>
+                    <Badge variant={s.tone === 'danger' ? 'danger' : 'warning'}>{s.reason}</Badge>
+                    <ScorePill score={s.scores[s.scores.length - 1]} />
+                  </div>
+                ))}
+                {needsAttention.length > 6 && <TSeeAll onClick={() => go('progress')} />}
+              </>
+            )}
+          </Card>
+        </div>
+        )}
+
+        {/* Recent submissions */}
+        {show('submissions') && (
+        <div style={{ flex: '1 1 320px', minWidth: 0 }}>
+          <Card title="Recent submissions" actions={[
+            <Btn key="v" variant="ghost" icon="chevron_r" small onClick={() => go('homework')}>See all</Btn>,
+          ]}>
+            {recentSubmissions.length === 0 ? (
+              <EmptyState
+                icon="clip"
+                title="No recent submissions to show"
+                message="The latest homework submissions will appear here once the homework store is connected."
+                action={<Btn variant="secondary" icon="clip" small onClick={() => go('homework')}>Open homework</Btn>}
+              />
+            ) : (
+              <>
+                {recentSubmissions.slice(0, 5).map((r, i, arr) => (
+                  <div key={i} style={{
+                    display: 'flex', alignItems: 'center', gap: 11, padding: '11px 16px',
+                    borderBottom: i < Math.min(arr.length, 5) - 1 ? `1px solid ${DS.border}` : 'none',
+                  }}>
+                    <Avatar name={r.student} size={30} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 500, color: DS.text }}>{r.student}</div>
+                      <div style={{ fontSize: 11.5, color: DS.muted }}>{r.assignment}</div>
+                    </div>
+                    <span style={{ fontSize: 11.5, color: DS.faint }}>{r.time}</span>
+                  </div>
+                ))}
+                <TSeeAll onClick={() => go('homework')} />
+              </>
+            )}
+          </Card>
+        </div>
+        )}
+      </div>
+      )}
 
       {/* ── Reports due (driven by the centre's resolved reporting rules) ── */}
+      {show('reports') && (
       <Card
         title="Reports due"
         actions={[
@@ -294,15 +491,15 @@ const TeacherDashboard = () => {
               ? <Badge key="b" variant="accent"><Icon name="clock" size={11} /> {reportsDue.length} upcoming</Badge>
               : <Badge key="b" variant="success"><Icon name="check" size={11} /> Nothing due</Badge>,
           reportDrafts.length > 0 && <Badge key="d" variant="warning"><Icon name="edit" size={11} /> {reportDrafts.length} draft{reportDrafts.length !== 1 ? 's' : ''}</Badge>,
-          <Btn key="v" variant="ghost" icon="eye" small onClick={() => window.__navigate && window.__navigate('teacher', 'reports')}>View all</Btn>,
-        ]}
+          <Btn key="v" variant="ghost" icon="eye" small onClick={() => go('reports')}>View all</Btn>,
+        ].filter(Boolean)}
       >
         <div>
           {reportsDue.length === 0 && (
             <div style={{ padding: '18px 16px', fontSize: 13, color: DS.muted }}>No reports due — every student you teach resolves to optional or off, or is already up to date.</div>
           )}
           {reportsDue.slice(0, 6).map((d, i, arr) => (
-            <div key={d.id} onClick={() => window.__navigate && window.__navigate('teacher', 'reports')}
+            <div key={d.id} onClick={() => go('reports')}
               style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', cursor: 'pointer',
                 borderBottom: i < Math.min(arr.length, 6) - 1 ? `1px solid ${DS.border}` : 'none' }}>
               <Avatar name={d.name} size={32} />
@@ -318,6 +515,10 @@ const TeacherDashboard = () => {
           ))}
         </div>
       </Card>
+      )}
+
+      {/* ── Customise dashboard modal ─────────────────────────────── */}
+      <CustomiseModal open={customiseOpen} onClose={() => setCustomiseOpen(false)} prefs={prefs} />
     </div>
   );
 };

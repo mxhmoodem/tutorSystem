@@ -5,7 +5,7 @@
 // ─── Shared admin store (localStorage-backed) ───────────────────────────────────
 // Teachers, classes and students live here so that add / invite / create flows
 // actually persist and reflect across the admin pages.
-const ADMIN_STORE_KEY = 'admin_store_v2';
+const ADMIN_STORE_KEY = 'admin_store_v3';
 
 // Seed data (SEED_TEACHERS, SEED_CLASSES, SEED_STUDENTS, SEED_SUBJECTS) and the
 // read-only roster (allStudents) live in mocks/adminPages.mock.jsx, loaded
@@ -66,6 +66,19 @@ const useAdminStore = () => {
   const updateTeacher = (id, patch) => persist({ ...store, teachers: store.teachers.map(t => t.id === id ? { ...t, ...patch } : t) });
   const addClass      = c => persist({ ...store, classes:  [{ ...c, id: c.id || 'c' + Date.now() }, ...store.classes] });
   const updateClass   = (id, patch) => persist({ ...store, classes: store.classes.map(c => c.id === id ? { ...c, ...patch } : c) });
+  // Cover / substitute teacher while a class's regular teacher is away. The class
+  // keeps its `teacher`; `cls.cover = { teacherId, teacher, from, to, reason }` (or
+  // null) records the stand-in for a date window. coverActive()/effectiveTeacher()
+  // (below) resolve which one applies on a given date, so cover reverts on its own.
+  const setCover   = (classId, cover) => persist({ ...store, classes: store.classes.map(c => c.id === classId ? { ...c, cover } : c) });
+  const clearCover = classId => persist({ ...store, classes: store.classes.map(c => c.id === classId ? { ...c, cover: null } : c) });
+  // Apply a per-class { [classId]: coverObj|null } map in ONE persist. Lets the
+  // teacher-profile "arrange cover" flow give each of an away teacher's classes its
+  // own stand-in (or none) over the same away window — N separate setCover calls off
+  // one pre-render snapshot would clobber each other (stale closure).
+  const setCoversForClasses  = map => persist({ ...store, classes: store.classes.map(c => (c.id in map) ? { ...c, cover: map[c.id] } : c) });
+  // Lift cover off every class an away teacher takes (the "remove all cover" button).
+  const clearCoverForTeacher = awayName => persist({ ...store, classes: store.classes.map(c => c.teacher === awayName ? { ...c, cover: null } : c) });
   // Create a class AND link its roster in one persist — avoids the stale-closure
   // problem of calling addClass then updateStudent N times (each off the same
   // pre-render snapshot would clobber the previous write).
@@ -83,6 +96,41 @@ const useAdminStore = () => {
   };
   const addStudent    = s => persist({ ...store, students: [{ ...s, id: 's' + Date.now() }, ...store.students] });
   const updateStudent = (id, patch) => persist({ ...store, students: store.students.map(s => s.id === id ? { ...s, ...patch } : s) });
+  const removeStudent = id => persist({ ...store, students: store.students.filter(s => s.id !== id) });
+  const removeTeacher = id => persist({ ...store, teachers: store.teachers.filter(t => t.id !== id) });
+
+  // Bulk inserts in a single persist — adding N records one-by-one off the same
+  // pre-render snapshot would clobber each previous write (stale-closure), so the
+  // CSV import + multi-teacher invite flows stamp every record then persist once.
+  const addStudents = (list = []) => {
+    const stamped = list.map((s, i) => ({ ...s, id: s.id || ('s' + (Date.now() + i)) }));
+    persist({ ...store, students: [...stamped, ...store.students] });
+    return stamped.map(s => s.id);
+  };
+  const addTeachers = (list = []) => {
+    const stamped = list.map((t, i) => ({ ...t, id: t.id || ('t' + (Date.now() + i)) }));
+    persist({ ...store, teachers: [...stamped, ...store.teachers] });
+    return stamped.map(t => t.id);
+  };
+
+  // Class-level enrolment (§5 — staff only). Adds classId to each student's
+  // classIds and recomputes the class's headcount from actual memberships, in one
+  // persist. Distinct from account provisioning: a student must already exist.
+  const enrolStudentsInClass = (classId, studentIds = []) => {
+    const ids = new Set(studentIds);
+    const nextStudents = store.students.map(s => ids.has(s.id)
+      ? { ...s, classIds: [...new Set([...(s.classIds || []), classId])] }
+      : s);
+    const count = nextStudents.filter(s => (s.classIds || []).includes(classId)).length;
+    persist({ ...store, students: nextStudents, classes: store.classes.map(c => c.id === classId ? { ...c, students: count } : c) });
+  };
+  const removeFromClass = (classId, studentId) => {
+    const nextStudents = store.students.map(s => s.id === studentId
+      ? { ...s, classIds: (s.classIds || []).filter(id => id !== classId) }
+      : s);
+    const count = nextStudents.filter(s => (s.classIds || []).includes(classId)).length;
+    persist({ ...store, students: nextStudents, classes: store.classes.map(c => c.id === classId ? { ...c, students: count } : c) });
+  };
   const addSubject    = s => persist({ ...store, subjects: [{ ...s, id: 'sub' + Date.now() }, ...store.subjects] });
   const updateSubject = (id, patch) => persist({ ...store, subjects: store.subjects.map(s => s.id === id ? { ...s, ...patch } : s) });
   const removeSubject = id => persist({ ...store, subjects: store.subjects.filter(s => s.id !== id) });
@@ -121,7 +169,7 @@ const useAdminStore = () => {
   const removeHoliday = (teacherId, holidayId) =>
     persist({ ...store, holidays: { ...store.holidays, [teacherId]: (store.holidays[teacherId] || []).filter(h => h.id !== holidayId) } });
 
-  return { ...store, addTeacher, updateTeacher, addClass, updateClass, createClassWithRoster, addStudent, updateStudent, addSubject, updateSubject, removeSubject, addSubjectInline, addYearGroup, addLevel, addExamBoard, setAttendance, addHoliday, removeHoliday };
+  return { ...store, addTeacher, addTeachers, updateTeacher, removeTeacher, addClass, updateClass, setCover, clearCover, setCoversForClasses, clearCoverForTeacher, createClassWithRoster, enrolStudentsInClass, removeFromClass, addStudent, addStudents, updateStudent, removeStudent, addSubject, updateSubject, removeSubject, addSubjectInline, addYearGroup, addLevel, addExamBoard, setAttendance, addHoliday, removeHoliday };
 };
 
 // ─── Admin sub-navigation ───────────────────────────────────────────────────────
@@ -1337,11 +1385,176 @@ const classHomework = cls => {
   });
 };
 
+// Assign / edit the cover teacher for a SINGLE class (the Class-detail entry point);
+// onApply wires to store.setCover. The multi-class, per-class flow that lets each of
+// an away teacher's classes get a different stand-in is TeacherCoverModal, below.
+// `editing` = a cover already exists (controls title + the Remove button); `prefill`
+// only seeds the form — it may come from an existing cover OR the away teacher's
+// booked holiday, so it is kept distinct from whether we're editing.
+const CoverModal = ({ open, onClose, store, awayName, classes = [], prefill, editing, onApply, onClear }) => {
+  const candidates = store.teachers.filter(t => t.name !== awayName && t.status !== 'invited');
+  const blank = { teacherId:'', from:'', to:'', reason:'' };
+  const [form, setForm] = React.useState(blank);
+  React.useEffect(() => {
+    if (open) setForm(prefill
+      ? { teacherId: prefill.teacherId || '', from: prefill.from || '', to: prefill.to || '', reason: prefill.reason || '' }
+      : blank);
+  }, [open, prefill]);
+
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const picked = store.teachers.find(t => t.id === form.teacherId);
+  const badRange = form.from && form.to && form.from > form.to;
+  const valid = picked && form.from && form.to && !badRange;
+
+  const apply = () => {
+    if (!valid) return;
+    onApply({ teacherId: picked.id, teacher: picked.name, from: form.from, to: form.to, reason: form.reason.trim() });
+    onClose();
+  };
+  const remove = () => { onClear && onClear(); onClose(); };
+
+  return (
+    <Modal
+      open={open} onClose={onClose}
+      icon="teacher" iconColor={DS.warning}
+      title={editing ? 'Edit cover' : 'Arrange cover'}
+      subtitle={`Assign a stand-in to take ${classes.length === 1 ? 'this class' : `all of ${awayName}'s classes`} while ${awayName || 'the teacher'} is away.`}
+      width={520}
+      footer={<>
+        {editing && onClear && <Btn variant="ghost" icon="x" onClick={remove} style={{ marginRight:'auto' }}>Remove cover</Btn>}
+        <Btn variant="secondary" onClick={onClose}>Cancel</Btn>
+        <Btn variant="primary" icon="check" onClick={apply} style={valid ? {} : { opacity:0.5, cursor:'not-allowed' }}>{editing ? 'Update cover' : 'Confirm cover'}</Btn>
+      </>}
+    >
+      {/* Affected classes */}
+      <div style={{ padding:'12px 14px', marginBottom:18, background:DS.surface, border:`1px solid ${DS.border}`, borderRadius:10 }}>
+        <div style={{ fontSize:11.5, color:DS.muted, textTransform:'uppercase', letterSpacing:0.4, marginBottom:8 }}>
+          {classes.length} class{classes.length === 1 ? '' : 'es'} to cover
+        </div>
+        <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
+          {classes.map(c => (
+            <span key={c.id} style={{ fontSize:12, padding:'3px 9px', background:subjectColor(c.name)+'14', color:subjectColor(c.name), border:`1px solid ${subjectColor(c.name)}33`, borderRadius:14 }}>
+              {c.name} · {c.day}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      <Field label="Cover teacher" required>
+        <Select value={form.teacherId} onChange={e => set('teacherId', e.target.value)}>
+          <option value="">Select a teacher…</option>
+          {candidates.map(t => <option key={t.id} value={t.id}>{t.name}{t.subject ? ` — ${t.subject}` : ''}</option>)}
+        </Select>
+      </Field>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'0 16px' }}>
+        <Field label="From" required><Input type="date" value={form.from} onChange={e => set('from', e.target.value)} icon="calendar" invalid={badRange} /></Field>
+        <Field label="To" required error={badRange ? 'End is before start' : ''}><Input type="date" value={form.to} onChange={e => set('to', e.target.value)} icon="calendar" invalid={badRange} /></Field>
+      </div>
+      <Field label="Reason" hint="Optional — shows on the class and timetable.">
+        <Input value={form.reason} onChange={e => set('reason', e.target.value)} placeholder="e.g. Annual leave / Sick" />
+      </Field>
+    </Modal>
+  );
+};
+
+// Arrange cover across an away teacher's classes: ONE shared away window, but each
+// class gets its own stand-in (or none) — so a multi-day absence can be split across
+// several teachers. Builds a { [classId]: cover|null } map for store.setCoversForClasses.
+const TeacherCoverModal = ({ open, onClose, store, teacher, classes = [], prefillWindow, prefillAssign, editing, onApply, onClear }) => {
+  const awayName = teacher && teacher.name;
+  const candidates = store.teachers.filter(t => t.name !== awayName && t.status !== 'invited');
+  const [win, setWin] = React.useState({ from:'', to:'', reason:'' });
+  const [assign, setAssign] = React.useState({}); // classId -> teacherId ('' = no cover)
+  // Seed once per open. Deps are intentionally just [open] so an incidental parent
+  // re-render (e.g. store refresh) can't wipe a half-finished assignment mid-edit.
+  React.useEffect(() => {
+    if (!open) return;
+    setWin(prefillWindow ? { from: prefillWindow.from || '', to: prefillWindow.to || '', reason: prefillWindow.reason || '' } : { from:'', to:'', reason:'' });
+    setAssign(prefillAssign ? { ...prefillAssign } : {});
+  }, [open]);
+
+  const setW   = (k, v) => setWin(w => ({ ...w, [k]: v }));
+  const setOne = (cid, tid) => setAssign(a => ({ ...a, [cid]: tid }));
+  const setAll = tid => setAssign(Object.fromEntries(classes.map(c => [c.id, tid])));
+  const badRange = win.from && win.to && win.from > win.to;
+  const assignedCount = classes.filter(c => assign[c.id]).length;
+  const valid = win.from && win.to && !badRange && assignedCount > 0;
+
+  const apply = () => {
+    if (!valid) return;
+    const map = {};
+    classes.forEach(c => {
+      const t = assign[c.id] && store.teachers.find(x => x.id === assign[c.id]);
+      map[c.id] = t ? { teacherId: t.id, teacher: t.name, from: win.from, to: win.to, reason: win.reason.trim() } : null;
+    });
+    onApply(map);
+    onClose();
+  };
+  const remove = () => { onClear && onClear(); onClose(); };
+
+  return (
+    <Modal
+      open={open} onClose={onClose}
+      icon="teacher" iconColor={DS.warning}
+      title={editing ? 'Edit cover' : 'Arrange cover'}
+      subtitle={`Set the away dates once, then choose a stand-in per class — each class can have a different cover while ${awayName || 'the teacher'} is away.`}
+      width={600}
+      footer={<>
+        {editing && onClear && <Btn variant="ghost" icon="x" onClick={remove} style={{ marginRight:'auto' }}>Remove all cover</Btn>}
+        <Btn variant="secondary" onClick={onClose}>Cancel</Btn>
+        <Btn variant="primary" icon="check" onClick={apply} style={valid ? {} : { opacity:0.5, cursor:'not-allowed' }}>{editing ? 'Update cover' : `Confirm cover · ${assignedCount}/${classes.length}`}</Btn>
+      </>}
+    >
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'0 16px' }}>
+        <Field label="Away from" required><Input type="date" value={win.from} onChange={e => setW('from', e.target.value)} icon="calendar" invalid={badRange} /></Field>
+        <Field label="Away until" required error={badRange ? 'End is before start' : ''}><Input type="date" value={win.to} onChange={e => setW('to', e.target.value)} icon="calendar" invalid={badRange} /></Field>
+      </div>
+      <Field label="Reason" hint="Optional — applies to every covered class.">
+        <Input value={win.reason} onChange={e => setW('reason', e.target.value)} placeholder="e.g. Annual leave / Sick" />
+      </Field>
+
+      {/* Quick-fill, then tweak per class */}
+      <div style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 14px', margin:'2px 0 16px', background:DS.surface, border:`1px solid ${DS.border}`, borderRadius:10 }}>
+        <span style={{ fontSize:12.5, color:DS.muted, whiteSpace:'nowrap' }}>Set all to</span>
+        <Select value="" onChange={e => { if (e.target.value) setAll(e.target.value === '__none__' ? '' : e.target.value); }} style={{ flex:1 }}>
+          <option value="">Choose a teacher…</option>
+          <option value="__none__">— No cover —</option>
+          {candidates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+        </Select>
+      </div>
+
+      <FlowSection icon="users" title={`Cover by class · ${assignedCount}/${classes.length} assigned`} />
+      {classes.length === 0 ? (
+        <EmptyState icon="calendar" title="No classes to cover" message="This teacher isn't assigned to any classes yet." />
+      ) : (
+        <div style={{ display:'flex', flexDirection:'column', gap:8, maxHeight:300, overflowY:'auto' }}>
+          {classes.map(c => {
+            const color = subjectColor(c.name);
+            return (
+              <div key={c.id} style={{ display:'flex', alignItems:'center', gap:12, padding:'10px 12px', border:`1px solid ${DS.border}`, borderLeft:`3px solid ${color}`, borderRadius:10 }}>
+                <div style={{ minWidth:0, flex:1 }}>
+                  <div style={{ fontSize:13, fontWeight:600, color:DS.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{c.name}</div>
+                  <div style={{ fontSize:11.5, color:DS.muted }}>{c.group} · {c.day} {c.time}</div>
+                </div>
+                <Select value={assign[c.id] || ''} onChange={e => setOne(c.id, e.target.value)} style={{ width:190, flexShrink:0 }}>
+                  <option value="">— No cover —</option>
+                  {candidates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </Select>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Modal>
+  );
+};
+
 const ClassDetailPage = () => {
   const store = useAdminStore();
   const id = adminParam();
   const cls = store.classes.find(c => c.id === id);
   const [modalOpen, setModalOpen] = React.useState(false);
+  const [coverOpen, setCoverOpen] = React.useState(false);
 
   if (!cls) return (
     <div style={{ padding:'32px' }}>
@@ -1359,6 +1572,15 @@ const ClassDetailPage = () => {
   const examBoard = store.examBoards.find(b => b.id === cls.examBoardId);
   const roster = store.students.filter(s => (s.classIds || []).includes(cls.id));
   const fill = cls.capacity ? Math.min(100, Math.round((cls.students / cls.capacity) * 100)) : 0;
+
+  // Cover (substitute) state for this class.
+  const cover = cls.cover;
+  const onCover = coverActive(cls);
+  const coverTeacher = cover && store.teachers.find(t => t.id === cover.teacherId);
+  // Prefill the cover modal from an existing cover, else the regular teacher's next
+  // booked holiday window — so "assign cover" lines up with when they're actually away.
+  const teacherHoliday = teacher && (store.holidays[teacher.id] || []).find(h => !h.to || h.to >= todayISO());
+  const coverPrefill = cover || (teacherHoliday ? { from: teacherHoliday.from, to: teacherHoliday.to, reason: teacherHoliday.reason } : null);
 
   // Derived analytics (stable per class). Prefer real roster figures when present.
   const rnd = seededRand(cls.id);
@@ -1382,6 +1604,17 @@ const ClassDetailPage = () => {
   return (
     <div style={{ padding:'32px', maxWidth:1040, margin:'0 auto' }}>
       <FlowHeader title={cls.name} subtitle={`${cls.group} · ${cls.teacher}`} onBack={() => adminNav('classes')} />
+
+      {/* Cover banner — only while the substitute window is live */}
+      {onCover && (
+        <div style={{ display:'flex', gap:12, alignItems:'center', padding:'12px 16px', marginBottom:20, background:DS.warningBg, border:`1px solid ${DS.warningBorder}`, borderRadius:10 }}>
+          <Icon name="teacher" size={18} color={DS.warning} />
+          <div style={{ fontSize:13, color:DS.sub, lineHeight:1.5, flex:1 }}>
+            <strong style={{ color:DS.text }}>{cls.teacher} is away</strong> — <strong style={{ color:DS.text }}>{onCover.teacher}</strong> is covering this class until {fmtDay(onCover.to)}{onCover.reason ? ` (${onCover.reason})` : ''}.
+          </div>
+          <Btn variant="secondary" small icon="edit" onClick={() => setCoverOpen(true)}>Manage</Btn>
+        </div>
+      )}
 
       {/* Hero */}
       <Card style={{ marginBottom:20 }}>
@@ -1423,6 +1656,7 @@ const ClassDetailPage = () => {
               level && ['Level', level.name],
               examBoard && ['Exam board', examBoard.name],
               ['Teacher', cls.teacher],
+              cover && ['Cover', `${cover.teacher} · ${fmtRange(cover.from, cover.to)}${onCover ? ' (active)' : ' (scheduled)'}`],
               ['Schedule', `${cls.day} · ${cls.time}`],
               ['Room', cls.room || '—'],
               ['Capacity', `${cls.students} / ${cls.capacity} (${fill}% full)`],
@@ -1449,14 +1683,40 @@ const ClassDetailPage = () => {
                 <Btn variant="secondary" icon="user" onClick={() => adminNav('teacher_profile', teacher.id)}>View Teacher</Btn>
               </div>
             ) : <div style={{ fontSize:13, color:DS.faint }}>No teacher assigned.</div>}
+
+            {/* Cover / substitute teacher */}
+            <div style={{ marginTop:16, paddingTop:16, borderTop:`1px solid ${DS.border}` }}>
+              {cover ? (
+                <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:11 }}>
+                    <Avatar name={cover.teacher} size={38} color={coverTeacher && coverTeacher.color} />
+                    <div style={{ minWidth:0, flex:1 }}>
+                      <div style={{ fontSize:10.5, color:DS.muted, textTransform:'uppercase', letterSpacing:0.5, fontWeight:600 }}>Cover teacher</div>
+                      <div style={{ fontSize:13.5, fontWeight:700, color:DS.text }}>{cover.teacher}</div>
+                      <div style={{ fontSize:12, color:DS.muted }}>{fmtRange(cover.from, cover.to)}</div>
+                    </div>
+                    <Badge variant={onCover ? 'warning' : 'default'}>{onCover ? 'Active' : 'Scheduled'}</Badge>
+                  </div>
+                  {cover.reason && <div style={{ fontSize:12, color:DS.muted }}>{cover.reason}</div>}
+                  <div style={{ display:'flex', gap:8 }}>
+                    <Btn variant="secondary" icon="edit" small onClick={() => setCoverOpen(true)} style={{ flex:1 }}>Edit cover</Btn>
+                    <Btn variant="ghost" icon="x" small onClick={() => store.clearCover(cls.id)}>Remove</Btn>
+                  </div>
+                </div>
+              ) : teacher ? (
+                <Btn variant="secondary" icon="teacher" onClick={() => setCoverOpen(true)} style={{ width:'100%' }}>Assign cover teacher</Btn>
+              ) : null}
+            </div>
           </div>
         </Card>
       </div>
 
       {/* Enrolled students */}
-      <Card title={`Enrolled Students · ${roster.length}`} style={{ marginBottom:20 }} actions={<Btn variant="secondary" icon="plus" small onClick={() => adminNav('students_add')}>Enrol Student</Btn>}>
+      <Card title={`Enrolled Students · ${roster.length}`} style={{ marginBottom:20 }} actions={
+        <Btn variant="secondary" icon="users" small onClick={() => adminNav('class_roster', cls.id)}>Manage roster</Btn>
+      }>
         {roster.length === 0 ? (
-          <EmptyState icon="graduation" title="No students enrolled" message="Enrol students into this class from the student record." />
+          <EmptyState icon="graduation" title="No students enrolled" message="Add already signed-up students from the class roster." action={<Btn variant="primary" icon="users" small onClick={() => adminNav('class_roster', cls.id)}>Manage roster</Btn>} />
         ) : (
           <Table
             cols={['Student','Year','Attendance','HW %','Avg Score','']}
@@ -1530,6 +1790,8 @@ const ClassDetailPage = () => {
       </Card>
 
       <ClassFormModal open={modalOpen} onClose={() => setModalOpen(false)} onSave={handleSave} store={store} teachers={store.teachers} editing={cls} />
+      <CoverModal open={coverOpen} onClose={() => setCoverOpen(false)} store={store} awayName={cls.teacher} classes={[cls]}
+        prefill={coverPrefill} editing={!!cover} onApply={cv => store.setCover(cls.id, cv)} onClear={() => store.clearCover(cls.id)} />
     </div>
   );
 };
@@ -1659,6 +1921,26 @@ const recentWeekdays = (n = 10) => {
   return out;
 };
 const fmtDay = iso => new Date(iso + 'T00:00:00').toLocaleDateString('en-GB', { weekday:'short', day:'numeric', month:'short' });
+const fmtRange = (from, to) => from && to ? `${fmtDay(from)} → ${fmtDay(to)}` : (from ? `from ${fmtDay(from)}` : to ? `until ${fmtDay(to)}` : 'no dates set');
+
+// ── Cover (substitute teacher) resolution ────────────────────────────────────
+// A class always keeps its regular `teacher`; `cls.cover` (set by admin) names a
+// stand-in for a [from,to] window. Cover is "active" only within that window on
+// the given date — so it kicks in automatically while the teacher is away and
+// lifts itself once the window passes, with no manual revert.
+const coverActive = (cls, dateISO = todayISO()) => {
+  const cv = cls && cls.cover;
+  if (!cv || !cv.teacher) return null;
+  if (cv.from && dateISO < cv.from) return null;
+  if (cv.to && dateISO > cv.to) return null;
+  return cv;
+};
+// Who actually teaches this class on `dateISO` — the cover if active, else regular.
+// The canonical resolver any view can use to ask "who's taking this session now".
+const effectiveTeacher = (cls, dateISO = todayISO()) => {
+  const cv = coverActive(cls, dateISO);
+  return cv ? cv.teacher : cls.teacher;
+};
 
 // Small present/late/absent toggle used by both admin and teacher self-service.
 const AttendanceToggle = ({ value, onSet }) => (
@@ -1683,6 +1965,7 @@ const TeacherProfilePage = () => {
   const [editing, setEditing] = React.useState(false);
   const [form, setForm] = React.useState(null);
   const [holiday, setHoliday] = React.useState({ from:'', to:'', reason:'' });
+  const [coverOpen, setCoverOpen] = React.useState(false);
 
   React.useEffect(() => { if (teacher && !form) setForm({ ...teacher, subjects: teacherSubjects(teacher) }); }, [teacher]);
 
@@ -1702,6 +1985,27 @@ const TeacherProfilePage = () => {
   const holidays = store.holidays[teacher.id] || [];
   const days = recentWeekdays(10);
   const present = days.filter(d => (store.attendance[`${teacher.id}|${d}`] || 'present') === 'present').length;
+
+  // Cover across this teacher's classes — each class can have its OWN stand-in, so
+  // we summarise the set rather than assume one cover teacher.
+  const coveredClasses = teacherClasses.filter(c => c.cover);
+  const coverNames = [...new Set(coveredClasses.map(c => c.cover.teacher))];
+  const liveCover  = teacherClasses.some(c => coverActive(c));
+  // Distinct away windows in play (the flow shares one, but be robust to mixed).
+  const coverRanges = [...new Set(coveredClasses.map(c => `${c.cover.from}|${c.cover.to}`))];
+  const coverReasons = [...new Set(coveredClasses.map(c => c.cover.reason).filter(Boolean))];
+  const windowLabel = coverRanges.length === 1 && coveredClasses.length
+    ? fmtRange(coveredClasses[0].cover.from, coveredClasses[0].cover.to)
+    : 'various dates';
+  // Modal seed: shared away window (existing cover → next booked holiday) + the
+  // per-class teacher already assigned to each covered class.
+  const nextHoliday = holidays.find(h => !h.to || h.to >= todayISO());
+  const seedCover = coveredClasses[0] && coveredClasses[0].cover;
+  const coverWindow = seedCover
+    ? { from: seedCover.from, to: seedCover.to, reason: seedCover.reason }
+    : (nextHoliday ? { from: nextHoliday.from, to: nextHoliday.to, reason: nextHoliday.reason } : null);
+  const seedAssign = {};
+  coveredClasses.forEach(c => { seedAssign[c.id] = c.cover.teacherId; });
 
   return (
     <div style={{ padding:'32px', maxWidth:1040, margin:'0 auto' }}>
@@ -1789,6 +2093,53 @@ const TeacherProfilePage = () => {
         </div>
       </Card>
 
+      <Card title="Cover while away" style={{ marginBottom:20 }} actions={
+        teacherClasses.length
+          ? <Btn variant={coveredClasses.length ? 'secondary' : 'primary'} small icon="teacher" onClick={() => setCoverOpen(true)}>{coveredClasses.length ? 'Edit cover' : 'Arrange cover'}</Btn>
+          : null
+      }>
+        {teacherClasses.length === 0 ? (
+          <EmptyState icon="calendar" title="No classes to cover" message="This teacher isn't assigned to any classes yet." />
+        ) : coveredClasses.length ? (
+          <div>
+            <div style={{ display:'flex', alignItems:'center', gap:11, padding:'16px 24px' }}>
+              <div style={{ width:38, height:38, borderRadius:9, background:DS.warningBg, color:DS.warning, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}><Icon name="teacher" size={18} /></div>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:13.5, fontWeight:700, color:DS.text }}>
+                  {coverNames.length === 1
+                    ? `${coverNames[0]} is covering ${teacher.name}`
+                    : `${coverNames.length} teachers covering ${coveredClasses.length} of ${teacherClasses.length} classes`}
+                </div>
+                <div style={{ fontSize:12, color:DS.muted }}>{windowLabel}{coverReasons.length === 1 ? ` · ${coverReasons[0]}` : ''}</div>
+              </div>
+              <Badge variant={liveCover ? 'warning' : 'default'}>{liveCover ? 'Active now' : 'Scheduled'}</Badge>
+            </div>
+            {teacherClasses.map(c => {
+              const ct = c.cover && store.teachers.find(t => t.id === c.cover.teacherId);
+              return (
+                <div key={c.id} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, padding:'11px 24px', borderTop:`1px solid ${DS.border}` }}>
+                  <div style={{ fontSize:13, color:DS.text, minWidth:0 }}>{c.name} <span style={{ color:DS.muted }}>· {c.day} {c.time}</span></div>
+                  {c.cover ? (
+                    <div style={{ display:'flex', alignItems:'center', gap:7, flexShrink:0 }}>
+                      <Avatar name={c.cover.teacher} size={20} color={ct && ct.color} />
+                      <span style={{ fontSize:12.5, color:DS.sub }}>{c.cover.teacher}</span>
+                      {coverActive(c) && <span style={{ fontSize:9, fontWeight:700, color:DS.warning, background:DS.warningBg, border:`1px solid ${DS.warningBorder}`, borderRadius:4, padding:'1px 4px', letterSpacing:0.3 }}>NOW</span>}
+                    </div>
+                  ) : <span style={{ fontSize:12, color:DS.faint, flexShrink:0 }}>No cover</span>}
+                </div>
+              );
+            })}
+            <div style={{ padding:'14px 24px', borderTop:`1px solid ${DS.border}` }}>
+              <Btn variant="ghost" small icon="x" onClick={() => store.clearCoverForTeacher(teacher.name)}>Remove cover from all classes</Btn>
+            </div>
+          </div>
+        ) : (
+          <EmptyState icon="teacher" title="No cover arranged"
+            message={`When ${teacher.name} is away, assign a stand-in per class — each of their ${teacherClasses.length} class${teacherClasses.length === 1 ? '' : 'es'} can have a different cover.`}
+            action={<Btn variant="primary" small icon="teacher" onClick={() => setCoverOpen(true)}>Arrange cover</Btn>} />
+        )}
+      </Card>
+
       <div style={{ display:'grid', gridTemplateColumns:'1fr 320px', gap:20, alignItems:'start' }}>
           <Card title="Booked Holidays">
             <div style={{ padding:'8px 0' }}>
@@ -1810,6 +2161,10 @@ const TeacherProfilePage = () => {
             </div>
           </Card>
         </div>
+
+      <TeacherCoverModal open={coverOpen} onClose={() => setCoverOpen(false)} store={store} teacher={teacher} classes={teacherClasses}
+        prefillWindow={coverWindow} prefillAssign={seedAssign} editing={coveredClasses.length > 0}
+        onApply={map => store.setCoversForClasses(map)} onClear={() => store.clearCoverForTeacher(teacher.name)} />
     </div>
   );
 };
@@ -1908,81 +2263,10 @@ const AdminTeachersPage = () => {
 };
 
 // ─── Admin Invoices Page ────────────────────────────────────────────────────────
-const AdminInvoicesPage = () => {
-  const invoices = [
-    { id:'INV-0284', student:'Oliver Chen',      family:'Chen family',      amount:320, status:'sent',    due:'30 Apr', issued:'15 Apr', classes:['A-Level Maths','Further Maths'] },
-    { id:'INV-0283', student:'Emma Thompson',     family:'Thompson family',  amount:180, status:'paid',    due:'30 Apr', issued:'15 Apr', classes:['GCSE Mathematics'] },
-    { id:'INV-0282', student:'Sophia Patel',      family:'Patel family',     amount:180, status:'paid',    due:'30 Apr', issued:'15 Apr', classes:['GCSE Mathematics'] },
-    { id:'INV-0281', student:'Amelia Roberts',    family:'Roberts family',   amount:180, status:'overdue', due:'15 Apr', issued:'1 Apr',  classes:['GCSE English Lit.'] },
-    { id:'INV-0280', student:'Noah Fitzgerald',   family:'Fitzgerald family',amount:360, status:'overdue', due:'15 Apr', issued:'1 Apr',  classes:['GCSE Mathematics','GCSE Science'] },
-    { id:'INV-0279', student:'Isabella Martinez', family:'Martinez family',  amount:320, status:'paid',    due:'15 Apr', issued:'1 Apr',  classes:['A-Level Maths','Further Maths'] },
-    { id:'INV-0278', student:'Ethan Huang',       family:'Huang family',     amount:360, status:'paid',    due:'15 Apr', issued:'1 Apr',  classes:['GCSE Mathematics','Physics'] },
-    { id:'INV-0277', student:'James Wilson',      family:'Wilson family',    amount:360, status:'sent',    due:'30 Apr', issued:'15 Apr', classes:['GCSE Mathematics','GCSE Science'] },
-  ];
-
-  const [filter, setFilter] = React.useState('all');
-  const [showNew, setShowNew] = React.useState(false);
-
-  const filtered = invoices.filter(inv => filter === 'all' || inv.status === filter);
-  const totalOutstanding = invoices.filter(i=>i.status!=='paid').reduce((s,i)=>s+i.amount,0);
-  const totalOverdue     = invoices.filter(i=>i.status==='overdue').reduce((s,i)=>s+i.amount,0);
-  const totalPaid        = invoices.filter(i=>i.status==='paid').reduce((s,i)=>s+i.amount,0);
-
-  const statusVariant = { paid:'success', sent:'accent', overdue:'danger' };
-
-  return (
-    <div style={{ padding:'32px' }}>
-      <PageHeader title="Invoices" subtitle="Track payments, send reminders, and manage billing" actions={[
-        <Btn key="exp" variant="secondary" icon="download" small>Export CSV</Btn>,
-        <Btn key="new" variant="primary" icon="plus" small onClick={() => setShowNew(!showNew)}>New Invoice</Btn>,
-      ]} />
-
-      {/* Summary KPIs */}
-      <div style={{ display:'flex', gap:16, marginBottom:24 }}>
-        <KPICard label="Outstanding" value={`£${totalOutstanding}`} sub={`${invoices.filter(i=>i.status!=='paid').length} invoices`} icon="invoice" iconBg={DS.warningBg} accent={DS.warning} />
-        <KPICard label="Overdue"     value={`£${totalOverdue}`}    sub={`${invoices.filter(i=>i.status==='overdue').length} invoices`} icon="alert"   iconBg={DS.dangerBg}  accent={DS.danger}  trendDir="down" trend="Action needed" />
-        <KPICard label="Paid this month" value={`£${totalPaid}`}   sub={`${invoices.filter(i=>i.status==='paid').length} invoices`}   icon="check"   iconBg={DS.successBg} accent={DS.success} trendDir="up"   trend="On track" />
-        <KPICard label="Total billed" value={`£${invoices.reduce((s,i)=>s+i.amount,0)}`} sub="This cycle" icon="chart" iconBg={DS.accentLight} accent={DS.accent} />
-      </div>
-
-      {/* Filter tabs */}
-      <div style={{ display:'flex', gap:6, marginBottom:20 }}>
-        {[['all','All'],['sent','Sent'],['overdue','Overdue'],['paid','Paid']].map(([id,label]) => (
-          <button key={id} onClick={() => setFilter(id)} style={{
-            padding:'7px 14px', borderRadius:7, border:`1px solid ${filter===id ? DS.accentBorder : DS.border}`,
-            background: filter===id ? DS.accentLight : DS.bg,
-            color: filter===id ? DS.accent : DS.muted,
-            fontSize:13, fontWeight: filter===id ? 600 : 400, cursor:'pointer',
-          }}>{label}</button>
-        ))}
-      </div>
-
-      <Card>
-        <Table
-          cols={['Invoice','Student / Family','Classes','Amount','Issued','Due','Status','Actions']}
-          rows={filtered.map(inv => [
-            <span style={{ fontSize:13, fontWeight:600, color:DS.text, fontVariantNumeric:'tabular-nums' }}>{inv.id}</span>,
-            <div>
-              <div style={{ fontSize:13, fontWeight:500, color:DS.text }}>{inv.student}</div>
-              <div style={{ fontSize:11, color:DS.muted }}>{inv.family}</div>
-            </div>,
-            <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
-              {inv.classes.map(c => <span key={c} style={{ fontSize:11, color:DS.muted }}>{c}</span>)}
-            </div>,
-            <span style={{ fontSize:14, fontWeight:700, color:DS.text }}>£{inv.amount}</span>,
-            <span style={{ fontSize:13, color:DS.muted }}>{inv.issued}</span>,
-            <span style={{ fontSize:13, color:inv.status==='overdue' ? DS.danger : DS.muted, fontWeight: inv.status==='overdue' ? 600 : 400 }}>{inv.due}</span>,
-            <Badge variant={statusVariant[inv.status]}>{inv.status}</Badge>,
-            <div style={{ display:'flex', gap:6 }}>
-              {inv.status !== 'paid' && <Btn variant="primary" small>Send Reminder</Btn>}
-              <Btn variant="ghost" icon="eye" small>View</Btn>
-            </div>,
-          ])}
-        />
-      </Card>
-    </div>
-  );
-};
+// The full Invoices module (ledger + workflow: derived status, payment schedules,
+// detail drawer, reminders, CSV reconciliation, analytics) lives in its own file,
+// Invoices.jsx, which defines `AdminInvoicesPage` and is loaded after this file in
+// index.html. The router below renders it for the `invoices` route.
 
 // ─── Admin Schedule Page ────────────────────────────────────────────────────────
 // Parse the start time out of a class's `time` field ("09:00–10:30" → "09:00").
@@ -2076,9 +2360,12 @@ const AdminSchedulePage = () => {
                       meta line. Kept thin on purpose so many concurrent classes can stack in one slot. */}
                   {cells.map(c => {
                     const color = subjectColor(c.name);
-                    const teacher = store.teachers.find(t => t.name === c.teacher);
+                    // Show whoever actually teaches today — the cover if its window is live.
+                    const cv = coverActive(c);
+                    const shownTeacher = cv ? cv.teacher : c.teacher;
+                    const teacher = store.teachers.find(t => t.name === shownTeacher);
                     return (
-                      <button key={c.id} onClick={() => adminNav('class_detail', c.id)} title={`${c.name} · ${c.group} · ${c.teacher} · ${c.room || 'No room'}`} style={{
+                      <button key={c.id} onClick={() => adminNav('class_detail', c.id)} title={`${c.name} · ${c.group} · ${shownTeacher}${cv ? ` (covering ${c.teacher})` : ''} · ${c.room || 'No room'}`} style={{
                         textAlign:'left', background:color+'12', border:`1px solid ${color}44`,
                         borderLeft:`3px solid ${color}`, borderRadius:6,
                         padding:'5px 8px', cursor:'pointer', width:'100%',
@@ -2088,8 +2375,9 @@ const AdminSchedulePage = () => {
                           {c.name.replace(/^(GCSE|A-Level)\s/, '')}
                         </div>
                         <div style={{ display:'flex', alignItems:'center', gap:5, fontSize:10.5, color:DS.muted, whiteSpace:'nowrap', overflow:'hidden' }}>
-                          <Avatar name={c.teacher} size={13} color={teacher && teacher.color} />
-                          <span style={{ overflow:'hidden', textOverflow:'ellipsis' }}>{c.teacher}</span>
+                          <Avatar name={shownTeacher} size={13} color={teacher && teacher.color} />
+                          <span style={{ overflow:'hidden', textOverflow:'ellipsis' }}>{shownTeacher}</span>
+                          {cv && <span style={{ flexShrink:0, fontSize:9, fontWeight:700, color:DS.warning, background:DS.warningBg, border:`1px solid ${DS.warningBorder}`, borderRadius:4, padding:'0 4px', letterSpacing:0.3 }}>COVER</span>}
                           <span style={{ color:DS.faint }}>·</span>
                           <span style={{ color:DS.faint, flexShrink:0 }}>{c.group.replace(/\s*–.*$/, '')}</span>
                           {c.room && <><span style={{ color:DS.faint }}>·</span><span style={{ color:DS.faint, flexShrink:0 }}>{c.room}</span></>}
@@ -2126,6 +2414,10 @@ const AdminPages = ({ page, section }) => {
   if (page === 'teacher_profile') return <TeacherProfilePage />;
   if (page === 'invoices')        return <AdminInvoicesPage />;
   if (page === 'schedule')        return <AdminSchedulePage />;
+  // Staff › Timesheets (Timesheets.jsx, loaded after this file; exposes AdminTimesheetsPage on window).
+  if (page === 'timesheets')      return window.AdminTimesheetsPage ? <window.AdminTimesheetsPage section={section} /> : null;
+  // Per-teacher drill-in from the timesheets overview (teacher id stashed on adminParam).
+  if (page === 'timesheet_detail') return window.AdminTimesheetDetailPage ? <window.AdminTimesheetDetailPage /> : null;
   return null;
 };
 

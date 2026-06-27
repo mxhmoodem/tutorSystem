@@ -31,8 +31,13 @@ const COMMS_USERS = [
   { id: 'u_priya',  name: 'Priya Nair',   role: 'teacher', centreId: 'bm',   classIds: ['c5','c6'] },
   { id: 'u_marcusw',name: 'Marcus Webb',  role: 'teacher', centreId: 'bm',   classIds: ['c8','c23'] },
   { id: 'u_oliver', name: 'Oliver Chen',  role: 'student', centreId: 'bm',   classIds: ['c3'] },
-  { id: 'u_emma',   name: 'Emma Thompson',role: 'student', centreId: 'bm',   classIds: ['c1','c8'] },
-  { id: 'u_sophia', name: 'Sophia Patel', role: 'student', centreId: 'bm',   classIds: ['c1'] },
+  { id: 'u_emma',   name: 'Emma Thompson',role: 'student', centreId: 'bm',   classIds: ['c1','c2'] },
+  { id: 'u_sophia', name: 'Sophia Patel', role: 'student', centreId: 'bm',   classIds: ['c1','c2'] },
+  // Students wired into David Park's physics classes (c13) + Sarah's Yr 11 Maths
+  // group B (c2) so the message channels + safeguarding flag queue populate.
+  { id: 'u_aiden',  name: 'Aiden Foster', role: 'student', centreId: 'bm',   classIds: ['c13'] },
+  { id: 'u_james',  name: 'James Wilson', role: 'student', centreId: 'bm',   classIds: ['c2','c13'] },
+  { id: 'u_mia',    name: 'Mia Okonkwo',  role: 'student', centreId: 'bm',   classIds: ['c2'] },
 
   // ── Apex Learning Centre (isolation proof — should never surface for bm users) ──
   { id: 'u_daniel', name: 'Daniel Mehta', role: 'admin',   centreId: 'apex', classIds: [] },
@@ -147,6 +152,42 @@ const COMMS_THREADS = [
     participants: ['u_sarah', 'u_oliver'], classId: null, subject: null,
     createdBy: 'u_oliver', createdAt: _ago(2 * DAY), lastMessageAt: _ago(20 * MIN),
   },
+
+  // ── Class channels (group teaching threads — always monitored) ──
+  {
+    id: 'th_chan_c2', centreId: 'bm', type: 'channel',
+    participants: ['u_sarah', 'u_emma', 'u_james', 'u_sophia', 'u_mia'],
+    classId: 'c2', subject: 'Yr 11 GCSE Maths · Group B',
+    createdBy: 'u_sarah', createdAt: _ago(40 * DAY), lastMessageAt: _ago(2 * HOUR + 20),
+  },
+  {
+    id: 'th_chan_c13', centreId: 'bm', type: 'channel',
+    participants: ['u_david', 'u_aiden', 'u_james'],
+    classId: 'c13', subject: 'A-Level Physics · Year 13',
+    createdBy: 'u_david', createdAt: _ago(35 * DAY), lastMessageAt: _ago(1 * DAY),
+  },
+
+  // ── Staff ↔ student DMs (monitored; some carry safeguarding triggers) ──
+  {
+    id: 'th_aiden_david', centreId: 'bm', type: 'dm',
+    participants: ['u_aiden', 'u_david'], classId: null, subject: null,
+    createdBy: 'u_aiden', createdAt: _ago(2 * DAY), lastMessageAt: _ago(1 * DAY),
+  },
+  {
+    id: 'th_mia_sarah', centreId: 'bm', type: 'dm',
+    participants: ['u_mia', 'u_sarah'], classId: null, subject: null,
+    createdBy: 'u_mia', createdAt: _ago(2 * DAY), lastMessageAt: _ago(1 * DAY),
+  },
+  {
+    id: 'th_james_david', centreId: 'bm', type: 'dm',
+    participants: ['u_james', 'u_david'], classId: null, subject: null,
+    createdBy: 'u_james', createdAt: _ago(20 * HOUR), lastMessageAt: _ago(20 * HOUR),
+  },
+  {
+    id: 'th_sophia_sarah', centreId: 'bm', type: 'dm',
+    participants: ['u_sophia', 'u_sarah'], classId: null, subject: null,
+    createdBy: 'u_sophia', createdAt: _ago(3 * DAY), lastMessageAt: _ago(3 * DAY - 1),
+  },
   // Apex DM — isolation proof.
   {
     id: 'th_apex', centreId: 'apex', type: 'dm',
@@ -189,8 +230,132 @@ const COMMS_MESSAGES = [
     body: 'Hi Miss, I had a question about Q4 on the integration sheet — I keep getting a negative area. Could you take a look?', attachments: [],
     createdAt: _ago(20 * MIN), readBy: { u_oliver: _ago(20 * MIN) } },
 
+  // ── Class channel: Yr 11 GCSE Maths · Group B (c2) ──
+  { id: 'm_c2_1', threadId: 'th_chan_c2', senderId: 'u_sarah', senderName: 'Sarah Clarke', senderRole: 'teacher',
+    body: 'Morning everyone — Worksheet 4B (simultaneous equations) is set for Friday. Sections A and B only.', attachments: [],
+    createdAt: _ago(3 * HOUR), readBy: { u_sarah: _ago(3 * HOUR), u_emma: _ago(2 * HOUR + 55), u_james: _ago(2 * HOUR + 52) } },
+  { id: 'm_c2_2', threadId: 'th_chan_c2', senderId: 'u_emma', senderName: 'Emma Thompson', senderRole: 'student',
+    body: 'Is that the one from the textbook or the printed sheet?', attachments: [],
+    createdAt: _ago(2 * HOUR + 50), readBy: { u_emma: _ago(2 * HOUR + 50), u_sarah: _ago(2 * HOUR + 48) } },
+  { id: 'm_c2_3', threadId: 'th_chan_c2', senderId: 'u_sarah', senderName: 'Sarah Clarke', senderRole: 'teacher',
+    body: "The printed sheet I handed out Tuesday. There's a copy in the resources tab if you've lost it.", attachments: [],
+    createdAt: _ago(2 * HOUR + 45), readBy: { u_sarah: _ago(2 * HOUR + 45), u_james: _ago(2 * HOUR + 42) } },
+  { id: 'm_c2_4', threadId: 'th_chan_c2', senderId: 'u_james', senderName: 'James Wilson', senderRole: 'student',
+    body: 'Got it, thanks Miss.', attachments: [],
+    createdAt: _ago(2 * HOUR + 40), readBy: { u_james: _ago(2 * HOUR + 40) } },
+  { id: 'm_c2_5', threadId: 'th_chan_c2', senderId: 'u_sophia', senderName: 'Sophia Patel', senderRole: 'student',
+    body: 'Do we need to show all working for Q7?', attachments: [],
+    createdAt: _ago(2 * HOUR + 30), readBy: { u_sophia: _ago(2 * HOUR + 30) } },
+  { id: 'm_c2_6', threadId: 'th_chan_c2', senderId: 'u_sarah', senderName: 'Sarah Clarke', senderRole: 'teacher',
+    body: 'Yes please — full method marks matter in the exam. Show every line.', attachments: [],
+    createdAt: _ago(2 * HOUR + 20), readBy: { u_sarah: _ago(2 * HOUR + 20) } },
+
+  // ── Class channel: A-Level Physics · Year 13 (c13) ──
+  { id: 'm_c13_1', threadId: 'th_chan_c13', senderId: 'u_david', senderName: 'David Park', senderRole: 'teacher',
+    body: "Reminder: bring your data booklets next session — we're working through past-paper Section C.", attachments: [],
+    createdAt: _ago(1 * DAY), readBy: { u_david: _ago(1 * DAY), u_aiden: _ago(1 * DAY - 60) } },
+
+  // ── Aiden ↔ Mr Park (external-contact trigger) ──
+  { id: 'm_ad_1', threadId: 'th_aiden_david', senderId: 'u_aiden', senderName: 'Aiden Foster', senderRole: 'student',
+    body: "Hi sir, I'm stuck on the refraction question from the worksheet.", attachments: [],
+    createdAt: _ago(2 * DAY), readBy: { u_aiden: _ago(2 * DAY), u_david: _ago(2 * DAY - 20) } },
+  { id: 'm_ad_2', threadId: 'th_aiden_david', senderId: 'u_david', senderName: 'David Park', senderRole: 'teacher',
+    body: "No problem Aiden. Which part — Snell's law or the critical angle?", attachments: [],
+    createdAt: _ago(2 * DAY - 25), readBy: { u_david: _ago(2 * DAY - 25), u_aiden: _ago(2 * DAY - 30) } },
+  { id: 'm_ad_3', threadId: 'th_aiden_david', senderId: 'u_aiden', senderName: 'Aiden Foster', senderRole: 'student',
+    body: 'The critical angle one. I keep getting the wrong number.', attachments: [],
+    createdAt: _ago(2 * DAY - 35), readBy: { u_aiden: _ago(2 * DAY - 35), u_david: _ago(2 * DAY - 40) } },
+  { id: 'm_ad_4', threadId: 'th_aiden_david', senderId: 'u_david', senderName: 'David Park', senderRole: 'teacher',
+    body: 'Remember sin(C) = 1/n. Plug in n = 1.5 and take the inverse sine. You should get about 41.8°.', attachments: [],
+    createdAt: _ago(2 * DAY - 45), readBy: { u_david: _ago(2 * DAY - 45), u_aiden: _ago(2 * DAY - 50) } },
+  // TRIGGER: external contact (phone number + "whatsapp")
+  { id: 'm_ad_5', threadId: 'th_aiden_david', senderId: 'u_aiden', senderName: 'Aiden Foster', senderRole: 'student',
+    body: "Oh that makes sense. My WhatsApp is 07700 900182 if it's easier to text?", attachments: [],
+    createdAt: _ago(2 * DAY - 55), readBy: { u_aiden: _ago(2 * DAY - 55), u_david: _ago(2 * DAY - 58) } },
+  { id: 'm_ad_6', threadId: 'th_aiden_david', senderId: 'u_david', senderName: 'David Park', senderRole: 'teacher',
+    body: "Let's keep everything here on TutorOS, Aiden — that's our centre policy and it keeps us both safe. Happy to help with anything in this channel any time. 👍", attachments: [],
+    createdAt: _ago(2 * DAY - 60), readBy: { u_david: _ago(2 * DAY - 60), u_aiden: _ago(2 * DAY - 70) } },
+  { id: 'm_ad_7', threadId: 'th_aiden_david', senderId: 'u_aiden', senderName: 'Aiden Foster', senderRole: 'student',
+    body: 'Understood! Can we go over Q4 next session?', attachments: [],
+    createdAt: _ago(1 * DAY), readBy: { u_aiden: _ago(1 * DAY) } },
+
+  // ── Mia ↔ Ms Clarke (out-of-hours trigger: sent 23:14) ──
+  { id: 'm_ms_1', threadId: 'th_mia_sarah', senderId: 'u_mia', senderName: 'Mia Okonkwo', senderRole: 'student',
+    body: "Sorry to message so late, I just wanted to check tomorrow's lesson is still at 4pm?", attachments: [],
+    createdAt: '2026-06-16T23:14:00.000Z', readBy: { u_mia: '2026-06-16T23:14:00.000Z' } },
+  { id: 'm_ms_2', threadId: 'th_mia_sarah', senderId: 'u_sarah', senderName: 'Sarah Clarke', senderRole: 'teacher',
+    body: 'No problem Mia — yes, 4pm as usual in Room 3. See you then. (Best to message during the day where you can.)', attachments: [],
+    createdAt: _ago(1 * DAY), readBy: { u_sarah: _ago(1 * DAY) } },
+
+  // ── James ↔ Mr Park (image-shared trigger) ──
+  // TRIGGER: image attachment
+  { id: 'm_jd_1', threadId: 'th_james_david', senderId: 'u_james', senderName: 'James Wilson', senderRole: 'student',
+    body: "Sir, here's my working for Q7 — I think I went wrong somewhere.",
+    attachments: [{ name: 'photo-of-working.jpg', type: 'image' }],
+    createdAt: _ago(20 * HOUR), readBy: { u_james: _ago(20 * HOUR) } },
+
+  // ── Sophia ↔ Ms Clarke (keyword trigger: "instagram") — already resolved by DSL ──
+  // TRIGGER: keyword
+  { id: 'm_sf_kw', threadId: 'th_sophia_sarah', senderId: 'u_sophia', senderName: 'Sophia Patel', senderRole: 'student',
+    body: "Miss I've been really stressed about exams. Is it ok if I message you on instagram instead, it's quicker for me?", attachments: [],
+    createdAt: _ago(3 * DAY), readBy: { u_sophia: _ago(3 * DAY), u_sarah: _ago(3 * DAY - 1) } },
+  { id: 'm_sf_2', threadId: 'th_sophia_sarah', senderId: 'u_sarah', senderName: 'Sarah Clarke', senderRole: 'teacher',
+    body: "I'm really glad you told me, Sophia — you're not in any trouble at all. Let's keep chatting here so I can support you properly, and I'll let Ms Chen know so we can help. 💛", attachments: [],
+    createdAt: _ago(3 * DAY - 1), readBy: { u_sarah: _ago(3 * DAY - 1) } },
+
   // Apex — isolation proof
   { id: 'm_ax1', threadId: 'th_apex', senderId: 'u_daniel', senderName: 'Daniel Mehta', senderRole: 'admin',
     body: 'Hannah, can you cover the Friday slot?', attachments: [],
     createdAt: _ago(3 * HOUR), readBy: { u_daniel: _ago(3 * HOUR) } },
+];
+
+// ─── Comms config (per-centre safety posture) ──────────────────────────────────────
+// Backs the Settings → Comms tab and gates Messages behaviour (1:1 on/off, quiet
+// hours, images, DSL observer). Seeds the `standard` preset so the demo shows live
+// monitored DMs + channels; an admin can switch to Locked-down to see DMs disabled
+// and the quiet-hours composer lock kick in.
+const COMMS_CONFIG = {
+  bm: {
+    preset: 'standard',
+    dmEnabled: true,
+    quietFrom: '21:00', quietTo: '07:00',
+    images: true,
+    dslObserver: true,
+    dslLeadId: 'u_lisa', dslDeputyId: 'u_david',
+    retention: '3y',
+    wordlist: ['address', 'meet up', 'whatsapp', 'snapchat', 'instagram', 'phone number', 'kik', 'secret'],
+    announceAuthors: 'admins',
+    approvalWorkflow: false,
+  },
+  apex: {
+    preset: 'standard',
+    dmEnabled: true,
+    quietFrom: '21:00', quietTo: '07:00',
+    images: true,
+    dslObserver: true,
+    dslLeadId: 'u_daniel', dslDeputyId: null,
+    retention: '3y',
+    wordlist: ['address', 'meet up', 'whatsapp', 'snapchat', 'instagram'],
+    announceAuthors: 'admins',
+    approvalWorkflow: false,
+  },
+};
+
+// ─── Flag resolutions (keyed by messageId) ─────────────────────────────────────────
+// Flags themselves are COMPUTED client-side from messages (Communications.jsx). This
+// map only records what the DSL has done about a flagged message. Sophia's keyword
+// message is seeded as already handled, so the queue shows 3 open + 1 resolved.
+const COMMS_FLAGS = {
+  m_sf_kw: { status: 'resolved', by: 'u_lisa', at: _ago(2 * DAY),
+    note: 'Spoke with Sophia — wellbeing check booked with form tutor. Conversation kept on platform.' },
+};
+
+// ─── Concerns log (low-level, recorded by the DSL) ─────────────────────────────────
+const COMMS_CONCERNS = [
+  { id: 'cn_sophia', centreId: 'bm', aboutUserId: 'u_sophia', threadId: 'th_sophia_sarah',
+    reason: 'Wellbeing — exam stress', level: 'low', by: 'u_lisa', at: _ago(2 * DAY),
+    note: 'Disclosed exam stress and asked to move off-platform (Instagram). Redirected; wellbeing support arranged. Monitoring.' },
+  { id: 'cn_aiden', centreId: 'bm', aboutUserId: 'u_aiden', threadId: 'th_aiden_david',
+    reason: 'Attempted off-platform contact', level: 'low', by: 'u_david', at: _ago(1 * DAY),
+    note: 'Shared personal mobile with tutor. Tutor declined and reinforced policy. Logged for awareness.' },
 ];

@@ -33,7 +33,10 @@ const DS = {
   // with shadow alone. Cards get a visible (slightly darker than DS.border)
   // outline plus a soft shadow so each surface reads as distinct on white.
   page:         '#FFFFFF',
-  sidebarBg:    '#F9FAFB',
+  // Navbar/sidebar and the breadcrumb header are white; the scrolling content
+  // area sits on a soft grey "canvas" so white cards lift off it.
+  sidebarBg:    '#FFFFFF',
+  canvas:       '#F3F4F6',
   card:         '#FFFFFF',
   cardBorder:   '#DADDE3',
   cardShadow:   '0 1px 2px rgba(16,24,40,0.04), 0 1px 3px rgba(16,24,40,0.08)',
@@ -97,6 +100,12 @@ const PATHS = {
   send:        'M12 19l9 2-9-18-9 18 9-2zm0 0v-8',
   megaphone:   'M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z',
   sidebar:     'M4 5a1 1 0 011-1h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5z M9 4v16',
+  shield:      'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z',
+  lock:        'M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z',
+  video:       'M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z',
+  mic:         'M19 11a7 7 0 01-14 0m7 7v4m0-4a3 3 0 01-3-3V5a3 3 0 016 0v6a3 3 0 01-3 3z',
+  image:       'M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z',
+  cloud:       'M2.25 15a4.5 4.5 0 004.5 4.5H18a3.75 3.75 0 001.332-7.257 3 3 0 00-3.758-3.848 5.25 5.25 0 00-10.233 2.33A4.502 4.502 0 002.25 15z',
 };
 
 const Icon = ({ name, size = 16, color = 'currentColor', strokeWidth = 1.5 }) => (
@@ -194,30 +203,99 @@ const KPICard = ({ label, value, sub, trend, trendDir, icon, iconBg, accent }) =
   </div>
 );
 
+// ─── Colour helper ───────────────────────────────────────────────────────────────
+// Lighten (positive pct) or darken (negative pct) a hex colour. Used to build the
+// two-stop gradients on stat cards / hero so they re-theme with the live accent.
+const shadeColor = (hex, pct) => {
+  const h = (hex || '#000000').replace('#', '');
+  const full = h.length === 3 ? h.split('').map(c => c + c).join('') : h;
+  const num = parseInt(full, 16);
+  if (Number.isNaN(num)) return hex;
+  let r = (num >> 16) & 255, g = (num >> 8) & 255, b = num & 255;
+  const t = pct < 0 ? 0 : 255;
+  const p = Math.abs(pct) / 100;
+  r = Math.round((t - r) * p) + r;
+  g = Math.round((t - g) * p) + g;
+  b = Math.round((t - b) * p) + b;
+  return '#' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+};
+
+// ─── Stat Card ─────────────────────────────────────────────────────────────────
+// Clean KPI tile (dashboards): hairline border, generous space, a quiet muted
+// glyph and strong number typography. Colour appears only on the delta — the rest
+// stays monochrome so a row of these reads calm and premium, not decorated. Same
+// props as KPICard so it's a drop-in.
+const StatCard = ({ label, value, sub, trend, trendDir, icon }) => {
+  const [hov, setHov] = React.useState(false);
+  const dcol = trendDir === 'up' ? DS.success : trendDir === 'down' ? DS.danger : DS.muted;
+  return (
+    <div
+      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+      style={{
+        background: DS.card, boxShadow: DS.cardShadow,
+        border: `1px solid ${hov ? DS.borderDark : DS.cardBorder}`,
+        borderRadius: 12, padding: '18px 20px',
+        display: 'flex', flexDirection: 'column', gap: 16, flex: 1, minWidth: 0,
+        transition: 'border-color 0.14s ease',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span style={{ fontSize: 13, color: DS.muted, fontWeight: 500 }}>{label}</span>
+        {icon && <Icon name={icon} size={16} color={DS.faint} />}
+      </div>
+      <div>
+        <div style={{ fontSize: 29, fontWeight: 700, color: DS.text, lineHeight: 1, letterSpacing: '-0.6px' }}>{value}</div>
+        {(trend || sub) && (
+          <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+            {trend && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 12.5, fontWeight: 500, color: dcol }}>
+                <Icon name={trendDir === 'up' ? 'trending_up' : trendDir === 'down' ? 'trending_dn' : 'clock'} size={13} />
+                {trend}
+              </span>
+            )}
+            {sub && <span style={{ fontSize: 12.5, color: DS.muted }}>{sub}</span>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 // ─── Sidebar ───────────────────────────────────────────────────────────────────
 // Settings is one shared tabbed page per role: a role-specific first tab, then the
 // common Notifications / Appearance / Account tabs. Build the sidebar sub-items so
 // the dropdown mirrors that tab order. Tab ids must match Settings.jsx ROLE_TABS.
 const SETTINGS_ROLE_TAB = {
-  superadmin: { id: 'platform', label: 'Platform Defaults' },
-  admin:      { id: 'centre',   label: 'Centre' },
-  teacher:    { id: 'teaching', label: 'Teaching' },
-  student:    { id: 'learning', label: 'Learning' },
+  superadmin: { id: 'platform', label: 'Platform Defaults', icon: 'settings' },
+  admin:      { id: 'centre',   label: 'Centre',            icon: 'book' },
+  teacher:    { id: 'teaching', label: 'Teaching',          icon: 'teacher' },
+  student:    { id: 'learning', label: 'Learning',          icon: 'brain' },
 };
 const SETTINGS_SUB = (role) => {
   const first = SETTINGS_ROLE_TAB[role] || SETTINGS_ROLE_TAB.admin;
-  return [first, { id: 'notifications', label: 'Notifications' }, { id: 'appearance', label: 'Appearance' }, { id: 'account', label: 'Account' }]
-    .map(t => ({ id: `settings:${t.id}`, label: t.label }));
+  // Admins get a 2nd role-specific tab (plan + billing) after the Centre tab.
+  const billing = role === 'admin' ? [{ id: 'billing', label: 'Plans & Billing', icon: 'invoice' }] : [];
+  return [first, ...billing,
+    { id: 'notifications', label: 'Notifications', icon: 'bell' },
+    { id: 'appearance',    label: 'Appearance',    icon: 'grid' },
+    { id: 'account',       label: 'Account',       icon: 'user' },
+  ].map(t => ({ id: `settings:${t.id}`, label: t.label, icon: t.icon }));
 };
 
-// Communications is one shared module across roles (announcements feed + inbox).
-// Both sections appear for every role; the composer is gated inside the page by
-// the permission helpers (students/parents are receive-only). Compound ids follow
-// the `<parent>:<section>` dropdown convention.
-const COMMS_SUB = [
-  { id: 'comms:announcements', label: 'Announcements' },
-  { id: 'comms:inbox',         label: 'Inbox' },
+// Communications is one shared module across roles. Every role gets Announcements +
+// Messages; admins additionally get the Safeguarding (DSL oversight) section, and
+// the superadmin keeps the platform Support section. The composer + DSL view are
+// gated inside the page by the permission helpers. Compound ids follow the
+// `<parent>:<section>` dropdown convention.
+const COMMS_BASE = [
+  { id: 'comms:announcements', label: 'Announcements', icon: 'megaphone' },
+  { id: 'comms:messages',      label: 'Messages',      icon: 'mail' },
 ];
+const commsSub = (role) => {
+  if (role === 'admin')      return [...COMMS_BASE, { id: 'comms:safeguarding', label: 'Safeguarding', icon: 'shield' }, { id: 'comms:settings', label: 'Comms settings', icon: 'settings' }];
+  if (role === 'superadmin') return [...COMMS_BASE, { id: 'comms:support',      label: 'Support',      icon: 'message' }];
+  return COMMS_BASE;
+};
 
 const NAV_CONFIG = {
   superadmin: {
@@ -230,10 +308,7 @@ const NAV_CONFIG = {
       { id: 'revenue',       icon: 'invoice',     label: 'Revenue' },
       { id: 'engagement',    icon: 'chart',       label: 'Engagement' },
       { id: 'system',        icon: 'zap',         label: 'System Health' },
-      { id: 'comms',         icon: 'message',     label: 'Communications', sub: [
-        ...COMMS_SUB,
-        { id: 'comms:support', label: 'Support' },
-      ] },
+      { id: 'comms',         icon: 'message',     label: 'Communications', sub: commsSub('superadmin') },
       { id: 'security',      icon: 'alert',       label: 'Security & Audit' },
       { id: 'controls',      icon: 'settings',    label: 'Platform Controls' },
     ],
@@ -244,21 +319,30 @@ const NAV_CONFIG = {
     color: DS.accent,
     items: [
       { id: 'dashboard', icon: 'dashboard', label: 'Dashboard' },
+      { id: 'centres',   icon: 'grid',     label: 'Centres' },
       { id: 'students',  icon: 'users',    label: 'Students' },
+      { id: 'people',    icon: 'send',     label: 'People & invites' },
       { id: 'classes',   icon: 'book',     label: 'Classes', sub: [
-        { id: 'classes:classes',  label: 'Classes' },
-        { id: 'classes:subjects', label: 'Subjects' },
+        { id: 'classes:classes',  label: 'Classes',  icon: 'grid' },
+        { id: 'classes:subjects', label: 'Subjects', icon: 'book' },
       ] },
-      { id: 'teachers',  icon: 'user',     label: 'Teachers' },
+      // Staff grouping — operational staff admin (Teachers + Timesheets) under one
+      // dropdown. Subs keep their own page ids (`teachers`, `timesheets:review`) which
+      // don't share the parent id, so the sidebar/breadcrumb resolve a group by
+      // matching the active page against its subs (see subMatches in Sidebar).
+      { id: 'staff', icon: 'users', label: 'Staff', sub: [
+        { id: 'teachers',          label: 'Teachers',   icon: 'teacher' },
+        { id: 'timesheets:review', label: 'Timesheets', icon: 'clock' },
+      ] },
       { id: 'schedule',  icon: 'calendar', label: 'Schedule' },
       { id: 'invoices',  icon: 'invoice',  label: 'Invoices' },
       { id: 'reports',   icon: 'chart',    label: 'Reports', sub: [
-        { id: 'reports:overview', label: 'Overview' },
-        { id: 'reports:browse',   label: 'All Reports' },
-        { id: 'reports:generate', label: 'Generate' },
-        { id: 'reports:settings', label: 'Settings' },
+        { id: 'reports:overview', label: 'Overview',    icon: 'dashboard' },
+        { id: 'reports:browse',   label: 'All Reports', icon: 'list' },
+        { id: 'reports:generate', label: 'Generate',    icon: 'plus' },
+        { id: 'reports:settings', label: 'Settings',    icon: 'settings' },
       ] },
-      { id: 'comms',     icon: 'message',  label: 'Communications', sub: COMMS_SUB },
+      { id: 'comms',     icon: 'message',  label: 'Communications', sub: commsSub('admin') },
     ],
     bottom: [{ id: 'settings', icon: 'settings', label: 'Settings', sub: SETTINGS_SUB('admin') }],
   },
@@ -271,14 +355,15 @@ const NAV_CONFIG = {
       { id: 'timetable',       icon: 'calendar',  label: 'Timetable' },
       { id: 'lesson_planner',  icon: 'edit',      label: 'Lesson Planner' },
       { id: 'homework',        icon: 'clip',      label: 'Homework', sub: [
-        { id: 'homework:assignments', label: 'Assignments' },
-        { id: 'homework:analytics',   label: 'Analytics' },
+        { id: 'homework:assignments', label: 'Assignments', icon: 'clip' },
+        { id: 'homework:analytics',   label: 'Analytics',   icon: 'chart' },
       ] },
       { id: 'attendance',      icon: 'check',     label: 'Attendance' },
+      { id: 'timesheet',       icon: 'clock',     label: 'Timesheet' },
       { id: 'progress',        icon: 'chart',     label: 'Progress' },
       { id: 'tracking',        icon: 'star',      label: 'Tracking' },
       { id: 'reports',         icon: 'file',      label: 'Reports' },
-      { id: 'comms',           icon: 'message',   label: 'Communications', sub: COMMS_SUB },
+      { id: 'comms',           icon: 'message',   label: 'Communications', sub: commsSub('teacher') },
     ],
     bottom: [{ id: 'settings', icon: 'settings', label: 'Settings', sub: SETTINGS_SUB('teacher') }],
   },
@@ -288,14 +373,14 @@ const NAV_CONFIG = {
     items: [
       { id: 'dashboard', icon: 'home',      label: 'Overview'   },
       { id: 'homework',  icon: 'clip',      label: 'Homework', sub: [
-        { id: 'homework:assignments', label: 'Assignments' },
-        { id: 'homework:submitted',   label: 'Submitted' },
-        { id: 'homework:results',     label: 'Results' },
+        { id: 'homework:assignments', label: 'Assignments', icon: 'clip' },
+        { id: 'homework:submitted',   label: 'Submitted',   icon: 'upload' },
+        { id: 'homework:results',     label: 'Results',     icon: 'eye' },
       ] },
       { id: 'progress',  icon: 'chart',     label: 'My Progress'},
       { id: 'sessions',  icon: 'calendar',  label: 'Sessions'   },
       { id: 'reports',   icon: 'file',      label: 'Reports'},
-      { id: 'comms',     icon: 'message',   label: 'Communications', sub: COMMS_SUB },
+      { id: 'comms',     icon: 'message',   label: 'Communications', sub: commsSub('student') },
     ],
     bottom: [{ id: 'settings', icon: 'settings', label: 'Settings', sub: SETTINGS_SUB('student') }],
   },
@@ -308,16 +393,141 @@ const navParentId = (active) => (active || '').split(':')[0].split('_')[0];
 
 // Hover states on the grey sidebar need a *lighter* (white-ish) wash than the
 // page primitives' DS.surfaceHover, which is nearly the same grey as the bar.
-const SIDE_HOVER = 'rgba(255,255,255,0.7)';
+// Hover wash for items on the (now white) sidebar — a faint neutral grey so it
+// reads on white. (Was a translucent white that only showed on the old grey bar.)
+const SIDE_HOVER = 'rgba(17,24,39,0.045)';
 
-const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, collapsed = false }) => {
+// Workspace-style centre switcher in the sidebar header. A staff account can be
+// linked to several centres (each its own subscription); clicking the centre name
+// opens a dropdown to switch between them or start a new one. Module-scoped (not
+// nested in Sidebar) so its open/dropdown state survives parent re-renders. The
+// open/close + click-away mirror NotificationBell (Communications.jsx).
+const CentreSwitcher = ({ collapsed, centre, centres, onSwitchCentre, onAddCentre, roleLabel, planUsage }) => {
+  const [open, setOpen] = React.useState(false);
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
+
+  const pick = (id) => { setOpen(false); if (id !== centre.id) onSwitchCentre && onSwitchCentre(id); };
+  const add  = () => { setOpen(false); onAddCentre && onAddCentre(); };
+  const tile = (name, active) => (
+    <div style={{
+      width: 32, height: 32, borderRadius: 8, flexShrink: 0,
+      background: active ? DS.accent : DS.muted,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+    }}>
+      <span style={{ color: '#fff', fontSize: 14, fontWeight: 800, letterSpacing: '-0.5px' }}>{(name || 'C').slice(0, 1).toUpperCase()}</span>
+    </div>
+  );
+
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        title={collapsed ? centre.name : undefined}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 10, width: '100%',
+          justifyContent: collapsed ? 'center' : 'flex-start',
+          background: open ? SIDE_HOVER : 'transparent', border: 'none',
+          borderRadius: 8, padding: collapsed ? '8px 0' : '6px 8px', cursor: 'pointer',
+          textAlign: 'left', transition: 'background 0.12s',
+        }}>
+        {tile(centre.name, true)}
+        {!collapsed && (
+          <React.Fragment>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: DS.text, letterSpacing: '-0.2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{centre.name}</div>
+              <div style={{ fontSize: 10.5, color: DS.muted, marginTop: 1 }}>{roleLabel}</div>
+            </div>
+            <Icon name="chevron_d" size={15} color={DS.faint} />
+          </React.Fragment>
+        )}
+      </button>
+
+      {open && (
+        <div style={{
+          position: 'absolute', zIndex: 60,
+          ...(collapsed ? { left: '100%', top: 0, marginLeft: 10, width: 248 } : { left: 0, right: 0, top: '100%', marginTop: 6 }),
+          background: DS.bg, border: `1px solid ${DS.border}`, borderRadius: 11,
+          boxShadow: DS.cardShadowHi, padding: 6, animation: 'tos-fade 0.1s ease',
+        }}>
+          <div style={{ fontSize: 10, color: DS.faint, padding: '4px 8px 6px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Your centres</div>
+          {centres.map(c => {
+            const active = c.id === centre.id;
+            return (
+              <button key={c.id} onClick={() => pick(c.id)}
+                onMouseEnter={e => { if (!active) e.currentTarget.style.background = DS.surfaceHover; }}
+                onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10, width: '100%',
+                  padding: '8px', borderRadius: 8, border: 'none', cursor: 'pointer',
+                  background: active ? DS.accentLight : 'transparent', textAlign: 'left',
+                }}>
+                {tile(c.name, active)}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: active ? DS.accent : DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.name}</div>
+                  <div style={{ fontSize: 11, color: DS.muted, textTransform: 'capitalize' }}>{c.roles.join(' · ')}{c.city ? ` · ${c.city}` : ''}</div>
+                </div>
+                {active && <Icon name="check" size={15} color={DS.accent} />}
+              </button>
+            );
+          })}
+          {planUsage && (
+            <div style={{ fontSize: 10.5, color: DS.faint, padding: '6px 8px 2px' }}>
+              {planUsage.used} of {planUsage.max} centre{planUsage.max === 1 ? '' : 's'} used
+            </div>
+          )}
+          <div style={{ height: 1, background: DS.border, margin: '6px 4px' }} />
+          <button onClick={add}
+            onMouseEnter={e => { e.currentTarget.style.background = DS.surfaceHover; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 10, width: '100%',
+              padding: '8px', borderRadius: 8, border: 'none', cursor: 'pointer',
+              background: 'transparent', textAlign: 'left',
+            }}>
+            <div style={{ width: 32, height: 32, borderRadius: 8, flexShrink: 0, border: `1px dashed ${DS.borderDark}`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: DS.muted }}>
+              <Icon name="plus" size={16} />
+            </div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>Add a centre</div>
+              <div style={{ fontSize: 11, color: DS.faint }}>Add or manage centres</div>
+            </div>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, collapsed = false, centre, centres, onSwitchCentre, onAddCentre, identityName, planUsage, cloudStorage }) => {
   const cfg = NAV_CONFIG[role];
   const [hoveredItem, setHoveredItem] = React.useState(null);
-  // Which parent dropdowns are open. Keyed by item id; the parent owning the
-  // active section starts expanded so the current page is always visible.
-  const activeParent = navParentId(active);
-  const [expanded, setExpanded] = React.useState(() => ({ [activeParent]: true }));
-  React.useEffect(() => { setExpanded(e => ({ ...e, [activeParent]: true })); }, [activeParent]);
+
+  // A sub-item matches the active page when it's an exact compound-section match
+  // (e.g. reports:browse) OR a "whole page" sub (e.g. Teachers) whose page-parent
+  // folds onto it — `teacher_profile` → `teacher` → `teachers`. Compound sub ids
+  // contain ':' so the folding clauses can never false-match them.
+  // The last clause folds a drill-in page onto a compound sub: `timesheet_detail`
+  // → `timesheet` → `timesheets` matches the Staff sub `timesheets:review`.
+  const subMatches = (sub) => active === sub.id || navParentId(active) === sub.id || navParentId(active) + 's' === sub.id || navParentId(active) + 's' === sub.id.split(':')[0];
+  const itemIsActive = (item) => {
+    const base = navParentId(active);
+    if (active === item.id || base === item.id || base + 's' === item.id) return true;
+    return Array.isArray(item.sub) && item.sub.some(subMatches);
+  };
+
+  // Which parent dropdowns are open. The item owning the active page starts
+  // expanded — resolved via itemIsActive so groups whose subs don't share the
+  // parent id (e.g. Staff) still auto-open.
+  const allNavItems = [...(cfg.items || []), ...(cfg.bottom || [])];
+  const activeItemId = (allNavItems.find(itemIsActive) || {}).id || navParentId(active);
+  const [expanded, setExpanded] = React.useState(() => ({ [activeItemId]: true }));
+  React.useEffect(() => { setExpanded(e => ({ ...e, [activeItemId]: true })); }, [activeItemId]);
 
   // When collapsed the bar is icon-only; hovering an item reveals a floating
   // flyout (its label, or the sub-item menu for parents). Tracks which item's
@@ -326,11 +536,6 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
   const flyoutTimer = React.useRef(null);
   const openFlyout = (id) => { clearTimeout(flyoutTimer.current); setFlyout(id); };
   const closeFlyout = () => { flyoutTimer.current = setTimeout(() => setFlyout(null), 120); };
-
-  const itemIsActive = (item) => {
-    const base = navParentId(active);
-    return active === item.id || base === item.id || base + 's' === item.id;
-  };
 
   const NavItem = ({ item }) => {
     const hasSub = Array.isArray(item.sub) && item.sub.length > 0;
@@ -457,7 +662,7 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
   };
 
   const SubNavItem = ({ sub, flyout: inFlyout }) => {
-    const isActive = active === sub.id;
+    const isActive = subMatches(sub);
     const isHovered = hoveredItem === sub.id;
     return (
       <button
@@ -465,7 +670,7 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
         onMouseEnter={() => setHoveredItem(sub.id)}
         onMouseLeave={() => setHoveredItem(null)}
         style={{
-          display: 'flex', alignItems: 'center', width: '100%',
+          display: 'flex', alignItems: 'center', gap: 8, width: '100%',
           padding: '7px 10px', borderRadius: 6, border: 'none',
           background: isActive ? DS.accentLight : isHovered ? (inFlyout ? DS.surfaceHover : SIDE_HOVER) : 'transparent',
           color: isActive ? DS.accent : DS.muted,
@@ -473,12 +678,16 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
           textAlign: 'left', transition: 'background 0.12s', whiteSpace: 'nowrap',
         }}
       >
-        {sub.label}
+        <Icon name={sub.icon} size={13} color={isActive ? DS.accent : DS.faint} />
+        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{sub.label}</span>
       </button>
     );
   };
 
-  const userName = role === 'superadmin' ? 'Marcus Hale' : role === 'admin' ? 'Lisa Chen' : role === 'teacher' ? 'Sarah Clarke' : 'Oliver Chen';
+  const userName = identityName || (role === 'superadmin' ? 'Marcus Hale' : role === 'admin' ? 'Lisa Chen' : role === 'teacher' ? 'Sarah Clarke' : 'Oliver Chen');
+  // Centre switcher (top-left) shows for staff identities whose account resolves
+  // to one or more centres; otherwise the header is the static product logo.
+  const switcherOn = !!(centre && centres && centres.length);
 
   return (
     <div style={{
@@ -489,27 +698,36 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
       padding: collapsed ? '0 10px' : '0 12px',
       transition: 'width 0.16s ease',
     }}>
-      {/* Logo */}
+      {/* Header — centre switcher for staff identities, else the product logo.
+          Fixed to 52px (matching the TopBar height) so its bottom border lines
+          up exactly with the header's, forming one continuous line across the
+          sidebar + content header. */}
       <div style={{
-        padding: collapsed ? '20px 0 16px' : '20px 4px 16px',
+        height: 52, boxSizing: 'border-box',
+        display: 'flex', flexDirection: 'column', justifyContent: 'center',
         borderBottom: `1px solid ${DS.border}`,
         marginBottom: 8,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-start', gap: 10 }}>
-          <div style={{
-            width: 32, height: 32, borderRadius: 8, flexShrink: 0,
-            background: DS.accent,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <span style={{ color: '#fff', fontSize: 14, fontWeight: 800, letterSpacing: '-0.5px' }}>T</span>
-          </div>
-          {!collapsed && (
-            <div>
-              <div style={{ fontSize: 15, fontWeight: 700, color: DS.text, letterSpacing: '-0.3px' }}>TutorOS</div>
-              <div style={{ fontSize: 10, color: DS.muted, marginTop: 1 }}>{cfg.label}</div>
+        {switcherOn ? (
+          <CentreSwitcher collapsed={collapsed} centre={centre} centres={centres} planUsage={planUsage}
+            onSwitchCentre={onSwitchCentre} onAddCentre={onAddCentre} roleLabel={cfg.label} />
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-start', gap: 10, padding: collapsed ? 0 : '0 4px' }}>
+            <div style={{
+              width: 32, height: 32, borderRadius: 8, flexShrink: 0,
+              background: DS.accent,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <span style={{ color: '#fff', fontSize: 14, fontWeight: 800, letterSpacing: '-0.5px' }}>T</span>
             </div>
-          )}
-        </div>
+            {!collapsed && (
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: DS.text, letterSpacing: '-0.3px' }}>TutorOS</div>
+                <div style={{ fontSize: 10, color: DS.muted, marginTop: 1 }}>{cfg.label}</div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Role switcher (demo) — hidden while collapsed */}
@@ -537,6 +755,28 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
       {/* Bottom items */}
       <div style={{ paddingBottom: 12, borderTop: `1px solid ${DS.border}`, paddingTop: 8 }}>
         {cfg.bottom.map(item => <NavItem key={item.id} item={item} />)}
+
+        {/* Cloud-storage usage — admin only, just above the user profile.
+            Quota comes from the account's plan (cloudStorage.totalGb). */}
+        {cloudStorage && !collapsed && (() => {
+          const { usedGb = 0, totalGb = 0 } = cloudStorage;
+          const pct = totalGb ? Math.min(100, Math.round((usedGb / totalGb) * 100)) : 0;
+          return (
+            <div style={{ margin: '8px 0 4px', padding: '12px 14px', borderRadius: 12, background: DS.accent, color: '#fff' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                <Icon name="cloud" size={16} color="#fff" />
+                <span style={{ fontSize: 13, fontWeight: 600 }}>Cloud storage</span>
+              </div>
+              <div style={{ height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.28)', overflow: 'hidden' }}>
+                <div style={{ width: `${pct}%`, height: '100%', background: '#fff', borderRadius: 3, transition: 'width 0.3s' }} />
+              </div>
+              <div style={{ fontSize: 11.5, marginTop: 8, color: 'rgba(255,255,255,0.92)' }}>
+                {usedGb} GB of {totalGb} GB used
+              </div>
+            </div>
+          );
+        })()}
+
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-start',
           gap: 10, padding: collapsed ? '8px 0' : '8px 12px', marginTop: 4,
@@ -550,6 +790,16 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
               <div style={{ fontSize: 11, color: DS.faint }}>{cfg.label}</div>
             </div>
           )}
+        </div>
+        {/* Platform wordmark — the top-left slot now belongs to the centre, so
+            the "TutorOS" branding lives here as a quiet "powered by" footer. */}
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+          paddingTop: 8, marginTop: 4, borderTop: `1px solid ${DS.border}`,
+        }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: DS.faint, letterSpacing: '-0.2px' }}>
+            {collapsed ? 'T' : 'TutorOS'}
+          </span>
         </div>
       </div>
     </div>
@@ -614,27 +864,47 @@ const Btn = ({ variant = 'primary', children, icon, onClick, small, style = {} }
 };
 
 // ─── Card ──────────────────────────────────────────────────────────────────────
-const Card = ({ children, style = {}, title, subtitle, actions }) => (
-  <div style={{
-    background: DS.card, boxShadow: DS.cardShadow,
-    border: `1px solid ${DS.cardBorder}`,
-    borderRadius: 10, overflow: 'hidden', ...style,
-  }}>
-    {(title || actions) && (
-      <div style={{
-        padding: '16px 20px', borderBottom: `1px solid ${DS.border}`,
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
-      }}>
-        <div style={{ minWidth: 0 }}>
-          <span style={{ fontSize: 14, fontWeight: 600, color: DS.text }}>{title}</span>
-          {subtitle && <div style={{ fontSize: 12, color: DS.muted, marginTop: 2 }}>{subtitle}</div>}
+// `icon` + `accent` are optional: when given, the header gains a small gradient
+// glyph chip in the accent colour, so a stack of section cards reads as distinct,
+// colour-coded surfaces. Omitting them keeps the original plain header (no change
+// for the many existing callers).
+const Card = ({ children, style = {}, title, subtitle, actions, icon, accent }) => {
+  const ac = accent || DS.accent;
+  return (
+    <div style={{
+      background: DS.card, boxShadow: DS.cardShadow,
+      border: `1px solid ${DS.cardBorder}`,
+      borderRadius: 10, overflow: 'hidden', ...style,
+    }}>
+      {(title || actions) && (
+        <div style={{
+          padding: '16px 20px', borderBottom: `1px solid ${DS.border}`,
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+          background: icon ? `linear-gradient(180deg, ${ac}0A, transparent)` : undefined,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 11, minWidth: 0 }}>
+            {icon && (
+              <div style={{
+                width: 30, height: 30, borderRadius: 8, flexShrink: 0,
+                background: `linear-gradient(135deg, ${ac}, ${shadeColor(ac, -16)})`,
+                color: '#fff', boxShadow: `0 3px 8px ${ac}3A`,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                <Icon name={icon} size={15} />
+              </div>
+            )}
+            <div style={{ minWidth: 0 }}>
+              <span style={{ fontSize: 14, fontWeight: 600, color: DS.text }}>{title}</span>
+              {subtitle && <div style={{ fontSize: 12, color: DS.muted, marginTop: 2 }}>{subtitle}</div>}
+            </div>
+          </div>
+          {actions && <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>{actions}</div>}
         </div>
-        {actions && <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>{actions}</div>}
-      </div>
-    )}
-    {children}
-  </div>
-);
+      )}
+      {children}
+    </div>
+  );
+};
 
 // ─── Table ─────────────────────────────────────────────────────────────────────
 const Table = ({ cols, rows }) => (
@@ -719,7 +989,8 @@ const fmtTick = (v, isCurrency) => {
   return v >= 1000 ? `${(v/1000).toFixed(v % 1000 === 0 ? 0 : 1)}k` : Math.round(v).toString();
 };
 
-const LineChart = ({ labels = [], series = [], height = 200 }) => {
+const LineChart = ({ labels = [], series = [], height = 200, area = false }) => {
+  const uid = React.useId().replace(/[^a-zA-Z0-9]/g, '');
   const wrapRef = React.useRef(null);
   const [w, setW] = React.useState(600);
   const [measuredH, setMeasuredH] = React.useState(200);
@@ -773,6 +1044,25 @@ const LineChart = ({ labels = [], series = [], height = 200 }) => {
   return (
     <div ref={wrapRef} style={{ width: '100%', height: height === 'auto' ? '100%' : svgH }}>
       <svg width={totalW} height={svgH} style={{ display: 'block' }}>
+        {/* Optional gradient area fill beneath each line */}
+        {area && (
+          <defs>
+            {series.map((s, si) => (
+              <linearGradient key={si} id={`tos-area-${uid}-${si}`} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={s.color} stopOpacity="0.24" />
+                <stop offset="100%" stopColor={s.color} stopOpacity="0" />
+              </linearGradient>
+            ))}
+          </defs>
+        )}
+        {area && series.map((s, si) => {
+          const baseline = pT + chartH;
+          const dArea = `M ${xPos(0, s.data.length)},${baseline} ` +
+            s.data.map((v, i) => `L ${xPos(i, s.data.length)},${yPos(v, scales[si])}`).join(' ') +
+            ` L ${xPos(s.data.length - 1, s.data.length)},${baseline} Z`;
+          return <path key={`area-${si}`} d={dArea} fill={`url(#tos-area-${uid}-${si})`} stroke="none" />;
+        })}
+
         {/* Grid lines + left axis (uses series[0] scale) */}
         {Array.from({ length: ticks + 1 }, (_, i) => {
           const y = pT + (i / ticks) * chartH;
@@ -1101,9 +1391,89 @@ const Divider = ({ margin = '16px 0' }) => (
   <div style={{ borderTop: `1px solid ${DS.border}`, margin }} />
 );
 
+// ─── Dashboard customisation ─────────────────────────────────────────────────────
+// A small per-user preference store (localStorage) that records which dashboard
+// sections each role wants visible. `sections` is the catalogue of toggleable
+// blocks: [{ id, label, hint }]. Anything not yet in the saved map defaults to on,
+// so adding a new section later is backward-compatible.
+const useDashboardPrefs = (storageKey, sections) => {
+  const read = () => {
+    try { return JSON.parse(localStorage.getItem(storageKey) || '{}') || {}; }
+    catch (e) { return {}; }
+  };
+  const [prefs, setPrefs] = React.useState(read);
+  const isOn = (id) => prefs[id] !== false;   // default-on
+  const setOn = (id, on) => setPrefs(prev => {
+    const next = { ...prev, [id]: on };
+    try { localStorage.setItem(storageKey, JSON.stringify(next)); } catch (e) {}
+    return next;
+  });
+  const reset = () => {
+    setPrefs({});
+    try { localStorage.removeItem(storageKey); } catch (e) {}
+  };
+  return { sections, isOn, setOn, reset, hiddenCount: sections.filter(s => prefs[s.id] === false).length };
+};
+
+// Toggle list inside a Modal — pair with a "Customise" button in the page header.
+const CustomiseModal = ({ open, onClose, prefs, title = 'Customise dashboard', subtitle = 'Choose which sections appear on your dashboard.' }) => (
+  <Modal
+    open={open}
+    onClose={onClose}
+    title={title}
+    subtitle={subtitle}
+    icon="settings"
+    width={440}
+    footer={
+      <>
+        <Btn variant="ghost" small onClick={prefs.reset}>Reset to default</Btn>
+        <Btn variant="primary" small onClick={onClose}>Done</Btn>
+      </>
+    }
+  >
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      {prefs.sections.map((s, i) => {
+        const on = prefs.isOn(s.id);
+        return (
+          <button
+            key={s.id}
+            onClick={() => prefs.setOn(s.id, !on)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left',
+              padding: '12px 6px', border: 'none', background: 'transparent', cursor: 'pointer',
+              borderBottom: i < prefs.sections.length - 1 ? `1px solid ${DS.border}` : 'none',
+            }}
+          >
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 500, color: DS.text }}>{s.label}</div>
+              {s.hint && <div style={{ fontSize: 12, color: DS.muted, marginTop: 1 }}>{s.hint}</div>}
+            </div>
+            <Toggle on={on} />
+          </button>
+        );
+      })}
+    </div>
+  </Modal>
+);
+
+// Small on/off switch used by the customisation list.
+const Toggle = ({ on }) => (
+  <span style={{
+    width: 38, height: 22, borderRadius: 11, flexShrink: 0, position: 'relative',
+    background: on ? DS.accent : DS.borderDark, transition: 'background 0.15s',
+  }}>
+    <span style={{
+      position: 'absolute', top: 2, left: on ? 18 : 2,
+      width: 18, height: 18, borderRadius: '50%', background: '#fff',
+      boxShadow: '0 1px 2px rgba(0,0,0,0.2)', transition: 'left 0.15s',
+    }} />
+  </span>
+);
+
 // ─── Export ────────────────────────────────────────────────────────────────────
 Object.assign(window, {
-  DS, Icon, Badge, Avatar, KPICard, Sidebar, PageHeader, Btn, Card,
+  DS, Icon, Badge, Avatar, KPICard, StatCard, shadeColor, Sidebar, PageHeader, Btn, Card,
   Table, TableRow, Sparkline, LineChart, BarChart, ScorePill, Divider, NAV_CONFIG, navParentId,
   Modal, Field, Input, Textarea, Select, Segmented, SearchInput, EmptyState,
+  useDashboardPrefs, CustomiseModal, Toggle,
 });

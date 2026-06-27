@@ -1649,6 +1649,16 @@ const SAControlsPage = () => {
   const [maintenance, setMaintenance] = React.useState(false);
   const [readOnly, setReadOnly] = React.useState(false);
 
+  // Live platform plan catalogue + override codes (Plans.jsx). Editing here
+  // applies platform-wide and is what the admin subscription + billing read.
+  const plansStore = usePlansStore();
+  const codesStore = usePlanCodesStore();
+  const [planModal, setPlanModal] = React.useState({ open: false, plan: null });
+  const [codeModal, setCodeModal] = React.useState({ open: false, code: null });
+  const [copied, setCopied] = React.useState('');
+  const copyCode = c => { try { navigator.clipboard.writeText(c); } catch (e) {} setCopied(c); setTimeout(() => setCopied(''), 1400); };
+  const planColor = id => ({ starter: '#9CA3AF', growth: '#0891B2', scale: SA_ACCENT }[id] || SA_ACCENT);
+
   const toggleFlag = (id) => setFlags(flags.map(f => f.id === id ? { ...f, on: !f.on } : f));
 
   const Switch = ({ on, onChange }) => (
@@ -1720,43 +1730,81 @@ const SAControlsPage = () => {
         />
       </Card>
 
-      {/* Plans */}
-      <Card title="Plans & Pricing" actions={[<Btn key="add" variant="ghost" icon="plus" small>New Plan</Btn>]} style={{ marginBottom: 20 }}>
+      {/* Plans — live catalogue (tutoros.plans.v1, edited here, read by admin subscription) */}
+      <Card title="Plans & Pricing" actions={[<Btn key="add" variant="ghost" icon="plus" small onClick={() => setPlanModal({ open: true, plan: null })}>New Plan</Btn>]} style={{ marginBottom: 20 }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, padding: '20px' }}>
-          {[
-            { name: 'Starter', price: 60,  students: 30, teachers: 2,  centres: 3, color: '#9CA3AF', features: ['Basic dashboard', '1GB storage', 'Email support'] },
-            { name: 'Growth',  price: 160, students: 100, teachers: 6, centres: 5, color: '#0891B2', features: ['Lesson Planner', 'AI Feedback', '10GB storage', 'Priority support'] },
-            { name: 'Scale',   price: 410, students: 500, teachers: 25, centres: 4, color: SA_ACCENT, features: ['All Growth features', 'Custom branding', 'Unlimited storage', 'Dedicated CSM'] },
-          ].map(plan => (
-            <div key={plan.name} style={{
-              border: `2px solid ${plan.color}33`, borderRadius: 10, padding: 18,
-              background: plan.color + '08',
+          {plansStore.plans.map(plan => {
+            const color = planColor(plan.id);
+            return (
+            <div key={plan.id} style={{
+              border: `2px solid ${color}33`, borderRadius: 10, padding: 18,
+              background: color + '08', opacity: plan.archived ? 0.55 : 1,
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                <span style={{ fontSize: 14, fontWeight: 700, color: plan.color }}>{plan.name}</span>
-                <Badge variant="default">{plan.centres} centres</Badge>
+                <span style={{ fontSize: 14, fontWeight: 700, color }}>{plan.name}</span>
+                {plan.archived ? <Badge variant="default">Archived</Badge> : <Badge variant="default">{plan.maxCentres} centre{plan.maxCentres !== 1 ? 's' : ''}</Badge>}
               </div>
               <div style={{ marginBottom: 14 }}>
                 <span style={{ fontSize: 28, fontWeight: 700, color: DS.text }}>£{plan.price}</span>
                 <span style={{ fontSize: 13, color: DS.muted }}> /mo</span>
               </div>
               <div style={{ fontSize: 11, color: DS.muted, marginBottom: 10 }}>
-                Up to {plan.students} students · {plan.teachers} teachers
+                Up to {plan.studentSeats} students · {plan.teacherSeats} teachers per centre · {plan.storageGb || 0}GB storage
               </div>
               <Divider margin="10px 0" />
-              {plan.features.map(f => (
+              {(plan.features || []).map(f => (
                 <div key={f} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: DS.sub, padding: '3px 0' }}>
-                  <Icon name="check" size={12} color={plan.color} />
+                  <Icon name="check" size={12} color={color} />
                   {f}
                 </div>
               ))}
               <div style={{ marginTop: 14, display: 'flex', gap: 6 }}>
-                <Btn variant="secondary" small>Edit</Btn>
-                <Btn variant="ghost" small>Archive</Btn>
+                <Btn variant="secondary" small onClick={() => setPlanModal({ open: true, plan })}>Edit</Btn>
+                {plan.archived
+                  ? <Btn variant="ghost" small onClick={() => plansStore.restorePlan(plan.id)}>Restore</Btn>
+                  : <Btn variant="ghost" small onClick={() => plansStore.archivePlan(plan.id)}>Archive</Btn>}
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
+      </Card>
+
+      {/* Promo & override codes — issued to a single centre for a fixed window */}
+      <Card title="Promo & override codes" subtitle="Give a centre a free trial or discounted price. Share the code with the centre's admin to redeem in their billing settings."
+        actions={[<Btn key="add" variant="ghost" icon="plus" small onClick={() => setCodeModal({ open: true, code: null })}>New code</Btn>]} style={{ marginBottom: 20 }}>
+        <Table
+          cols={['Code', 'Offer', 'Restrict to', 'Redemptions', 'Status', 'Actions']}
+          rows={codesStore.codes.map(c => {
+            const used = (c.redemptions || []).length;
+            const plan = c.planId ? getPlan(c.planId) : null;
+            return [
+              <button onClick={() => copyCode(c.code)} title="Copy code" style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer',
+                background: DS.surface, border: `1px solid ${DS.border}`, borderRadius: 6, padding: '3px 8px',
+                fontSize: 12, fontFamily: 'JetBrains Mono, monospace', color: SA_ACCENT, fontWeight: 600,
+              }}>
+                {c.code}
+                <Icon name={copied === c.code ? 'check' : 'copy'} size={12} color={copied === c.code ? DS.success : DS.faint} />
+              </button>,
+              <div>
+                <div style={{ fontSize: 13, color: DS.text }}>{planCodeSummary(c)}</div>
+                {c.note && <div style={{ fontSize: 11, color: DS.muted }}>{c.note}</div>}
+              </div>,
+              <span style={{ fontSize: 12, color: DS.muted }}>{plan ? plan.name : 'Any plan'}</span>,
+              <span style={{ fontSize: 13, color: DS.sub }}>{used}{c.maxRedemptions != null ? ` / ${c.maxRedemptions}` : ''}</span>,
+              <Badge variant={c.status === 'active' ? 'success' : 'default'}>{c.status === 'active' ? 'Active' : 'Disabled'}</Badge>,
+              <div style={{ display: 'flex', gap: 6 }}>
+                <Btn variant="secondary" small onClick={() => setCodeModal({ open: true, code: c })}>Edit</Btn>
+                <Btn variant="ghost" small onClick={() => codesStore.setStatus(c.code, c.status === 'active' ? 'disabled' : 'active')}>{c.status === 'active' ? 'Disable' : 'Enable'}</Btn>
+                <Btn variant="ghost" icon="trash" small onClick={() => codesStore.deleteCode(c.code)} />
+              </div>,
+            ];
+          })}
+        />
+        {codesStore.codes.length === 0 && (
+          <div style={{ padding: '28px 20px', textAlign: 'center', fontSize: 13, color: DS.muted }}>No override codes yet. Create one to give a centre a free trial or discount.</div>
+        )}
       </Card>
 
       {/* Roles */}
@@ -1787,6 +1835,26 @@ const SAControlsPage = () => {
           ])}
         />
       </Card>
+
+      <PlanEditorModal
+        open={planModal.open}
+        plan={planModal.plan}
+        onClose={() => setPlanModal({ open: false, plan: null })}
+        onSave={draft => { if (planModal.plan) plansStore.updatePlan(planModal.plan.id, draft); else plansStore.addPlan(draft); }}
+      />
+      <PlanCodeModal
+        open={codeModal.open}
+        code={codeModal.code}
+        plans={plansStore.plans}
+        onClose={() => setCodeModal({ open: false, code: null })}
+        onSave={draft => {
+          if (codeModal.code) codesStore.updateCode(codeModal.code.code, {
+            kind: draft.kind, value: +draft.value || 0, durationMonths: Math.max(1, +draft.durationMonths || 1),
+            planId: draft.planId || null, maxRedemptions: (draft.maxRedemptions === '' || draft.maxRedemptions == null) ? null : +draft.maxRedemptions, note: draft.note || '',
+          });
+          else codesStore.createCode(draft);
+        }}
+      />
     </div>
   );
 };

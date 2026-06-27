@@ -42,6 +42,7 @@
 <script type="text/babel" src="mocks/superAdmin.mock.jsx"></script>
 <script type="text/babel" src="mocks/adminDashboard.mock.jsx"></script>
 <script type="text/babel" src="mocks/adminPages.mock.jsx"></script>
+<script type="text/babel" src="mocks/invoices.mock.jsx"></script>
 <script type="text/babel" src="mocks/teacherDashboard.mock.jsx"></script>
 <script type="text/babel" src="mocks/teacherPages.mock.jsx"></script>
 <script type="text/babel" src="mocks/lessonPlanner.mock.jsx"></script>
@@ -50,12 +51,20 @@
 <script type="text/babel" src="mocks/reports.mock.jsx"></script>
 <script type="text/babel" src="mocks/settings.mock.jsx"></script>
 <script type="text/babel" src="mocks/communications.mock.jsx"></script>
+<script type="text/babel" src="mocks/onboarding.mock.jsx"></script>
+<script type="text/babel" src="mocks/plans.mock.jsx"></script>
+<script type="text/babel" src="mocks/timesheets.mock.jsx"></script>
 
 <!-- Reports module (consumes reports.mock; consumed by Teacher/Student/Admin pages) -->
 <script type="text/babel" src="Reports.jsx"></script>
 
 <!-- Settings module (per-role tabbed settings; consumes settings.mock) -->
 <script type="text/babel" src="Settings.jsx"></script>
+
+<!-- Plans & override codes (platform plan catalogue + price-override codes).
+     Loads after the mocks + Settings.jsx, BEFORE SuperAdmin.jsx (editor) and
+     Centres.jsx (subscription resolution) which consume window.usePlansStore etc. -->
+<script type="text/babel" src="Plans.jsx"></script>
 
 <!-- Communications module (announcements + messages; consumes communications.mock + SuperAdmin's SACommsPage) -->
 <script type="text/babel" src="Communications.jsx"></script>
@@ -64,10 +73,36 @@
 <script type="text/babel" src="SuperAdmin.jsx"></script>
 <script type="text/babel" src="AdminDashboard.jsx"></script>
 <script type="text/babel" src="AdminPages.jsx"></script>
+
+<!-- Invoices module (admin ledger + workflow: derived status, schedules,
+     detail drawer, reminders, CSV reconciliation, analytics).
+     Loads after AdminPages.jsx — defines AdminInvoicesPage for its router;
+     consumes mocks/invoices.mock.jsx. -->
+<script type="text/babel" src="Invoices.jsx"></script>
+
+<!-- Onboarding module (centre setup · invites · provisioning · claim).
+     Loads after AdminPages.jsx — reuses useAdminStore / adminNav / flow chrome. -->
+<script type="text/babel" src="Onboarding.jsx"></script>
+
+<!-- Public auth front door (Login · Signup). Loads after Onboarding.jsx —
+     reuses its SetupShell / claim chrome + the admin & onboarding stores. -->
+<script type="text/babel" src="Auth.jsx"></script>
+
+<!-- Plan-aware multi-centre management. Loads after Auth.jsx — reuses genCentreCode
+     (Auth) + onboarding helpers; drives the sidebar centre switcher via index.html. -->
+<script type="text/babel" src="Centres.jsx"></script>
+
 <script type="text/babel" src="TeacherDashboard.jsx"></script>
 <script type="text/babel" src="TeacherPages.jsx"></script>
 <script type="text/babel" src="StudentDashboard.jsx"></script>
 <script type="text/babel" src="Homework.jsx"></script>
+
+<!-- Timesheets module (teacher working hours). Capture rides the register flow
+     (TimesheetCapture, used by TeacherPages.jsx); review/export are dedicated
+     pages (TeacherTimesheetPage + AdminTimesheetsPage). Loads after AdminPages.jsx
+     and TeacherPages.jsx — reuses useAdminStore; consumes mocks/timesheets.mock.jsx. -->
+<script type="text/babel" src="Timesheets.jsx"></script>
+
 <script type="text/babel" src="tweaks-panel.jsx"></script>
 
 <script type="text/babel">
@@ -84,14 +119,22 @@ const buildCrumbs = (role, page) => {
   const parentId = window.navParentId(page);
   const section  = page.includes(':') ? page.split(':')[1] : null;
   const all = [...(cfg.items || []), ...(cfg.bottom || [])];
-  const item = all.find(i => i.id === parentId || i.id === parentId + 's' || parentId === i.id + 's')
-    || all.find(i => page.startsWith(i.id));
+  // A sub matches the active page by exact id, a compound `<parent>:<section>` id,
+  // or a "whole page" sub (Teachers) the page-parent folds onto (teacher_profile).
+  const subMatch = (s) => s.id === page || s.id === `${parentId}:${section}` || parentId === s.id || parentId + 's' === s.id || parentId + 's' === s.id.split(':')[0];
+  let item = all.find(i => i.id === parentId || i.id === parentId + 's' || parentId === i.id + 's');
+  let sub  = null;
+  if (!item) {
+    // The page may live under a group whose subs don't share the parent id (Staff).
+    for (const i of all) {
+      if (Array.isArray(i.sub)) { const m = i.sub.find(subMatch); if (m) { item = i; sub = m; break; } }
+    }
+  }
+  if (!item) item = all.find(i => page.startsWith(i.id));
   if (!item) return [{ label: parentId.charAt(0).toUpperCase() + parentId.slice(1) }];
   const crumbs = [{ label: item.label }];
-  if (section && Array.isArray(item.sub)) {
-    const sub = item.sub.find(s => s.id === `${parentId}:${section}`);
-    if (sub) crumbs.push({ label: sub.label });
-  }
+  if (!sub && section && Array.isArray(item.sub)) sub = item.sub.find(s => s.id === `${parentId}:${section}`);
+  if (sub) crumbs.push({ label: sub.label });
   return crumbs;
 };
 
@@ -104,7 +147,13 @@ const TopBar = ({ view, page, onBack, accent, comms, onNavigate, collapsed, onTo
       padding: '0 18px', height: 52,
       borderBottom: `1px solid ${DS.border}`,
       boxShadow: '0 1px 2px rgba(16,24,40,0.04)',
-      background: '#FFFFFF', flexShrink: 0, zIndex: 20,
+      // Glassmorphism: translucent white + blur so the grey content frosts
+      // through as it scrolls under the sticky header.
+      position: 'sticky', top: 0,
+      background: 'rgba(255,255,255,0.72)',
+      backdropFilter: 'saturate(180%) blur(12px)',
+      WebkitBackdropFilter: 'saturate(180%) blur(12px)',
+      flexShrink: 0, zIndex: 30,
     }}>
       {/* Sidebar collapse toggle */}
       <button onClick={onToggleSidebar} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} style={{
@@ -167,6 +216,10 @@ const App = () => {
   const [plannerArgs, setPlannerArgs] = React.useState(null);
   const [renderKey, setRenderKey] = React.useState(0);
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
+  // Public account-claim link (teacher/student invite). When set, the claim page
+  // is shown full-screen over the app/landing. `''` is a valid (not-found) id, so
+  // we gate on `!== null`. window.__openClaim(id) is the entry point.
+  const [claimId, setClaimId] = React.useState(null);
 
   // Admin-settable primary accent. Persisted to localStorage so it survives
   // reloads independently of the dev Tweaks panel (which writes to disk). The
@@ -185,10 +238,46 @@ const App = () => {
     return () => { delete window.__setAccent; delete window.__getAccent; };
   }, []);
 
+  // Active centre — a staff account can be linked to several centres (each its own
+  // subscription); the sidebar switcher lets them hop between them. A cosmetic
+  // reframe in this prototype (centre name/branding), persisted like the accent.
+  const CENTRE_FALLBACK = (window.ONB_CENTRE && window.ONB_CENTRE.id) || 'bm';
+  const [activeCentre, setActiveCentre] = React.useState(() => {
+    try { return localStorage.getItem('tutoros.activeCentre') || CENTRE_FALLBACK; } catch (e) { return CENTRE_FALLBACK; }
+  });
+  React.useEffect(() => {
+    window.__setCentre = (id) => {
+      try { id ? localStorage.setItem('tutoros.activeCentre', id) : localStorage.removeItem('tutoros.activeCentre'); } catch (e) {}
+      setActiveCentre(id || CENTRE_FALLBACK);
+    };
+    window.__getCentre = () => { try { return localStorage.getItem('tutoros.activeCentre') || CENTRE_FALLBACK; } catch (e) { return CENTRE_FALLBACK; } };
+    return () => { delete window.__setCentre; delete window.__getCentre; };
+  }, []);
+
+  // Resolve the signed-in staff identity's memberships → one switcher entry per
+  // centre (with its granted roles). Admin/teacher only; students/superadmin keep
+  // the static product header. Reuses the onboarding store's membership list.
+  const sub = window.useSubscriptionStore ? window.useSubscriptionStore() : null;
+  const centreNav = React.useMemo(() => {
+    if (!sub || (view !== 'admin' && view !== 'teacher') || !window.ONB_SESSION) return null;
+    // The Centres page (subscription store) is the single source of truth for the
+    // account's owned centres; the switcher lists the active (non-archived) ones so
+    // a centre added there shows up here live (the store is cross-instance reactive).
+    const list = (sub.centres || []).filter(c => c.status !== 'archived');
+    if (!list.length) return null;
+    const centres = list.map(c => ({ id: c.id, name: c.name, accent: c.accent || null, city: c.city || '', roles: [c.isPrimary ? 'Primary centre' : 'Centre'] }));
+    const activeId = centres.some(c => c.id === activeCentre) ? activeCentre : centres[0].id;
+    const active = centres.find(c => c.id === activeId) || centres[0];
+    return { centre: { id: activeId, name: active.name }, centres, planUsage: { used: (sub.centres || []).length, max: sub.plan.maxCentres } };
+  }, [sub && sub.centres, sub && sub.planId, view, activeCentre]);
+
   // Communications state is lifted here (localStorage isn't reactive) so the
   // notification bell + sidebar badges update live across the page, topbar and
   // sidebar. The context is the active role's demo identity (see COMMS_SELF).
-  const commsRole = view === 'landing' ? 'admin' : view;
+  // Public, full-screen, unauthenticated views — gated ahead of the app shell
+  // (no sidebar/topbar), like the landing & claim pages.
+  const isAuth = view === 'login' || view === 'signup';
+  const commsRole = (view === 'landing' || isAuth) ? 'admin' : view;
   const commsCtx  = React.useMemo(() => window.commsContext ? window.commsContext(commsRole) : null, [commsRole]);
   const comms     = window.useComms ? window.useComms(commsCtx) : null;
 
@@ -214,14 +303,26 @@ const App = () => {
     return item && item.sub && item.sub.length ? item.sub[0].id : pg;
   };
 
-  const enterApp = (role) => { setView(role || 'admin'); setPage('dashboard'); };
+  const enterApp = (role, pg) => { setView(role || 'admin'); setPage(normalizePage(role || 'admin', pg || 'dashboard')); };
 
   // Expose navigation for PPTX export
   React.useEffect(() => {
     window.__navigate = (role, pg) => {
+      setClaimId(null);   // leaving a claim link returns to the app
       if (role === 'landing') { setView('landing'); setPage('dashboard'); }
+      // Public auth views aren't role nav — don't normalize against NAV_CONFIG.
+      else if (role === 'login' || role === 'signup') { setView(role); setPage('dashboard'); }
+      // The standalone "Set up centre" page is gone — setup is now a right-hand drawer
+      // on the Centres page. Rewrite any admin/setup navigation to open it for the
+      // active centre (covers the dashboard banner, signup CTA and sub-flow back links).
+      else if (role === 'admin' && pg === 'setup') {
+        window.__centresIntent = { setup: (window.__getCentre ? window.__getCentre() : null) };
+        setView('admin'); setPage('centres');
+      }
       else { setView(role); setPage(normalizePage(role, pg)); }
     };
+    // Open the public account-claim page for a mock invite token / claim code.
+    window.__openClaim = (id) => setClaimId(id || '');
     window.__openLessonPlanner = (group, date, mode) => {
       setPlannerArgs({ group, date, mode });
       setView('teacher');
@@ -229,7 +330,7 @@ const App = () => {
     };
   }, []);
   const handleNav = (p)   => { setPlannerArgs(null); setPage(normalizePage(view, p)); };
-  const isApp = view !== 'landing';
+  const isApp = view !== 'landing' && !isAuth;
 
   const renderContent = () => {
     // Nav items with sub-sections route on a `<parent>:<section>` id (e.g.
@@ -238,7 +339,6 @@ const App = () => {
     const parent  = page.split(':')[0];
     const section = page.includes(':') ? page.split(':')[1] : null;
 
-    // Settings is available to every role and lives in its own module.
     if (parent === 'settings') return <SettingsPage role={view} section={section} />;
     // Communications is shared across all roles (announcements + messages),
     // backed by the lifted comms state. Superadmin's view is platform-scoped.
@@ -249,7 +349,17 @@ const App = () => {
     }
     if (view === 'admin') {
       if (parent === 'dashboard') return <AdminDashboard />;
+      if (parent === 'centres')   return <CentresPage />;
       if (parent === 'reports')   return <AdminReportsConfig section={section} />;
+      // Onboarding flows (Onboarding.jsx) — full-page admin routes reached via adminNav.
+      // (The "Set up centre" checklist is now the Centres page's right-hand drawer;
+      // admin/setup is rewritten to it in __navigate, so there's no standalone route.)
+      if (parent === 'invite_teachers')    return <InviteTeachersPage />;
+      if (parent === 'students_import')    return <BulkImportPage />;
+      if (parent === 'students_provision') return <AddSingleStudentPage />;
+      if (parent === 'claim_slips')        return <ClaimSlipsPage />;
+      if (parent === 'class_roster')       return <ClassRosterPage />;
+      if (parent === 'people')             return <PeopleInvitesPage />;
       return <AdminPages page={parent} section={section} />;
     }
     if (view === 'teacher') {
@@ -258,6 +368,7 @@ const App = () => {
       if (parent === 'homework')       return <TeacherPages page="homework" section={section} />;
       if (parent === 'progress')       return <TeacherPages page="progress" />;
       if (parent === 'attendance')     return <TeacherPages page="attendance" />;
+      if (parent === 'timesheet')      return <TeacherPages page="timesheet" />;
       if (parent === 'tracking')       return <TeacherPages page="tracking" />;
       if (parent === 'reports')        return <TeacherPages page="reports" />;
       if (parent === 'lesson_planner') return <TeacherPages page="lesson_planner" plannerArgs={plannerArgs} />;
@@ -271,7 +382,15 @@ const App = () => {
 
   return (
     <div key={renderKey} style={{ height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      {isApp ? (
+      {claimId !== null ? (
+        <div style={{ flex: 1, overflow: 'auto' }}>
+          <ClaimPage identifier={claimId} onExit={() => { setClaimId(null); setView('landing'); setPage('dashboard'); }} />
+        </div>
+      ) : isAuth ? (
+        <div style={{ flex: 1, overflow: 'auto' }}>
+          {view === 'signup' ? <SignupPage /> : <LoginPage />}
+        </div>
+      ) : isApp ? (
         <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
           <Sidebar
             role={view}
@@ -280,19 +399,37 @@ const App = () => {
             onRoleSwitch={(role) => { setView(role); setPage('dashboard'); }}
             badges={comms ? { comms: comms.unread.total } : null}
             collapsed={sidebarCollapsed}
+            centre={centreNav ? centreNav.centre : null}
+            centres={centreNav ? centreNav.centres : null}
+            planUsage={centreNav ? centreNav.planUsage : null}
+            cloudStorage={view === 'admin' && sub ? { usedGb: sub.storageUsedGb ?? 0, totalGb: (sub.plan && sub.plan.storageGb) || 0 } : null}
+            identityName={centreNav ? window.ONB_SESSION.name : null}
+            onSwitchCentre={(id) => {
+              window.__setCentre && window.__setCentre(id);
+              // Follow the centre's branding accent (null → platform default).
+              const c = centreNav && centreNav.centres.find(x => x.id === id);
+              window.__setAccent && window.__setAccent((c && c.accent) || null);
+            }}
+            onAddCentre={() => { window.__centresIntent = { add: true }; window.__navigate('admin', 'centres'); }}
           />
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#FFFFFF' }}>
-            <TopBar view={view} page={page} onBack={() => setView('landing')} accent={tweaks.accent}
-              comms={comms} onNavigate={(role, pg) => window.__navigate(role, pg)}
-              collapsed={sidebarCollapsed} onToggleSidebar={() => setSidebarCollapsed(c => !c)} />
-            <div style={{ flex: 1, overflow: 'auto' }}>
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: DS.canvas }}>
+            {/* The header is sticky *inside* the scroll area so page content
+                scrolls beneath it — that's what makes the glass blur visible. */}
+            <div style={{ flex: 1, overflow: 'auto', position: 'relative' }}>
+              <TopBar view={view} page={page} onBack={() => setView('landing')} accent={tweaks.accent}
+                comms={comms} onNavigate={(role, pg) => window.__navigate(role, pg)}
+                collapsed={sidebarCollapsed} onToggleSidebar={() => setSidebarCollapsed(c => !c)} />
               {renderContent()}
             </div>
           </div>
         </div>
       ) : (
         <div style={{ flex: 1, overflow: 'auto' }}>
-          <LandingPage onEnterApp={() => enterApp('admin')} />
+          <LandingPage
+            onEnterApp={() => enterApp('admin')}
+            onLogin={() => { setView('login'); setPage('dashboard'); }}
+            onGetStarted={() => { setView('signup'); setPage('dashboard'); }}
+          />
         </div>
       )}
 
@@ -303,6 +440,8 @@ const App = () => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           {[
             ['landing',     null,           'Marketing site'],
+            ['login',       'login',        'Public — Log in'],
+            ['signup',      'signup',       'Public — Sign up'],
             ['superadmin',  'dashboard',    'SuperAdmin — Overview'],
             ['superadmin',  'centres',      'SuperAdmin — Centres'],
             ['superadmin',  'users',        'SuperAdmin — Users'],
@@ -314,9 +453,18 @@ const App = () => {
             ['superadmin',  'controls',     'SuperAdmin — Platform Controls'],
             ['superadmin',  'settings',     'SuperAdmin — Settings'],
             ['admin',    'dashboard',  'Admin — Dashboard'],
+            ['admin',    'centres',    'Admin — Centres'],
+            ['admin',    'setup',      'Admin — Set up centre'],
+            ['admin',    'people',     'Admin — People & invites'],
+            ['admin',    'invite_teachers',    'Admin — Invite teachers'],
+            ['admin',    'students_import',     'Admin — Import students (CSV)'],
+            ['admin',    'students_provision',  'Admin — Add single student'],
+            ['admin',    'claim_slips',         'Admin — Claim slips'],
+            ['admin',    'class_roster',        'Admin — Class roster'],
             ['admin',    'students',   'Admin — Students'],
             ['admin',    'classes',    'Admin — Classes'],
-            ['admin',    'teachers',   'Admin — Teachers'],
+            ['admin',    'teachers',   'Admin — Staff · Teachers'],
+            ['admin',    'timesheets:review', 'Admin — Staff · Timesheets'],
             ['admin',    'schedule',   'Admin — Schedule'],
             ['admin',    'invoices',   'Admin — Invoices'],
             ['admin',    'reports',    'Admin — Reports'],
@@ -328,6 +476,7 @@ const App = () => {
             ['teacher',  'lesson_planner','Teacher — Lesson Planner'],
             ['teacher',  'homework',   'Teacher — Homework'],
             ['teacher',  'attendance', 'Teacher — Attendance'],
+            ['teacher',  'timesheet',  'Teacher — Timesheet'],
             ['teacher',  'progress',   'Teacher — Progress'],
             ['teacher',  'tracking',   'Teacher — Tracking'],
             ['teacher',  'reports',    'Teacher — Reports'],

@@ -584,16 +584,38 @@ const TeacherAttendancePage = () => {
     Object.fromEntries(cls.students.map(n => [n, null]))
   );
   const [saved, setSaved] = React.useState(false);
-  const [selectedDate, setSelectedDate] = React.useState('2026-04-25');
+  const [selectedDate, setSelectedDate] = React.useState(() => window.tsTodayISO ? window.tsTodayISO() : new Date().toISOString().slice(0, 10));
+
+  // Resolve the scheduled session behind this register so working-time capture can
+  // pre-fill its duration from the centre timetable (store.classes is the source of
+  // truth — see schedule-timetable architecture). teacherAllClasses groups match
+  // Sarah's store classes c1–c4; a no-match (e.g. Yr13) falls back to 90 min.
+  const adminStore = useAdminStore();
+  const me = adminStore.teachers.find(t => t.name === 'Sarah Clarke') || adminStore.teachers[0];
+  const matchedClass = adminStore.classes.find(c => me && c.teacher === me.name && c.group === cls.group);
+  const scheduledMinutes = window.tsSessionMinutes ? window.tsSessionMinutes(matchedClass && matchedClass.time) : 90;
+  const classId = matchedClass ? matchedClass.id : `tc${selectedClass}`;
+  const session = {
+    sessionId: `${classId}|${selectedDate}`, classId, teacherId: me && me.id,
+    centreId: window.TIMESHEET_CENTRE || 'centre-001', date: selectedDate,
+    scheduledMinutes, label: `${cls.group} · ${cls.subject}`,
+  };
+  // Which session's register has been confirmed (drives working-time capture).
+  const [registeredSession, setRegisteredSession] = React.useState(null);
+  const registered = registeredSession === session.sessionId;
+  const Capture = window.TimesheetCapture;
 
   React.useEffect(() => {
     setRecords(Object.fromEntries(cls.students.map(n => [n, null])));
     setSaved(false);
+    setRegisteredSession(null);
   }, [selectedClass]);
 
   const mark = (name, status) => { setRecords(p => ({...p, [name]:status})); setSaved(false); };
   const markAll = (status) => { setRecords(Object.fromEntries(cls.students.map(n => [n, status]))); setSaved(false); };
-  const handleSave = () => { setSaved(true); setTimeout(() => setSaved(false), 2500); };
+  // Confirming the register also captures a draft "teaching" TimeEntry (upsert on
+  // sessionId, so a second save never duplicates) — see Timesheets.jsx.
+  const handleSave = () => { setSaved(true); setRegisteredSession(session.sessionId); setTimeout(() => setSaved(false), 2500); };
 
   const counts = { present:0, absent:0, late:0, unmarked:0 };
   Object.values(records).forEach(v => { if (v) counts[v]++; else counts.unmarked++; });
@@ -681,6 +703,9 @@ const TeacherAttendancePage = () => {
               );
             })}
           </div>
+
+          {/* Working-time capture — rides this register flow (no separate clock-in) */}
+          {Capture && <Capture session={session} registered={registered} />}
 
           <div style={{ padding:'14px 16px', borderTop:`1px solid ${DS.border}`, background:DS.surface, display:'flex', alignItems:'center', gap:16 }}>
             <div style={{ display:'flex', gap:14, flex:1 }}>
@@ -2341,6 +2366,7 @@ const TeacherPages = ({ page, plannerArgs, section }) => {
   if (page === 'homework')       return <TeacherHomework section={section} />;
   if (page === 'progress')       return <TeacherProgressPage />;
   if (page === 'attendance')     return <TeacherAttendancePage />;
+  if (page === 'timesheet')      return window.TeacherTimesheetPage ? <window.TeacherTimesheetPage /> : null;
   if (page === 'tracking')       return <TeacherTrackingPage />;
   if (page === 'reports')        return <TeacherReports />;
   if (page === 'lesson_planner') return <LessonPlannerPage

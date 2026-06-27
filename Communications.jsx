@@ -24,8 +24,14 @@
 // ══════════════════════════════════════════════════════════════
 (() => {
 
-const COMMS_KEY = 'tutoros.comms.v1';
+// v2: store gained `config` (per-centre safety posture), `flags` (flag resolutions)
+// and `concerns` (DSL log), plus new seed threads/channels. Bumped so existing v1
+// blobs re-seed cleanly rather than losing the new content to backfill.
+const COMMS_KEY = 'tutoros.comms.v2';
 const COMMS_TODAY = '2026-06-18';
+// The demo "now" — used for relative times, scheduling and quiet-hours maths so the
+// prototype reads consistently regardless of the wall clock.
+const cmNow = () => new Date(COMMS_TODAY + 'T09:30:00Z');
 
 // ─── Roster helpers (typeof-guarded so load order can't break it) ──────────────────
 const usersArr   = () => (typeof COMMS_USERS !== 'undefined' ? COMMS_USERS : []);
@@ -45,6 +51,9 @@ function cmLoad() {
     announcements: toMap(typeof COMMS_ANNOUNCEMENTS !== 'undefined' ? COMMS_ANNOUNCEMENTS : []),
     threads:       toMap(typeof COMMS_THREADS !== 'undefined' ? COMMS_THREADS : []),
     messages:      toMap(typeof COMMS_MESSAGES !== 'undefined' ? COMMS_MESSAGES : []),
+    config:        (typeof COMMS_CONFIG !== 'undefined' ? JSON.parse(JSON.stringify(COMMS_CONFIG)) : {}),
+    flags:         (typeof COMMS_FLAGS !== 'undefined' ? JSON.parse(JSON.stringify(COMMS_FLAGS)) : {}),
+    concerns:      (typeof COMMS_CONCERNS !== 'undefined' ? COMMS_CONCERNS.slice() : []),
   };
   if (!raw || typeof raw !== 'object') return seed;
   // Backfill missing top-level keys so older blobs still load.
@@ -52,6 +61,9 @@ function cmLoad() {
     announcements: raw.announcements || seed.announcements,
     threads:       raw.threads       || seed.threads,
     messages:      raw.messages      || seed.messages,
+    config:        raw.config        || seed.config,
+    flags:         raw.flags         || seed.flags,
+    concerns:      raw.concerns      || seed.concerns,
   };
 }
 function cmSave(store) {
@@ -68,14 +80,128 @@ function commsContext(role) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════════
+//  SAFETY POSTURE — presets + per-centre config
+// ══════════════════════════════════════════════════════════════════════════════════
+// The three presets only set the four "posture" toggles; everything else (DSL leads,
+// wordlist, retention, authoring policy) is preserved when a preset is applied.
+const COMMS_PRESETS = {
+  locked: {
+    label: 'Locked-down', icon: 'lock',
+    blurb: 'The safest default. Students talk to staff only in class channels — no private DMs. Strictest hours and no images.',
+    values: { dmEnabled: false, quietFrom: '19:00', quietTo: '07:00', images: false, dslObserver: true },
+    lines: ['1:1 student↔staff messaging off', 'Quiet hours 7pm – 7am', 'Image sharing off', 'DSL observer on every thread'],
+  },
+  standard: {
+    label: 'Standard', icon: 'shield',
+    blurb: 'A balanced setup for most centres. 1:1 messaging is on but fully monitored, with sensible quiet hours.',
+    values: { dmEnabled: true, quietFrom: '21:00', quietTo: '07:00', images: true, dslObserver: true },
+    lines: ['1:1 messaging on (monitored)', 'Quiet hours 9pm – 7am', 'Image sharing on', 'DSL observer on every thread'],
+  },
+  open: {
+    label: 'Open', icon: 'users',
+    blurb: 'Maximum flexibility for older cohorts. Fewer restrictions — still logged and visible to your DSL.',
+    values: { dmEnabled: true, quietFrom: '23:00', quietTo: '06:00', images: true, dslObserver: false },
+    lines: ['1:1 messaging on (monitored)', 'Quiet hours 11pm – 6am', 'Image sharing on', 'DSL observer optional'],
+  },
+};
+const DEFAULT_CONFIG = () => ({
+  preset: 'standard', ...COMMS_PRESETS.standard.values,
+  dslLeadId: null, dslDeputyId: null, retention: '3y',
+  wordlist: ['address', 'meet up', 'whatsapp', 'snapchat', 'instagram', 'phone number', 'kik', 'secret'],
+  announceAuthors: 'admins', approvalWorkflow: false,
+});
+// Resolve the active centre's config (falls back to Standard defaults).
+function commsConfig(store, centreId) {
+  const c = (store && store.config && store.config[centreId]) || null;
+  return c ? { ...DEFAULT_CONFIG(), ...c } : DEFAULT_CONFIG();
+}
+
+// ─── Quiet hours (HH:MM window, handles overnight wrap; uses UTC for determinism) ──
+const hmToMin = (hm) => { const [h, m] = (hm || '0:0').split(':').map(Number); return (h || 0) * 60 + (m || 0); };
+function quietHoursActive(config, date) {
+  if (!config) return false;
+  const from = hmToMin(config.quietFrom), to = hmToMin(config.quietTo);
+  if (from === to) return false;
+  const t = date.getUTCHours() * 60 + date.getUTCMinutes();
+  return from < to ? (t >= from && t < to) : (t >= from || t < to);
+}
+
+// ─── Class-derived dimensions (year group / subject) from SEED_CLASSES ─────────────
+const seedClasses = () => (typeof SEED_CLASSES !== 'undefined' ? SEED_CLASSES : []);
+const classById   = (id) => seedClasses().find(c => c.id === id) || null;
+const classYear   = (cls) => { const m = (cls && cls.group || '').match(/Year\s*\d+/i); return m ? m[0].replace(/\s+/, ' ') : null; };
+const classSubject= (cls) => (cls && cls.name || '').replace(/^(GCSE|A-?Level|AS-?Level|KS\d|BTEC)\s+/i, '').replace(/\.$/, '').trim();
+const userYears   = (user) => [...new Set((user.classIds || []).map(id => classYear(classById(id))).filter(Boolean))];
+const userSubjects= (user) => [...new Set((user.classIds || []).map(id => classSubject(classById(id))).filter(Boolean))];
+const allYears    = () => [...new Set(seedClasses().map(c => classYear(c)).filter(Boolean))].sort();
+const allSubjects = () => [...new Set(seedClasses().map(c => classSubject(c)).filter(Boolean))].sort();
+
+// ─── Threads: which are "monitored" (staff↔student) ────────────────────────────────
+const STAFF_ROLES = ['admin', 'teacher', 'superadmin'];
+const isStaff = (u) => !!u && STAFF_ROLES.includes(u.role);
+function threadParties(t) {
+  const us = (t.participants || []).map(userById).filter(Boolean);
+  return { staff: us.filter(isStaff), students: us.filter(u => u.role === 'student') };
+}
+// A thread is safeguarding-monitored when it puts a student in contact with staff.
+function isMonitoredThread(t) {
+  if (!t) return false;
+  if (t.type === 'channel') return true;
+  const { staff, students } = threadParties(t);
+  return staff.length > 0 && students.length > 0;
+}
+
+// ─── Client-side flagging ──────────────────────────────────────────────────────────
+const PHONE_RE  = /(?:\+?\d[\d\s().-]{8,}\d)/;
+const SOCIAL_RE = /\b(whats[\s-]?app|snap(?:chat)?|insta(?:gram)?|telegram|tiktok|kik|discord)\b|@[\w.]{3,}/i;
+const MEETUP_RE = /\b(add me on|dm me|text me|my (?:number|mobile|cell) is|meet up|come over|my snap)\b/i;
+const FLAG_REASONS = {
+  external:     { id: 'external',     label: 'external contact', sev: 'high' },
+  keyword:      { id: 'keyword',      label: 'keyword',          sev: 'high' },
+  image:        { id: 'image',        label: 'image shared',     sev: 'high' },
+  out_of_hours: { id: 'out_of_hours', label: 'out of hours',     sev: 'low'  },
+};
+const REASON_ORDER = ['external', 'keyword', 'image', 'out_of_hours'];
+function messageReasons(m, config) {
+  const reasons = [];
+  const text = m.body || '';
+  if (PHONE_RE.test(text) || SOCIAL_RE.test(text) || MEETUP_RE.test(text)) reasons.push('external');
+  const wl = (config.wordlist || []).map(w => w.toLowerCase());
+  if (wl.some(w => text.toLowerCase().includes(w))) reasons.push('keyword');
+  if ((m.attachments || []).some(a => (a.type || '') === 'image')) reasons.push('image');
+  if (m.senderRole === 'student' && quietHoursActive(config, new Date(m.createdAt))) reasons.push('out_of_hours');
+  return reasons;
+}
+// One flag per flagged message, merged with its stored resolution.
+function computeFlags(store, ctx) {
+  const config = commsConfig(store, ctx.centreId);
+  const monitored = Object.values(store.threads).filter(t =>
+    (ctx.role === 'superadmin' || t.centreId === ctx.centreId) && isMonitoredThread(t));
+  const monIds = new Set(monitored.map(t => t.id));
+  const out = [];
+  Object.values(store.messages).forEach(m => {
+    if (!monIds.has(m.threadId)) return;
+    const reasons = messageReasons(m, config);
+    if (!reasons.length) return;
+    const primary = REASON_ORDER.find(r => reasons.includes(r));
+    out.push({
+      id: m.id, messageId: m.id, threadId: m.threadId, msg: m,
+      reasons, primary, sev: FLAG_REASONS[primary].sev,
+      resolution: (store.flags || {})[m.id] || { status: 'open' },
+    });
+  });
+  return out.sort((a, b) => (a.msg.createdAt > b.msg.createdAt ? -1 : 1));
+}
+
+// ══════════════════════════════════════════════════════════════════════════════════
 //  PERMISSION & SCOPE MATRIX — single source of truth
 // ══════════════════════════════════════════════════════════════════════════════════
 
 // Can `user` post an announcement at this scope?
 function canAnnounce(user, scope) {
   if (!user) return false;
-  if (user.role === 'superadmin') return scope === 'platform' || scope === 'centre' || scope === 'class';
-  if (user.role === 'admin')      return scope === 'centre' || scope === 'class';
+  if (user.role === 'superadmin') return ['platform', 'centre', 'class', 'year', 'subject'].includes(scope);
+  if (user.role === 'admin')      return ['centre', 'class', 'year', 'subject'].includes(scope);
   if (user.role === 'teacher')    return scope === 'class';
   return false; // students / parents receive only
 }
@@ -85,8 +211,8 @@ const canCompose = (user) => !!user && (user.role === 'superadmin' || user.role 
 // The scopes a given user may choose from in the composer.
 function allowedScopes(user) {
   if (!user) return [];
-  if (user.role === 'superadmin') return ['platform', 'centre', 'class'];
-  if (user.role === 'admin')      return ['centre', 'class'];
+  if (user.role === 'superadmin') return ['platform', 'centre', 'class', 'year', 'subject'];
+  if (user.role === 'admin')      return ['centre', 'class', 'year', 'subject'];
   if (user.role === 'teacher')    return ['class'];
   return [];
 }
@@ -129,15 +255,25 @@ function commsRecipients(scope, audience, authorCentreId) {
     if (scope === 'class') {
       return u.centreId === authorCentreId && (audience.classIds || []).some(c => (u.classIds || []).includes(c)) && roleOk(u.role);
     }
+    if (scope === 'year') {
+      return u.centreId === authorCentreId && roleOk(u.role) && userYears(u).some(y => (audience.years || []).includes(y));
+    }
+    if (scope === 'subject') {
+      return u.centreId === authorCentreId && roleOk(u.role) && userSubjects(u).some(s => (audience.subjects || []).includes(s));
+    }
     return false;
   }).map(u => u.id);
 }
+
+// Has a scheduled announcement gone live yet (relative to the demo "now")?
+const isScheduled = (a) => !!a.publishAt && new Date(a.publishAt) > cmNow();
 
 // Is announcement `a` visible to context `ctx`? (tenant + targeting)
 function announcementVisible(a, ctx) {
   if (!ctx.user) return false;
   if (ctx.role === 'superadmin') return true; // platform-scoped view sees all
   if (a.authorId === ctx.userId) return true; // authors always see their own posts
+  if (isScheduled(a)) return false;            // recipients don't see future posts
   // Tenant boundary first.
   if (a.scope === 'platform') {
     const cOk = a.audience.centreIds === 'all' || (Array.isArray(a.audience.centreIds) && a.audience.centreIds.includes(ctx.centreId));
@@ -149,10 +285,10 @@ function announcementVisible(a, ctx) {
   const roles = a.audience.roles;
   const roleOk = roles === 'all' || (Array.isArray(roles) && roles.includes(ctx.role));
   if (!roleOk) return false;
-  // Class targeting.
-  if (a.scope === 'class') {
-    return (a.audience.classIds || []).some(c => (ctx.user.classIds || []).includes(c));
-  }
+  // Dimensional targeting.
+  if (a.scope === 'class')   return (a.audience.classIds || []).some(c => (ctx.user.classIds || []).includes(c));
+  if (a.scope === 'year')    return userYears(ctx.user).some(y => (a.audience.years || []).includes(y));
+  if (a.scope === 'subject') return userSubjects(ctx.user).some(s => (a.audience.subjects || []).includes(s));
   return true;
 }
 
@@ -213,7 +349,7 @@ function useComms(ctx) {
         authorId: ctx.userId, authorName: (ctx.user || {}).name, authorRole: ctx.role,
         audience: draft.audience, title: draft.title, body: draft.body,
         priority: draft.priority || 'normal', pinned: !!draft.pinned, requiresAck: !!draft.requiresAck,
-        createdAt: stamp(), expiresAt: draft.expiresAt || null,
+        createdAt: stamp(), publishAt: draft.publishAt || null, expiresAt: draft.expiresAt || null,
         reads: { [ctx.userId]: stamp() }, acks: {},
       };
       mutate('announcements', m => { m[id] = a; return m; });
@@ -266,6 +402,49 @@ function useComms(ctx) {
       mutate('threads', m => { m[id] = t; return m; });
       return id;
     },
+    // Create a group thread from a set of member ids (self is always included).
+    // `classId` is recorded when the group was seeded from a class. Returns threadId.
+    createGroup(memberIds, subject, classId) {
+      const parts = [...new Set([ctx.userId, ...(memberIds || [])])];
+      if (parts.length < 2) return null;
+      const id = newId('th');
+      const t = { id, centreId: ctx.centreId, type: 'group', participants: parts,
+        classId: classId || null, subject: (subject || '').trim() || 'New group',
+        createdBy: ctx.userId, createdAt: stamp(), lastMessageAt: stamp() };
+      mutate('threads', m => { m[id] = t; return m; });
+      return id;
+    },
+
+    // ── Safety posture (config) ──
+    config: commsConfig(store, ctx.centreId),
+    applyPreset(presetId) {
+      const cur = commsConfig(store, ctx.centreId);
+      const vals = (COMMS_PRESETS[presetId] || {}).values || {};
+      persist({ ...store, config: { ...store.config, [ctx.centreId]: { ...cur, preset: presetId, ...vals } } });
+    },
+    setConfig(patch) {
+      const cur = commsConfig(store, ctx.centreId);
+      persist({ ...store, config: { ...store.config, [ctx.centreId]: { ...cur, ...patch } } });
+    },
+
+    // ── Safeguarding (DSL) ──
+    flags: computeFlags(store, ctx),
+    concerns: (store.concerns || [])
+      .filter(c => ctx.role === 'superadmin' || c.centreId === ctx.centreId)
+      .sort((x, y) => (x.at > y.at ? -1 : 1)),
+    resolveFlag(messageId, status, note) {
+      persist({ ...store, flags: { ...store.flags, [messageId]: { status, note: note || '', by: ctx.userId, at: stamp() } } });
+    },
+    // Optionally acknowledges the originating flag in the SAME persist — calling two
+    // mutators in a row would each spread a stale `store` and clobber each other.
+    recordConcern(entry, acknowledgeMessageId) {
+      const c = { id: newId('cn'), centreId: ctx.centreId, by: ctx.userId, at: stamp(), ...entry };
+      const next = { ...store, concerns: [c, ...(store.concerns || [])] };
+      if (acknowledgeMessageId) {
+        next.flags = { ...store.flags, [acknowledgeMessageId]: { status: 'acknowledged', note: 'Concern recorded', by: ctx.userId, at: stamp() } };
+      }
+      persist(next);
+    },
   };
   return api;
 }
@@ -282,6 +461,8 @@ const SCOPE_META = {
   platform: { label: 'Platform', icon: 'zap' },
   centre:   { label: 'Centre',   icon: 'book' },
   class:    { label: 'Class',    icon: 'users' },
+  year:     { label: 'Year',     icon: 'chart' },
+  subject:  { label: 'Subject',  icon: 'zap' },
 };
 
 // "2h ago" / "3d ago" / date for older.
@@ -316,7 +497,15 @@ const Chip = ({ icon, children, color, bg }) => (
 // ══════════════════════════════════════════════════════════════════════════════════
 //  ANNOUNCEMENTS
 // ══════════════════════════════════════════════════════════════════════════════════
-const AnnouncementCard = ({ a, comms }) => {
+// Scope chip text: class → class name, year/subject → the targeted values.
+function scopeChipLabel(a) {
+  if (a.scope === 'class' && a.classId) return classLabel(a.classId).split(' · ')[0];
+  if (a.scope === 'year')    return (a.audience.years || []).join(' · ') || 'Year';
+  if (a.scope === 'subject') return (a.audience.subjects || []).join(' · ') || 'Subject';
+  return (SCOPE_META[a.scope] || {}).label;
+}
+
+const AnnouncementCard = ({ a, comms, onNavigate }) => {
   const { ctx } = comms;
   const isAuthor = a.authorId === ctx.userId;
   const unread = !isAuthor && !a.reads[ctx.userId];
@@ -324,6 +513,8 @@ const AnnouncementCard = ({ a, comms }) => {
   const p = PRIORITY_META[a.priority] || PRIORITY_META.normal;
   const accent = p.color();
   const expired = isExpired(a);
+  const scheduled = isAuthor && isScheduled(a);
+  const actionNeeded = a.requiresAck && !isAuthor && !acked && !expired;
   const recipientCount = (a.audience ? commsRecipients(a.scope, a.audience, a.centreId) : []).length;
   const ackCount = Object.keys(a.acks || {}).length;
 
@@ -334,11 +525,18 @@ const AnnouncementCard = ({ a, comms }) => {
     }}>
       <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, background: accent }} />
       <div style={{ padding: '16px 20px 16px 22px' }}>
+        {/* Status badges */}
+        {(a.pinned || actionNeeded || scheduled) && (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+            {a.pinned && <Chip icon="pin" color={DS.warning} bg={DS.warningBg}>Pinned</Chip>}
+            {actionNeeded && <Chip icon="alert" color={DS.accent} bg={DS.accentLight}>Action needed</Chip>}
+            {scheduled && <Chip icon="clock" color={DS.muted}>Scheduled · {relTime(a.publishAt)}</Chip>}
+          </div>
+        )}
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 8 }}>
           {unread && <div style={{ width: 8, height: 8, borderRadius: '50%', background: accent, marginTop: 6, flexShrink: 0 }} />}
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 2 }}>
-              {a.pinned && <Icon name="pin" size={13} color={DS.muted} />}
               <span style={{ fontSize: 15, fontWeight: unread ? 700 : 600, color: DS.text }}>{a.title}</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: DS.muted }}>
@@ -350,8 +548,7 @@ const AnnouncementCard = ({ a, comms }) => {
             </div>
           </div>
           <div style={{ display: 'flex', gap: 6, flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-            <Chip icon={(SCOPE_META[a.scope] || {}).icon}
-              color={DS.sub}>{a.scope === 'class' && a.classId ? classLabel(a.classId).split(' · ')[0] : (SCOPE_META[a.scope] || {}).label}</Chip>
+            <Chip icon={(SCOPE_META[a.scope] || {}).icon} color={DS.sub}>{scopeChipLabel(a)}</Chip>
             {a.priority !== 'normal' && <Chip color={accent} bg={p.bg()}>{p.label}</Chip>}
           </div>
         </div>
@@ -370,6 +567,11 @@ const AnnouncementCard = ({ a, comms }) => {
           )}
 
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+            {!isAuthor && a.authorId && (
+              <Btn small variant="ghost" icon="mail" onClick={() => onNavigate && onNavigate(ctx.role, 'comms:messages')}>
+                Message {(a.authorName || '').split(' ')[0]}
+              </Btn>
+            )}
             {a.requiresAck && !isAuthor && (
               acked
                 ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12.5, fontWeight: 600, color: DS.success }}>
@@ -393,7 +595,7 @@ const AnnouncementCard = ({ a, comms }) => {
   );
 };
 
-const AnnouncementsFeed = ({ comms, onCompose }) => {
+const AnnouncementsFeed = ({ comms, onNavigate }) => {
   const { ctx } = comms;
   const [scope, setScope] = React.useState('all');
   const [roleFilter, setRoleFilter] = React.useState('all');
@@ -418,7 +620,7 @@ const AnnouncementsFeed = ({ comms, onCompose }) => {
         <SearchInput value={q} onChange={e => setQ(e.target.value)} placeholder="Search announcements…" style={{ maxWidth: 300 }} />
         <Select value={scope} onChange={e => setScope(e.target.value)} style={{ width: 150 }}>
           <option value="all">All scopes</option>
-          {(ctx.role === 'superadmin' ? ['platform','centre','class'] : ['centre','class']).map(s =>
+          {(ctx.role === 'superadmin' ? ['platform','centre','class','year','subject'] : ['centre','class','year','subject']).map(s =>
             <option key={s} value={s}>{(SCOPE_META[s] || {}).label}</option>)}
         </Select>
         <Select value={roleFilter} onChange={e => setRoleFilter(e.target.value)} style={{ width: 150 }}>
@@ -442,7 +644,7 @@ const AnnouncementsFeed = ({ comms, onCompose }) => {
           message={q || scope !== 'all' || roleFilter !== 'all' || unreadOnly ? 'No announcements match your filters.' : 'There are no announcements yet.'} />
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {list.map(a => <AnnouncementCard key={a.id} a={a} comms={comms} />)}
+          {list.map(a => <AnnouncementCard key={a.id} a={a} comms={comms} onNavigate={onNavigate} />)}
         </div>
       )}
     </div>
@@ -458,134 +660,240 @@ const TogglePill = ({ active, onClick, children }) => (
   }}>{children}</button>
 );
 
-const AnnouncementComposer = ({ open, onClose, comms }) => {
+// "Who receives this" cards → each maps to a stored announcement scope. "By role"
+// and "Whole centre" both store scope 'centre'; the difference is the roles facet.
+const AUDIENCE_CARDS = [
+  { mode: 'platform', scope: 'platform', icon: 'zap',   title: 'All centres',      desc: 'A platform-wide notice' },
+  { mode: 'centre',   scope: 'centre',   icon: 'users', title: 'Whole centre',     desc: 'Everyone — students, teachers & admins' },
+  { mode: 'role',     scope: 'centre',   icon: 'user',  title: 'By role',          desc: 'Students · Teachers · Admins' },
+  { mode: 'class',    scope: 'class',    icon: 'book',  title: 'By class / group', desc: 'A specific teaching group' },
+  { mode: 'year',     scope: 'year',     icon: 'chart', title: 'By year group',    desc: 'Year 9 – Year 13' },
+  { mode: 'subject',  scope: 'subject',  icon: 'zap',   title: 'By subject',       desc: 'Mathematics · Physics · Chemistry…' },
+];
+const EXPIRY_OPTS = [['never', "Don't expire"], ['3d', '3 days'], ['1w', '1 week'], ['2w', '2 weeks'], ['1m', '1 month']];
+const EXPIRY_DAYS = { '3d': 3, '1w': 7, '2w': 14, '1m': 30 };
+
+const AudienceCard = ({ card, active, onClick }) => (
+  <button type="button" onClick={onClick} style={{
+    display: 'flex', alignItems: 'flex-start', gap: 11, textAlign: 'left', width: '100%',
+    padding: '13px 15px', borderRadius: 10, cursor: 'pointer',
+    border: `1.5px solid ${active ? DS.accent : DS.border}`, background: active ? DS.accentLight : DS.bg,
+  }}>
+    <div style={{ width: 30, height: 30, borderRadius: 8, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+      background: active ? DS.accent : DS.surface, color: active ? '#fff' : DS.muted }}>
+      <Icon name={card.icon} size={15} color={active ? '#fff' : DS.muted} />
+    </div>
+    <div style={{ minWidth: 0 }}>
+      <div style={{ fontSize: 13.5, fontWeight: 600, color: active ? DS.accent : DS.text }}>{card.title}</div>
+      <div style={{ fontSize: 11.5, color: DS.muted, marginTop: 2, lineHeight: 1.35 }}>{card.desc}</div>
+    </div>
+  </button>
+);
+
+const RailCard = ({ children, accent }) => (
+  <div style={{
+    padding: '16px 18px', borderRadius: 12, marginBottom: 14,
+    border: `1px solid ${accent ? DS.accentBorder : DS.cardBorder}`, background: accent ? DS.accentLight : DS.bg,
+  }}>{children}</div>
+);
+
+const AnnouncementCompose = ({ comms, onPublished }) => {
   const { ctx } = comms;
   const user = ctx.user;
-  const scopes = allowedScopes(user);
-  const [scope, setScope] = React.useState(scopes[0] || 'centre');
+  const cards = AUDIENCE_CARDS.filter(c => c.mode === 'platform' ? user.role === 'superadmin' : canAnnounce(user, c.scope));
+
+  const [mode, setMode] = React.useState((cards[0] || {}).mode || 'centre');
   const [title, setTitle] = React.useState('');
   const [body, setBody] = React.useState('');
-  const [priority, setPriority] = React.useState('normal');
-  const [pinned, setPinned] = React.useState(false);
-  const [requiresAck, setRequiresAck] = React.useState(false);
-  const [expiresAt, setExpiresAt] = React.useState('');
-  // targeting
-  const [roles, setRoles] = React.useState(['teacher', 'student']);
-  const [centreIds, setCentreIds] = React.useState('all');
+  const [roles, setRoles] = React.useState(['student', 'teacher', 'admin']);
   const [classIds, setClassIds] = React.useState([]);
+  const [years, setYears] = React.useState([]);
+  const [subjects, setSubjects] = React.useState([]);
+  const [centreIds, setCentreIds] = React.useState('all');
+  const [when, setWhen] = React.useState('now');
+  const [publishAt, setPublishAt] = React.useState('');
+  const [expiresAfter, setExpiresAfter] = React.useState('2w');
+  const [priority, setPriority] = React.useState('normal');
+  const [requiresAck, setRequiresAck] = React.useState(false);
+  const [pinned, setPinned] = React.useState(false);
 
-  React.useEffect(() => { if (open) {
-    setScope(scopes[0] || 'centre'); setTitle(''); setBody(''); setPriority('normal');
-    setPinned(false); setRequiresAck(false); setExpiresAt('');
-    setRoles(['teacher', 'student']); setCentreIds('all'); setClassIds([]);
-  } }, [open]);
+  const card = cards.find(c => c.mode === mode) || cards[0];
+  const scope = card.scope;
 
-  // Classes this user may target (teacher → own; admin/superadmin → centre's classes).
   const myClasses = React.useMemo(() => {
-    if (typeof SEED_CLASSES === 'undefined') return [];
-    if (user.role === 'teacher') return SEED_CLASSES.filter(c => (user.classIds || []).includes(c.id));
-    return SEED_CLASSES; // admin/superadmin: the centre's classes (demo: the bm class list)
+    const all = seedClasses();
+    return user.role === 'teacher' ? all.filter(c => (user.classIds || []).includes(c.id)) : all;
   }, [user]);
+  const yearOpts = React.useMemo(() => allYears(), []);
+  const subjectOpts = React.useMemo(() => allSubjects(), []);
 
-  const audience = scope === 'platform'
-    ? { centreIds, roles: roles.length ? roles : 'all', classIds: [] }
-    : scope === 'class'
-      ? { centreIds: [ctx.centreId], roles: roles.length ? roles : 'all', classIds }
-      : { centreIds: [ctx.centreId], roles: roles.length ? roles : 'all', classIds: [] };
-
-  const reach = commsRecipients(scope, audience, ctx.centreId).length;
-  const valid = title.trim() && body.trim() && (scope !== 'class' || classIds.length > 0);
-
-  const toggleRole = (r) => setRoles(rs => rs.includes(r) ? rs.filter(x => x !== r) : [...rs, r]);
-  const toggleClass = (id) => setClassIds(cs => cs.includes(id) ? cs.filter(x => x !== id) : [...cs, id]);
+  const toggle = (setter) => (v) => setter(xs => xs.includes(v) ? xs.filter(x => x !== v) : [...xs, v]);
   const toggleCentre = (id) => setCentreIds(cs => {
     if (cs === 'all') return [id];
     const next = cs.includes(id) ? cs.filter(x => x !== id) : [...cs, id];
     return next.length === centresArr().length ? 'all' : next;
   });
 
-  const submit = () => {
-    if (!valid) return;
-    comms.postAnnouncement({ scope, centreId: scope === 'platform' ? null : ctx.centreId,
-      classId: scope === 'class' ? classIds[0] : null, audience, title, body, priority, pinned, requiresAck,
-      expiresAt: expiresAt || null });
-    onClose();
+  const audience = (() => {
+    const r = mode === 'role' ? (roles.length ? roles : 'all') : 'all';
+    if (scope === 'platform') return { centreIds, roles: r, classIds: [] };
+    if (scope === 'class')    return { centreIds: [ctx.centreId], roles: 'all', classIds };
+    if (scope === 'year')     return { centreIds: [ctx.centreId], roles: r, years };
+    if (scope === 'subject')  return { centreIds: [ctx.centreId], roles: r, subjects };
+    return { centreIds: [ctx.centreId], roles: r, classIds: [] };
+  })();
+  const reach = commsRecipients(scope, audience, ctx.centreId).length;
+
+  const selectionOk = mode === 'class' ? classIds.length : mode === 'year' ? years.length
+    : mode === 'subject' ? subjects.length : mode === 'role' ? roles.length
+    : mode === 'platform' ? (centreIds === 'all' || centreIds.length) : true;
+  const scheduleOk = when === 'now' || (when === 'schedule' && publishAt);
+  const valid = title.trim() && body.trim() && selectionOk && scheduleOk;
+
+  const computeExpiry = () => {
+    if (expiresAfter === 'never') return null;
+    return new Date(cmNow().getTime() + EXPIRY_DAYS[expiresAfter] * 86400000).toISOString().slice(0, 10);
   };
 
+  const publish = () => {
+    if (!valid) return;
+    comms.postAnnouncement({
+      scope, centreId: scope === 'platform' ? null : ctx.centreId,
+      classId: scope === 'class' ? classIds[0] : null, audience, title: title.trim(), body: body.trim(),
+      priority, pinned, requiresAck,
+      publishAt: when === 'schedule' && publishAt ? new Date(publishAt).toISOString() : null,
+      expiresAt: computeExpiry(),
+    });
+    onPublished && onPublished();
+  };
+
+  const Section = ({ label, children }) => (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: DS.muted, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 9 }}>{label}</div>
+      {children}
+    </div>
+  );
+
   return (
-    <Modal open={open} onClose={onClose} title="New announcement" icon="message" width={600}
-      footer={[
-        <Btn key="c" variant="secondary" small onClick={onClose}>Cancel</Btn>,
-        <Btn key="p" variant="primary" small icon="send" onClick={submit} style={{ opacity: valid ? 1 : 0.5, pointerEvents: valid ? 'auto' : 'none' }}>Post announcement</Btn>,
-      ]}>
-
-      {scopes.length > 1 && (
-        <Field label="Scope">
-          <Segmented fullWidth value={scope} onChange={setScope}
-            options={scopes.map(s => ({ id: s, label: (SCOPE_META[s] || {}).label }))} />
+    <div style={{ display: 'flex', gap: 22, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+      {/* Left — content + audience */}
+      <div style={{ flex: '1 1 520px', minWidth: 300, background: DS.bg, border: `1px solid ${DS.cardBorder}`, borderRadius: 12, padding: '22px 24px' }}>
+        <Field label="Title" required>
+          <Input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Spring mock exams — timetable now live" />
         </Field>
-      )}
+        <Field label="Message" required>
+          <Textarea value={body} onChange={e => setBody(e.target.value)} style={{ minHeight: 130 }}
+            placeholder="Write your announcement. This is one-way — recipients can't reply in-thread, but they can start a monitored message to you if they need to respond." />
+        </Field>
 
-      {/* Audience — swaps by role/scope */}
-      {scope === 'platform' && (
-        <Field label="Centres" hint="Platform-wide announcements reach selected centres.">
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <TogglePill active={centreIds === 'all'} onClick={() => setCentreIds('all')}>All centres</TogglePill>
-            {centresArr().map(c => (
-              <TogglePill key={c.id} active={centreIds !== 'all' && centreIds.includes(c.id)} onClick={() => toggleCentre(c.id)}>{c.name}</TogglePill>
-            ))}
+        <Section label="Who receives this">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10 }}>
+            {cards.map(c => <AudienceCard key={c.mode} card={c} active={mode === c.mode} onClick={() => setMode(c.mode)} />)}
           </div>
-        </Field>
-      )}
 
-      {scope === 'class' && (
-        <Field label={user.role === 'teacher' ? 'Your classes' : 'Classes'} required hint="Only students/parents of the selected classes will receive this.">
-          {myClasses.length === 0
-            ? <div style={{ fontSize: 13, color: DS.faint }}>No classes available.</div>
-            : <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', maxHeight: 140, overflow: 'auto' }}>
-                {myClasses.map(c => (
-                  <TogglePill key={c.id} active={classIds.includes(c.id)} onClick={() => toggleClass(c.id)}>{c.name} · {c.group}</TogglePill>
+          {/* Mode-specific pickers */}
+          {mode === 'role' && (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+              {['student', 'teacher', 'admin'].map(r => (
+                <TogglePill key={r} active={roles.includes(r)} onClick={() => toggle(setRoles)(r)}>{ROLE_LABEL[r]}s</TogglePill>
+              ))}
+            </div>
+          )}
+          {mode === 'platform' && (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+              <TogglePill active={centreIds === 'all'} onClick={() => setCentreIds('all')}>All centres</TogglePill>
+              {centresArr().map(c => (
+                <TogglePill key={c.id} active={centreIds !== 'all' && centreIds.includes(c.id)} onClick={() => toggleCentre(c.id)}>{c.name}</TogglePill>
+              ))}
+            </div>
+          )}
+          {mode === 'class' && (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12, maxHeight: 150, overflow: 'auto' }}>
+              {myClasses.length === 0 ? <div style={{ fontSize: 13, color: DS.faint }}>No classes available.</div>
+                : myClasses.map(c => (
+                  <TogglePill key={c.id} active={classIds.includes(c.id)} onClick={() => toggle(setClassIds)(c.id)}>{c.name} · {c.group}</TogglePill>
                 ))}
-              </div>}
-        </Field>
-      )}
+            </div>
+          )}
+          {mode === 'year' && (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+              {yearOpts.map(y => <TogglePill key={y} active={years.includes(y)} onClick={() => toggle(setYears)(y)}>{y}</TogglePill>)}
+            </div>
+          )}
+          {mode === 'subject' && (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+              {subjectOpts.map(s => <TogglePill key={s} active={subjects.includes(s)} onClick={() => toggle(setSubjects)(s)}>{s}</TogglePill>)}
+            </div>
+          )}
+        </Section>
+      </div>
 
-      {scope !== 'class' && (
-        <Field label="Audience roles">
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {['teacher', 'student', 'parent'].map(r => (
-              <TogglePill key={r} active={roles.includes(r)} onClick={() => toggleRole(r)}>{ROLE_LABEL[r]}s</TogglePill>
-            ))}
+      {/* Right rail — preview + delivery */}
+      <div style={{ width: 290, flexShrink: 0 }}>
+        <RailCard accent>
+          <div style={{ fontSize: 11.5, fontWeight: 700, color: DS.accent, textTransform: 'uppercase', letterSpacing: 0.4 }}>Audience preview</div>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 6 }}>
+            <span style={{ fontSize: 34, fontWeight: 800, color: DS.accent, lineHeight: 1 }}>{reach}</span>
+            <span style={{ fontSize: 13, color: DS.accent }}>{reach === 1 ? 'person will' : 'people will'} receive this</span>
           </div>
-        </Field>
-      )}
+        </RailCard>
 
-      <Field label="Title" required>
-        <Input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. INSET day reminder" />
-      </Field>
-      <Field label="Message" required>
-        <Textarea value={body} onChange={e => setBody(e.target.value)} placeholder="Write your announcement…" style={{ minHeight: 110 }} />
-      </Field>
+        <RailCard>
+          <Section label="When to send">
+            <Segmented fullWidth value={when} onChange={setWhen}
+              options={[{ id: 'now', label: 'Publish now' }, { id: 'schedule', label: 'Schedule' }]} />
+            {when === 'schedule' && (
+              <Input type="datetime-local" value={publishAt} onChange={e => setPublishAt(e.target.value)} style={{ marginTop: 10 }} />
+            )}
+          </Section>
+          <Field label="Expires after">
+            <Select value={expiresAfter} onChange={e => setExpiresAfter(e.target.value)}>
+              {EXPIRY_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </Select>
+          </Field>
+          <Field label="Priority">
+            <Select value={priority} onChange={e => setPriority(e.target.value)}>
+              <option value="normal">Normal</option>
+              <option value="important">Important</option>
+              <option value="urgent">Urgent</option>
+            </Select>
+          </Field>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
+            <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '8px 0', cursor: 'pointer' }}>
+              <span style={{ fontSize: 13, color: DS.text, fontWeight: 500 }}>Acknowledgement required</span>
+              <TogglePill active={requiresAck} onClick={() => setRequiresAck(v => !v)}>{requiresAck ? 'On' : 'Off'}</TogglePill>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '8px 0', cursor: 'pointer' }}>
+              <span style={{ fontSize: 13, color: DS.text, fontWeight: 500 }}>Pin to top / priority</span>
+              <TogglePill active={pinned} onClick={() => setPinned(v => !v)}>{pinned ? 'On' : 'Off'}</TogglePill>
+            </label>
+          </div>
+        </RailCard>
 
-      <Field label="Priority">
-        <Segmented fullWidth value={priority} onChange={setPriority}
-          options={[{ id: 'normal', label: 'Normal' }, { id: 'important', label: 'Important' }, { id: 'urgent', label: 'Urgent' }]} />
-      </Field>
-
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
-        <TogglePill active={pinned} onClick={() => setPinned(v => !v)}>📌 Pin to top</TogglePill>
-        <TogglePill active={requiresAck} onClick={() => setRequiresAck(v => !v)}>✓ Require acknowledgement</TogglePill>
+        <Btn variant="primary" icon="megaphone" onClick={publish}
+          style={{ width: '100%', justifyContent: 'center', opacity: valid ? 1 : 0.5, pointerEvents: valid ? 'auto' : 'none' }}>
+          {when === 'schedule' ? `Schedule for ${reach}` : `Publish to ${reach} ${reach === 1 ? 'person' : 'people'}`}
+        </Btn>
       </div>
+    </div>
+  );
+};
 
-      <Field label="Expiry (optional)" hint="The announcement is dimmed after this date.">
-        <Input type="date" value={expiresAt} onChange={e => setExpiresAt(e.target.value)} style={{ maxWidth: 200 }} />
-      </Field>
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 14px', borderRadius: 8, background: DS.accentLight, border: `1px solid ${DS.accentBorder}` }}>
-        <Icon name="users" size={16} color={DS.accent} />
-        <span style={{ fontSize: 13, color: DS.accent, fontWeight: 600 }}>This will reach {reach} {reach === 1 ? 'person' : 'people'}</span>
+// Compose / Inbox tabbed wrapper — the Announcements page body.
+const AnnouncementsSection = ({ comms, onNavigate }) => {
+  const author = canCompose(comms.ctx.user);
+  const [tab, setTab] = React.useState(author ? 'compose' : 'inbox');
+  if (!author) return <AnnouncementsFeed comms={comms} onNavigate={onNavigate} />;
+  return (
+    <div>
+      <div style={{ marginBottom: 18 }}>
+        <Segmented value={tab} onChange={setTab}
+          options={[{ id: 'compose', label: 'Compose', icon: 'megaphone' }, { id: 'inbox', label: 'Inbox', icon: 'bell' }]} />
       </div>
-    </Modal>
+      {tab === 'compose'
+        ? <AnnouncementCompose comms={comms} onPublished={() => setTab('inbox')} />
+        : <AnnouncementsFeed comms={comms} onNavigate={onNavigate} />}
+    </div>
   );
 };
 
@@ -602,57 +910,148 @@ const threadTitle = (t, ctx) => {
 };
 const threadOther = (t, ctx) => userById(t.participants.find(p => p !== ctx.userId));
 
-const ThreadListItem = ({ t, comms, active, onClick }) => {
+// Stable mock presence so the layout can show green "online" dots like a real chat app.
+const isOnline = (id) => {
+  if (!id) return false;
+  let s = 0; for (let i = 0; i < id.length; i++) s += id.charCodeAt(i);
+  return s % 3 !== 0;
+};
+const msgTime  = (iso) => new Date(iso).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+const dayKey   = (iso) => new Date(iso).toISOString().slice(0, 10);
+const dayDivider = (iso) => {
+  const d = new Date(iso);
+  const long = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long' });
+  return dayKey(iso) === COMMS_TODAY ? 'Today, ' + long : d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
+};
+
+// Round avatar with an optional presence dot / group glyph (list + chat header).
+const ChatAvatar = ({ name, size = 42, online, group }) => (
+  <div style={{ position: 'relative', flexShrink: 0, width: size, height: size }}>
+    {group
+      ? <div style={{ width: size, height: size, borderRadius: '50%', background: DS.accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="users" size={Math.round(size * 0.46)} color="#fff" /></div>
+      : <Avatar name={name} size={size} />}
+    {online && <span style={{ position: 'absolute', right: 0, bottom: 1, width: Math.round(size * 0.26), height: Math.round(size * 0.26), borderRadius: '50%', background: DS.success, border: '2px solid #fff' }} />}
+  </div>
+);
+
+// Small circular icon button for the chat header actions (video / call / more).
+const RoundIconBtn = ({ icon, title, onClick }) => {
+  const [hov, setHov] = React.useState(false);
+  return (
+    <button onClick={onClick} title={title} onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+      style={{ width: 38, height: 38, borderRadius: '50%', border: `1px solid ${DS.border}`, background: hov ? DS.surface : DS.bg, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+      <Icon name={icon} size={17} color={DS.muted} />
+    </button>
+  );
+};
+
+// Overlapping participant avatars + remaining count, shown for group/channel threads.
+const AvatarStack = ({ participants, ctx, max = 3 }) => {
+  const others = participants.filter(p => p !== ctx.userId).map(p => userById(p)).filter(Boolean);
+  const shown = others.slice(0, max);
+  const extra = others.length - shown.length;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', marginRight: 4 }}>
+      {shown.map((u, i) => (
+        <div key={u.id} style={{ marginLeft: i ? -10 : 0, borderRadius: '50%', border: '2px solid #fff' }}><Avatar name={u.name} size={28} /></div>
+      ))}
+      {extra > 0 && (
+        <div style={{ marginLeft: -10, width: 28, height: 28, borderRadius: '50%', border: '2px solid #fff', background: DS.text, color: '#fff', fontSize: 10.5, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{extra}</div>
+      )}
+    </div>
+  );
+};
+
+// Section label in the thread list ("Pinned Message", "All Message").
+const ThreadSection = ({ icon, children }) => (
+  <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '14px 18px 6px' }}>
+    <Icon name={icon} size={12} color={DS.faint} />
+    <span style={{ fontSize: 11.5, fontWeight: 600, color: DS.faint }}>{children}</span>
+  </div>
+);
+
+// Per-user pinned-thread set, persisted locally (layout only — no tenant data change).
+const PIN_KEY = 'tutoros.comms.pins.v1';
+const loadPins = (userId) => { try { return (JSON.parse(localStorage.getItem(PIN_KEY)) || {})[userId] || []; } catch (e) { return []; } };
+const savePins = (userId, ids) => {
+  let all = {};
+  try { all = JSON.parse(localStorage.getItem(PIN_KEY)) || {}; } catch (e) { all = {}; }
+  all[userId] = ids; localStorage.setItem(PIN_KEY, JSON.stringify(all));
+};
+
+const ThreadListItem = ({ t, comms, active, onClick, pinned, onTogglePin }) => {
   const { ctx } = comms;
+  const [hov, setHov] = React.useState(false);
   const title = threadTitle(t, ctx);
   const unread = comms.threadUnread(t);
   const msgs = comms.messagesFor(t.id);
   const last = msgs[msgs.length - 1];
   const isGroup = t.type !== 'dm';
   const other = !isGroup ? threadOther(t, ctx) : null;
+  const monitored = isMonitoredThread(t);
+  const online = !isGroup && !!other && isOnline(other.id);
   return (
-    <button onClick={onClick} style={{
-      display: 'flex', gap: 11, alignItems: 'center', width: '100%', textAlign: 'left',
-      padding: '12px 14px', border: 'none', borderBottom: `1px solid ${DS.border}`,
-      background: active ? DS.accentLight : 'transparent', cursor: 'pointer',
+    <div onClick={onClick} onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)} style={{
+      display: 'flex', gap: 12, alignItems: 'center', width: 'calc(100% - 16px)', textAlign: 'left',
+      padding: '11px 12px', margin: '2px 8px', borderRadius: 12, cursor: 'pointer',
+      background: active ? DS.accentLight : hov ? DS.surface : 'transparent',
     }}>
-      {isGroup
-        ? <div style={{ width: 38, height: 38, borderRadius: '50%', background: DS.accent, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="users" size={18} color="#fff" /></div>
-        : <Avatar name={(other || {}).name || '—'} size={38} />}
+      <ChatAvatar name={(other || {}).name || title} size={42} group={isGroup} online={online} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontSize: 13.5, fontWeight: unread ? 700 : 600, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>{title}</span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>{title}</span>
           <span style={{ fontSize: 11, color: DS.faint, flexShrink: 0 }}>{last ? relTime(last.createdAt) : ''}</span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
-          <span style={{ fontSize: 12, color: unread ? DS.sub : DS.muted, fontWeight: unread ? 500 : 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
+          {monitored && <Icon name="eye" size={11} color={DS.faint} />}
+          <span style={{ fontSize: 12.5, color: unread ? DS.sub : DS.muted, fontWeight: unread ? 500 : 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>
             {last ? (last.senderId === ctx.userId ? 'You: ' : isGroup ? (last.senderName || '').split(' ')[0] + ': ' : '') + last.body : 'No messages yet'}
           </span>
-          {unread > 0 && <span style={{ flexShrink: 0, minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9, background: DS.accent, color: '#fff', fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{unread}</span>}
+          {unread > 0
+            ? <span style={{ flexShrink: 0, minWidth: 20, height: 20, padding: '0 6px', borderRadius: 10, background: DS.danger, color: '#fff', fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{unread}</span>
+            : (hov || pinned) && (
+                <button onClick={e => { e.stopPropagation(); onTogglePin(t.id); }} title={pinned ? 'Unpin' : 'Pin'}
+                  style={{ flexShrink: 0, border: 'none', background: 'transparent', cursor: 'pointer', padding: 2, display: 'flex' }}>
+                  <Icon name="pin" size={14} color={pinned ? DS.accent : DS.faint} />
+                </button>
+              )}
         </div>
       </div>
-    </button>
+    </div>
   );
 };
 
-const Bubble = ({ m, mine, showSender, isGroup, participants, ctx }) => {
-  // "Seen" receipt for my own last message: anyone else in the thread has it in readBy.
+// `first` = first message of a sender's run (show avatar + name/time header);
+// `last`  = last of the run (adds spacing + "Seen" receipt).
+const Bubble = ({ m, mine, first, last, participants, ctx }) => {
   const seenByOthers = mine && (participants || []).some(p => p !== ctx.userId && (m.readBy || {})[p]);
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start', marginBottom: 10 }}>
-      {showSender && !mine && (
-        <div style={{ fontSize: 11, color: DS.muted, fontWeight: 600, margin: '0 0 3px 10px' }}>
-          {m.senderName} <span style={{ color: DS.faint, fontWeight: 400 }}>· {ROLE_LABEL[m.senderRole] || m.senderRole}</span>
+  if (mine) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: last ? 14 : 4 }}>
+        <div style={{ maxWidth: '72%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+          {first && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 5 }}>
+              <span style={{ fontSize: 11, color: DS.faint }}>{msgTime(m.createdAt)}</span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: DS.text }}>You</span>
+            </div>
+          )}
+          <div style={{ padding: '10px 14px', borderRadius: 14, borderTopRightRadius: first ? 4 : 14, background: DS.accent, color: '#fff', fontSize: 13.5, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{m.body}</div>
+          {last && seenByOthers && <div style={{ fontSize: 10.5, color: DS.faint, marginTop: 4 }}>Seen</div>}
         </div>
-      )}
-      <div style={{
-        maxWidth: '74%', padding: '9px 13px', borderRadius: 14,
-        borderBottomRightRadius: mine ? 4 : 14, borderBottomLeftRadius: mine ? 14 : 4,
-        background: mine ? DS.accent : DS.surface, color: mine ? '#fff' : DS.text,
-        border: mine ? 'none' : `1px solid ${DS.border}`, fontSize: 13.5, lineHeight: 1.5, whiteSpace: 'pre-wrap',
-      }}>{m.body}</div>
-      <div style={{ fontSize: 10.5, color: DS.faint, margin: '3px 6px 0' }}>
-        {relTime(m.createdAt)}{seenByOthers ? ' · Seen' : ''}
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginBottom: last ? 14 : 4 }}>
+      <div style={{ width: 36, flexShrink: 0 }}>{first && <Avatar name={m.senderName} size={36} />}</div>
+      <div style={{ maxWidth: '72%' }}>
+        {first && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: DS.text }}>{m.senderName}</span>
+            <span style={{ fontSize: 11, color: DS.faint }}>{msgTime(m.createdAt)}</span>
+          </div>
+        )}
+        <div style={{ display: 'inline-block', padding: '10px 14px', borderRadius: 14, borderTopLeftRadius: first ? 4 : 14, background: DS.surface, color: DS.text, border: `1px solid ${DS.border}`, fontSize: 13.5, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{m.body}</div>
       </div>
     </div>
   );
@@ -667,81 +1066,250 @@ const ThreadView = ({ t, comms }) => {
   const title = threadTitle(t, ctx);
   const other = !isGroup ? threadOther(t, ctx) : null;
 
+  const config = comms.config;
+  const monitored = isMonitoredThread(t);
+  const isStudent = ctx.role === 'student';
+  // Quiet hours + 1:1-off only constrain a STUDENT in a monitored conversation.
+  const dmBlocked = monitored && isStudent && t.type === 'dm' && !config.dmEnabled;
+  const quiet = monitored && isStudent && quietHoursActive(config, new Date());
+  const lockReason = dmBlocked
+    ? '1:1 messaging with staff is turned off at your centre — please use your class channel.'
+    : quiet ? `Quiet hours — messaging is paused until ${config.quietTo}.` : null;
+
   // Mark read on open / when new messages arrive.
   React.useEffect(() => { comms.markThreadRead(t.id); }, [t.id, msgs.length]);
   React.useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [t.id, msgs.length]);
 
   const send = () => { if (draft.trim()) { comms.sendMessage(t.id, draft); setDraft(''); } };
+  const subtitle = t.type === 'channel'
+    ? `${t.participants.length} members`
+    : isGroup
+      ? t.participants.map(p => (userById(p) || {}).name).filter(Boolean).join(', ')
+      : (other ? ROLE_LABEL[other.role] : '');
+  const iconBtn = { border: 'none', background: 'transparent', cursor: 'pointer', padding: 5, display: 'flex', borderRadius: 8 };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '14px 18px', borderBottom: `1px solid ${DS.border}`, flexShrink: 0 }}>
-        {isGroup
-          ? <div style={{ width: 36, height: 36, borderRadius: '50%', background: DS.accent, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="users" size={17} color="#fff" /></div>
-          : <Avatar name={(other || {}).name || '—'} size={36} />}
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 14.5, fontWeight: 700, color: DS.text }}>{title}</div>
-          <div style={{ fontSize: 12, color: DS.muted }}>
-            {isGroup
-              ? t.participants.map(p => (userById(p) || {}).name).filter(Boolean).join(', ')
-              : (other ? ROLE_LABEL[other.role] : '')}
-          </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 20px', borderBottom: `1px solid ${DS.border}`, flexShrink: 0 }}>
+        <ChatAvatar name={(other || {}).name || title} size={44} group={isGroup} online={!isGroup && !!other && isOnline(other.id)} />
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</div>
+          <div style={{ fontSize: 12.5, color: DS.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{subtitle}</div>
         </div>
+        {isGroup && <AvatarStack participants={t.participants} ctx={ctx} />}
+        <RoundIconBtn icon="video" title="Start video call" />
+        <RoundIconBtn icon="phone" title="Start voice call" />
+        <RoundIconBtn icon="dots" title="More" />
       </div>
 
+      {/* Monitored banner */}
+      {monitored && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '7px 20px', background: DS.surface, borderBottom: `1px solid ${DS.border}`, fontSize: 11.5, color: DS.muted, flexShrink: 0 }}>
+          <Icon name="eye" size={13} color={DS.muted} />
+          Monitored conversation{config.dslObserver ? ' · visible to your Designated Safeguarding Lead' : ''}
+        </div>
+      )}
+
       {/* Messages */}
-      <div ref={scrollRef} style={{ flex: 1, overflow: 'auto', padding: '18px 18px 6px', background: DS.bg }}>
+      <div ref={scrollRef} style={{ flex: 1, overflow: 'auto', padding: '18px 22px 8px', background: DS.bg }}>
         {msgs.length === 0
           ? <EmptyState icon="message" title="No messages yet" message="Say hello to start the conversation." />
           : msgs.map((m, i) => {
               const mine = m.senderId === ctx.userId;
               const prev = msgs[i - 1];
-              const showSender = isGroup && (!prev || prev.senderId !== m.senderId);
-              return <Bubble key={m.id} m={m} mine={mine} showSender={showSender} isGroup={isGroup} participants={t.participants} ctx={ctx} />;
+              const next = msgs[i + 1];
+              const newDay = !prev || dayKey(prev.createdAt) !== dayKey(m.createdAt);
+              const first = newDay || prev.senderId !== m.senderId;
+              const last = !next || next.senderId !== m.senderId || dayKey(next.createdAt) !== dayKey(m.createdAt);
+              return (
+                <React.Fragment key={m.id}>
+                  {newDay && (
+                    <div style={{ display: 'flex', justifyContent: 'center', margin: i ? '12px 0 16px' : '0 0 16px' }}>
+                      <span style={{ fontSize: 11.5, fontWeight: 600, color: DS.muted, background: DS.bg, border: `1px solid ${DS.border}`, borderRadius: 20, padding: '5px 14px', boxShadow: DS.cardShadow }}>{dayDivider(m.createdAt)}</span>
+                    </div>
+                  )}
+                  <Bubble m={m} mine={mine} first={first} last={last} participants={t.participants} ctx={ctx} />
+                </React.Fragment>
+              );
             })}
       </div>
 
-      {/* Composer */}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', padding: '12px 16px', borderTop: `1px solid ${DS.border}`, flexShrink: 0 }}>
-        <Textarea value={draft} onChange={e => setDraft(e.target.value)} placeholder="Write a message…"
-          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
-          style={{ minHeight: 42, maxHeight: 120 }} />
-        <Btn variant="primary" icon="send" onClick={send} style={{ opacity: draft.trim() ? 1 : 0.5, pointerEvents: draft.trim() ? 'auto' : 'none' }}>Send</Btn>
-      </div>
+      {/* Composer (locked for students during quiet hours / when 1:1 is off) */}
+      {lockReason ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '14px 18px', borderTop: `1px solid ${DS.border}`, background: DS.surface, flexShrink: 0 }}>
+          <Icon name={dmBlocked ? 'lock' : 'clock'} size={15} color={DS.muted} />
+          <span style={{ fontSize: 12.5, color: DS.muted }}>{lockReason}</span>
+        </div>
+      ) : (
+        <div style={{ padding: '12px 18px 16px', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: DS.surface, border: `1px solid ${DS.border}`, borderRadius: 14, padding: '6px 8px 6px 16px' }}>
+            <input value={draft} onChange={e => setDraft(e.target.value)} placeholder="Type a message"
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
+              style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: 14, color: DS.text }} />
+            <button style={iconBtn} title="Attach image"><Icon name="image" size={18} color={DS.faint} /></button>
+            <button style={iconBtn} title="Share location"><Icon name="pin" size={18} color={DS.faint} /></button>
+            <button style={iconBtn} title="Voice note"><Icon name="mic" size={18} color={DS.faint} /></button>
+            <button onClick={send} title="Send" style={{ width: 40, height: 40, borderRadius: 12, border: 'none', background: DS.accent, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, opacity: draft.trim() ? 1 : 0.55 }}>
+              <Icon name="send" size={18} color="#fff" />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
 
+// Shared row style for the picker lists in the new-conversation modal.
+const PICK_ROW = { display: 'flex', alignItems: 'center', gap: 11, padding: '9px 8px', border: 'none', borderRadius: 8, background: 'transparent', cursor: 'pointer', textAlign: 'left', width: '100%' };
+
+// Round check indicator for multi-select rows.
+const CheckDot = ({ on }) => (
+  <span style={{
+    width: 20, height: 20, borderRadius: '50%', flexShrink: 0,
+    border: `1.5px solid ${on ? DS.accent : DS.borderDark}`, background: on ? DS.accent : 'transparent',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+  }}>{on && <Icon name="check" size={12} color="#fff" />}</span>
+);
+
+const PersonRow = ({ u, ctx, trailing, onClick }) => (
+  <button type="button" onClick={onClick} style={PICK_ROW}>
+    <Avatar name={u.name} size={34} />
+    <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ fontSize: 13.5, fontWeight: 600, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.name}</div>
+      <div style={{ fontSize: 12, color: DS.muted }}>{ROLE_LABEL[u.role]}{ctx.role === 'superadmin' ? ` · ${centreName(u.centreId)}` : ''}</div>
+    </div>
+    {trailing}
+  </button>
+);
+
+// Bulk row for adding everyone in a class / subject at once.
+const BulkRow = ({ icon, title, count, on, onClick }) => (
+  <button type="button" onClick={onClick} style={PICK_ROW}>
+    <div style={{ width: 34, height: 34, borderRadius: 9, background: DS.accentLight, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+      <Icon name={icon} size={17} color={DS.accent} />
+    </div>
+    <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ fontSize: 13.5, fontWeight: 600, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</div>
+      <div style={{ fontSize: 12, color: DS.muted }}>{count} member{count === 1 ? '' : 's'}</div>
+    </div>
+    <CheckDot on={on} />
+  </button>
+);
+
 const NewMessageModal = ({ open, onClose, comms, onOpenThread }) => {
   const { ctx } = comms;
-  const [q, setQ] = React.useState('');
-  React.useEffect(() => { if (open) setQ(''); }, [open]);
-  const candidates = commsDmCandidates(ctx.user)
-    .filter(u => u.name.toLowerCase().includes(q.toLowerCase()));
+  const [mode, setMode]   = React.useState('direct');   // direct | group
+  const [source, setSource] = React.useState('people'); // class | subject | people
+  const [q, setQ]         = React.useState('');
+  const [members, setMembers] = React.useState([]);     // selected user ids (group)
+  const [name, setName]   = React.useState('');
+  const [touchedName, setTouchedName] = React.useState(false);
+  React.useEffect(() => {
+    if (open) { setMode('direct'); setSource('people'); setQ(''); setMembers([]); setName(''); setTouchedName(false); }
+  }, [open]);
 
-  const start = (u) => { const id = comms.openOrCreateDm(u.id); onClose(); onOpenThread(id); };
+  // When 1:1 is off, a student can't open private staff DMs — class channels only.
+  const dmOff = ctx.role === 'student' && !comms.config.dmEnabled;
+  let candidates = commsDmCandidates(ctx.user);
+  if (dmOff) candidates = candidates.filter(u => !isStaff(u));
+  const matches = (u) => u.name.toLowerCase().includes(q.toLowerCase());
+  const visiblePeople = candidates.filter(matches);
+
+  // Classes / subjects, scoped to people the current user may actually message.
+  const groupClasses  = seedClasses().filter(c => candidates.some(u => (u.classIds || []).includes(c.id)));
+  const groupSubjects = [...new Set(candidates.flatMap(userSubjects))].sort();
+  const classMemberIds   = (cid) => candidates.filter(u => (u.classIds || []).includes(cid)).map(u => u.id);
+  const subjectMemberIds = (s)   => candidates.filter(u => userSubjects(u).includes(s)).map(u => u.id);
+
+  const startDm = (u) => { const id = comms.openOrCreateDm(u.id); onClose(); onOpenThread(id); };
+  const toggleMember = (id) => setMembers(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  // Add/remove a whole class/subject; auto-suggest the group name from its label.
+  const toggleBulk = (ids, label) => {
+    const allIn = ids.length > 0 && ids.every(id => members.includes(id));
+    setMembers(prev => allIn ? prev.filter(id => !ids.includes(id)) : [...new Set([...prev, ...ids])]);
+    if (!allIn && !touchedName && label) setName(label);
+  };
+  const canCreate = members.length >= 2 && !!name.trim();
+  const create = () => {
+    if (!canCreate) return;
+    const cid = source === 'class'
+      ? (groupClasses.find(c => { const ids = classMemberIds(c.id); return ids.length && ids.every(id => members.includes(id)); }) || {}).id
+      : null;
+    const id = comms.createGroup(members, name, cid);
+    if (id) { onClose(); onOpenThread(id); }
+  };
+
+  const modeTabs = [{ id: 'direct', label: 'Direct' }, { id: 'group', label: 'Group' }];
+  const srcTabs  = [{ id: 'class', label: 'Class' }, { id: 'subject', label: 'Subject' }, { id: 'people', label: 'People' }];
 
   return (
-    <Modal open={open} onClose={onClose} title="New message" subtitle="Start a conversation" icon="mail" width={460}>
-      <SearchInput value={q} onChange={e => setQ(e.target.value)} placeholder="Search people…" style={{ marginBottom: 14 }} />
-      {candidates.length === 0
-        ? <EmptyState icon="users" title="No one to message" message="There's no one in your centre you can start a new conversation with." />
-        : <div style={{ display: 'flex', flexDirection: 'column', maxHeight: 360, overflow: 'auto' }}>
-            {candidates.map(u => (
-              <button key={u.id} onClick={() => start(u)} style={{
-                display: 'flex', alignItems: 'center', gap: 11, padding: '10px 8px', border: 'none',
-                borderBottom: `1px solid ${DS.border}`, background: 'transparent', cursor: 'pointer', textAlign: 'left',
-              }}>
-                <Avatar name={u.name} size={34} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13.5, fontWeight: 600, color: DS.text }}>{u.name}</div>
-                  <div style={{ fontSize: 12, color: DS.muted }}>{ROLE_LABEL[u.role]}{ctx.role === 'superadmin' ? ` · ${centreName(u.centreId)}` : ''}</div>
-                </div>
-                <Icon name="chevron_r" size={15} color={DS.faint} />
-              </button>
-            ))}
-          </div>}
+    <Modal open={open} onClose={onClose}
+      title={mode === 'group' ? 'New group chat' : 'New message'}
+      subtitle={mode === 'group' ? 'Add a class, a subject, or pick people' : 'Start a conversation'}
+      icon={mode === 'group' ? 'users' : 'mail'} width={500}
+      footer={mode === 'group' ? (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, width: '100%' }}>
+          <span style={{ fontSize: 12.5, color: DS.muted }}>{members.length} member{members.length === 1 ? '' : 's'} selected</span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Btn variant="secondary" onClick={onClose}>Cancel</Btn>
+            <Btn variant="primary" icon="check" onClick={create}
+              style={{ opacity: canCreate ? 1 : 0.5, pointerEvents: canCreate ? 'auto' : 'none' }}>Create group</Btn>
+          </div>
+        </div>
+      ) : null}>
+
+      <div style={{ marginBottom: 14 }}>
+        <Segmented options={modeTabs} value={mode} onChange={setMode} fullWidth />
+      </div>
+
+      {mode === 'direct' ? (
+        <>
+          <SearchInput value={q} onChange={e => setQ(e.target.value)} placeholder="Search people…" style={{ marginBottom: 12 }} />
+          {visiblePeople.length === 0
+            ? <EmptyState icon={dmOff ? 'lock' : 'users'} title={dmOff ? 'Private messaging is off' : 'No one to message'}
+                message={dmOff ? 'Your centre has 1:1 staff messaging turned off. Use your class channels to reach your teachers.' : "There's no one in your centre you can start a new conversation with."} />
+            : <div style={{ display: 'flex', flexDirection: 'column', maxHeight: 360, overflow: 'auto' }}>
+                {visiblePeople.map(u => (
+                  <PersonRow key={u.id} u={u} ctx={ctx} onClick={() => startDm(u)} trailing={<Icon name="chevron_r" size={15} color={DS.faint} />} />
+                ))}
+              </div>}
+        </>
+      ) : (
+        <>
+          <Input value={name} onChange={e => { setName(e.target.value); setTouchedName(true); }} placeholder="Group name" />
+          <div style={{ margin: '12px 0' }}>
+            <Segmented options={srcTabs} value={source} onChange={setSource} fullWidth />
+          </div>
+          {source === 'people' && <SearchInput value={q} onChange={e => setQ(e.target.value)} placeholder="Search people…" style={{ marginBottom: 10 }} />}
+
+          <div style={{ display: 'flex', flexDirection: 'column', maxHeight: 300, overflow: 'auto' }}>
+            {source === 'class' && (groupClasses.length === 0
+              ? <EmptyState icon="book" title="No classes" message="No class with people you can message." />
+              : groupClasses.map(c => {
+                  const ids = classMemberIds(c.id);
+                  return <BulkRow key={c.id} icon="book" title={`${c.name} · ${c.group}`} count={ids.length}
+                    on={ids.length > 0 && ids.every(id => members.includes(id))}
+                    onClick={() => toggleBulk(ids, `${classSubject(c)} · ${c.group}`)} />;
+                }))}
+
+            {source === 'subject' && (groupSubjects.length === 0
+              ? <EmptyState icon="zap" title="No subjects" message="No subject with people you can message." />
+              : groupSubjects.map(s => {
+                  const ids = subjectMemberIds(s);
+                  return <BulkRow key={s} icon="zap" title={s} count={ids.length}
+                    on={ids.length > 0 && ids.every(id => members.includes(id))}
+                    onClick={() => toggleBulk(ids, s)} />;
+                }))}
+
+            {source === 'people' && (visiblePeople.length === 0
+              ? <EmptyState icon="users" title="No people" message="No one to add." />
+              : visiblePeople.map(u => (
+                  <PersonRow key={u.id} u={u} ctx={ctx} onClick={() => toggleMember(u.id)} trailing={<CheckDot on={members.includes(u.id)} />} />
+                )))}
+          </div>
+        </>
+      )}
     </Modal>
   );
 };
@@ -750,33 +1318,344 @@ const Inbox = ({ comms, initialThreadId }) => {
   const threads = comms.threads;
   const [activeId, setActiveId] = React.useState(initialThreadId || (threads[0] && threads[0].id) || null);
   const [newOpen, setNewOpen] = React.useState(false);
+  const [q, setQ] = React.useState('');
+  const [pins, setPins] = React.useState(() => loadPins(comms.ctx.userId));
   React.useEffect(() => { if (initialThreadId) setActiveId(initialThreadId); }, [initialThreadId]);
   // Keep selection valid as threads change (e.g. a new DM created).
   React.useEffect(() => { if (activeId && !threads.find(t => t.id === activeId)) setActiveId(threads[0] ? threads[0].id : null); }, [threads.length]);
 
+  const togglePin = (id) => setPins(prev => {
+    const next = prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id];
+    savePins(comms.ctx.userId, next);
+    return next;
+  });
+
   const active = threads.find(t => t.id === activeId);
+  const ql = q.trim().toLowerCase();
+  const filtered = ql ? threads.filter(t => threadTitle(t, comms.ctx).toLowerCase().includes(ql)) : threads;
+  const pinnedThreads = filtered.filter(t => pins.includes(t.id));
+  const otherThreads = filtered.filter(t => !pins.includes(t.id));
+  const item = (t) => <ThreadListItem key={t.id} t={t} comms={comms} active={t.id === activeId} onClick={() => setActiveId(t.id)} pinned={pins.includes(t.id)} onTogglePin={togglePin} />;
 
   return (
-    <div style={{ display: 'flex', height: 'calc(100vh - 220px)', minHeight: 460, border: `1px solid ${DS.cardBorder}`, borderRadius: 10, overflow: 'hidden', background: DS.bg }}>
-      {/* Left: thread list */}
-      <div style={{ width: 320, borderRight: `1px solid ${DS.border}`, display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 14px', borderBottom: `1px solid ${DS.border}` }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: DS.text }}>Messages</span>
-          <Btn small variant="primary" icon="plus" onClick={() => setNewOpen(true)}>New</Btn>
+    <div style={{ display: 'flex', gap: 10, height: '100%', minHeight: 0 }}>
+      {/* Left: thread list (its own card) */}
+      <div style={{ width: 340, display: 'flex', flexDirection: 'column', flexShrink: 0, border: `1px solid ${DS.cardBorder}`, borderRadius: 14, overflow: 'hidden', background: DS.bg, boxShadow: DS.cardShadow }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px 12px' }}>
+          <span style={{ fontSize: 19, fontWeight: 800, color: DS.accent }}>Messages</span>
+          <button onClick={() => setNewOpen(true)} title="New message"
+            style={{ width: 38, height: 38, borderRadius: '50%', border: `1px solid ${DS.border}`, background: DS.bg, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Icon name="edit" size={16} color={DS.muted} />
+          </button>
         </div>
-        <div style={{ flex: 1, overflow: 'auto' }}>
-          {threads.length === 0
-            ? <EmptyState icon="message" title="No conversations" message="Start a new message to begin." />
-            : threads.map(t => <ThreadListItem key={t.id} t={t} comms={comms} active={t.id === activeId} onClick={() => setActiveId(t.id)} />)}
+        <div style={{ padding: '0 14px 6px' }}>
+          <SearchInput value={q} onChange={e => setQ(e.target.value)} placeholder="Search…" />
+        </div>
+        <div style={{ flex: 1, overflow: 'auto', paddingBottom: 8 }}>
+          {filtered.length === 0
+            ? <EmptyState icon="message" title={ql ? 'No matches' : 'No conversations'} message={ql ? 'No conversations match your search.' : 'Start a new message to begin.'} />
+            : <React.Fragment>
+                {pinnedThreads.length > 0 && <React.Fragment><ThreadSection icon="pin">Pinned Message</ThreadSection>{pinnedThreads.map(item)}</React.Fragment>}
+                {otherThreads.length > 0 && <React.Fragment><ThreadSection icon="message">All Message</ThreadSection>{otherThreads.map(item)}</React.Fragment>}
+              </React.Fragment>}
         </div>
       </div>
-      {/* Right: active thread */}
-      <div style={{ flex: 1, minWidth: 0 }}>
+      {/* Right: active thread (its own card) */}
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', border: `1px solid ${DS.cardBorder}`, borderRadius: 14, overflow: 'hidden', background: DS.bg, boxShadow: DS.cardShadow }}>
         {active
           ? <ThreadView t={active} comms={comms} />
-          : <EmptyState icon="message" title="Select a conversation" message="Choose a thread on the left, or start a new message." />}
+          : <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><EmptyState icon="message" title="Select a conversation" message="Choose a thread on the left, or start a new message." /></div>}
       </div>
       <NewMessageModal open={newOpen} onClose={() => setNewOpen(false)} comms={comms} onOpenThread={setActiveId} />
+    </div>
+  );
+};
+
+// ══════════════════════════════════════════════════════════════════════════════════
+//  SAFEGUARDING / DSL OVERSIGHT (admin only)
+// ══════════════════════════════════════════════════════════════════════════════════
+const REASON_CHIP = {
+  external:     { color: () => DS.warning, bg: () => DS.warningBg, icon: 'send' },
+  keyword:      { color: () => DS.warning, bg: () => DS.warningBg, icon: 'filter' },
+  image:        { color: () => DS.warning, bg: () => DS.warningBg, icon: 'eye' },
+  out_of_hours: { color: () => DS.muted,   bg: () => DS.surface,   icon: 'clock' },
+};
+function flagStatusLabel(f) {
+  const s = f.resolution.status;
+  if (s === 'resolved')     return { label: 'Resolved',     color: DS.success, bg: DS.successBg || DS.accentLight };
+  if (s === 'acknowledged') return { label: 'Acknowledged', color: DS.success, bg: DS.accentLight };
+  if (s === 'escalated')    return { label: 'Escalated',    color: DS.danger,  bg: DS.dangerBg };
+  return f.sev === 'high'
+    ? { label: 'Needs review', color: DS.warning, bg: DS.warningBg }
+    : { label: 'Low concern',  color: DS.muted,   bg: DS.surface };
+}
+// Recipient/other side of a flagged message (for the "A → B" summary).
+function flagCounterparty(thread, msg) {
+  if (!thread) return '';
+  if (thread.type === 'channel') return thread.subject || 'Class channel';
+  const other = (thread.participants || []).find(p => p !== msg.senderId);
+  return (userById(other) || {}).name || '';
+}
+
+// Read-only thread renderer for the DSL — staff right, student left, flagged msg ringed.
+const DslBubble = ({ m, highlight, reason }) => {
+  const staff = isStaff(userById(m.senderId));
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: staff ? 'flex-end' : 'flex-start', marginBottom: 12 }}>
+      <div style={{ fontSize: 11, color: DS.muted, fontWeight: 600, margin: '0 6px 3px' }}>
+        {m.senderName} <span style={{ color: DS.faint, fontWeight: 400 }}>· {ROLE_LABEL[m.senderRole] || m.senderRole}</span>
+      </div>
+      <div style={{
+        maxWidth: '80%', padding: '9px 13px', borderRadius: 14, fontSize: 13.5, lineHeight: 1.5, whiteSpace: 'pre-wrap',
+        background: staff ? DS.accentLight : DS.surface, color: DS.text,
+        border: `1px solid ${highlight ? DS.warning : staff ? DS.accentBorder : DS.border}`,
+        boxShadow: highlight ? `0 0 0 3px ${DS.warningBg}` : 'none',
+      }}>
+        {m.body}
+        {(m.attachments || []).map((a, i) => (
+          <div key={i} style={{ marginTop: 7, display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: DS.muted, padding: '4px 9px', border: `1px dashed ${DS.border}`, borderRadius: 6 }}>
+            <Icon name="eye" size={12} color={DS.muted} />{a.name}
+          </div>
+        ))}
+      </div>
+      {highlight && reason && <div style={{ marginTop: 5 }}><Chip icon="flag" color={DS.warning} bg={DS.warningBg}>Trigger: {FLAG_REASONS[reason].label}</Chip></div>}
+      <div style={{ fontSize: 10.5, color: DS.faint, margin: '3px 6px 0' }}>{relTime(m.createdAt)}</div>
+    </div>
+  );
+};
+
+const DslThread = ({ thread, comms, highlightId, highlightReason }) => {
+  const scrollRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!scrollRef.current) return;
+    const hl = scrollRef.current.querySelector('[data-hl="1"]');
+    if (hl) hl.scrollIntoView({ block: 'center' }); else scrollRef.current.scrollTop = 0;
+  }, [thread && thread.id, highlightId]);
+  if (!thread) return <EmptyState icon="eye" title="Select a thread" message="Choose a flagged message or a channel to view it in full context." />;
+  const msgs = comms.messagesFor(thread.id);
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 16px', borderBottom: `1px solid ${DS.border}`, flexShrink: 0 }}>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: DS.text }}>{threadTitle(thread, comms.ctx)}</div>
+          <div style={{ fontSize: 11.5, color: DS.muted }}>
+            {thread.type === 'channel' ? `${thread.participants.length} members · full thread in context`
+              : `${thread.participants.map(p => (userById(p) || {}).name).filter(Boolean).join(' ↔ ')} · full thread in context`}
+          </div>
+        </div>
+        <Chip icon="eye" color={DS.accent} bg={DS.accentLight}>DSL view</Chip>
+      </div>
+      <div ref={scrollRef} style={{ flex: 1, overflow: 'auto', padding: '16px 18px', background: DS.bg }}>
+        {msgs.map(m => (
+          <div key={m.id} data-hl={m.id === highlightId ? '1' : '0'}>
+            <DslBubble m={m} highlight={m.id === highlightId} reason={m.id === highlightId ? highlightReason : null} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const SafeStat = ({ icon, value, label, tone }) => (
+  <div style={{ flex: '1 1 180px', background: DS.bg, border: `1px solid ${DS.cardBorder}`, borderRadius: 12, padding: '16px 18px', display: 'flex', gap: 12, alignItems: 'center' }}>
+    <div style={{ width: 38, height: 38, borderRadius: 10, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: (tone && tone.bg) || DS.accentLight, color: (tone && tone.color) || DS.accent }}>
+      <Icon name={icon} size={18} color={(tone && tone.color) || DS.accent} />
+    </div>
+    <div>
+      <div style={{ fontSize: 22, fontWeight: 800, color: DS.text, lineHeight: 1 }}>{value}</div>
+      <div style={{ fontSize: 11.5, color: DS.muted, marginTop: 3 }}>{label}</div>
+    </div>
+  </div>
+);
+
+const RecordConcernModal = ({ open, onClose, comms, flag }) => {
+  const thread = flag ? comms.store.threads[flag.threadId] : null;
+  const about = flag ? userById(flag.msg.senderId) : null;
+  const [reason, setReason] = React.useState('');
+  const [level, setLevel] = React.useState('low');
+  const [note, setNote] = React.useState('');
+  React.useEffect(() => { if (open) { setReason(flag ? FLAG_REASONS[flag.primary].label : ''); setLevel('low'); setNote(''); } }, [open, flag]);
+  const save = () => {
+    comms.recordConcern(
+      { aboutUserId: about ? about.id : null, threadId: thread ? thread.id : null, reason: reason.trim() || 'Concern', level, note: note.trim() },
+      flag ? flag.messageId : null,
+    );
+    onClose();
+  };
+  return (
+    <Modal open={open} onClose={onClose} title="Record a concern" subtitle={about ? `About ${about.name}` : ''} icon="flag" width={480}
+      footer={[
+        <Btn key="c" variant="secondary" small onClick={onClose}>Cancel</Btn>,
+        <Btn key="s" variant="primary" small icon="check" onClick={save} style={{ opacity: note.trim() ? 1 : 0.5, pointerEvents: note.trim() ? 'auto' : 'none' }}>Log concern</Btn>,
+      ]}>
+      <Field label="Reason"><Input value={reason} onChange={e => setReason(e.target.value)} placeholder="e.g. Wellbeing — exam stress" /></Field>
+      <Field label="Level">
+        <Segmented fullWidth value={level} onChange={setLevel}
+          options={[{ id: 'low', label: 'Low' }, { id: 'medium', label: 'Medium' }, { id: 'high', label: 'High' }]} />
+      </Field>
+      <Field label="Notes" required>
+        <Textarea value={note} onChange={e => setNote(e.target.value)} style={{ minHeight: 90 }} placeholder="What happened and what action was taken…" />
+      </Field>
+    </Modal>
+  );
+};
+
+function exportThread(thread, comms) {
+  if (!thread) return;
+  const lines = [
+    `Thread: ${threadTitle(thread, comms.ctx)}`,
+    `Centre: ${centreName(thread.centreId)}`,
+    `Exported: ${new Date().toISOString()}`, '',
+  ];
+  comms.messagesFor(thread.id).forEach(m => {
+    lines.push(`[${m.createdAt}] ${m.senderName} (${ROLE_LABEL[m.senderRole] || m.senderRole}): ${m.body}${(m.attachments || []).length ? ' [attachment]' : ''}`);
+  });
+  const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `thread-${thread.id}.txt`;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+const FlagListItem = ({ f, comms, active, onClick }) => {
+  const thread = comms.store.threads[f.threadId];
+  const st = flagStatusLabel(f);
+  const rc = REASON_CHIP[f.primary] || REASON_CHIP.keyword;
+  const subjMeta = thread && thread.classId ? classSubject(classById(thread.classId)) : null;
+  return (
+    <button onClick={onClick} style={{
+      display: 'block', width: '100%', textAlign: 'left', padding: '13px 15px', cursor: 'pointer',
+      borderStyle: 'solid', borderWidth: 0, borderBottomWidth: 1, borderBottomColor: DS.border,
+      borderLeftWidth: 3, borderLeftColor: active ? rc.color() : 'transparent',
+      background: active ? DS.accentLight : 'transparent',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
+        <Chip icon={rc.icon} color={rc.color()} bg={rc.bg()}>{FLAG_REASONS[f.primary].label}</Chip>
+        <span style={{ fontSize: 11, fontWeight: 700, color: st.color, background: st.bg, padding: '2px 8px', borderRadius: 6 }}>{st.label}</span>
+        <span style={{ marginLeft: 'auto', fontSize: 11, color: DS.faint }}>{relTime(f.msg.createdAt)}</span>
+      </div>
+      <div style={{ fontSize: 12.5, color: DS.text, fontWeight: 600 }}>
+        {f.msg.senderName} <span style={{ color: DS.faint }}>→</span> {flagCounterparty(thread, f.msg)}
+        {subjMeta && <span style={{ fontSize: 11, fontWeight: 500, color: DS.accent, background: DS.accentLight, padding: '1px 6px', borderRadius: 5, marginLeft: 6 }}>{subjMeta}</span>}
+      </div>
+      <div style={{ fontSize: 12, color: DS.muted, marginTop: 3, fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>“{f.msg.body}”</div>
+    </button>
+  );
+};
+
+const SafeguardingPage = ({ comms }) => {
+  const { ctx } = comms;
+  const config = comms.config;
+  const flags = comms.flags;
+  const monitored = comms.threads.filter(isMonitoredThread);
+  const openFlags = flags.filter(f => f.resolution.status === 'open');
+  const resolvedCount = flags.filter(f => f.resolution.status !== 'open').length;
+
+  const [tab, setTab] = React.useState('queue');
+  const [selFlagId, setSelFlagId] = React.useState(openFlags[0] ? openFlags[0].id : (flags[0] ? flags[0].id : null));
+  const [selChanId, setSelChanId] = React.useState(monitored[0] ? monitored[0].id : null);
+  const [concernOpen, setConcernOpen] = React.useState(false);
+
+  const selFlag = flags.find(f => f.id === selFlagId) || null;
+  const flagThread = selFlag ? comms.store.threads[selFlag.threadId] : null;
+  const chanThread = comms.store.threads[selChanId] || null;
+
+  const PANE_H = 'calc(100vh - 360px)';
+
+  const dslLead = userById(config.dslLeadId);
+  const dslDeputy = userById(config.dslDeputyId);
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+        <Chip icon="shield" color={DS.accent} bg={DS.accentLight}>DSL oversight</Chip>
+        {dslLead && <span style={{ fontSize: 12.5, color: DS.muted }}>Lead: <b style={{ color: DS.sub }}>{dslLead.name}</b>{dslDeputy ? ` · Deputy: ${dslDeputy.name}` : ''}</span>}
+      </div>
+
+      {/* Stats */}
+      <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 20 }}>
+        <SafeStat icon="flag"   value={openFlags.length} label="Open flags · awaiting review" tone={{ bg: DS.warningBg, color: DS.warning }} />
+        <SafeStat icon="check"  value={resolvedCount}    label="Resolved · acknowledged" tone={{ bg: DS.accentLight, color: DS.success }} />
+        <SafeStat icon="eye"    value={monitored.length} label="Monitored threads · staff↔student" />
+        <SafeStat icon="book"   value={comms.concerns.length} label="Concerns logged · this term" tone={{ bg: DS.surface, color: DS.muted }} />
+      </div>
+
+      <div style={{ marginBottom: 16 }}>
+        <Segmented value={tab} onChange={setTab} options={[
+          { id: 'queue',    label: 'Flag queue', count: openFlags.length || undefined },
+          { id: 'channels', label: 'Channel browser' },
+          { id: 'concerns', label: 'Concerns log' },
+        ]} />
+      </div>
+
+      {/* Flag queue */}
+      {tab === 'queue' && (
+        flags.length === 0
+          ? <EmptyState icon="check" title="Nothing flagged" message="No messages have triggered a safeguarding flag. You're all clear." />
+          : <div style={{ display: 'flex', gap: 16, alignItems: 'stretch', minHeight: 420, flexWrap: 'wrap' }}>
+              <div style={{ flex: '1 1 340px', minWidth: 300, border: `1px solid ${DS.cardBorder}`, borderRadius: 12, overflow: 'hidden', background: DS.bg, display: 'flex', flexDirection: 'column' }}>
+                <div style={{ padding: '11px 15px', borderBottom: `1px solid ${DS.border}`, fontSize: 13, fontWeight: 700, color: DS.text }}>Surfaced messages</div>
+                <div style={{ overflow: 'auto', maxHeight: PANE_H }}>
+                  {flags.map(f => <FlagListItem key={f.id} f={f} comms={comms} active={f.id === selFlagId} onClick={() => setSelFlagId(f.id)} />)}
+                </div>
+              </div>
+              <div style={{ flex: '1.4 1 420px', minWidth: 320, border: `1px solid ${DS.cardBorder}`, borderRadius: 12, overflow: 'hidden', background: DS.bg, display: 'flex', flexDirection: 'column', maxHeight: PANE_H }}>
+                <div style={{ flex: 1, minHeight: 0 }}>
+                  <DslThread thread={flagThread} comms={comms} highlightId={selFlag && selFlag.messageId} highlightReason={selFlag && selFlag.primary} />
+                </div>
+                {selFlag && (
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', padding: '12px 14px', borderTop: `1px solid ${DS.border}`, background: DS.surface }}>
+                    <Btn small variant="secondary" icon="check" onClick={() => comms.resolveFlag(selFlag.messageId, 'acknowledged')}>Acknowledge</Btn>
+                    <Btn small variant="secondary" icon="alert" onClick={() => comms.resolveFlag(selFlag.messageId, 'escalated')}>Escalate</Btn>
+                    <Btn small variant="secondary" icon="flag" onClick={() => setConcernOpen(true)}>Record concern</Btn>
+                    <Btn small variant="ghost" icon="download" onClick={() => exportThread(flagThread, comms)}>Export thread</Btn>
+                  </div>
+                )}
+              </div>
+            </div>
+      )}
+
+      {/* Channel browser */}
+      {tab === 'channels' && (
+        <div style={{ display: 'flex', gap: 16, alignItems: 'stretch', minHeight: 420, flexWrap: 'wrap' }}>
+          <div style={{ flex: '1 1 320px', minWidth: 280, border: `1px solid ${DS.cardBorder}`, borderRadius: 12, overflow: 'hidden', background: DS.bg }}>
+            <div style={{ padding: '11px 15px', borderBottom: `1px solid ${DS.border}`, fontSize: 13, fontWeight: 700, color: DS.text }}>Monitored conversations</div>
+            <div style={{ overflow: 'auto', maxHeight: PANE_H }}>
+              {monitored.map(t => <ThreadListItem key={t.id} t={t} comms={comms} active={t.id === selChanId} onClick={() => setSelChanId(t.id)} />)}
+            </div>
+          </div>
+          <div style={{ flex: '1.4 1 420px', minWidth: 320, border: `1px solid ${DS.cardBorder}`, borderRadius: 12, overflow: 'hidden', background: DS.bg, maxHeight: PANE_H }}>
+            <DslThread thread={chanThread} comms={comms} />
+          </div>
+        </div>
+      )}
+
+      {/* Concerns log */}
+      {tab === 'concerns' && (
+        comms.concerns.length === 0
+          ? <EmptyState icon="book" title="No concerns logged" message="Recorded concerns will appear here for your safeguarding record." />
+          : <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {comms.concerns.map(c => {
+                const about = userById(c.aboutUserId);
+                const by = userById(c.by);
+                return (
+                  <div key={c.id} style={{ border: `1px solid ${DS.border}`, borderRadius: 10, padding: '14px 18px', background: DS.bg }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
+                      <Chip icon="flag" color={DS.warning} bg={DS.warningBg}>{c.reason}</Chip>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: c.level === 'high' ? DS.danger : c.level === 'medium' ? DS.warning : DS.muted, textTransform: 'capitalize' }}>{c.level} concern</span>
+                      <span style={{ marginLeft: 'auto', fontSize: 11.5, color: DS.faint }}>{relTime(c.at)}</span>
+                    </div>
+                    <div style={{ fontSize: 13.5, color: DS.text, fontWeight: 600 }}>{about ? about.name : 'Student'}</div>
+                    <div style={{ fontSize: 13, color: DS.sub, lineHeight: 1.5, marginTop: 4 }}>{c.note}</div>
+                    <div style={{ fontSize: 11.5, color: DS.faint, marginTop: 8 }}>Logged by {by ? by.name : '—'}</div>
+                  </div>
+                );
+              })}
+            </div>
+      )}
+
+      <RecordConcernModal open={concernOpen} onClose={() => setConcernOpen(false)} comms={comms} flag={selFlag} />
     </div>
   );
 };
@@ -792,31 +1671,47 @@ const SupportSection = () => {
 // ══════════════════════════════════════════════════════════════════════════════════
 //  PAGE
 // ══════════════════════════════════════════════════════════════════════════════════
+const SECTION_META = {
+  announcements: { title: 'Announcements', sub: 'Broadcast one-way notices — with optional read & acknowledgement tracking.' },
+  messages:      { title: 'Messages',      sub: 'Direct messages and class channels. Staff↔student chats are always monitored.' },
+  safeguarding:  { title: 'Safeguarding',  sub: 'Surfaced messages, full thread visibility, and a record of low-level concerns.' },
+  support:       { title: 'Support',       sub: 'Support tickets and email activity across all centres.' },
+  settings:      { title: 'Comms settings', sub: 'Choose a safety preset, then fine-tune. These apply to every conversation in your centre.' },
+};
+
 const CommunicationsPage = ({ role, section, comms }) => {
   const ctx = comms.ctx;
-  const [composeOpen, setComposeOpen] = React.useState(false);
-  const sec = section || 'announcements';
+  // `inbox` kept as an alias for older links → Messages.
+  let sec = section || 'announcements';
+  if (sec === 'inbox') sec = 'messages';
+  if (sec === 'safeguarding' && role !== 'admin') sec = 'announcements';
+  if (sec === 'settings' && role !== 'admin') sec = 'announcements';
   const isSuper = role === 'superadmin';
+  const meta = SECTION_META[sec] || SECTION_META.announcements;
+  const onNavigate = (r, p) => window.__navigate && window.__navigate(r, p);
 
-  const subtitle = isSuper
-    ? 'Platform-wide announcements, conversations and support across all centres'
-    : ctx.user ? `${centreName(ctx.centreId)} · signed in as ${ctx.user.name}` : '';
+  const subtitle = sec === 'announcements' && isSuper
+    ? 'Platform-wide notices across all centres'
+    : meta.sub;
+
+  // Messages is a full-height chat workspace: no page header, just a small gap
+  // around the contacts + conversation cards so they nearly fill the content area.
+  if (sec === 'messages') {
+    return (
+      <div style={{ height: 'calc(100vh - 52px)', padding: 10, boxSizing: 'border-box' }}>
+        <Inbox comms={comms} />
+      </div>
+    );
+  }
 
   return (
     <div style={{ padding: '32px' }}>
-      <PageHeader
-        title="Communications"
-        subtitle={subtitle}
-        actions={sec === 'announcements' && canCompose(ctx.user)
-          ? [<Btn key="new" variant="primary" icon="plus" small onClick={() => setComposeOpen(true)}>New announcement</Btn>]
-          : sec === 'inbox' ? [] : []}
-      />
+      <PageHeader title={meta.title} subtitle={subtitle} />
 
-      {sec === 'announcements' && <AnnouncementsFeed comms={comms} onCompose={() => setComposeOpen(true)} />}
-      {sec === 'inbox' && <Inbox comms={comms} />}
+      {sec === 'announcements' && <AnnouncementsSection comms={comms} onNavigate={onNavigate} />}
+      {sec === 'safeguarding' && <SafeguardingPage comms={comms} />}
       {sec === 'support' && isSuper && <SupportSection />}
-
-      {canCompose(ctx.user) && <AnnouncementComposer open={composeOpen} onClose={() => setComposeOpen(false)} comms={comms} />}
+      {sec === 'settings' && window.CommsTab && <window.CommsTab comms={comms} />}
     </div>
   );
 };
@@ -874,7 +1769,7 @@ const NotificationBell = ({ comms, onNavigate }) => {
             {items.length === 0
               ? <div style={{ padding: '28px 16px', textAlign: 'center', fontSize: 13, color: DS.muted }}>You're all caught up 🎉</div>
               : items.map(it => (
-                  <button key={it.kind + it.id} onClick={() => go(it.kind === 'ann' ? 'announcements' : 'inbox')} style={{
+                  <button key={it.kind + it.id} onClick={() => go(it.kind === 'ann' ? 'announcements' : 'messages')} style={{
                     display: 'flex', gap: 10, alignItems: 'flex-start', width: '100%', textAlign: 'left',
                     padding: '11px 14px', border: 'none', borderBottom: `1px solid ${DS.border}`, background: 'transparent', cursor: 'pointer',
                   }}>
@@ -890,7 +1785,7 @@ const NotificationBell = ({ comms, onNavigate }) => {
                   </button>
                 ))}
           </div>
-          <button onClick={() => go('inbox')} style={{ width: '100%', padding: '11px', border: 'none', borderTop: `1px solid ${DS.border}`, background: DS.surface, color: DS.accent, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+          <button onClick={() => go('messages')} style={{ width: '100%', padding: '11px', border: 'none', borderTop: `1px solid ${DS.border}`, background: DS.surface, color: DS.accent, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
             View all
           </button>
         </div>
@@ -903,6 +1798,8 @@ const NotificationBell = ({ comms, onNavigate }) => {
 Object.assign(window, {
   useComms, commsContext, CommunicationsPage, NotificationBell,
   commsUnreadCount, canAnnounce, canMessage, commsRecipients,
+  // Used by the Settings → Comms tab (Settings.jsx) to render the preset cards.
+  COMMS_PRESETS, commsUserById: userById,
 });
 
 })();
