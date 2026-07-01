@@ -5,7 +5,7 @@
 //  Extends the existing admin flows additively. Accounts live in the shared
 //  admin store (admin_store_v3, see AdminPages.jsx) as a nested optional
 //  `account` object on teacher/student records — never a renamed/removed field.
-//  A tiny per-centre onboarding store (tutoros.onboarding.v1::<centreId>) holds
+//  A tiny per-centre onboarding store (tutoros.onboarding.v2::<centreId>) holds
 //  the plan/seat caps, the auto-saved CSV import draft, the setup-checklist
 //  progress, and the cross-centre membership list.
 //
@@ -14,7 +14,10 @@
 //  generated identity is namespaced by the centre slug.
 
 // ─── Per-centre onboarding store ──────────────────────────────────────────────
-const ONB_STORE_KEY = 'tutoros.onboarding.v1';
+// v2: re-seeds onboarding (incl. the cross-centre membership list) onto the
+// expanded seed — staff across bm + apex + summit. A stored v1 blob predates the
+// apex/summit staff and masks them (read() prefers the stored blob over the seed).
+const ONB_STORE_KEY = 'tutoros.onboarding.v2';
 
 const useOnboardingStore = (centreId = ONB_CENTRE.id) => {
   const key = `${ONB_STORE_KEY}::${centreId}`;
@@ -62,7 +65,62 @@ const useOnboardingStore = (centreId = ONB_CENTRE.id) => {
     });
   };
 
-  return { ...state, centreId, completeStep, setImportDraft, setLastBatch, finishImport, finishProvision, finishInvites, identityFor, recordSignup };
+  // ─── Staff role grants (Team page) ───────────────────────────────────────
+  // Roles are stored as flat { email, centreId, role } membership rows (a person
+  // holds >1 role via >1 row). permissions.js `membersForCentre` groups them into
+  // a roles[] array for display. Grant/revoke add/remove a single row, and write
+  // an audit entry in the SAME persist so neither clobbers the other (the
+  // stale-closure trap the bulk finishers above also avoid).
+  const logEntry = (entry) =>
+    [{ id: 'rl' + Date.now(), at: new Date().toISOString(), ...entry }, ...(state.roleLog || [])].slice(0, 200);
+
+  const grantRole = (email, cId, role, by) => {
+    const e = (email || '').toLowerCase();
+    if (!e || !role) return;
+    if (state.memberships.some(m => m.email.toLowerCase() === e && m.centreId === cId && m.role === role)) return; // idempotent
+    persist({
+      ...state,
+      memberships: [...state.memberships, { email: e, centreId: cId, role }],
+      roleLog: logEntry({ action: 'grant', role, email: e, centreId: cId, by: (by || '').toLowerCase() }),
+    });
+  };
+  const revokeRole = (email, cId, role, by) => {
+    const e = (email || '').toLowerCase();
+    persist({
+      ...state,
+      memberships: state.memberships.filter(m => !(m.email.toLowerCase() === e && m.centreId === cId && m.role === role)),
+      roleLog: logEntry({ action: 'revoke', role, email: e, centreId: cId, by: (by || '').toLowerCase() }),
+    });
+  };
+  // Ownership transfer is an account-level change (the subscription store owns
+  // ownerUserId); we only record the audit entry here.
+  const logRoleChange = (entry) => persist({ ...state, roleLog: logEntry(entry) });
+
+  // Materialise implicit teacher memberships: every teacher on the centre's
+  // roster (admin store) is a teacher of that centre, but only some have an
+  // explicit membership row. Backfill the missing ones so roles are purely
+  // membership-driven and the Team toggles act on real data.
+  //
+  // Runs ONCE per centre (rosterSeeded flag, set in the same persist): re-seeding
+  // on every mount would resurrect a teacher an admin has just explicitly revoked.
+  // Safe to call on mount — a no-op after the first run.
+  const ensureTeacherMemberships = (cId, emails = []) => {
+    if ((state.rosterSeeded || {})[cId]) return;
+    const have = new Set(state.memberships
+      .filter(m => m.centreId === cId && m.role === 'teacher')
+      .map(m => m.email.toLowerCase()));
+    const add = emails
+      .map(e => (e || '').toLowerCase())
+      .filter(e => e && !have.has(e))
+      .map(email => ({ email, centreId: cId, role: 'teacher' }));
+    persist({
+      ...state,
+      memberships: add.length ? [...state.memberships, ...add] : state.memberships,
+      rosterSeeded: { ...(state.rosterSeeded || {}), [cId]: true },
+    });
+  };
+
+  return { ...state, centreId, completeStep, setImportDraft, setLastBatch, finishImport, finishProvision, finishInvites, identityFor, recordSignup, grantRole, revokeRole, logRoleChange, ensureTeacherMemberships };
 };
 
 // ─── Account + identity helpers ───────────────────────────────────────────────

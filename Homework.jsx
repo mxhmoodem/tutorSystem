@@ -640,6 +640,8 @@ const DEFAULT_SETTINGS = {
   allowLate: false,
   randomize: false,
   autoGradeMcq: true,
+  // Whether students see the list of questions on the start page before beginning.
+  showQuestionPreview: true,
   // Student review
   allowReview: false,
   showCorrect: false,
@@ -934,14 +936,57 @@ const MathDisplay = ({ tex, inline, style }) => {
   return <span ref={ref} style={{ fontFamily: F.mono, color: C.text, ...style }} />;
 };
 
+// Render a question prompt, formatting any inline $…$ / display $$…$$ LaTeX
+// spans with KaTeX while leaving the surrounding prose as plain text. This is
+// what makes equations a teacher types into a question show up formatted.
+const PromptText = ({ text, style }) => {
+  const str = text == null ? '' : String(text);
+  if (!str.includes('$')) return <span style={style}>{str}</span>;
+  // Split on $$…$$ (display) and $…$ (inline) spans, keeping the delimiters.
+  const parts = str.split(/(\$\$[^$]+\$\$|\$[^$\n]+\$)/g);
+  return (
+    <span style={style}>
+      {parts.map((p, i) => {
+        if (p.length >= 4 && p.startsWith('$$') && p.endsWith('$$'))
+          return <MathDisplay key={i} tex={p.slice(2, -2)} inline style={{ fontFamily: 'inherit' }} />;
+        if (p.length >= 2 && p.startsWith('$') && p.endsWith('$'))
+          return <MathDisplay key={i} tex={p.slice(1, -1)} inline style={{ fontFamily: 'inherit' }} />;
+        return <React.Fragment key={i}>{p}</React.Fragment>;
+      })}
+    </span>
+  );
+};
+
+// Quick-insert chips for the symbols students reach for most. `#@` wraps the
+// current selection; `#?` leaves a placeholder the caret tabs into. The full
+// symbol / greek / function set lives on the pop-up virtual keyboard.
+const MATH_CHIPS = [
+  { lbl: 'x²',  tex: '#@^{2}' },
+  { lbl: 'xⁿ',  tex: '#@^{#?}' },
+  { lbl: '√',   tex: '\\sqrt{#@}' },
+  { lbl: 'ⁿ√',  tex: '\\sqrt[#?]{#@}' },
+  { lbl: 'a/b', tex: '\\frac{#@}{#?}' },
+  { lbl: 'π',   tex: '\\pi' },
+  { lbl: 'θ',   tex: '\\theta' },
+  { lbl: '≤',   tex: '\\le' },
+  { lbl: '≥',   tex: '\\ge' },
+  { lbl: '±',   tex: '\\pm' },
+  { lbl: '×',   tex: '\\times' },
+  { lbl: '÷',   tex: '\\div' },
+];
+
 const MathEditor = ({ value, onChange, placeholder = 'Enter math…' }) => {
   const ref = React.useRef(null);
   const [foc, setFoc] = React.useState(false);
+  const [kbOpen, setKbOpen] = React.useState(false);
   const lastVal = React.useRef(value || '');
 
   React.useEffect(() => {
     const el = ref.current;
     if (!el) return;
+    // Summon MathLive's shared virtual keyboard manually (via the toolbar
+    // button) so it doesn't auto-pop on every focus or steal space on desktop.
+    try { el.mathVirtualKeyboardPolicy = 'manual'; } catch (e) {}
     const sync = () => {
       const v = el.value || '';
       if (v !== lastVal.current) {
@@ -972,21 +1017,81 @@ const MathEditor = ({ value, onChange, placeholder = 'Enter math…' }) => {
     }
   }, [value]);
 
+  // Mirror the shared keyboard's open/closed state (one keyboard is shared by
+  // every math-field on the page) so the toggle button reflects it — including
+  // when the student dismisses the keyboard with its own close button. The sync
+  // is best-effort; show/hide below works regardless of this listener.
+  React.useEffect(() => {
+    const el = ref.current;
+    if (!el || !el.addEventListener) return;
+    const onToggle = () => setKbOpen(!!(window.mathVirtualKeyboard && window.mathVirtualKeyboard.visible));
+    el.addEventListener('virtual-keyboard-toggle', onToggle);
+    return () => el.removeEventListener('virtual-keyboard-toggle', onToggle);
+  }, []);
+
+  const insert = (latex) => {
+    const el = ref.current;
+    if (!el || !el.insert) return;
+    el.focus();
+    el.insert(latex, { focus: true, selectionMode: 'placeholder' });
+  };
+
+  const toggleKeyboard = () => {
+    const el = ref.current;
+    const vk = window.mathVirtualKeyboard;
+    el && el.focus();
+    if (!vk) return;
+    if (vk.visible) vk.hide(); else vk.show();
+    setKbOpen(!!vk.visible);
+  };
+
   return (
     <div style={{
       border: `1px solid ${foc ? C.brand : C.border}`,
-      borderRadius: 8, padding: 8, background: C.bg,
+      borderRadius: 8, background: C.bg, overflow: 'hidden',
       boxShadow: foc ? ring(C.brand) : 'none', transition: T,
     }}>
       {React.createElement('math-field', {
         ref,
         placeholder,
         style: {
-          display:'block', minHeight: 36, fontSize: 16,
-          padding: 4, border: 'none', outline: 'none',
+          display:'block', minHeight: 40, fontSize: 18,
+          padding: 8, border: 'none', outline: 'none', background: 'transparent',
         },
-        'virtual-keyboard-mode': 'manual',
       })}
+      {/* LaTeX toolbar: open the on-screen math keyboard or tap a common symbol */}
+      <div style={{
+        display:'flex', alignItems:'center', flexWrap:'wrap', gap: 6,
+        padding: '6px 8px', borderTop: `1px solid ${C.border}`, background: C.surface,
+      }}>
+        <button type="button"
+          onMouseDown={(e) => { e.preventDefault(); toggleKeyboard(); }}
+          title={kbOpen ? 'Hide math keyboard' : 'Show math keyboard'}
+          style={{
+            display:'inline-flex', alignItems:'center', gap: 6,
+            padding: '5px 9px', borderRadius: 7, cursor:'pointer',
+            border: `1px solid ${kbOpen ? C.brand : C.border}`,
+            background: kbOpen ? C.brandSoft : C.bg,
+            color: kbOpen ? C.brand : C.sub, fontFamily: F.body, fontSize: 12, fontWeight: 600,
+            transition: T,
+          }}>
+          <Ico name="keyboard" size={14} color={kbOpen ? C.brand : C.muted} />
+          Keyboard
+        </button>
+        <span style={{ width: 1, height: 18, background: C.border, margin: '0 2px' }} />
+        {MATH_CHIPS.map((ch, i) => (
+          <button key={i} type="button"
+            onMouseDown={(e) => { e.preventDefault(); insert(ch.tex); }}
+            title={`Insert ${ch.lbl}`}
+            style={{
+              minWidth: 30, padding: '4px 8px', borderRadius: 7, cursor:'pointer',
+              border: `1px solid ${C.border}`, background: C.bg, color: C.text,
+              fontFamily: F.mono, fontSize: 13, lineHeight: 1.2, transition: T,
+            }}>
+            {ch.lbl}
+          </button>
+        ))}
+      </div>
     </div>
   );
 };
@@ -1134,6 +1239,7 @@ const Ico = ({ name, size = 16, color = 'currentColor' }) => {
     lock:    'M5 11h14v10H5V11z M8 11V7a4 4 0 018 0v4',
     chat:    'M21 12a8 8 0 01-8 8H5l-2 2V12a8 8 0 018-8h2a8 8 0 018 8z',
     alertCircle: 'M12 22a10 10 0 100-20 10 10 0 000 20z M12 8v5 M12 16h.01',
+    keyboard: 'M3 6h18v12H3V6z M7 10h.01 M11 10h.01 M15 10h.01 M7 14h.01 M11 14h.01 M15 14h.01 M18.5 14h.01',
   };
   const d = paths[name] || '';
   return (
@@ -1455,7 +1561,7 @@ const PdfImportModal = ({ open, onClose, onImport }) => {
                           <Pill tone={m.marker === 'auto' ? 'brand' : 'amber'}>{m.label}</Pill>
                           <span style={{ marginLeft:'auto', fontFamily:F.mono, fontSize:11, color:C.muted }}>{q.points} pt</span>
                         </div>
-                        <div style={{ fontFamily:F.body, fontSize:13, color:C.text, lineHeight: 1.5 }}>{q.prompt}</div>
+                        <PromptText text={q.prompt} style={{ fontFamily:F.body, fontSize:13, color:C.text, lineHeight: 1.5 }} />
                       </div>
                     </div>
                   );
@@ -2372,52 +2478,75 @@ const BarList = ({ rows, max, unit = '%' }) => {
 };
 
 // Simple SVG line chart for the monthly average trend.
-const LineChart = ({ points, height = 150 }) => {
-  const w = 320, h = height, pad = 8;
-  const xs = points.length > 1 ? (w - pad * 2) / (points.length - 1) : 0;
-  const min = 50, max = 100;
-  const y = (v) => h - pad - ((v - min) / (max - min)) * (h - pad * 2);
-  const path = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${pad + i * xs} ${y(p.value)}`).join(' ');
-  const area = `${path} L ${pad + (points.length - 1) * xs} ${h - pad} L ${pad} ${h - pad} Z`;
+// Score-history trend line (points: [{ label, value }], value is a %). Rendered
+// with Recharts (window.Recharts, loaded via CDN in index.html) for the premium
+// shadcn-style look: gradient area fill, soft dashed grid, floating card tooltip.
+const LineChart = ({ points = [], height = 150 }) => {
+  const { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } = (window.Recharts || {});
+  const uid = React.useId().replace(/[^a-zA-Z0-9]/g, '');
+  if (!ResponsiveContainer || !points.length) return null;
+  const HwTip = ({ active, payload, label }) =>
+    active && payload && payload.length ? (
+      <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 9,
+        boxShadow: C.shadowL, padding: '7px 10px', fontSize: 12 }}>
+        <div style={{ color: C.muted, fontSize: 11, marginBottom: 2 }}>{label}</div>
+        <div style={{ color: C.text, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{payload[0].value}%</div>
+      </div>
+    ) : null;
   return (
-    <svg viewBox={`0 0 ${w} ${h + 18}`} style={{ width:'100%', height: h + 18 }}>
-      {[100, 80, 65, 50].map(g => (
-        <g key={g}>
-          <line x1={pad} x2={w - pad} y1={y(g)} y2={y(g)} stroke={C.surface2} strokeWidth="1" />
-          <text x={0} y={y(g) + 3} fontSize="8" fill={C.faint} fontFamily={F.mono}>{g}%</text>
-        </g>
-      ))}
-      <path d={area} fill={C.brandSoft} opacity="0.6" />
-      <path d={path} fill="none" stroke={C.brand} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-      {points.map((p, i) => (
-        <g key={i}>
-          <circle cx={pad + i * xs} cy={y(p.value)} r="3" fill={C.bg} stroke={C.brand} strokeWidth="2" />
-          <text x={pad + i * xs} y={h + 12} fontSize="8" fill={C.faint} fontFamily={F.body} textAnchor="middle">{p.label}</text>
-        </g>
-      ))}
-    </svg>
+    <div style={{ width: '100%', height: height + 18 }}>
+      <ResponsiveContainer width="100%" height="100%">
+        <AreaChart data={points} margin={{ top: 8, right: 8, bottom: 0, left: -6 }}>
+          <defs>
+            <linearGradient id={`hw-trend-${uid}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={C.brand} stopOpacity={0.24} />
+              <stop offset="100%" stopColor={C.brand} stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid vertical={false} stroke={C.surface2} strokeDasharray="3 3" />
+          <XAxis dataKey="label" stroke="transparent" tickLine={false} axisLine={false}
+            tick={{ fill: C.faint, fontSize: 9, fontFamily: F.body }} dy={4} />
+          <YAxis domain={[50, 100]} ticks={[50, 65, 80, 100]} stroke="transparent"
+            tickLine={false} axisLine={false} width={26}
+            tick={{ fill: C.faint, fontSize: 8, fontFamily: F.mono }} tickFormatter={(v) => `${v}%`} />
+          <Tooltip cursor={{ stroke: C.borderD, strokeDasharray: '3 3' }} content={<HwTip />} />
+          <Area type="monotone" dataKey="value" stroke={C.brand} strokeWidth={2}
+            fill={`url(#hw-trend-${uid})`} isAnimationActive={false}
+            dot={{ r: 3, fill: C.bg, stroke: C.brand, strokeWidth: 2 }}
+            activeDot={{ r: 4, strokeWidth: 0 }} />
+        </AreaChart>
+      </ResponsiveContainer>
+    </div>
   );
 };
 
-// Donut for submission-status split.
-const Donut = ({ segments, size = 150 }) => {
-  const total = segments.reduce((s, x) => s + x.value, 0) || 1;
-  const r = size / 2 - 12, cx = size / 2, cy = size / 2, circ = 2 * Math.PI * r;
-  let offset = 0;
+// Donut for submission-status split (segments: [{ label, value, color }]).
+const Donut = ({ segments = [], size = 150 }) => {
+  const { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } = (window.Recharts || {});
+  const data = segments.filter(s => s.value > 0);
+  if (!PieChart || !data.length) return null;
+  const DonutTip = ({ active, payload }) =>
+    active && payload && payload.length ? (
+      <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 9,
+        boxShadow: C.shadowL, padding: '7px 10px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 7 }}>
+        <span style={{ width: 8, height: 8, borderRadius: 2, background: payload[0].payload.color }} />
+        <span style={{ color: C.muted }}>{payload[0].payload.label || payload[0].name}</span>
+        <span style={{ color: C.text, fontWeight: 600 }}>{payload[0].value}</span>
+      </div>
+    ) : null;
   return (
-    <svg viewBox={`0 0 ${size} ${size}`} style={{ width: size, height: size }}>
-      <circle cx={cx} cy={cy} r={r} fill="none" stroke={C.surface2} strokeWidth="14" />
-      {segments.map((s, i) => {
-        const len = (s.value / total) * circ;
-        const el = (
-          <circle key={i} cx={cx} cy={cy} r={r} fill="none" stroke={s.color} strokeWidth="14"
-            strokeDasharray={`${len} ${circ - len}`} strokeDashoffset={-offset}
-            transform={`rotate(-90 ${cx} ${cy})`} strokeLinecap="butt" />
-        );
-        offset += len;
-        return el;
-      })}
-    </svg>
+    <div style={{ width: size, height: size }}>
+      <ResponsiveContainer width="100%" height="100%">
+        <PieChart>
+          <Pie data={data} dataKey="value" nameKey="label" cx="50%" cy="50%"
+            innerRadius={size / 2 - 26} outerRadius={size / 2 - 12} paddingAngle={2}
+            stroke="none" startAngle={90} endAngle={-270} isAnimationActive={false}>
+            {data.map((s, i) => <Cell key={i} fill={s.color} />)}
+          </Pie>
+          <Tooltip content={<DonutTip />} />
+        </PieChart>
+      </ResponsiveContainer>
+    </div>
   );
 };
 
@@ -2941,6 +3070,8 @@ const TeacherBuilder = ({ assignment, students, folders = [], classes = [], defa
                   checked={a.settings.randomize} onChange={(v) => setSetting('randomize', v)} />
                 <SettingRow title="Auto-Grade MCQs" desc="Automatically grade MCQ and True/False questions"
                   checked={a.settings.autoGradeMcq} onChange={(v) => setSetting('autoGradeMcq', v)} />
+                <SettingRow title="Show Question Preview" desc="Students can preview the list of questions on the start page before beginning"
+                  checked={a.settings.showQuestionPreview} onChange={(v) => setSetting('showQuestionPreview', v)} />
               </Card>
 
               {/* Student review settings */}
@@ -3742,7 +3873,7 @@ const TeacherReview = ({ assignment, users, onClose, onUpdateSubmission }) => {
                             ? <Pill tone="danger" icon={<Ico name="x" size={10} />}>Incorrect</Pill>
                             : null)}
                       </div>
-                      <div style={{ fontFamily: F.body, fontSize: 14, color: C.text, lineHeight: 1.5 }}>{q.prompt}</div>
+                      <PromptText text={q.prompt} style={{ fontFamily: F.body, fontSize: 14, color: C.text, lineHeight: 1.5 }} />
                     </div>
                   </div>
 
@@ -4449,22 +4580,33 @@ const HwDetail = ({ a, store, draft, onBack, onStart }) => {
         </div>
       )}
 
-      <Card style={{ marginBottom: 28 }}>
-        <div style={{ padding: '16px 20px 6px', fontFamily: F.head, fontSize: 15, fontWeight: 700 }}>Questions Overview</div>
-        <div style={{ padding: '6px 8px 10px' }}>
-          {a.questions.map((q, i) => (
-            <div key={q.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 12px', borderRadius: 8 }}>
-              <span style={{
-                width: 24, height: 24, borderRadius: '50%', background: C.surface2, color: C.muted,
-                fontFamily: F.mono, fontSize: 11, fontWeight: 700,
-                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-              }}>{i + 1}</span>
-              <span style={{ flex: 1, fontSize: 13.5, color: C.sub, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{q.prompt}</span>
-              <span style={{ fontSize: 12, color: C.muted, fontFamily: F.mono }}>{q.points}m</span>
-            </div>
-          ))}
-        </div>
-      </Card>
+      {/* The teacher can hide this per-question preview via the "Show Question
+          Preview" setting (defaults on) — useful for timed / exam-style work. */}
+      {(a.settings ? a.settings.showQuestionPreview !== false : true) ? (
+        <Card style={{ marginBottom: 28 }}>
+          <div style={{ padding: '16px 20px 6px', fontFamily: F.head, fontSize: 15, fontWeight: 700 }}>Questions Overview</div>
+          <div style={{ padding: '6px 8px 10px' }}>
+            {a.questions.map((q, i) => (
+              <div key={q.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 12px', borderRadius: 8 }}>
+                <span style={{
+                  width: 24, height: 24, borderRadius: '50%', background: C.surface2, color: C.muted,
+                  fontFamily: F.mono, fontSize: 11, fontWeight: 700,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                }}>{i + 1}</span>
+                <span style={{ flex: 1, fontSize: 13.5, color: C.sub, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{q.prompt}</span>
+                <span style={{ fontSize: 12, color: C.muted, fontFamily: F.mono }}>{q.points}m</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      ) : (
+        <Card style={{ marginBottom: 28, padding: '18px 20px', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Ico name="lock" size={15} color={C.faint} />
+          <span style={{ fontSize: 13, color: C.muted }}>
+            {a.questions.length} question{a.questions.length === 1 ? '' : 's'} · {totalM} mark{totalM === 1 ? '' : 's'} — questions are revealed when you start.
+          </span>
+        </Card>
+      )}
 
       <div style={{ display: 'flex', justifyContent: 'center' }}>
         <Btn variant="brand" icon={<Ico name="play" size={14} color="#fff" />} onClick={onStart}
@@ -4479,27 +4621,15 @@ const HwDetail = ({ a, store, draft, onBack, onStart }) => {
 // ════════════════════════════════════════════════════════════════
 // Student — attempt
 // ════════════════════════════════════════════════════════════════
-const HwAnswerInput = ({ question, value, onChange }) => {
-  if (question.type === 'math') {
-    return <Input multiline rows={5} value={value || ''} onChange={onChange}
-      placeholder="Enter your expression (LaTeX supported)..." />;
-  }
-  return <QuestionAnswerInput question={question} value={value} onChange={onChange} />;
-};
+// Students answer with the same rich inputs as the teacher preview — math
+// questions get the MathLive editor + on-screen LaTeX keyboard, and their
+// submitted LaTeX renders through KaTeX on review (see QuestionAnswerInput /
+// QuestionAnswerDisplay).
+const HwAnswerInput = ({ question, value, onChange }) =>
+  <QuestionAnswerInput question={question} value={value} onChange={onChange} />;
 
-// Math answers are typed as plain text in the student flow, so show them
-// verbatim instead of KaTeX-rendering them.
-const HwAnswerDisplay = ({ question, answer }) => {
-  if (question.type === 'math' && answer != null && answer !== '') {
-    return (
-      <div style={{
-        padding: '8px 12px', background: C.bg, borderRadius: 8, border: `1px solid ${C.border}`,
-        fontFamily: F.mono, fontSize: 14, color: C.text, whiteSpace: 'pre-wrap', display: 'inline-block',
-      }}>{String(answer)}</div>
-    );
-  }
-  return <QuestionAnswerDisplay question={question} answer={answer} />;
-};
+const HwAnswerDisplay = ({ question, answer }) =>
+  <QuestionAnswerDisplay question={question} answer={answer} />;
 
 const HwAttempt = ({ a, draft, onUpdateDraft, onBack, onSubmit }) => {
   const [answers, setAnswers] = React.useState(() => draft.answers || {});
@@ -4538,6 +4668,18 @@ const HwAttempt = ({ a, draft, onUpdateDraft, onBack, onSubmit }) => {
         <div style={{ width: `${(answered / total) * 100}%`, height: '100%', background: C.brand, borderRadius: 999, transition: 'width .3s' }} />
       </div>
 
+      {/* Teacher's instructions — kept visible here (not just on the start page)
+          so students can refer to them while working through the questions. */}
+      {a.instructions && (
+        <div style={{
+          display: 'flex', gap: 10, padding: '12px 14px', background: C.brandSoft,
+          border: `1px solid ${C.brandBorder}`, borderRadius: 10, marginBottom: 20, alignItems: 'flex-start',
+        }}>
+          <Ico name="info" size={14} color={C.brand} />
+          <span style={{ fontSize: 13, color: C.sub, lineHeight: 1.5 }}>{a.instructions}</span>
+        </div>
+      )}
+
       {/* Question chips */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
         {a.questions.map((qq, i) => {
@@ -4573,9 +4715,7 @@ const HwAttempt = ({ a, draft, onUpdateDraft, onBack, onSubmit }) => {
           </span>
         </div>
 
-        <div style={{ fontFamily: F.head, fontSize: 17, fontWeight: 700, color: C.text, lineHeight: 1.45, marginBottom: 18 }}>
-          {q.prompt}
-        </div>
+        <PromptText text={q.prompt} style={{ display: 'block', fontFamily: F.head, fontSize: 17, fontWeight: 700, color: C.text, lineHeight: 1.45, marginBottom: 18 }} />
 
         <HwAnswerInput question={q} value={answers[q.id]} onChange={(v) => setAnswers(prev => ({ ...prev, [q.id]: v }))} />
 
@@ -4723,7 +4863,7 @@ const HwSubmissionReview = ({ a, me, store, onBack }) => {
                   </span>
                 )}
               </div>
-              <div style={{ fontSize: 15, fontWeight: 700, color: C.text, lineHeight: 1.45, marginBottom: 14 }}>{q.prompt}</div>
+              <PromptText text={q.prompt} style={{ display: 'block', fontSize: 15, fontWeight: 700, color: C.text, lineHeight: 1.45, marginBottom: 14 }} />
               <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: '12px 14px' }}>
                 <div style={{ fontSize: 10.5, fontWeight: 700, color: C.muted, letterSpacing: '.07em', marginBottom: 7 }}>YOUR ANSWER</div>
                 <HwAnswerDisplay question={q} answer={sub.answers ? sub.answers[q.id] : null} />
@@ -4895,7 +5035,7 @@ const HwResultReview = ({ a, me, store, onBack }) => {
                 </div>
               </div>
 
-              <div style={{ fontSize: 15, fontWeight: 700, color: C.text, lineHeight: 1.45, marginBottom: 14 }}>{q.prompt}</div>
+              <PromptText text={q.prompt} style={{ display: 'block', fontSize: 15, fontWeight: 700, color: C.text, lineHeight: 1.45, marginBottom: 14 }} />
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: '12px 14px' }}>

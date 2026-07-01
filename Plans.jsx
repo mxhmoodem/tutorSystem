@@ -66,9 +66,10 @@ const usePlansStore = () => {
   };
   const archivePlan = id => writePlans(state.map(p => p.id === id ? { ...p, archived: true } : p));
   const restorePlan = id => writePlans(state.map(p => p.id === id ? { ...p, archived: false } : p));
+  const deletePlan = id => writePlans(state.filter(p => p.id !== id));
   const reset = () => writePlans(planSeed());
 
-  return { plans, updatePlan, addPlan, archivePlan, restorePlan, reset };
+  return { plans, updatePlan, addPlan, archivePlan, restorePlan, deletePlan, reset };
 };
 
 // ─── Override-codes store (tutoros.plancodes.v1) ─────────────────────────────────

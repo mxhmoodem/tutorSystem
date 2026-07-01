@@ -45,7 +45,16 @@ const SETTINGS_SEED = {
       name: 'BrightPath Tuition', email: 'hello@brightpath.edu',
       phone: '+44 161 496 0123', website: 'brightpath.edu',
       address: '14 Oxford Road\nManchester M1 5QA',
-      brandColor: '#43b190', term: 'Spring Term 2026', currency: 'GBP',
+      brandColor: '#43b190',
+      // Academic term schedule — the header auto-selects whichever term covers
+      // today's date, so admins set these once and they apply on the right day.
+      terms: [
+        { id: 't_spr26', name: 'Spring Term 2026',  start: '2026-01-06', end: '2026-03-27' },
+        { id: 't_sum26', name: 'Summer Term 2026',  start: '2026-04-20', end: '2026-07-17' },
+        { id: 't_aut26', name: 'Autumn Term 2026',  start: '2026-09-02', end: '2026-12-18' },
+        { id: 't_spr27', name: 'Spring Term 2027',  start: '2027-01-05', end: '2027-03-26' },
+      ],
+      currency: 'GBP',
       invoiceDueDays: 14, taxRate: 0, autoSendInvoices: true, lateReminders: true,
     },
   },

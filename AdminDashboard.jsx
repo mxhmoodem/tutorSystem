@@ -149,7 +149,7 @@ const AdminDashboard = () => {
   // (set by the Onboarding module) without a hook so the dashboard stays decoupled;
   // hidden once all three setup steps are done.
   const setupState = (() => {
-    try { return JSON.parse(localStorage.getItem('tutoros.onboarding.v1::bm') || 'null'); }
+    try { return JSON.parse(localStorage.getItem('tutoros.onboarding.v2::bm') || 'null'); }
     catch (e) { return null; }
   })();
   const setupSteps = (setupState && setupState.steps) || {};

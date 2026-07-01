@@ -140,14 +140,143 @@ const SetGrid = ({ children, cols = 2 }) => (
   </div>
 );
 
+// ─── Responsive layout primitives ─────────────────────────────────────────────────
+// Below WIDE_BP the page is a single stacked column (full width); at or above it,
+// tabs lay out as a narrow left rail + a wide main column (like the reference).
+const WIDE_BP = 800;
+
+// Measures its host element's width so we can switch layout without CSS media
+// queries (the whole app is inline-styled). Mirrors the ResizeObserver pattern
+// already used in shared.jsx.
+function useMeasuredWidth() {
+  const ref = React.useRef(null);
+  const [w, setW] = React.useState(() => (typeof window !== 'undefined' ? window.innerWidth : 1200));
+  React.useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => setW(el.clientWidth);
+    measure();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measure);
+      return () => window.removeEventListener('resize', measure);
+    }
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, w];
+}
+
+// Two-column settings layout: a fixed-ish left rail + a fluid main column.
+// Collapses to one stacked column when `wide` is false.
+const SplitLayout = ({ wide, left, right }) => (
+  <div style={{
+    display: 'grid',
+    gridTemplateColumns: wide ? 'minmax(0, 320px) minmax(0, 1fr)' : '1fr',
+    gap: wide ? 20 : 0, alignItems: 'start',
+  }}>
+    <div style={{ minWidth: 0 }}>{left}</div>
+    <div style={{ minWidth: 0 }}>{right}</div>
+  </div>
+);
+
+// ─── Icon + underline tab bar (top-level Settings tabs) ────────────────────────────
+const TabBtn = ({ tab, active, onClick }) => {
+  const [hov, setHov] = React.useState(false);
+  const color = active ? DS.accent : hov ? DS.text : DS.muted;
+  return (
+    <button
+      type="button" onClick={onClick}
+      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 7, padding: '11px 14px',
+        border: 'none', background: 'transparent', cursor: 'pointer', whiteSpace: 'nowrap',
+        color, fontSize: 13.5, fontWeight: active ? 600 : 500, marginBottom: -1,
+        borderBottom: `2px solid ${active ? DS.accent : 'transparent'}`,
+        transition: 'color 0.12s, border-color 0.12s',
+      }}
+    >
+      {tab.icon && <Icon name={tab.icon} size={15} color={color} />}
+      {tab.label}
+    </button>
+  );
+};
+const TabNav = ({ tabs, value, onChange }) => (
+  <div style={{
+    display: 'flex', gap: 2, marginBottom: 24, overflowX: 'auto',
+    borderBottom: `1px solid ${DS.border}`,
+  }}>
+    {tabs.map(t => <TabBtn key={t.id} tab={t} active={t.id === value} onClick={() => onChange(t.id)} />)}
+  </div>
+);
+
 // ─── Shared tabs (every role) ────────────────────────────────────────────────────
 
-const AccountTab = ({ data, set, roleLabel, viewRoles = [], currentRole, onSwitchView }) => {
+const AccountTab = ({ data, set, roleLabel, viewRoles = [], currentRole, onSwitchView, wide }) => {
   const a = data.account || {};
   // A staff identity granted more than one role at this centre (e.g. admin AND
   // teacher) gets a view switch — the two are different apps. Membership-driven,
   // so it only shows for genuinely dual-role users.
   const dualRole = viewRoles.length > 1;
+
+  // Left rail: identity summary (avatar + who you are), like the reference's logo card.
+  const photoCard = (
+    <SettingsSection title="Profile photo" icon="user">
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: '18px 0 12px', textAlign: 'center' }}>
+        <Avatar name={a.name} size={84} />
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: DS.text }}>{a.displayName || a.name}</div>
+          <div style={{ fontSize: 12.5, color: DS.muted, marginTop: 2 }}>{a.email}</div>
+        </div>
+        <Badge variant="default">{roleLabel}</Badge>
+        <div style={{ marginTop: 4 }}><Btn variant="secondary" small icon="upload">Change photo</Btn></div>
+        <div style={{ fontSize: 11.5, color: DS.faint }}>JPG or PNG, up to 2 MB.</div>
+      </div>
+    </SettingsSection>
+  );
+
+  const detailsCard = (
+    <SettingsSection title="Personal details" subtitle={`Your ${roleLabel} account`} icon="clip">
+      <SetGrid>
+        <Field label="Full name">
+          <Input value={a.name || ''} onChange={e => set('account', 'name', e.target.value)} />
+        </Field>
+        <Field label="Display name" hint="Shown to others in the app">
+          <Input value={a.displayName || ''} onChange={e => set('account', 'displayName', e.target.value)} />
+        </Field>
+        <Field label="Email">
+          <Input type="email" value={a.email || ''} onChange={e => set('account', 'email', e.target.value)} />
+        </Field>
+        <Field label="Phone">
+          <Input value={a.phone || ''} onChange={e => set('account', 'phone', e.target.value)} />
+        </Field>
+      </SetGrid>
+    </SettingsSection>
+  );
+
+  const securityCard = (
+    <SettingsSection title="Password & Security" subtitle="Keep your account secure" icon="alert">
+      <SetGrid>
+        <Field label="Current password">
+          <Input type="password" placeholder="••••••••" />
+        </Field>
+        <div />
+        <Field label="New password">
+          <Input type="password" placeholder="••••••••" />
+        </Field>
+        <Field label="Confirm new password">
+          <Input type="password" placeholder="••••••••" />
+        </Field>
+      </SetGrid>
+      <SettingRow
+        title="Two-factor authentication"
+        desc="Require a verification code from your phone when signing in."
+        checked={!!a.twoFactor} onToggle={v => set('account', 'twoFactor', v)}
+        last
+      />
+    </SettingsSection>
+  );
+
   return (
     <div>
       {dualRole && (
@@ -164,55 +293,12 @@ const AccountTab = ({ data, set, roleLabel, viewRoles = [], currentRole, onSwitc
           </div>
         </SettingsSection>
       )}
-      <SettingsSection title="Profile" subtitle={`Your ${roleLabel} account details`} icon="user">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 0', borderBottom: `1px solid ${DS.border}` }}>
-          <Avatar name={a.name} size={56} />
-          <div>
-            <Btn variant="secondary" small icon="user">Change photo</Btn>
-            <div style={{ fontSize: 11.5, color: DS.faint, marginTop: 6 }}>JPG or PNG, up to 2 MB.</div>
-          </div>
-        </div>
-        <SetGrid>
-          <Field label="Full name">
-            <Input value={a.name || ''} onChange={e => set('account', 'name', e.target.value)} />
-          </Field>
-          <Field label="Display name" hint="Shown to others in the app">
-            <Input value={a.displayName || ''} onChange={e => set('account', 'displayName', e.target.value)} />
-          </Field>
-          <Field label="Email">
-            <Input type="email" value={a.email || ''} onChange={e => set('account', 'email', e.target.value)} />
-          </Field>
-          <Field label="Phone">
-            <Input value={a.phone || ''} onChange={e => set('account', 'phone', e.target.value)} />
-          </Field>
-        </SetGrid>
-      </SettingsSection>
-
-      <SettingsSection title="Password & Security" subtitle="Keep your account secure" icon="alert">
-        <SetGrid>
-          <Field label="Current password">
-            <Input type="password" placeholder="••••••••" />
-          </Field>
-          <div />
-          <Field label="New password">
-            <Input type="password" placeholder="••••••••" />
-          </Field>
-          <Field label="Confirm new password">
-            <Input type="password" placeholder="••••••••" />
-          </Field>
-        </SetGrid>
-        <SettingRow
-          title="Two-factor authentication"
-          desc="Require a verification code from your phone when signing in."
-          checked={!!a.twoFactor} onToggle={v => set('account', 'twoFactor', v)}
-          last
-        />
-      </SettingsSection>
+      <SplitLayout wide={wide} left={photoCard} right={<>{detailsCard}{securityCard}</>} />
     </div>
   );
 };
 
-const NotificationsTab = ({ data, set }) => {
+const NotificationsTab = ({ data, set, wide }) => {
   const n = data.notifications || {};
   const ch = (
     <Select value={n.channel || 'email'} onChange={e => set('notifications', 'channel', e.target.value)} style={{ width: 150 }}>
@@ -222,33 +308,33 @@ const NotificationsTab = ({ data, set }) => {
       <option value="none">None</option>
     </Select>
   );
-  return (
-    <div>
-      <SettingsSection title="Delivery" subtitle="How you receive notifications" icon="bell">
-        <SettingRow title="Preferred channel" desc="Default delivery method for new alerts." control={ch} />
-        <SettingRow
-          title="Daily digest"
-          desc="Bundle non-urgent notifications into one summary each morning."
-          checked={!!n.digest} onToggle={v => set('notifications', 'digest', v)}
-        />
-        <SettingRow
-          title="Quiet hours"
-          desc="Pause push notifications between 9pm and 7am."
-          checked={!!n.quietHours} onToggle={v => set('notifications', 'quietHours', v)}
-          last
-        />
-      </SettingsSection>
-
-      <SettingsSection title="What to notify me about" icon="message">
-        <SettingRow title="Announcements" desc="Platform and centre-wide announcements."
-          checked={!!n.announcements} onToggle={v => set('notifications', 'announcements', v)} />
-        <SettingRow title="Messages" desc="Direct messages and replies."
-          checked={!!n.messages} onToggle={v => set('notifications', 'messages', v)} />
-        <SettingRow title="Reminders" desc="Upcoming sessions, deadlines and due dates."
-          checked={!!n.reminders} onToggle={v => set('notifications', 'reminders', v)} last />
-      </SettingsSection>
-    </div>
+  const delivery = (
+    <SettingsSection title="Delivery" subtitle="How you receive notifications" icon="bell">
+      <SettingRow title="Preferred channel" desc="Default delivery method for new alerts." control={ch} />
+      <SettingRow
+        title="Daily digest"
+        desc="Bundle non-urgent notifications into one summary each morning."
+        checked={!!n.digest} onToggle={v => set('notifications', 'digest', v)}
+      />
+      <SettingRow
+        title="Quiet hours"
+        desc="Pause push notifications between 9pm and 7am."
+        checked={!!n.quietHours} onToggle={v => set('notifications', 'quietHours', v)}
+        last
+      />
+    </SettingsSection>
   );
+  const topics = (
+    <SettingsSection title="What to notify me about" subtitle="Choose which activity reaches you" icon="message">
+      <SettingRow title="Announcements" desc="Platform and centre-wide announcements."
+        checked={!!n.announcements} onToggle={v => set('notifications', 'announcements', v)} />
+      <SettingRow title="Messages" desc="Direct messages and replies."
+        checked={!!n.messages} onToggle={v => set('notifications', 'messages', v)} />
+      <SettingRow title="Reminders" desc="Upcoming sessions, deadlines and due dates."
+        checked={!!n.reminders} onToggle={v => set('notifications', 'reminders', v)} last />
+    </SettingsSection>
+  );
+  return <SplitLayout wide={wide} left={delivery} right={topics} />;
 };
 
 // Admin/superadmin can set the platform-wide primary accent. It drives DS.accent
@@ -295,7 +381,7 @@ const AccentControl = () => {
   );
 };
 
-const AppearanceTab = ({ data, set, role }) => {
+const AppearanceTab = ({ data, set, role, wide }) => {
   const ap = data.appearance || {};
   const canBrand = role === 'admin' || role === 'superadmin';
   const ThemeOpt = ({ id, label }) => {
@@ -310,323 +396,484 @@ const AppearanceTab = ({ data, set, role }) => {
       }}>{label}</button>
     );
   };
-  return (
-    <div>
-      {canBrand && (
-        <SettingsSection
-          title="Primary accent"
-          subtitle="Sets the brand colour used across buttons, links, highlights and active states for everyone in your centre."
-          icon="star"
-        >
-          <AccentControl />
-        </SettingsSection>
-      )}
-      <SettingsSection title="Theme" subtitle="Personalise how TutorOS looks for you" icon="star">
-        <div style={{ display: 'flex', gap: 10, padding: '12px 0', borderBottom: `1px solid ${DS.border}` }}>
-          <ThemeOpt id="light" label="☀ Light" />
-          <ThemeOpt id="dark" label="🌙 Dark" />
-          <ThemeOpt id="system" label="🖥 System" />
-        </div>
-        <SettingRow
-          title="Compact density"
-          desc="Tighten spacing to fit more on screen."
-          checked={!!ap.compact} onToggle={v => set('appearance', 'compact', v)}
-        />
-        <SettingRow
-          title="Reduce motion"
-          desc="Minimise animations and transitions."
-          checked={!!ap.reduceMotion} onToggle={v => set('appearance', 'reduceMotion', v)}
-          last
-        />
-      </SettingsSection>
 
-      <SettingsSection title="Language & Region" icon="book">
-        <SetGrid>
-          <Field label="Language">
-            <Select value={ap.language || 'en-GB'} onChange={e => set('appearance', 'language', e.target.value)}>
-              <option value="en-GB">English (UK)</option>
-              <option value="en-US">English (US)</option>
-              <option value="ar">العربية</option>
-              <option value="fr">Français</option>
-            </Select>
-          </Field>
-          <Field label="Time zone">
-            <Select value={ap.timezone || 'Europe/London'} onChange={e => set('appearance', 'timezone', e.target.value)}>
-              <option value="Europe/London">London (GMT/BST)</option>
-              <option value="Europe/Paris">Central European</option>
-              <option value="Asia/Dubai">Gulf (GST)</option>
-              <option value="America/New_York">US Eastern</option>
-            </Select>
-          </Field>
-          <Field label="Date format">
-            <Select value={ap.dateFormat || 'dd/mm/yyyy'} onChange={e => set('appearance', 'dateFormat', e.target.value)}>
-              <option value="dd/mm/yyyy">DD/MM/YYYY</option>
-              <option value="mm/dd/yyyy">MM/DD/YYYY</option>
-              <option value="yyyy-mm-dd">YYYY-MM-DD</option>
-            </Select>
-          </Field>
-          <Field label="Start of week">
-            <Select value={ap.weekStart || 'monday'} onChange={e => set('appearance', 'weekStart', e.target.value)}>
-              <option value="monday">Monday</option>
-              <option value="sunday">Sunday</option>
-            </Select>
-          </Field>
-        </SetGrid>
-      </SettingsSection>
-    </div>
+  const accentCard = canBrand && (
+    <SettingsSection
+      title="Primary accent"
+      subtitle="Brand colour used across buttons, links, highlights and active states for everyone in your centre."
+      icon="star"
+    >
+      <AccentControl />
+    </SettingsSection>
   );
+  const themeCard = (
+    <SettingsSection title="Theme" subtitle="Personalise how TutorOS looks for you" icon="grid">
+      <div style={{ display: 'flex', gap: 10, padding: '12px 0', borderBottom: `1px solid ${DS.border}` }}>
+        <ThemeOpt id="light" label="☀ Light" />
+        <ThemeOpt id="dark" label="🌙 Dark" />
+        <ThemeOpt id="system" label="🖥 System" />
+      </div>
+      <SettingRow
+        title="Compact density"
+        desc="Tighten spacing to fit more on screen."
+        checked={!!ap.compact} onToggle={v => set('appearance', 'compact', v)}
+      />
+      <SettingRow
+        title="Reduce motion"
+        desc="Minimise animations and transitions."
+        checked={!!ap.reduceMotion} onToggle={v => set('appearance', 'reduceMotion', v)}
+        last
+      />
+    </SettingsSection>
+  );
+  const regionCard = (
+    <SettingsSection title="Language & Region" subtitle="How dates, times and text are formatted" icon="book">
+      <SetGrid>
+        <Field label="Language">
+          <Select value={ap.language || 'en-GB'} onChange={e => set('appearance', 'language', e.target.value)}>
+            <option value="en-GB">English (UK)</option>
+            <option value="en-US">English (US)</option>
+            <option value="ar">العربية</option>
+            <option value="fr">Français</option>
+          </Select>
+        </Field>
+        <Field label="Time zone">
+          <Select value={ap.timezone || 'Europe/London'} onChange={e => set('appearance', 'timezone', e.target.value)}>
+            <option value="Europe/London">London (GMT/BST)</option>
+            <option value="Europe/Paris">Central European</option>
+            <option value="Asia/Dubai">Gulf (GST)</option>
+            <option value="America/New_York">US Eastern</option>
+          </Select>
+        </Field>
+        <Field label="Date format">
+          <Select value={ap.dateFormat || 'dd/mm/yyyy'} onChange={e => set('appearance', 'dateFormat', e.target.value)}>
+            <option value="dd/mm/yyyy">DD/MM/YYYY</option>
+            <option value="mm/dd/yyyy">MM/DD/YYYY</option>
+            <option value="yyyy-mm-dd">YYYY-MM-DD</option>
+          </Select>
+        </Field>
+        <Field label="Start of week">
+          <Select value={ap.weekStart || 'monday'} onChange={e => set('appearance', 'weekStart', e.target.value)}>
+            <option value="monday">Monday</option>
+            <option value="sunday">Sunday</option>
+          </Select>
+        </Field>
+      </SetGrid>
+    </SettingsSection>
+  );
+
+  return <SplitLayout wide={wide} left={<>{accentCard}{themeCard}</>} right={regionCard} />;
 };
 
 // ─── Role-specific tabs ────────────────────────────────────────────────────────────
 
 // SuperAdmin → Platform Defaults (distinct from live "Platform Controls" page,
 // which handles feature flags / plans / roles). This is org-level configuration.
-const PlatformTab = ({ data, set }) => {
+const PlatformTab = ({ data, set, wide }) => {
   const p = data.platform || {};
+  const defaults = (
+    <SettingsSection title="New-centre defaults" subtitle="Applied automatically when a centre is created" icon="book">
+      <SetGrid>
+        <Field label="Default plan">
+          <Select value={p.defaultPlan || 'growth'} onChange={e => set('platform', 'defaultPlan', e.target.value)}>
+            <option value="starter">Starter</option>
+            <option value="growth">Growth</option>
+            <option value="scale">Scale</option>
+          </Select>
+        </Field>
+        <Field label="Trial length (days)">
+          <Input type="number" value={p.trialDays ?? 14} onChange={e => set('platform', 'trialDays', +e.target.value)} />
+        </Field>
+        <Field label="Seats included">
+          <Input type="number" value={p.defaultSeats ?? 10} onChange={e => set('platform', 'defaultSeats', +e.target.value)} />
+        </Field>
+        <Field label="Default currency">
+          <Select value={p.currency || 'GBP'} onChange={e => set('platform', 'currency', e.target.value)}>
+            <option value="GBP">£ GBP</option>
+            <option value="USD">$ USD</option>
+            <option value="EUR">€ EUR</option>
+            <option value="AED">د.إ AED</option>
+          </Select>
+        </Field>
+      </SetGrid>
+    </SettingsSection>
+  );
+  const billing = (
+    <SettingsSection title="Billing & data" subtitle="Platform-wide policies" icon="invoice">
+      <Field label="Billing contact email" style={{ padding: '10px 0 0' }}>
+        <Input type="email" value={p.billingEmail || ''} onChange={e => set('platform', 'billingEmail', e.target.value)} />
+      </Field>
+      <SettingRow
+        title="Auto-suspend on failed payment"
+        desc="Suspend a centre's access if an invoice is unpaid after the grace period."
+        checked={!!p.autoSuspend} onToggle={v => set('platform', 'autoSuspend', v)}
+      />
+      <SettingRow
+        title="Data retention"
+        desc="How long to keep records after a centre is deleted."
+        control={
+          <Select value={p.retention || '90d'} onChange={e => set('platform', 'retention', e.target.value)} style={{ width: 150 }}>
+            <option value="30d">30 days</option>
+            <option value="90d">90 days</option>
+            <option value="1y">1 year</option>
+            <option value="forever">Keep forever</option>
+          </Select>
+        }
+        last
+      />
+    </SettingsSection>
+  );
+  const support = (
+    <SettingsSection title="Support & maintenance" subtitle="Access and notices" icon="zap">
+      <SettingRow title="Support access" desc="Allow support staff to access centre accounts for troubleshooting."
+        checked={!!p.supportAccess} onToggle={v => set('platform', 'supportAccess', v)} />
+      <SettingRow title="Send maintenance notices" desc="Email admins before scheduled maintenance windows."
+        checked={!!p.maintenanceNotices} onToggle={v => set('platform', 'maintenanceNotices', v)} last />
+    </SettingsSection>
+  );
+  return <SplitLayout wide={wide} left={support} right={<>{defaults}{billing}</>} />;
+};
+
+// Small status pill for a term row (resolved from today's date).
+const TermStatusPill = ({ status }) => {
+  const map = {
+    active:   { variant: 'success', label: 'Active now' },
+    upcoming: { variant: 'info',    label: 'Upcoming' },
+    ended:    { variant: 'default', label: 'Ended' },
+    draft:    { variant: 'warning', label: 'Set dates' },
+  };
+  const m = map[status] || map.draft;
+  return <Badge variant={m.variant}>{m.label}</Badge>;
+};
+
+// Academic-term schedule editor — a repeatable list of named terms with
+// start/end dates. The header indicator (index.html) auto-selects whichever
+// term covers today, so admins configure the year once and each term applies
+// on its own start date without anyone flipping a switch.
+const TERM_COLS = 'minmax(0,1fr) 136px 136px 92px 30px';
+const TermsEditor = ({ terms, onChange }) => {
+  const today = termTodayISO();
+  const list = terms || [];
+  const newId = () => 't_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const patch = (id, key, value) =>
+    onChange(list.map(t => (t.id === id ? { ...t, [key]: value } : t)));
+  const remove = (id) => onChange(list.filter(t => t.id !== id));
+  const add = () => onChange([...list, { id: newId(), name: '', start: '', end: '' }]);
+
+  const colLabel = { fontSize: 12, fontWeight: 600, color: DS.sub };
   return (
     <div>
-      <SettingsSection title="New-centre defaults" subtitle="Applied automatically when a centre is created" icon="book">
-        <SetGrid>
-          <Field label="Default plan">
-            <Select value={p.defaultPlan || 'growth'} onChange={e => set('platform', 'defaultPlan', e.target.value)}>
-              <option value="starter">Starter</option>
-              <option value="growth">Growth</option>
-              <option value="scale">Scale</option>
-            </Select>
-          </Field>
-          <Field label="Trial length (days)">
-            <Input type="number" value={p.trialDays ?? 14} onChange={e => set('platform', 'trialDays', +e.target.value)} />
-          </Field>
-          <Field label="Seats included">
-            <Input type="number" value={p.defaultSeats ?? 10} onChange={e => set('platform', 'defaultSeats', +e.target.value)} />
-          </Field>
-          <Field label="Default currency">
-            <Select value={p.currency || 'GBP'} onChange={e => set('platform', 'currency', e.target.value)}>
-              <option value="GBP">£ GBP</option>
-              <option value="USD">$ USD</option>
-              <option value="EUR">€ EUR</option>
-              <option value="AED">د.إ AED</option>
-            </Select>
-          </Field>
-        </SetGrid>
-      </SettingsSection>
-
-      <SettingsSection title="Billing & data" subtitle="Platform-wide policies" icon="invoice">
-        <Field label="Billing contact email" style={{ padding: '10px 0 0' }}>
-          <Input type="email" value={p.billingEmail || ''} onChange={e => set('platform', 'billingEmail', e.target.value)} />
-        </Field>
-        <SettingRow
-          title="Auto-suspend on failed payment"
-          desc="Suspend a centre's access if an invoice is unpaid after the grace period."
-          checked={!!p.autoSuspend} onToggle={v => set('platform', 'autoSuspend', v)}
-        />
-        <SettingRow
-          title="Data retention"
-          desc="How long to keep records after a centre is deleted."
-          control={
-            <Select value={p.retention || '90d'} onChange={e => set('platform', 'retention', e.target.value)} style={{ width: 150 }}>
-              <option value="30d">30 days</option>
-              <option value="90d">90 days</option>
-              <option value="1y">1 year</option>
-              <option value="forever">Keep forever</option>
-            </Select>
-          }
-          last
-        />
-      </SettingsSection>
-
-      <SettingsSection title="Support & maintenance" icon="zap">
-        <SettingRow title="Support access" desc="Allow support staff to access centre accounts for troubleshooting."
-          checked={!!p.supportAccess} onToggle={v => set('platform', 'supportAccess', v)} />
-        <SettingRow title="Send maintenance notices" desc="Email admins before scheduled maintenance windows."
-          checked={!!p.maintenanceNotices} onToggle={v => set('platform', 'maintenanceNotices', v)} last />
-      </SettingsSection>
+      {list.length > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: TERM_COLS, gap: 12, padding: '6px 0 4px' }}>
+          <span style={colLabel}>Term name</span>
+          <span style={colLabel}>Starts</span>
+          <span style={colLabel}>Ends</span>
+          <span style={colLabel}>Status</span>
+          <span />
+        </div>
+      )}
+      {list.map((t, i) => (
+        <div key={t.id} style={{
+          display: 'grid', gridTemplateColumns: TERM_COLS, gap: 12, alignItems: 'center',
+          padding: '8px 0', borderTop: i === 0 ? 'none' : `1px solid ${DS.border}`,
+        }}>
+          <Input value={t.name || ''} placeholder="Autumn Term 2026"
+            onChange={e => patch(t.id, 'name', e.target.value)} />
+          <Input type="date" value={t.start || ''} onChange={e => patch(t.id, 'start', e.target.value)} />
+          <Input type="date" value={t.end || ''} onChange={e => patch(t.id, 'end', e.target.value)} />
+          <TermStatusPill status={termStatus(t, today)} />
+          <button type="button" onClick={() => remove(t.id)} title="Remove term" style={{
+            background: 'none', border: 'none', cursor: 'pointer', color: DS.faint,
+            padding: 6, borderRadius: 7, display: 'flex', justifySelf: 'center',
+          }}>
+            <Icon name="trash" size={15} />
+          </button>
+        </div>
+      ))}
+      {list.length === 0 && (
+        <div style={{ fontSize: 12.5, color: DS.muted, padding: '10px 0' }}>
+          No terms set yet — add your first one below.
+        </div>
+      )}
+      <div style={{ paddingTop: 14 }}>
+        <Btn variant="secondary" small icon="plus" onClick={add}>Add term</Btn>
+      </div>
     </div>
   );
 };
 
-// Admin → Centre (centre profile, branding, term, invoicing defaults)
-const CentreTab = ({ data, set }) => {
+// Working hours & pay — centre pay policy (lives in the timesheet store config so the
+// derived timesheet recomputes live) + per-teacher employment type / hourly rate (on the
+// admin store teacher records). Both feed the timesheet pay-eligibility rules.
+const WorkingHoursPaySection = () => {
+  const ts = useTimesheetStore();
+  const admin = useAdminStore();
+  const cfg = ts.config || {};
+  const cats = window.TS_PAID_CATEGORIES || [];
+  const empTypes = window.TS_EMPLOYMENT_TYPES || [];
+  const tsEmp = window.tsEmployment || (() => ({ payType: 'salaried', hourlyRate: 0 }));
+  const teachers = (admin.teachers || []).filter(t => t.status === 'active');
+
+  return (
+    <>
+      <SettingsSection title="Pay for non-session time"
+        subtitle="Prep, marking, meetings and training are always recorded — these switches decide whether they are pay-eligible"
+        icon="clock">
+        <SettingRow
+          title="Pay staff for non-session time"
+          desc="Master switch. When off, non-session time is logged for the record but never produces pay."
+          checked={!!cfg.payNonSession} onToggle={v => ts.setConfig({ payNonSession: v })}
+        />
+        {cats.map((c, i) => (
+          <SettingRow key={c.id}
+            title={`Pay for ${c.label.toLowerCase()}`}
+            desc={`Count ${c.label.toLowerCase()} towards pay for hourly and mixed staff.`}
+            checked={!!cfg.payNonSession && !!(cfg.paidCategories || {})[c.id]}
+            disabled={!cfg.payNonSession}
+            onToggle={v => ts.setConfig({ paidCategories: { [c.id]: v } })}
+            last={i === cats.length - 1}
+          />
+        ))}
+      </SettingsSection>
+
+      <SettingsSection title="Teacher employment & rates"
+        subtitle="Salaried hours are recorded but not paid · hourly is always paid · mixed pays only cover and extras"
+        icon="users">
+        {teachers.length === 0 && <div style={{ fontSize: 12.5, color: DS.muted, padding: '10px 0' }}>No active teachers yet.</div>}
+        {teachers.map((t, i) => {
+          const e = tsEmp(t);
+          return (
+            <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 0', borderBottom: i < teachers.length - 1 ? `1px solid ${DS.border}` : 'none' }}>
+              <Avatar name={t.name} size={32} color={t.color} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 600, color: DS.text }}>{t.name}</div>
+                <div style={{ fontSize: 12, color: DS.muted }}>{t.subject}</div>
+              </div>
+              <Select value={e.payType} onChange={ev => admin.updateTeacher(t.id, { payType: ev.target.value })} style={{ width: 130 }}>
+                {empTypes.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+              </Select>
+              <div style={{ width: 122, display: 'flex', justifyContent: 'flex-end' }}>
+                {e.payType !== 'salaried' ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: 13, color: DS.muted }}>£</span>
+                    <Input type="number" min="0" value={e.hourlyRate}
+                      onChange={ev => admin.updateTeacher(t.id, { hourlyRate: Math.max(0, +ev.target.value || 0) })}
+                      style={{ width: 76 }} />
+                    <span style={{ fontSize: 12, color: DS.faint }}>/h</span>
+                  </div>
+                ) : <span style={{ fontSize: 12, color: DS.faint }}>salaried</span>}
+              </div>
+            </div>
+          );
+        })}
+      </SettingsSection>
+    </>
+  );
+};
+
+// Admin → Centre (centre profile, branding, term schedule, invoicing defaults)
+const CentreTab = ({ data, set, wide }) => {
   const c = data.centre || {};
+
+  // Left rail — brand identity (logo + colour), mirroring the reference layout.
+  const logoCard = (
+    <SettingsSection title="Logo" subtitle="Shown on reports and the portal" icon="image">
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: '18px 0 12px' }}>
+        <div style={{
+          width: 76, height: 76, borderRadius: 16, background: DS.surface,
+          border: `1px dashed ${DS.borderDark}`, display: 'flex', alignItems: 'center',
+          justifyContent: 'center', color: DS.faint,
+        }}><Icon name="image" size={28} /></div>
+        <Btn variant="secondary" small icon="upload">Upload logo</Btn>
+        <div style={{ fontSize: 11.5, color: DS.faint }}>PNG or SVG, up to 2 MB.</div>
+      </div>
+    </SettingsSection>
+  );
+  const colourCard = (
+    <SettingsSection title="Brand colour" subtitle="Used for headers on generated reports" icon="star">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 0 6px' }}>
+        <input type="color" value={c.brandColor || '#43b190'}
+          onChange={e => set('centre', 'brandColor', e.target.value)}
+          style={{ width: 46, height: 38, border: `1px solid ${DS.border}`, borderRadius: 9, padding: 0, cursor: 'pointer', background: DS.bg, flexShrink: 0 }} />
+        <Input value={c.brandColor || '#43b190'} onChange={e => set('centre', 'brandColor', e.target.value)}
+          style={{ fontFamily: 'monospace' }} />
+      </div>
+    </SettingsSection>
+  );
+
+  const profileCard = (
+    <SettingsSection title="Centre profile" subtitle="Details shown on reports, invoices and the portal" icon="book">
+      <SetGrid>
+        <Field label="Centre name">
+          <Input value={c.name || ''} onChange={e => set('centre', 'name', e.target.value)} />
+        </Field>
+        <Field label="Contact email">
+          <Input type="email" value={c.email || ''} onChange={e => set('centre', 'email', e.target.value)} />
+        </Field>
+        <Field label="Phone">
+          <Input value={c.phone || ''} onChange={e => set('centre', 'phone', e.target.value)} />
+        </Field>
+        <Field label="Website">
+          <Input value={c.website || ''} onChange={e => set('centre', 'website', e.target.value)} />
+        </Field>
+      </SetGrid>
+      <Field label="Address" style={{ padding: '0 0 10px' }}>
+        <Textarea value={c.address || ''} onChange={e => set('centre', 'address', e.target.value)} style={{ minHeight: 60 }} />
+      </Field>
+    </SettingsSection>
+  );
+  const termsCard = (
+    <SettingsSection
+      title="Academic terms"
+      subtitle="Set your term dates once — the header shows whichever term is running today and switches automatically as each begins"
+      icon="calendar"
+    >
+      <TermsEditor terms={getCentreTerms(c)} onChange={next => set('centre', 'terms', next)} />
+    </SettingsSection>
+  );
+  const invoicingCard = (
+    <SettingsSection title="Invoicing" subtitle="Defaults applied to new invoices" icon="invoice">
+      <SetGrid>
+        <Field label="Currency">
+          <Select value={c.currency || 'GBP'} onChange={e => set('centre', 'currency', e.target.value)}>
+            <option value="GBP">£ GBP</option>
+            <option value="USD">$ USD</option>
+            <option value="EUR">€ EUR</option>
+            <option value="AED">د.إ AED</option>
+          </Select>
+        </Field>
+        <Field label="Invoice due (days)">
+          <Input type="number" value={c.invoiceDueDays ?? 14} onChange={e => set('centre', 'invoiceDueDays', +e.target.value)} />
+        </Field>
+        <Field label="Tax rate (%)">
+          <Input type="number" value={c.taxRate ?? 0} onChange={e => set('centre', 'taxRate', +e.target.value)} />
+        </Field>
+      </SetGrid>
+      <SettingRow title="Auto-send invoices" desc="Email invoices to guardians automatically when generated."
+        checked={!!c.autoSendInvoices} onToggle={v => set('centre', 'autoSendInvoices', v)} />
+      <SettingRow title="Late payment reminders" desc="Automatically remind guardians of overdue invoices."
+        checked={!!c.lateReminders} onToggle={v => set('centre', 'lateReminders', v)} last />
+    </SettingsSection>
+  );
+
   return (
     <div>
-      <SettingsSection title="Centre profile" subtitle="Details shown on reports, invoices and the portal" icon="book">
-        <SetGrid>
-          <Field label="Centre name">
-            <Input value={c.name || ''} onChange={e => set('centre', 'name', e.target.value)} />
-          </Field>
-          <Field label="Contact email">
-            <Input type="email" value={c.email || ''} onChange={e => set('centre', 'email', e.target.value)} />
-          </Field>
-          <Field label="Phone">
-            <Input value={c.phone || ''} onChange={e => set('centre', 'phone', e.target.value)} />
-          </Field>
-          <Field label="Website">
-            <Input value={c.website || ''} onChange={e => set('centre', 'website', e.target.value)} />
-          </Field>
-        </SetGrid>
-        <Field label="Address" style={{ padding: '0 0 10px' }}>
-          <Textarea value={c.address || ''} onChange={e => set('centre', 'address', e.target.value)} style={{ minHeight: 60 }} />
-        </Field>
-      </SettingsSection>
-
-      <SettingsSection title="Branding" subtitle="Personalise reports and the parent portal" icon="star">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 0', borderBottom: `1px solid ${DS.border}` }}>
-          <div style={{
-            width: 48, height: 48, borderRadius: 10, background: DS.surface,
-            border: `1px solid ${DS.border}`, display: 'flex', alignItems: 'center',
-            justifyContent: 'center', color: DS.faint,
-          }}><Icon name="book" size={20} /></div>
-          <Btn variant="secondary" small>Upload logo</Btn>
-        </div>
-        <SettingRow
-          title="Brand colour"
-          desc="Used for headers on generated reports."
-          control={
-            <input type="color" value={c.brandColor || '#43b190'}
-              onChange={e => set('centre', 'brandColor', e.target.value)}
-              style={{ width: 40, height: 28, border: `1px solid ${DS.border}`, borderRadius: 6, padding: 0, cursor: 'pointer', background: DS.bg }} />
-          }
-          last
-        />
-      </SettingsSection>
-
-      <SettingsSection title="Term & invoicing" icon="invoice">
-        <SetGrid>
-          <Field label="Current term">
-            <Input value={c.term || ''} onChange={e => set('centre', 'term', e.target.value)} />
-          </Field>
-          <Field label="Currency">
-            <Select value={c.currency || 'GBP'} onChange={e => set('centre', 'currency', e.target.value)}>
-              <option value="GBP">£ GBP</option>
-              <option value="USD">$ USD</option>
-              <option value="EUR">€ EUR</option>
-              <option value="AED">د.إ AED</option>
-            </Select>
-          </Field>
-          <Field label="Invoice due (days)">
-            <Input type="number" value={c.invoiceDueDays ?? 14} onChange={e => set('centre', 'invoiceDueDays', +e.target.value)} />
-          </Field>
-          <Field label="Tax rate (%)">
-            <Input type="number" value={c.taxRate ?? 0} onChange={e => set('centre', 'taxRate', +e.target.value)} />
-          </Field>
-        </SetGrid>
-        <SettingRow title="Auto-send invoices" desc="Email invoices to guardians automatically when generated."
-          checked={!!c.autoSendInvoices} onToggle={v => set('centre', 'autoSendInvoices', v)} />
-        <SettingRow title="Late payment reminders" desc="Automatically remind guardians of overdue invoices."
-          checked={!!c.lateReminders} onToggle={v => set('centre', 'lateReminders', v)} last />
-      </SettingsSection>
+      <SplitLayout
+        wide={wide}
+        left={<>{logoCard}{colourCard}</>}
+        right={<>{profileCard}{termsCard}{invoicingCard}</>}
+      />
+      {/* Working hours & pay — drives the derived staff timesheet (Staff › Timesheets).
+          Kept full-width below the split: the teacher rows need the horizontal room. */}
+      <WorkingHoursPaySection />
     </div>
   );
 };
 
 // Teacher → Teaching (homework / grading defaults, availability)
-const TeachingTab = ({ data, set }) => {
+const TeachingTab = ({ data, set, wide }) => {
   const t = data.teaching || {};
-  return (
-    <div>
-      <SettingsSection title="Homework defaults" subtitle="Pre-filled when you create a new assignment" icon="clip">
-        <SetGrid>
-          <Field label="Default attempts allowed">
-            <Input type="number" value={t.attempts ?? 1} onChange={e => set('teaching', 'attempts', Math.max(1, +e.target.value || 1))} />
-          </Field>
-          <Field label="Default due window (days)">
-            <Input type="number" value={t.dueDays ?? 7} onChange={e => set('teaching', 'dueDays', +e.target.value)} />
-          </Field>
-        </SetGrid>
-        <SettingRow title="Allow late submissions" desc="By default, accept work submitted after the due date."
-          checked={!!t.allowLate} onToggle={v => set('teaching', 'allowLate', v)} />
-        <SettingRow title="Auto-grade multiple choice" desc="Mark MCQ questions automatically on submission."
-          checked={!!t.autoGradeMcq} onToggle={v => set('teaching', 'autoGradeMcq', v)} />
-        <SettingRow title="Let students review answers" desc="Allow review of marked work by default."
-          checked={!!t.allowReview} onToggle={v => set('teaching', 'allowReview', v)} last />
-      </SettingsSection>
-
-      <SettingsSection title="Grading" icon="check">
-        <SettingRow
-          title="Default grading scale"
-          control={
-            <Select value={t.gradingScale || 'percent'} onChange={e => set('teaching', 'gradingScale', e.target.value)} style={{ width: 170 }}>
-              <option value="percent">Percentage</option>
-              <option value="letter">Letter (A–F)</option>
-              <option value="points">Points</option>
-            </Select>
-          }
-        />
-        <SettingRow title="Release marks after approval" desc="Hold marks until you've reviewed and approved them."
-          checked={!!t.releaseAfterApproval} onToggle={v => set('teaching', 'releaseAfterApproval', v)} last />
-      </SettingsSection>
-
-      <SettingsSection title="Availability & alerts" icon="calendar">
-        <SetGrid>
-          <Field label="Working hours from">
-            <Input type="time" value={t.hoursFrom || '09:00'} onChange={e => set('teaching', 'hoursFrom', e.target.value)} />
-          </Field>
-          <Field label="Working hours to">
-            <Input type="time" value={t.hoursTo || '17:00'} onChange={e => set('teaching', 'hoursTo', e.target.value)} />
-          </Field>
-        </SetGrid>
-        <SettingRow title="Notify on each submission" desc="Get an alert the moment a student submits homework."
-          checked={!!t.notifyOnSubmission} onToggle={v => set('teaching', 'notifyOnSubmission', v)} last />
-      </SettingsSection>
-    </div>
+  const homework = (
+    <SettingsSection title="Homework defaults" subtitle="Pre-filled when you create a new assignment" icon="clip">
+      <SetGrid>
+        <Field label="Default attempts allowed">
+          <Input type="number" value={t.attempts ?? 1} onChange={e => set('teaching', 'attempts', Math.max(1, +e.target.value || 1))} />
+        </Field>
+        <Field label="Default due window (days)">
+          <Input type="number" value={t.dueDays ?? 7} onChange={e => set('teaching', 'dueDays', +e.target.value)} />
+        </Field>
+      </SetGrid>
+      <SettingRow title="Allow late submissions" desc="By default, accept work submitted after the due date."
+        checked={!!t.allowLate} onToggle={v => set('teaching', 'allowLate', v)} />
+      <SettingRow title="Auto-grade multiple choice" desc="Mark MCQ questions automatically on submission."
+        checked={!!t.autoGradeMcq} onToggle={v => set('teaching', 'autoGradeMcq', v)} />
+      <SettingRow title="Let students review answers" desc="Allow review of marked work by default."
+        checked={!!t.allowReview} onToggle={v => set('teaching', 'allowReview', v)} last />
+    </SettingsSection>
   );
+  const grading = (
+    <SettingsSection title="Grading" subtitle="How marks are scored and released" icon="check">
+      <SettingRow
+        title="Default grading scale"
+        control={
+          <Select value={t.gradingScale || 'percent'} onChange={e => set('teaching', 'gradingScale', e.target.value)} style={{ width: 150 }}>
+            <option value="percent">Percentage</option>
+            <option value="letter">Letter (A–F)</option>
+            <option value="points">Points</option>
+          </Select>
+        }
+      />
+      <SettingRow title="Release marks after approval" desc="Hold marks until you've reviewed and approved them."
+        checked={!!t.releaseAfterApproval} onToggle={v => set('teaching', 'releaseAfterApproval', v)} last />
+    </SettingsSection>
+  );
+  const availability = (
+    <SettingsSection title="Availability & alerts" subtitle="Your working hours" icon="calendar">
+      <SetGrid>
+        <Field label="Working hours from">
+          <Input type="time" value={t.hoursFrom || '09:00'} onChange={e => set('teaching', 'hoursFrom', e.target.value)} />
+        </Field>
+        <Field label="Working hours to">
+          <Input type="time" value={t.hoursTo || '17:00'} onChange={e => set('teaching', 'hoursTo', e.target.value)} />
+        </Field>
+      </SetGrid>
+      <SettingRow title="Notify on each submission" desc="Get an alert the moment a student submits homework."
+        checked={!!t.notifyOnSubmission} onToggle={v => set('teaching', 'notifyOnSubmission', v)} last />
+    </SettingsSection>
+  );
+  return <SplitLayout wide={wide} left={<>{grading}{availability}</>} right={homework} />;
 };
 
 // Student → Learning (guardian, accessibility, reminders) — lighter weight
-const LearningTab = ({ data, set }) => {
+const LearningTab = ({ data, set, wide }) => {
   const l = data.learning || {};
-  return (
-    <div>
-      <SettingsSection title="Guardian & contact" subtitle="Who we keep in the loop about your progress" icon="users">
-        <SetGrid>
-          <Field label="Guardian name">
-            <Input value={l.guardianName || ''} onChange={e => set('learning', 'guardianName', e.target.value)} />
-          </Field>
-          <Field label="Guardian email">
-            <Input type="email" value={l.guardianEmail || ''} onChange={e => set('learning', 'guardianEmail', e.target.value)} />
-          </Field>
-        </SetGrid>
-        <SettingRow title="Share reports with guardian" desc="Email new reports and feedback to your guardian."
-          checked={!!l.shareWithGuardian} onToggle={v => set('learning', 'shareWithGuardian', v)} last />
-      </SettingsSection>
-
-      <SettingsSection title="Homework reminders" icon="clip">
-        <SettingRow
-          title="Remind me before a deadline"
-          control={
-            <Select value={l.reminderLead || '1d'} onChange={e => set('learning', 'reminderLead', e.target.value)} style={{ width: 160 }}>
-              <option value="none">Don't remind</option>
-              <option value="1h">1 hour before</option>
-              <option value="1d">1 day before</option>
-              <option value="2d">2 days before</option>
-            </Select>
-          }
-        />
-        <SettingRow title="Streak nudges" desc="Encourage me to keep my study streak going."
-          checked={!!l.streakNudges} onToggle={v => set('learning', 'streakNudges', v)} last />
-      </SettingsSection>
-
-      <SettingsSection title="Accessibility" subtitle="Make TutorOS easier to use" icon="star">
-        <SetGrid>
-          <Field label="Text size">
-            <Select value={l.textSize || 'normal'} onChange={e => set('learning', 'textSize', e.target.value)}>
-              <option value="normal">Normal</option>
-              <option value="large">Large</option>
-              <option value="xlarge">Extra large</option>
-            </Select>
-          </Field>
-          <Field label="">
-            <div style={{ height: 1 }} />
-          </Field>
-        </SetGrid>
-        <SettingRow title="High contrast" desc="Increase colour contrast for readability."
-          checked={!!l.highContrast} onToggle={v => set('learning', 'highContrast', v)} />
-        <SettingRow title="Dyslexia-friendly font" desc="Use a typeface designed for easier reading."
-          checked={!!l.dyslexiaFont} onToggle={v => set('learning', 'dyslexiaFont', v)} last />
-      </SettingsSection>
-    </div>
+  const guardian = (
+    <SettingsSection title="Guardian & contact" subtitle="Who we keep in the loop about your progress" icon="users">
+      <SetGrid>
+        <Field label="Guardian name">
+          <Input value={l.guardianName || ''} onChange={e => set('learning', 'guardianName', e.target.value)} />
+        </Field>
+        <Field label="Guardian email">
+          <Input type="email" value={l.guardianEmail || ''} onChange={e => set('learning', 'guardianEmail', e.target.value)} />
+        </Field>
+      </SetGrid>
+      <SettingRow title="Share reports with guardian" desc="Email new reports and feedback to your guardian."
+        checked={!!l.shareWithGuardian} onToggle={v => set('learning', 'shareWithGuardian', v)} last />
+    </SettingsSection>
   );
+  const reminders = (
+    <SettingsSection title="Homework reminders" subtitle="When we nudge you" icon="clip">
+      <SettingRow
+        title="Remind me before a deadline"
+        control={
+          <Select value={l.reminderLead || '1d'} onChange={e => set('learning', 'reminderLead', e.target.value)} style={{ width: 150 }}>
+            <option value="none">Don't remind</option>
+            <option value="1h">1 hour before</option>
+            <option value="1d">1 day before</option>
+            <option value="2d">2 days before</option>
+          </Select>
+        }
+      />
+      <SettingRow title="Streak nudges" desc="Encourage me to keep my study streak going."
+        checked={!!l.streakNudges} onToggle={v => set('learning', 'streakNudges', v)} last />
+    </SettingsSection>
+  );
+  const accessibility = (
+    <SettingsSection title="Accessibility" subtitle="Make TutorOS easier to use" icon="star">
+      <Field label="Text size" style={{ padding: '10px 0 0' }}>
+        <Select value={l.textSize || 'normal'} onChange={e => set('learning', 'textSize', e.target.value)}>
+          <option value="normal">Normal</option>
+          <option value="large">Large</option>
+          <option value="xlarge">Extra large</option>
+        </Select>
+      </Field>
+      <SettingRow title="High contrast" desc="Increase colour contrast for readability."
+        checked={!!l.highContrast} onToggle={v => set('learning', 'highContrast', v)} />
+      <SettingRow title="Dyslexia-friendly font" desc="Use a typeface designed for easier reading."
+        checked={!!l.dyslexiaFont} onToggle={v => set('learning', 'dyslexiaFont', v)} last />
+    </SettingsSection>
+  );
+  return <SplitLayout wide={wide} left={<>{reminders}{accessibility}</>} right={guardian} />;
 };
 
 // Admin → Comms (safety posture). Reads/writes the lifted comms config via the
@@ -977,10 +1224,10 @@ const BillingTab = () => {
 
 // ─── Tab registry per role ──────────────────────────────────────────────────────────
 const ROLE_TABS = {
-  superadmin: { label: 'Platform Owner', tab: { id: 'platform', label: 'Platform Defaults', Comp: PlatformTab } },
-  admin:      { label: 'Centre Admin',   tab: { id: 'centre',   label: 'Centre',            Comp: CentreTab } },
-  teacher:    { label: 'Teacher',        tab: { id: 'teaching', label: 'Teaching',          Comp: TeachingTab } },
-  student:    { label: 'Student',        tab: { id: 'learning', label: 'Learning',          Comp: LearningTab } },
+  superadmin: { label: 'Platform Owner', tab: { id: 'platform', label: 'Platform Defaults', Comp: PlatformTab, icon: 'grid' } },
+  admin:      { label: 'Centre Admin',   tab: { id: 'centre',   label: 'Centre',            Comp: CentreTab,   icon: 'home' } },
+  teacher:    { label: 'Teacher',        tab: { id: 'teaching', label: 'Teaching',          Comp: TeachingTab, icon: 'clip' } },
+  student:    { label: 'Student',        tab: { id: 'learning', label: 'Learning',          Comp: LearningTab, icon: 'book' } },
 };
 
 // ─── Page ───────────────────────────────────────────────────────────────────────────
@@ -991,6 +1238,10 @@ const SettingsPage = ({ role = 'admin', section }) => {
   const { data, set, reset } = useSettingsStore(role);
   const roleMeta = ROLE_TABS[role] || ROLE_TABS.admin;
   const [saved, setSaved] = React.useState(false);
+
+  // Full width until the content column is wide enough to split into a rail + main.
+  const [wrapRef, wrapW] = useMeasuredWidth();
+  const wide = wrapW >= WIDE_BP;
 
   // The signed-in staff identity may hold both admin + teacher at the active
   // centre — if so, the Account tab offers a view switch. Resolved from the same
@@ -1011,33 +1262,55 @@ const SettingsPage = ({ role = 'admin', section }) => {
     return roles;
   }, [role, activeCentreId]);
 
+  // Storage panels live in Storage.jsx (loaded AFTER Settings.jsx) — resolve at
+  // render time via window, mirroring how BillingTab reaches useSubscriptionStore.
+  const StorageAdmin = () => { const C = window.StorageAdminPanel; return C ? <C /> : <div style={{ padding: 20, fontSize: 13, color: DS.muted }}>Storage is still loading…</div>; };
+  const StorageOwner = () => { const C = window.StorageOwnerPanel; return C ? <C /> : <div style={{ padding: 20, fontSize: 13, color: DS.muted }}>Storage is still loading…</div>; };
+
   const tabs = [
-    { id: roleMeta.tab.id, label: roleMeta.tab.label, render: () => <roleMeta.tab.Comp data={data} set={set} /> },
+    { id: roleMeta.tab.id, label: roleMeta.tab.label, icon: roleMeta.tab.icon, render: () => <roleMeta.tab.Comp data={data} set={set} wide={wide} /> },
     // Admins get a 2nd role-specific tab: plan change · override code · billing details.
-    ...(role === 'admin' ? [{ id: 'billing', label: 'Plans & Billing', render: () => <BillingTab /> }] : []),
-    { id: 'notifications', label: 'Notifications', render: () => <NotificationsTab data={data} set={set} /> },
-    { id: 'appearance',    label: 'Appearance',    render: () => <AppearanceTab data={data} set={set} role={role} /> },
-    { id: 'account',       label: 'Account',       render: () => <AccountTab data={data} set={set} roleLabel={roleMeta.label} viewRoles={viewRoles} currentRole={role} onSwitchView={r => window.__navigate && window.__navigate(r, 'dashboard')} /> },
+    ...(role === 'admin' ? [{ id: 'billing', label: 'Plans & Billing', icon: 'invoice', render: () => <BillingTab /> }] : []),
+    // Storage (usage + quota). Admin/Account-Owner get the account view; the
+    // superadmin owner gets the platform view (R2 config, totals, pooled-vs-split).
+    ...(role === 'admin' ? [{ id: 'storage', label: 'Storage', icon: 'cloud', render: () => <StorageAdmin /> }] : []),
+    ...(role === 'superadmin' ? [{ id: 'storage', label: 'Storage', icon: 'cloud', render: () => <StorageOwner /> }] : []),
+    { id: 'notifications', label: 'Notifications', icon: 'bell', render: () => <NotificationsTab data={data} set={set} wide={wide} /> },
+    { id: 'appearance',    label: 'Appearance',    icon: 'star', render: () => <AppearanceTab data={data} set={set} role={role} wide={wide} /> },
+    { id: 'account',       label: 'Account',       icon: 'user', render: () => <AccountTab data={data} set={set} roleLabel={roleMeta.label} viewRoles={viewRoles} currentRole={role} onSwitchView={r => window.__navigate && window.__navigate(r, 'dashboard')} wide={wide} /> },
   ];
-  const active = tabs.find(t => t.id === section) || tabs[0];
+  // The sidebar "Settings" entry is now a single navigating button (no dropdown),
+  // so the page owns its own tab switching. Internal state seeds from the `section`
+  // prop and re-syncs whenever it changes, so deep links (e.g. settings:billing
+  // from the dashboard banner, or the storage meter) still land on the right tab.
+  const [activeId, setActiveId] = React.useState(() => (tabs.some(t => t.id === section) ? section : tabs[0].id));
+  React.useEffect(() => { if (section && tabs.some(t => t.id === section)) setActiveId(section); }, [section]);
+  const active = tabs.find(t => t.id === activeId) || tabs[0];
 
   // Changes persist live (localStorage); the Save button is a confirmation affordance.
   const onSave = () => { setSaved(true); setTimeout(() => setSaved(false), 1800); };
 
   return (
-    <div style={{ padding: 32, maxWidth: 880, margin: '0 auto' }}>
-      <PageHeader
-        title={active.label === roleMeta.tab.label ? 'Settings' : `Settings · ${active.label}`}
-        subtitle={`Manage your ${roleMeta.label.toLowerCase()} account and preferences`}
-        actions={[
-          <Btn key="reset" variant="ghost" small onClick={reset}>Reset</Btn>,
-          <Btn key="save" variant="primary" small icon={saved ? 'check' : undefined} onClick={onSave}>
-            {saved ? 'Saved' : 'Save changes'}
-          </Btn>,
-        ]}
-      />
+    // Full-bleed padded gutter; the inner column is full width until it hits the
+    // max, then caps and centres on large screens.
+    <div style={{ padding: 32 }}>
+      <div ref={wrapRef} style={{ maxWidth: 1240, margin: '0 auto' }}>
+        <PageHeader
+          title="Settings"
+          subtitle={`Manage your ${roleMeta.label.toLowerCase()} account and preferences`}
+          actions={[
+            <Btn key="reset" variant="ghost" small onClick={reset}>Reset</Btn>,
+            <Btn key="save" variant="primary" small icon={saved ? 'check' : undefined} onClick={onSave}>
+              {saved ? 'Saved' : 'Save changes'}
+            </Btn>,
+          ]}
+        />
 
-      {active.render()}
+        {/* In-page tab bar — icon + underline tabs for the settings subpages. */}
+        <TabNav tabs={tabs} value={active.id} onChange={setActiveId} />
+
+        {active.render()}
+      </div>
     </div>
   );
 };

@@ -13,7 +13,7 @@
 //  "Set up centre" page anymore: navigating to admin/setup is rewritten to open this
 //  page's setup drawer (index.html __navigate).
 //
-//  Frontend-only. Account-scoped localStorage store (tutoros.subscription.v1) seeded
+//  Frontend-only. Account-scoped localStorage store (tutoros.subscription.v2) seeded
 //  from ONB_SUBSCRIPTION (mocks/onboarding.mock.jsx). Reuses genCentreCode (Auth.jsx),
 //  RAND/onbTodayIso/CopyChip/Mono (Onboarding.jsx) + shared primitives (shared.jsx).
 
@@ -30,7 +30,9 @@
 // useSubscriptionStore() (App's instance for the switcher + this page's instance)
 // — mirrors why Communications state was lifted into App. Without this, adding a
 // centre here wouldn't show up in the sidebar switcher until an unrelated re-render.
-const SUB_STORE_KEY = 'tutoros.subscription.v1';
+// v2: re-seeds the account onto the 3-centre seed (bm + apex + summit) — the
+// stored v1 blob predates Summit and masks new seed centres (readSub prefers it).
+const SUB_STORE_KEY = 'tutoros.subscription.v2';
 const subListeners = new Set();
 const readSub = () => {
   try {
@@ -91,10 +93,15 @@ const useSubscriptionStore = () => {
   const updateCentre = (id, patch) => writeSub({ ...state, centres: state.centres.map(c => c.id === id ? { ...c, ...patch } : c) });
   const completeStep = (id, stepId) => writeSub({ ...state, centres: state.centres.map(c => c.id === id ? { ...c, setup: { ...(c.setup || {}), [stepId]: true } } : c) });
   const setPrimary   = id => writeSub({ ...state, centres: state.centres.map(c => ({ ...c, isPrimary: c.id === id })) });
+  // Transfer account ownership by repointing ownerUserId (email = identity key).
+  // Ownership lives here on the account, never as a flag on a person — see
+  // permissions.js isAccountOwner. The Team page guards that the new owner is an
+  // Admin (and that only the current owner can call this) before invoking it.
+  const setOwner = userId => writeSub({ ...state, ownerUserId: (userId || '').toLowerCase() });
   // Primary centre can't be removed — guard at UI level too.
   const removeCentre = id => writeSub({ ...state, centres: state.centres.filter(c => !(c.id === id && !c.isPrimary)) });
 
-  return { ...state, plan, setPlan, addCentre, updateCentre, completeStep, setPrimary, removeCentre,
+  return { ...state, plan, setPlan, addCentre, updateCentre, completeStep, setPrimary, removeCentre, setOwner,
     setBilling, applyCode, removeCode, override, effectivePrice };
 };
 

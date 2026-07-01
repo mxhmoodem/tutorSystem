@@ -546,8 +546,675 @@ const AcademicStep = ({ form, touched, err, classes, onToggleSubject, onToggleCl
 );
 
 // ─── Student full profile — viewable + editable ──────────────────────────────────
-const StudentProfilePage = () => {
+// ═══════════════════════════════════════════════════════════════════════════════
+//  Student profile — full analytics dashboard
+//  The reports / tracking / homework stores key students by their own ids, so
+//  rather than fragile cross-store joins the rich profile analytics are DERIVED
+//  from the student id with the same deterministic seededRand() used for class
+//  figures (stable across renders). Real store data — classes, subjects, guardian,
+//  account, attendance/hw/score and name-matched invoices — is used wherever it
+//  links cleanly; the trends, submissions, reports, lessons, meetings, reviews and
+//  timeline below are synthesised but internally consistent with those figures.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const ANALYTICS_MONTHS = ['Sep','Oct','Nov','Dec','Jan','Feb','Mar','Apr','May','Jun'];
+
+// score → GCSE number grade (9–1), or A-Level letter (A*–E) for Year 12/13.
+const scoreToGrade = (score, alevel) => {
+  if (alevel) return score>=90?'A*':score>=80?'A':score>=70?'B':score>=60?'C':score>=50?'D':'E';
+  return score>=90?'9':score>=80?'8':score>=72?'7':score>=64?'6':score>=56?'5':score>=48?'4':score>=40?'3':'2';
+};
+const gradeColour = score => score>=75?DS.success:score>=55?DS.warning:DS.danger;
+const hwBadge = s => s==='Marked'?'success':s==='Late'?'warning':s==='Missing'?'danger':'info';
+const capWord = s => s ? String(s).charAt(0).toUpperCase()+String(s).slice(1).replace(/[-_]/g,' ') : s;
+const studentAge = dob => { const d=new Date(dob); if(isNaN(d))return ''; const t=new Date('2026-06-27'); let a=t.getFullYear()-d.getFullYear(); if(t.getMonth()<d.getMonth()||(t.getMonth()===d.getMonth()&&t.getDate()<d.getDate()))a--; return a; };
+const fmtBirthday = dob => { const d=new Date(dob); return isNaN(d)?(dob||'—'):d.toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'}); };
+
+const HW_TITLE_BANK = ['Practice Paper','Topic Quiz','Consolidation Set','Past-Paper Questions','Revision Worksheet','End-of-Unit Test','Mixed Problems','Extended Writing Task'];
+const LESSON_TOPIC_BANK = {
+  Mathematics:['Quadratic equations','Simultaneous equations','Trigonometry','Differentiation','Vectors','Probability'],
+  'Further Maths':['Complex numbers','Matrices','Polar coordinates','Hyperbolic functions','Proof by induction'],
+  Physics:['Kinematics','Electric fields','Waves & optics','Nuclear decay','Circular motion'],
+  Chemistry:['Bonding & structure','Rates of reaction','Organic mechanisms','Electrolysis','Equilibria'],
+  Biology:['Cell structure','Genetics','Homeostasis','Ecosystems','Enzyme kinetics'],
+  Science:['Forces & motion','Chemical reactions','Cells & organisms','Energy transfer','The periodic table'],
+  English:['Macbeth — Act 1','Unseen poetry','Persuasive writing','An Inspector Calls','Language analysis'],
+  'English Literature':['Macbeth — themes','Power & conflict poetry','A Christmas Carol','Unseen prose'],
+  'Computer Science':['Algorithms','Data representation','Boolean logic','Networks','Iteration in Python'],
+  Geography:['Coastal landscapes','Urbanisation','Tectonic hazards','River processes','Ecosystems'],
+  History:['Weimar Germany','The Cold War','Medicine through time','Elizabethan England'],
+  French:['Le passé composé','La famille','Les vacances','Speaking practice'],
+  Spanish:['El pretérito','Mi rutina','El medio ambiente','Speaking practice'],
+  Economics:['Price elasticity','Market failure','Fiscal policy','Supply & demand'],
+  Business:['Cash-flow forecasts','The marketing mix','Stakeholders','Break-even analysis'],
+};
+const topicsFor = subj => LESSON_TOPIC_BANK[subj] || LESSON_TOPIC_BANK[(subj||'').replace(/^(GCSE|A-Level)\s+/,'')] || ['Topic review','Exam technique','Consolidation','Assessment feedback','New unit'];
+const REVIEW_BANK = [
+  'Consistently well-prepared and fully engaged in lessons — a pleasure to teach.',
+  'Has a secure grasp of the fundamentals and is now building real exam confidence.',
+  'Effort has improved noticeably this term; the upward trend is encouraging.',
+  'Capable of excellent work but needs to be more consistent with homework deadlines.',
+  'An excellent contributor to class discussion who works well in group tasks.',
+  'Making steady progress; would benefit from a little more independent revision.',
+  'A thoughtful, methodical worker who responds positively to feedback.',
+];
+const TARGET_BANK = [
+  'Complete weekly past-paper questions under timed conditions.',
+  'Review exam command words carefully before each assessment.',
+  'Show full working so no method marks are dropped.',
+  'Attend the fortnightly support session to consolidate weaker topics.',
+  'Keep a topic-by-topic revision tracker and review it weekly.',
+  'Read around the subject beyond the specification to stretch further.',
+];
+
+// Build a stable, comprehensive analytics picture for one student.
+const studentAnalytics = (student, enrolledClasses) => {
+  const rnd = seededRand((student.id || student.name || 'x') + 'profile');
+  const pick = arr => arr[Math.floor(rnd()*arr.length)] || arr[0];
+  const base = student.score || 70, hwBase = student.hw || 75, attBase = student.attendance || 92;
+  const alevel = /1[23]/.test(student.year || '');
+  const subjects = (student.subjects && student.subjects.length) ? student.subjects : ['General Studies'];
+  const teacherFor = subj => {
+    const key = (subj||'').toLowerCase().split(' ')[0];
+    const cls = enrolledClasses.find(c => (c.name||'').toLowerCase().includes(key));
+    return (cls && cls.teacher) || (enrolledClasses[0] && enrolledClasses[0].teacher) || 'Centre staff';
+  };
+
+  const trend = ANALYTICS_MONTHS.map((m,i) => {
+    const t = i/(ANALYTICS_MONTHS.length-1);
+    return Math.max(35, Math.min(99, Math.round(base-12 + t*12 + (rnd()-0.5)*7)));
+  });
+  trend[trend.length-1] = base;
+  const cohort = ANALYTICS_MONTHS.map((_,i) => Math.max(45, Math.min(92, Math.round(68 + Math.sin(i/1.5)*3 + (rnd()-0.5)*4))));
+  const attendanceByMonth = ANALYTICS_MONTHS.map(() => Math.max(60, Math.min(100, Math.round(attBase + (rnd()-0.5)*14))));
+
+  const subjectRows = subjects.map(s => {
+    const score = Math.max(35, Math.min(99, Math.round(base + (rnd()-0.45)*22)));
+    const targetScore = Math.min(99, score + Math.round(rnd()*10));
+    const spark = Array.from({length:6},(_,k)=>Math.max(35,Math.min(99,Math.round(score-8 + k*2 + (rnd()-0.5)*6))));
+    return { name:s, teacher:teacherFor(s), score, predicted:scoreToGrade(score,alevel), target:scoreToGrade(targetScore,alevel), effort:60+Math.round(rnd()*38), spark, onTrack: score>=targetScore-4 };
+  });
+
+  const hwPool = hwBase>=85?['Marked','Marked','Marked','Marked','Late']:hwBase>=60?['Marked','Marked','Late','Marked','Missing']:['Marked','Late','Missing','Missing','Late'];
+  const homework = Array.from({length:7},(_,i)=>{
+    const subj = pick(subjects);
+    const status = i===0?'Pending':pick(hwPool);
+    const score = (status==='Missing'||status==='Pending')?null:Math.max(30,Math.min(100,Math.round(base+(rnd()-0.4)*26)));
+    return { id:i, title:`${pick(HW_TITLE_BANK)} — ${pick(topicsFor(subj))}`, subject:subj, set:(i+1)*4+Math.floor(rnd()*4), status, score };
+  });
+
+  const periods = ['Autumn Term 2025','Spring Term 2026','Summer Term 2026'];
+  const dates = ['12 Dec 2025','6 Apr 2026','24 Jun 2026'];
+  const reports = subjects.slice(0,3).map((s,i)=>({
+    id:i, subject:s, teacher:teacherFor(s), period:periods[i%3], type:i===0?'Termly Progress':'Quick Update',
+    date:dates[i%3], predicted:scoreToGrade((subjectRows[i]&&subjectRows[i].score)||base,alevel),
+    status:(i===2&&rnd()>0.6)?'Draft':'Published', summary:pick(REVIEW_BANK),
+  }));
+
+  const days = ['Mon','Tue','Wed','Thu','Fri'];
+  const lessons = Array.from({length:6},(_,i)=>{
+    const subj = pick(subjects);
+    return { id:i, date:`${24-i*3} ${i<2?'Jun':'May'}`, day:pick(days), subject:subj, topic:pick(topicsFor(subj)),
+      attendance: i===0?'Present':(attBase>=90?pick(['Present','Present','Present','Late']):pick(['Present','Present','Late','Absent'])),
+      participation: pick(['High','High','Good','Good','Fair']) };
+  });
+
+  const meetings = [
+    { id:0, type:"Parents' Evening", date:'18 Mar 2026', status:'Completed', who:`${student.guardianName||'Guardian'} · ${teacherFor(subjects[0])}`, note:'Reviewed progress and agreed a revision plan ahead of the mock exams.' },
+    { id:1, type:'Progress Review', date:'2 May 2026', status:'Completed', who:teacherFor(subjects[0]), note:pick(REVIEW_BANK) },
+    { id:2, type:"Parents' Evening", date:'9 Jul 2026', status:'Scheduled', who:`${student.guardianName||'Guardian'} · Form tutor`, note:'End-of-year review and discussion of next-year options.' },
+  ];
+
+  const reviews = subjectRows.slice(0,3).map((s,i)=>({ id:i, teacher:s.teacher, subject:s.name, date:['Jun 2026','May 2026','Apr 2026'][i%3], rating:Math.max(3,Math.min(5,Math.round(s.effort/20))), comment:pick(REVIEW_BANK) }));
+
+  const targets = (()=>{ const pool=[...TARGET_BANK], out=[]; while(out.length<3&&pool.length) out.push(pool.splice(Math.floor(rnd()*pool.length),1)[0]); return out; })();
+
+  const ratings = {
+    Behaviour: Math.max(50,Math.min(99,70+Math.round(rnd()*28))),
+    Effort: Math.max(40,Math.min(99,hwBase+Math.round((rnd()-0.3)*16))),
+    Participation: Math.max(45,Math.min(99,60+Math.round(rnd()*38))),
+    Homework: Math.max(20,Math.min(100,hwBase)),
+    Confidence: Math.max(40,Math.min(98,base+Math.round((rnd()-0.4)*20))),
+  };
+
+  const predictedGrade = scoreToGrade(base, alevel);
+  const targetGrade = scoreToGrade(Math.min(99, base+6), alevel);
+  const engagement = Math.round((attBase + hwBase + ratings.Participation)/3);
+
+  const timeline = [
+    { icon:'clip', color:DS.accent, text:`Submitted “${homework[1].title}”`, when:'2 days ago' },
+    { icon:'graduation', color:DS.success, text:`Attended ${lessons[0].subject} — ${lessons[0].topic}`, when:'3 days ago' },
+    { icon:'file', color:DS.warning, text:`${reports[0].subject} progress report published`, when:'1 week ago' },
+    { icon:'chart', color:DS.info, text:`Scored ${subjectRows[0].score}% in ${subjectRows[0].name} assessment`, when:'1 week ago' },
+    { icon:'message', color:DS.accent, text:`Message sent to ${student.guardianName||'guardian'}`, when:'2 weeks ago' },
+  ];
+
+  return { trend, cohort, attendanceByMonth, subjectRows, homework, reports, lessons, meetings, reviews, ratings, targets, predictedGrade, targetGrade, engagement, timeline, alevel };
+};
+
+// Circular progress gauge — the headline attainment/grade dial.
+const GaugeRing = ({ value, label, sub, color = DS.accent, size = 108, stroke = 10 }) => {
+  const r = (size-stroke)/2, c = 2*Math.PI*r;
+  const off = c*(1 - Math.max(0,Math.min(100,value))/100);
+  return (
+    <div style={{ position:'relative', width:size, height:size, flexShrink:0 }}>
+      <svg width={size} height={size}>
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={DS.border} strokeWidth={stroke} />
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth={stroke} strokeDasharray={c} strokeDashoffset={off} strokeLinecap="round" transform={`rotate(-90 ${size/2} ${size/2})`} />
+      </svg>
+      <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center' }}>
+        <span style={{ fontSize:26, fontWeight:700, color:DS.text, lineHeight:1 }}>{label}</span>
+        {sub && <span style={{ fontSize:11, color:DS.muted, marginTop:3 }}>{sub}</span>}
+      </div>
+    </div>
+  );
+};
+
+const RatingBar = ({ label, value }) => {
+  const c = value>=75?DS.success:value>=55?DS.warning:DS.danger;
+  return (
+    <div style={{ marginBottom:11 }}>
+      <div style={{ display:'flex', justifyContent:'space-between', marginBottom:5 }}>
+        <span style={{ fontSize:12.5, color:DS.sub }}>{label}</span>
+        <span style={{ fontSize:12.5, fontWeight:600, color:DS.text }}>{value}%</span>
+      </div>
+      <div style={{ height:7, background:DS.surface, borderRadius:4, overflow:'hidden' }}>
+        <div style={{ width:`${value}%`, height:'100%', background:c, borderRadius:4 }} />
+      </div>
+    </div>
+  );
+};
+
+const StarRow = ({ n }) => (
+  <span style={{ display:'inline-flex', gap:2 }}>
+    {[1,2,3,4,5].map(i => <Icon key={i} name="star" size={13} color={i<=n?DS.warning:DS.borderDark} />)}
+  </span>
+);
+
+const ChartLegend = ({ items }) => (
+  <div style={{ display:'flex', gap:16, marginTop:10, justifyContent:'center' }}>
+    {items.map(([label,color]) => (
+      <span key={label} style={{ display:'flex', alignItems:'center', gap:6, fontSize:12, color:DS.muted }}>
+        <span style={{ width:10, height:10, borderRadius:3, background:color }} />{label}
+      </span>
+    ))}
+  </div>
+);
+
+// The full read-only analytics dashboard (shown when the profile is not being edited).
+const StudentAnalyticsView = ({ student, enrolledClasses, role = 'admin' }) => {
   const store = useAdminStore();
+  const isTeacher = role === 'teacher';   // teachers see the profile read-only, minus Fees + Account
+  const A = React.useMemo(() => studentAnalytics(student, enrolledClasses), [student.id, enrolledClasses.length]);
+  const subjects = student.subjects || [];
+  const teachers = [...new Set(enrolledClasses.map(c => c.teacher).filter(Boolean))];
+  // Read the account off THIS component's live store copy (it owns the reset / temp-PIN
+  // / revoke mutations). useAdminStore is per-component state with no cross-notify, so
+  // the parent's `student` prop wouldn't reflect those writes until a remount.
+  const account = (store.students.find(s => s.id === student.id) || student).account || {};
+  const invoices = (typeof REPORTS_INVOICES !== 'undefined' ? REPORTS_INVOICES : []).filter(i => i.student === studentName(student));
+  const notStarted = !enrolledClasses.length && !(student.score || student.attendance || student.hw);
+  const span2 = { gridColumn:'1 / -1' };
+
+  const [tab, setTab] = React.useState('attainment');
+  const [resetOpen, setResetOpen] = React.useState(false);
+  const [resetInfo, setResetInfo] = React.useState(null);   // { code, url } of the freshly issued link
+  const [pinOpen, setPinOpen] = React.useState(false);
+  const [pin, setPin] = React.useState('');
+  const [pinTouched, setPinTouched] = React.useState(false);
+  const [revokeOpen, setRevokeOpen] = React.useState(false);
+
+  // ── Account / sign-in facts, derived from the claim model ──
+  const under13     = !!account.underThirteen;
+  const setupLbl    = (window.SETUP_LABEL && window.SETUP_LABEL[account.setupMethod]) || capWord(account.setupMethod || account.dailyMethod || '—');
+  const centreCode  = (typeof ONB_CENTRE !== 'undefined' && ONB_CENTRE.code) || '—';
+  const resetTarget = under13 ? (student.guardianEmail || 'the guardian email on file') : (account.syntheticEmail || student.email || 'the student email on file');
+  const copy = txt => { try { navigator.clipboard.writeText(String(txt)); } catch (e) {} };
+
+  // Students pick their own PIN/password/QR when they CLAIM their account, and the
+  // secret is never stored — so an admin "reset" can't reveal or set it. Instead it
+  // re-issues a fresh one-time claim link (under-13 → guardian) so they choose a new
+  // one, exactly mirroring first sign-up. A temporary PIN is the in-person fallback.
+  const issueReset = () => {
+    const code  = 'BM-' + (window.RAND ? window.RAND(4) : Math.random().toString(36).slice(2,6).toUpperCase());
+    const token = window.genToken ? window.genToken('tok') : ('tok-' + Math.random().toString(36).slice(2,10));
+    store.updateStudent(student.id, { account: { ...account, status:'pending', setupMethod:'pending', tempCredential:false, claimCode:code, inviteToken:token, resetOn:(new Date()).toISOString().slice(0,10) } });
+    setResetInfo({ code, url:'https://app.tutoros.app/claim/' + code });
+    setResetOpen(true);
+  };
+  const saveTempPin = () => {
+    setPinTouched(true);
+    if (!/^\d{6}$/.test(pin)) return;
+    store.updateStudent(student.id, { account: { ...account, status:'active', setupMethod:'pin', tempCredential:true } });
+    setPinOpen(false); setPin(''); setPinTouched(false);
+  };
+  const revoke = () => { store.updateStudent(student.id, { account: { ...account, status:'invited' } }); setRevokeOpen(false); };
+
+  // Compact label/value rows for the left cards.
+  const facts = list => list.filter(Boolean).map(([l,v]) => (
+    <div key={l} style={{ display:'flex', justifyContent:'space-between', padding:'8px 0', borderBottom:`1px solid ${DS.border}`, fontSize:13, gap:12 }}>
+      <span style={{ color:DS.muted, flexShrink:0 }}>{l}</span>
+      <span style={{ color:DS.text, fontWeight:500, textAlign:'right', minWidth:0, wordBreak:'break-word' }}>{v}</span>
+    </div>
+  ));
+  // Account rows with an optional copy button.
+  const acctRow = (label, value, copyVal) => (
+    <div key={label} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:12, padding:'9px 0', borderBottom:`1px solid ${DS.border}`, fontSize:13 }}>
+      <span style={{ color:DS.muted, flexShrink:0 }}>{label}</span>
+      <span style={{ display:'flex', alignItems:'center', gap:8, minWidth:0 }}>
+        <span style={{ color:DS.text, fontWeight:500, textAlign:'right', wordBreak:'break-word' }}>{value}</span>
+        {copyVal ? <button onClick={() => copy(copyVal)} title="Copy" style={{ background:'none', border:'none', cursor:'pointer', color:DS.faint, padding:2, display:'flex', flexShrink:0 }}><Icon name="copy" size={14} /></button> : null}
+      </span>
+    </div>
+  );
+  const kpiTile = (label, value, color) => (
+    <div key={label} style={{ padding:'12px 14px', background:DS.surface, border:`1px solid ${DS.border}`, borderRadius:10 }}>
+      <div style={{ fontSize:21, fontWeight:700, color:color||DS.text, lineHeight:1.1 }}>{value}</div>
+      <div style={{ fontSize:11.5, color:DS.muted, marginTop:3 }}>{label}</div>
+    </div>
+  );
+
+  const TABS = [
+    { id:'attainment', label:'Attainment',         icon:'chart' },
+    { id:'attendance', label:'Attendance',         icon:'calendar' },
+    { id:'homework',   label:'Homework',           icon:'clip' },
+    { id:'reports',    label:'Reports',            icon:'file' },
+    { id:'classes',    label:'Classes',            icon:'book' },
+    { id:'fees',       label:'Fees',               icon:'invoice' },
+    { id:'account',    label:'Account',            icon:'lock' },
+  ];
+  const gridCols = { display:'grid', gridTemplateColumns:'minmax(0,1fr) minmax(0,1fr)', gap:18, alignItems:'start' };
+
+  // ── LEFT (fixed): the most-referenced identity info, kept to hand while the
+  //    right-hand tabs scroll independently. ──
+  const aside = (
+    <aside style={{ width:336, flexShrink:0, overflow:'auto', display:'flex', flexDirection:'column', gap:16, paddingTop:2, paddingRight:2, paddingBottom:24 }}>
+      <Card title="Contact Details" icon="user" accent={DS.info}>
+        <div style={{ padding:'4px 20px 12px' }}>
+          {facts([
+            ['Year', student.year],
+            ['Date of birth', fmtBirthday(student.dob)],
+            student.dob && ['Age', studentAge(student.dob)+' years'],
+            ['Email', student.email || '—'],
+            ['Phone', student.phone || '—'],
+            ['Address', student.address || '—'],
+            ['Last seen', student.lastSeen || '—'],
+          ])}
+        </div>
+      </Card>
+
+      <Card title="Guardian" icon="users" accent="#DB2777">
+        <div style={{ padding:'4px 20px 14px' }}>
+          {facts([
+            ['Name', student.guardianName || '—'],
+            ['Relationship', student.guardianRelation || '—'],
+            ['Email', student.guardianEmail || '—'],
+            ['Phone', student.guardianPhone || '—'],
+            student.notes && ['Notes', student.notes],
+          ])}
+          {(student.guardianEmail || student.guardianPhone) && (
+            <div style={{ display:'flex', gap:8, marginTop:12 }}>
+              <Btn variant="secondary" small icon="mail" style={{ flex:1, justifyContent:'center' }}>Email</Btn>
+              <Btn variant="secondary" small icon="phone" style={{ flex:1, justifyContent:'center' }}>Call</Btn>
+            </div>
+          )}
+        </div>
+      </Card>
+    </aside>
+  );
+
+  // Data tabs are empty for a provisioned-but-not-enrolled student; Account & Access
+  // (and Fees) stay live — that's exactly where you'd (re)send their claim link.
+  const notStartedEmpty = (
+    <Card>
+      <EmptyState icon="clock" title="This student hasn't started yet"
+        message={`${student.firstName || studentName(student) || 'This student'} has an account but isn't enrolled in any classes yet, so there's no activity to analyse. Use the Account & Access tab to (re)send their claim link.`} />
+    </Card>
+  );
+
+  // ── Tab 1 · Attainment ──
+  const tabAttainment = (
+    <div style={gridCols}>
+      <Card title="Attainment overview" icon="chart" accent={DS.accent} style={span2}>
+        <div style={{ padding:'20px 24px', display:'flex', gap:28, alignItems:'center', flexWrap:'wrap' }}>
+          <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:10 }}>
+            <GaugeRing value={student.score||0} label={A.predictedGrade} sub="Predicted" color={gradeColour(student.score||0)} />
+            <Badge variant={student.status==='at-risk'?'danger':'success'}>{student.status==='at-risk'?'Needs support':'On track'}</Badge>
+          </div>
+          <div style={{ flex:1, minWidth:260, display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(118px,1fr))', gap:12 }}>
+            {kpiTile('Attendance', (student.attendance||0)+'%', (student.attendance||0)<80?DS.danger:DS.success)}
+            {kpiTile('Homework', (student.hw||0)+'%', (student.hw||0)<50?DS.danger:DS.success)}
+            {kpiTile('Avg score', (student.score||0)+'%', (student.score||0)<60?DS.danger:DS.success)}
+            {kpiTile('Engagement', A.engagement+'%', DS.info)}
+            {kpiTile('Target grade', A.targetGrade, DS.success)}
+          </div>
+        </div>
+      </Card>
+
+      <Card title="Subject Performance" icon="book" accent="#7C3AED" style={span2} subtitle={`Predicted grades and recent trend across ${A.subjectRows.length} subject${A.subjectRows.length===1?'':'s'}`}>
+        <Table cols={['Subject','Teacher','Latest','Predicted','Target','Trend','Status']}
+          rows={A.subjectRows.map(s => [
+            <span style={{ display:'flex', alignItems:'center', gap:9 }}><span style={{ width:9, height:9, borderRadius:3, background:subjectColor(s.name), flexShrink:0 }} /><span style={{ fontSize:13, fontWeight:600, color:DS.text }}>{s.name}</span></span>,
+            <span style={{ fontSize:13, color:DS.muted }}>{s.teacher}</span>,
+            <ScorePill score={s.score} />,
+            <span style={{ fontSize:13.5, fontWeight:700, color:DS.text }}>{s.predicted}</span>,
+            <span style={{ fontSize:13, color:DS.muted }}>{s.target}</span>,
+            <Sparkline data={s.spark} color={subjectColor(s.name)} width={84} height={26} />,
+            <Badge variant={s.onTrack?'success':'warning'}>{s.onTrack?'On track':'Below target'}</Badge>,
+          ])} />
+      </Card>
+
+      <Card title="Attainment Trend" icon="trending_up" accent={DS.info} subtitle="Score vs cohort">
+        <div style={{ padding:'16px 18px' }}>
+          <LineChart labels={ANALYTICS_MONTHS} height={196} series={[{ label:'Student %', data:A.trend, color:DS.accent }, { label:'Cohort %', data:A.cohort, color:DS.faint }]} />
+          <ChartLegend items={[['Student',DS.accent],['Cohort',DS.faint]]} />
+        </div>
+      </Card>
+      <Card title="Performance & Effort" icon="star" accent={DS.accent}>
+        <div style={{ padding:'18px 22px' }}>
+          {Object.entries(A.ratings).map(([k,v]) => <RatingBar key={k} label={k} value={v} />)}
+        </div>
+      </Card>
+
+      <Card title="Targets & Next Steps" icon="flag" accent={DS.success} style={span2}>
+        <div style={{ padding:'16px 22px', display:'flex', flexDirection:'column', gap:12 }}>
+          {A.targets.map((t,i) => (
+            <div key={i} style={{ display:'flex', gap:11, alignItems:'flex-start' }}>
+              <div style={{ width:22, height:22, borderRadius:'50%', background:DS.successBg, color:DS.success, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, marginTop:1 }}><Icon name="check" size={13} /></div>
+              <span style={{ fontSize:13, color:DS.sub, lineHeight:1.5 }}>{t}</span>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <Card title="Recent Activity" icon="clock" accent={DS.accent} style={span2}>
+        <div style={{ padding:'18px 22px', display:'grid', gridTemplateColumns:'1fr 1fr', gap:'14px 28px' }}>
+          {A.timeline.map((e,i) => (
+            <div key={i} style={{ display:'flex', gap:11, alignItems:'flex-start' }}>
+              <div style={{ width:30, height:30, borderRadius:'50%', background:e.color+'18', color:e.color, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}><Icon name={e.icon} size={15} /></div>
+              <div style={{ minWidth:0 }}>
+                <div style={{ fontSize:13, color:DS.sub, lineHeight:1.4 }}>{e.text}</div>
+                <div style={{ fontSize:11.5, color:DS.faint, marginTop:2 }}>{e.when}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+    </div>
+  );
+
+  // ── Tab 2 · Attendance ──
+  const tabAttendance = (
+    <div style={gridCols}>
+      <Card title="Attendance by Month" icon="calendar" accent={DS.success} style={span2} actions={<span style={{ fontSize:12, color:DS.muted }}>{student.attendance}% avg</span>}>
+        <div style={{ padding:'16px 18px' }}>
+          <BarChart labels={ANALYTICS_MONTHS} data={A.attendanceByMonth} color={DS.success} height={220} />
+        </div>
+      </Card>
+      <Card title="Recent Lessons" icon="calendar" accent="#0D9488" style={span2}>
+        <Table cols={['Date','Subject','Topic','Attendance','Participation']}
+          rows={A.lessons.map(l => [
+            <span style={{ fontSize:13, color:DS.sub }}>{l.day} {l.date}</span>,
+            <span style={{ fontSize:13, fontWeight:500, color:DS.text }}>{l.subject}</span>,
+            <span style={{ fontSize:13, color:DS.muted }}>{l.topic}</span>,
+            <Badge variant={l.attendance==='Present'?'success':l.attendance==='Late'?'warning':'danger'}>{l.attendance}</Badge>,
+            <span style={{ fontSize:13, color:DS.muted }}>{l.participation}</span>,
+          ])} />
+      </Card>
+    </div>
+  );
+
+  // ── Tab 3 · Homework ──
+  const tabHomework = (
+    <div style={gridCols}>
+      <Card title="Homework Submissions" icon="clip" accent="#0891B2" style={span2} actions={<span style={{ fontSize:12, color:DS.muted }}>{student.hw}% completion</span>}>
+        <Table cols={['Assignment','Subject','Set','Status','Score']}
+          rows={A.homework.map(h => [
+            <span style={{ fontSize:13, fontWeight:500, color:DS.text }}>{h.title}</span>,
+            <span style={{ fontSize:13, color:DS.muted }}>{h.subject}</span>,
+            <span style={{ fontSize:12.5, color:DS.muted }}>{h.set}d ago</span>,
+            <Badge variant={hwBadge(h.status)}>{h.status}</Badge>,
+            h.score==null ? <span style={{ fontSize:13, color:DS.faint }}>—</span> : <ScorePill score={h.score} />,
+          ])} />
+      </Card>
+    </div>
+  );
+
+  // ── Tab 4 · Reports & Feedback ──
+  const tabReports = (
+    <div style={gridCols}>
+      <Card title="Reports & Feedback" icon="file" accent="#D97706" style={span2} actions={<Btn variant="secondary" small icon="plus" onClick={() => window.__navigate && window.__navigate(role, 'reports')}>New</Btn>}>
+        <div>
+          {A.reports.map((r,i) => (
+            <div key={r.id} style={{ display:'flex', gap:12, padding:'13px 18px', borderBottom:i<A.reports.length-1?`1px solid ${DS.border}`:'none' }}>
+              <div style={{ width:34, height:34, borderRadius:9, background:subjectColor(r.subject)+'18', color:subjectColor(r.subject), display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}><Icon name="file" size={16} /></div>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}><span style={{ fontSize:13, fontWeight:600, color:DS.text }}>{r.subject}</span><Badge variant={r.status==='Published'?'success':'default'}>{r.status}</Badge></div>
+                <div style={{ fontSize:11.5, color:DS.muted, margin:'2px 0 5px' }}>{r.period} · {r.teacher} · Predicted {r.predicted}</div>
+                <div style={{ fontSize:12.5, color:DS.sub, lineHeight:1.45 }}>{r.summary}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <Card title="Teacher Reviews" icon="star" accent="#DC2626">
+        <div>
+          {A.reviews.map((r,i) => (
+            <div key={r.id} style={{ display:'flex', gap:12, padding:'13px 18px', borderBottom:i<A.reviews.length-1?`1px solid ${DS.border}`:'none' }}>
+              <Avatar name={r.teacher} size={34} />
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:8 }}><span style={{ fontSize:13, fontWeight:600, color:DS.text }}>{r.teacher}</span><StarRow n={r.rating} /></div>
+                <div style={{ fontSize:11.5, color:DS.muted, margin:'2px 0 5px' }}>{r.subject} · {r.date}</div>
+                <div style={{ fontSize:12.5, color:DS.sub, lineHeight:1.45 }}>{r.comment}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+      <Card title="Parents' Evenings & Meetings" icon="message" accent="#DB2777">
+        <div>
+          {A.meetings.map((m,i) => (
+            <div key={m.id} style={{ display:'flex', gap:12, padding:'13px 18px', borderBottom:i<A.meetings.length-1?`1px solid ${DS.border}`:'none' }}>
+              <div style={{ width:34, height:34, borderRadius:9, background:DS.accentLight, color:DS.accent, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}><Icon name="calendar" size={16} /></div>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ display:'flex', alignItems:'center', gap:8 }}><span style={{ fontSize:13, fontWeight:600, color:DS.text }}>{m.type}</span><Badge variant={m.status==='Completed'?'success':'info'}>{m.status}</Badge></div>
+                <div style={{ fontSize:11.5, color:DS.muted, margin:'2px 0 5px' }}>{m.date} · {m.who}</div>
+                <div style={{ fontSize:12.5, color:DS.sub, lineHeight:1.45 }}>{m.note}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+    </div>
+  );
+
+  // ── Tab 5 · Classes ──
+  const tabClasses = (
+    <div style={gridCols}>
+      <Card title={`Enrolled Classes · ${enrolledClasses.length}`} icon="users" accent={DS.accent} style={span2} subtitle={teachers.length?teachers.join(', '):undefined}>
+        <div style={{ padding:'16px 18px' }}>
+          {enrolledClasses.length ? (
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(280px,1fr))', gap:10 }}>
+              {enrolledClasses.map(c => (
+                <button key={c.id} onClick={() => isTeacher ? (window.__navigate && window.__navigate('teacher','classes')) : adminNav('class_detail', c.id)} style={{ display:'flex', alignItems:'center', gap:11, padding:'10px 12px', border:`1px solid ${DS.cardBorder}`, borderRadius:10, background:DS.bg, cursor:'pointer', textAlign:'left', width:'100%' }}>
+                  <div style={{ width:34, height:34, borderRadius:9, background:subjectColor(c.name)+'18', color:subjectColor(c.name), display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}><Icon name="book" size={16} /></div>
+                  <div style={{ flex:1, minWidth:0 }}><div style={{ fontSize:13, fontWeight:600, color:DS.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{c.name}</div><div style={{ fontSize:11.5, color:DS.muted }}>{c.group} · {c.teacher}</div></div>
+                  <span style={{ fontSize:11.5, color:DS.muted, whiteSpace:'nowrap' }}>{c.day} {c.time}</span>
+                </button>
+              ))}
+            </div>
+          ) : <span style={{ fontSize:13, color:DS.faint }}>Not enrolled in any classes.</span>}
+        </div>
+      </Card>
+    </div>
+  );
+
+  // ── Tab 6 · Fees & Invoices ──
+  const tabFees = (
+    <div style={gridCols}>
+      <Card title="Fees & Invoices" icon="invoice" accent="#16A34A" style={span2} actions={<Btn variant="secondary" small icon="invoice" onClick={() => adminNav('invoices')}>Open billing</Btn>}>
+        <div>
+          {invoices.length ? invoices.map((inv,i) => (
+            <div key={i} style={{ display:'flex', alignItems:'center', gap:12, padding:'13px 20px', borderBottom:i<invoices.length-1?`1px solid ${DS.border}`:'none' }}>
+              <div style={{ width:34, height:34, borderRadius:9, background:'#16A34A18', color:'#16A34A', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}><Icon name="invoice" size={16} /></div>
+              <div style={{ flex:1, minWidth:0 }}><div style={{ fontSize:13.5, fontWeight:600, color:DS.text }}>{inv.plan}</div><div style={{ fontSize:11.5, color:DS.muted }}>Due {inv.due}</div></div>
+              <span style={{ fontSize:14, fontWeight:700, color:DS.text }}>£{inv.amount}</span>
+              <Badge variant={inv.status==='paid'?'success':inv.status==='overdue'?'danger':'warning'}>{capWord(inv.status)}</Badge>
+            </div>
+          )) : <EmptyState icon="invoice" title="No invoices on record" message="When this student is added to a billing plan their invoices will appear here." />}
+        </div>
+      </Card>
+    </div>
+  );
+
+  // ── Tab 7 · Account & Access ──
+  const tabAccount = (
+    <div style={gridCols}>
+      <Card style={span2}>
+        <div style={{ padding:'14px 18px', display:'flex', gap:12, alignItems:'flex-start' }}>
+          <div style={{ width:30, height:30, borderRadius:8, background:DS.accentLight, color:DS.accent, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}><Icon name="shield" size={16} /></div>
+          <div style={{ fontSize:12.5, color:DS.sub, lineHeight:1.55 }}>
+            Students set their own PIN, password or QR sign-in when they claim their account, so the secret can't be viewed or typed here. Resetting re-issues their one-time claim link{under13?' (sent to the guardian for under-13s)':''}, or you can set a temporary PIN for an in-person reset.
+          </div>
+        </div>
+      </Card>
+
+      <Card title="Account" icon="user" accent={DS.muted}>
+        <div style={{ padding:'4px 20px 14px' }}>
+          {acctRow('Status', <Badge variant={account.status==='active'?'success':account.status==='pending'?'warning':account.status==='invited'?'info':'default'}>{capWord(account.status||'Unknown')}</Badge>)}
+          {account.tempCredential ? acctRow('Sign-in', <Badge variant="warning">Temporary PIN — must change</Badge>) : acctRow('Sign-in method', setupLbl)}
+          {acctRow('Username', account.username || '—', account.username)}
+          {acctRow('Login', account.syntheticEmail || student.email || '—', account.syntheticEmail || student.email)}
+          {acctRow('Centre code', centreCode, centreCode!=='—'?centreCode:null)}
+          {under13 ? acctRow('Under 13', 'Yes — guardian-managed') : null}
+          {account.consentRecorded!=null ? acctRow('Consent', account.consentRecorded?'Recorded':'Pending') : null}
+          {account.claimCode ? acctRow('Claim code', account.claimCode, account.claimCode) : null}
+          {account.activatedOn ? acctRow('Activated', account.activatedOn) : (account.provisionedOn ? acctRow('Provisioned', account.provisionedOn) : null)}
+        </div>
+      </Card>
+
+      <Card title="Sign-in & recovery" icon="lock" accent={DS.accent}>
+        <div style={{ padding:'16px 20px', display:'flex', flexDirection:'column', gap:14 }}>
+          <div>
+            <Btn variant="primary" icon="send" onClick={issueReset} style={{ width:'100%', justifyContent:'center' }}>Send / print reset link</Btn>
+            <div style={{ fontSize:12, color:DS.muted, marginTop:6, lineHeight:1.5 }}>Re-issue a one-time claim link{under13?' to the guardian':''} so they pick a new PIN, password or QR.</div>
+          </div>
+          <div>
+            <Btn variant="secondary" icon="pin" onClick={() => { setPin(''); setPinTouched(false); setPinOpen(true); }} style={{ width:'100%', justifyContent:'center' }}>Set a temporary PIN</Btn>
+            <div style={{ fontSize:12, color:DS.muted, marginTop:6, lineHeight:1.5 }}>For in-person resets — they change it on next sign-in.</div>
+          </div>
+          <div style={{ borderTop:`1px solid ${DS.border}`, paddingTop:14 }}>
+            <Btn variant="secondary" icon="lock" onClick={() => setRevokeOpen(true)} style={{ width:'100%', justifyContent:'center', color:DS.danger, borderColor:DS.dangerBorder }}>Revoke access</Btn>
+            <div style={{ fontSize:12, color:DS.muted, marginTop:6, lineHeight:1.5 }}>Disables sign-in; restore any time with a new link.</div>
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+
+  const tabBody = { attainment:tabAttainment, attendance:tabAttendance, homework:tabHomework, reports:tabReports, classes:tabClasses };
+  const panel = tab==='account' ? tabAccount
+    : tab==='fees' ? tabFees
+    : (notStarted ? notStartedEmpty : tabBody[tab]);
+
+  // ── RIGHT: tab strip + the active tab, scrolling on its own ──
+  const main = (
+    <main style={{ flex:1, minWidth:0, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+      <div style={{ flexShrink:0, display:'flex', gap:2, borderBottom:`1px solid ${DS.border}`, overflowX:'auto' }}>
+        {TABS.filter(t => !(isTeacher && (t.id === 'fees' || t.id === 'account'))).map(t => {
+          const active = tab===t.id;
+          return (
+            <button key={t.id} onClick={() => setTab(t.id)} style={{
+              display:'inline-flex', alignItems:'center', gap:7, padding:'11px 14px',
+              border:'none', background:'none', cursor:'pointer', whiteSpace:'nowrap',
+              fontSize:13, fontWeight:active?600:500, color:active?DS.accent:DS.muted,
+              borderBottom:`2px solid ${active?DS.accent:'transparent'}`, marginBottom:-1,
+            }}>
+              <Icon name={t.icon} size={15} color={active?DS.accent:DS.faint} />{t.label}
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ flex:1, overflow:'auto', paddingTop:16, paddingRight:2, paddingBottom:24 }}>
+        {panel}
+      </div>
+    </main>
+  );
+
+  // ── Reset / temp-PIN / revoke modals ──
+  const modals = (
+    <>
+      <Modal open={resetOpen} onClose={() => setResetOpen(false)} icon="send" iconColor={DS.accent}
+        title="Sign-in reset issued"
+        subtitle={under13 ? `${student.firstName || studentName(student)}'s parent/guardian completes the reset` : `${studentName(student)} chooses a new way to sign in`}
+        footer={<Btn variant="primary" onClick={() => setResetOpen(false)}>Done</Btn>}>
+        <div style={{ fontSize:13, color:DS.sub, lineHeight:1.6, marginBottom:16 }}>
+          A fresh one-time claim link has been generated and the account set back to <b>Pending setup</b>, so the old credential no longer works. {under13 ? 'Send the link to the guardian — consent stays recorded; they just set a new PIN.' : 'When opened, the student re-picks a PIN, password or QR sign-in.'}
+        </div>
+        {resetInfo && (<>
+          <div style={{ display:'grid', gap:10 }}>
+            <div style={{ padding:'12px 14px', background:DS.surface, border:`1px solid ${DS.border}`, borderRadius:10 }}>
+              <div style={{ fontSize:11, color:DS.faint, textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:6 }}>One-time claim code</div>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:10 }}>
+                <span style={{ fontFamily:"'JetBrains Mono', monospace", fontSize:18, fontWeight:700, letterSpacing:'1px', color:DS.text }}>{resetInfo.code}</span>
+                <Btn variant="ghost" small icon="copy" onClick={() => copy(resetInfo.code)}>Copy</Btn>
+              </div>
+            </div>
+            <div style={{ padding:'12px 14px', background:DS.surface, border:`1px solid ${DS.border}`, borderRadius:10 }}>
+              <div style={{ fontSize:11, color:DS.faint, textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:6 }}>Claim link</div>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:10 }}>
+                <span style={{ fontSize:12.5, color:DS.sub, wordBreak:'break-all' }}>{resetInfo.url}</span>
+                <Btn variant="ghost" small icon="copy" onClick={() => copy(resetInfo.url)}>Copy</Btn>
+              </div>
+            </div>
+            <div style={{ fontSize:12.5, color:DS.muted, display:'flex', alignItems:'center', gap:6 }}><Icon name="mail" size={14} color={DS.faint} />Will be sent to {resetTarget}</div>
+          </div>
+          <div style={{ display:'flex', gap:8, marginTop:16, flexWrap:'wrap' }}>
+            <Btn variant="primary" icon="send" onClick={() => copy(resetInfo.url)}>Email link</Btn>
+            <Btn variant="secondary" icon="print" onClick={() => window.print()}>Print slip</Btn>
+            <Btn variant="secondary" icon="eye" onClick={() => window.__openClaim && window.__openClaim(resetInfo.code)}>Preview claim page</Btn>
+          </div>
+        </>)}
+      </Modal>
+
+      <Modal open={pinOpen} onClose={() => { setPinOpen(false); setPin(''); setPinTouched(false); }} icon="pin" iconColor={DS.warning}
+        title="Set a temporary PIN"
+        subtitle="For in-person resets — the student changes it on next sign-in"
+        footer={<><Btn variant="ghost" onClick={() => { setPinOpen(false); setPin(''); setPinTouched(false); }}>Cancel</Btn><Btn variant="primary" icon="check" onClick={saveTempPin}>Set temporary PIN</Btn></>}>
+        <div style={{ fontSize:13, color:DS.sub, lineHeight:1.6, marginBottom:14 }}>
+          Read this 6-digit PIN to {studentName(student)}. They sign in with centre code <b>{centreCode}</b>, username <b>{account.username || '—'}</b> and this PIN, then set their own credential.
+        </div>
+        <Field label="Temporary 6-digit PIN" required error={pinTouched && !/^\d{6}$/.test(pin) ? 'Enter a 6-digit PIN' : ''}>
+          <Input value={pin} onChange={e => setPin(e.target.value.replace(/\D/g,'').slice(0,6))} invalid={(pinTouched && !/^\d{6}$/.test(pin)) || undefined} placeholder="••••••" style={{ letterSpacing:'8px', fontFamily:"'JetBrains Mono', monospace" }} />
+        </Field>
+      </Modal>
+
+      <Modal open={revokeOpen} onClose={() => setRevokeOpen(false)} icon="lock" iconColor={DS.danger}
+        title="Revoke access?"
+        subtitle={`${studentName(student)} will no longer be able to sign in`}
+        footer={<><Btn variant="ghost" onClick={() => setRevokeOpen(false)}>Cancel</Btn><Btn variant="danger" icon="lock" onClick={revoke}>Revoke access</Btn></>}>
+        <div style={{ fontSize:13, color:DS.sub, lineHeight:1.6 }}>
+          This disables the account and sets it back to <b>Invited</b>. Their data is kept — issue a new reset link any time to restore access.
+        </div>
+      </Modal>
+    </>
+  );
+
+  return (
+    <>
+      <div style={{ flex:1, display:'flex', gap:18, overflow:'hidden', minHeight:0, padding:'0 28px' }}>
+        {aside}
+        {main}
+      </div>
+      {modals}
+    </>
+  );
+};
+
+const StudentProfilePage = ({ role = 'admin' } = {}) => {
+  const store = useAdminStore();
+  const isTeacher = role === 'teacher';   // teacher = read-only, no Fees/Account, no Edit
   const id = adminParam();
   const student = store.students.find(s => s.id === id);
   const [editing, setEditing] = React.useState(false);
@@ -577,12 +1244,10 @@ const StudentProfilePage = () => {
 
   const enrolledClasses = (form.classIds || []).map(cid => store.classes.find(c => c.id === cid)).filter(Boolean);
 
-  return (
-    <div style={{ padding:'32px', maxWidth:1040, margin:'0 auto' }}>
-      <FlowHeader title={studentName(student)} subtitle={`${student.year} · ${(student.subjects||[]).join(', ') || 'No subjects'}`} onBack={() => adminNav('students')} />
-
-      {/* Hero */}
-      <Card style={{ marginBottom:20 }}>
+  const header = (
+    <>
+      <FlowHeader title={studentName(student)} subtitle={`${student.year} · ${(student.subjects||[]).join(', ') || 'No subjects'}`} onBack={() => isTeacher ? (window.__navigate && window.__navigate('teacher','students')) : adminNav('students')} />
+      <Card style={{ marginBottom: editing ? 20 : 16 }}>
         <div style={{ padding:'22px 24px', display:'flex', alignItems:'center', gap:18 }}>
           <Avatar name={studentName(student)} size={64} />
           <div style={{ flex:1, minWidth:0 }}>
@@ -593,19 +1258,28 @@ const StudentProfilePage = () => {
           <div style={{ display:'flex', gap:8 }}>
             {editing
               ? <><Btn variant="ghost" onClick={cancel}>Cancel</Btn><Btn variant="primary" icon="check" onClick={save}>Save Changes</Btn></>
-              : <><Btn variant="secondary" icon="message">Message</Btn><Btn variant="primary" icon="edit" onClick={() => setEditing(true)}>Edit Profile</Btn></>}
+              : <><Btn variant="secondary" icon="print" onClick={() => window.print()}>Print</Btn><Btn variant="secondary" icon="message" onClick={() => window.__navigate && window.__navigate(role, 'comms')}>Message</Btn>{!isTeacher && <Btn variant="primary" icon="edit" onClick={() => setEditing(true)}>Edit Profile</Btn>}</>}
           </div>
         </div>
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', borderTop:`1px solid ${DS.border}` }}>
-          {[['Attendance', student.attendance + '%', student.attendance < 80 ? DS.danger : DS.success], ['HW Completion', student.hw + '%', student.hw < 50 ? DS.danger : DS.success], ['Avg Score', student.score + '%', student.score < 60 ? DS.danger : DS.success]].map(([l,v,c], i) => (
-            <div key={l} style={{ padding:'16px 24px', borderLeft: i ? `1px solid ${DS.border}` : 'none' }}>
-              <div style={{ fontSize:12, color:DS.muted }}>{l}</div>
-              <div style={{ fontSize:22, fontWeight:700, color:c, marginTop:2 }}>{v}</div>
-            </div>
-          ))}
-        </div>
       </Card>
+    </>
+  );
 
+  // View mode = fixed full-height shell: the banner and left aside stay put while
+  // the right-hand tabs scroll on their own. Edit mode keeps the narrow form below.
+  if (!editing) {
+    return (
+      <div style={{ height:'calc(100vh - 52px)', display:'flex', flexDirection:'column', overflow:'hidden' }}>
+        <div style={{ flexShrink:0, padding:'24px 28px 0' }}>{header}</div>
+        <StudentAnalyticsView key={student.id} student={student} enrolledClasses={enrolledClasses} role={role} />
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding:'32px', maxWidth:1040, margin:'0 auto' }}>
+      {header}
+      {(<>
       <Card title="Personal Details" style={{ marginBottom:20 }}>
         <div style={{ padding:'20px 24px' }}>
           {editing ? (
@@ -673,6 +1347,7 @@ const StudentProfilePage = () => {
             )}
         </div>
       </Card>
+      </>)}
     </div>
   );
 };
@@ -2410,6 +3085,8 @@ const AdminPages = ({ page, section }) => {
   if (page === 'class_detail')    return <ClassDetailPage />;
   if (page === 'subject_detail')  return <SubjectDetailPage />;
   if (page === 'teachers')        return <AdminTeachersPage />;
+  // Staff › Roles & access (Team.jsx, loaded after this file; exposes AdminTeamPage on window).
+  if (page === 'team')            return window.AdminTeamPage ? <window.AdminTeamPage /> : null;
   if (page === 'teachers_add')    return <AddTeacherPage />;
   if (page === 'teacher_profile') return <TeacherProfilePage />;
   if (page === 'invoices')        return <AdminInvoicesPage />;

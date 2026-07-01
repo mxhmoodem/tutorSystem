@@ -15,6 +15,12 @@
   <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
   <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
   <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+  <!-- Recharts (the charting engine shadcn/ui charts are built on) — UMD build,
+       exposed as window.Recharts. Loaded before shared.jsx, which wraps it in
+       shadcn-styled <Sparkline/> / <LineChart/> / <BarChart/> components. Its UMD
+       factory needs window.React (above) and window.PropTypes (loaded here). -->
+  <script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/recharts@2.15.4/umd/Recharts.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/mathlive@0.101.2/dist/mathlive.min.js"></script>
   <style>
@@ -54,6 +60,12 @@
 <script type="text/babel" src="mocks/onboarding.mock.jsx"></script>
 <script type="text/babel" src="mocks/plans.mock.jsx"></script>
 <script type="text/babel" src="mocks/timesheets.mock.jsx"></script>
+<script type="text/babel" src="mocks/storage.mock.jsx"></script>
+
+<!-- Centralised role & permission helpers (hasRole / isAccountOwner / canManage*).
+     Loads after the mocks (needs ONB_* globals) and before the page modules that
+     route role/permission checks through it. -->
+<script type="text/babel" src="permissions.jsx"></script>
 
 <!-- Reports module (consumes reports.mock; consumed by Teacher/Student/Admin pages) -->
 <script type="text/babel" src="Reports.jsx"></script>
@@ -91,6 +103,16 @@
 <!-- Plan-aware multi-centre management. Loads after Auth.jsx — reuses genCentreCode
      (Auth) + onboarding helpers; drives the sidebar centre switcher via index.html. -->
 <script type="text/babel" src="Centres.jsx"></script>
+
+<!-- Team (Roles & access). Loads after Onboarding.jsx + Centres.jsx — consumes
+     their stores + permissions.jsx; exposes AdminTeamPage for the AdminPages router. -->
+<script type="text/babel" src="Team.jsx"></script>
+
+<!-- Storage usage & quota (account layer above centre; R2 prototype config, per-role
+     Storage tabs inside Settings, upload guard). Loads after Plans.jsx + Centres.jsx
+     (getPlan / useSubscriptionStore) and mocks/storage.mock.jsx; consumed lazily by
+     Settings.jsx's tab registry + the sidebar storage meter (index.html). -->
+<script type="text/babel" src="Storage.jsx"></script>
 
 <script type="text/babel" src="TeacherDashboard.jsx"></script>
 <script type="text/babel" src="TeacherPages.jsx"></script>
@@ -138,9 +160,44 @@ const buildCrumbs = (role, page) => {
   return crumbs;
 };
 
-const TopBar = ({ view, page, onBack, accent, comms, onNavigate, collapsed, onToggleSidebar }) => {
-  const [hovBack, setHovBack] = React.useState(false);
+// Format an ISO date (yyyy-mm-dd) as a short "6 Jan 2026" for the term tooltip.
+const fmtTermDate = (iso) => {
+  if (!iso) return '';
+  const [y, m, d] = String(iso).split('-').map(Number);
+  if (!y || !m || !d) return iso;
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return `${d} ${months[m - 1]} ${y}`;
+};
+
+// The header term indicator shows whichever academic term is running *today*.
+// Admins configure the whole term schedule in Settings → Centre; we resolve the
+// current term from today's date here, so it switches automatically as each new
+// term begins (no manual flip). It's a centre-wide value, so we read the admin
+// centre block from the settings store directly (localStorage isn't reactive
+// across hook instances; reading on each render keeps it fresh on navigation).
+const readTermIndicator = () => {
+  try {
+    const blob = JSON.parse(localStorage.getItem('settings_store_v1') || '{}');
+    const c = (blob.admin && blob.admin.centre) || {};
+    const { term, status } = resolveActiveTerm(getCentreTerms(c));
+    if (term) return { name: term.name || 'Untitled term', start: term.start || '', end: term.end || '', status };
+  } catch (e) {}
+  return { name: 'No term set', start: '', end: '', status: 'none' };
+};
+
+const TopBar = ({ view, page, comms, onNavigate, collapsed, onToggleSidebar }) => {
   const crumbs = buildCrumbs(view, page);
+  const term = readTermIndicator();
+  const termRange = term.start && term.end
+    ? `${fmtTermDate(term.start)} – ${fmtTermDate(term.end)}` : '';
+  // Dot + tooltip reflect whether the resolved term is running now, still to
+  // come, or already finished.
+  const termDot = term.status === 'active' ? '#16A34A'
+    : term.status === 'upcoming' ? '#D97706' : '#9CA3AF';
+  const periodTitle = term.status === 'active' ? (termRange ? `Current term · ${termRange}` : 'Current term')
+    : term.status === 'upcoming' ? (term.start ? `Upcoming · starts ${fmtTermDate(term.start)}` : 'Upcoming term')
+    : term.status === 'ended' ? (termRange ? `Most recent term · ${termRange}` : 'Most recent term')
+    : 'No term scheduled';
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 6,
@@ -180,9 +237,11 @@ const TopBar = ({ view, page, onBack, accent, comms, onNavigate, collapsed, onTo
         ))}
       </nav>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#16A34A' }} />
-        <span style={{ fontSize: 12, color: '#6B7280' }}>Spring Term 2026</span>
+      {/* Term indicator — the term running today (auto-resolved from the centre's
+          term schedule); status colours the dot, date range shows on hover. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }} title={periodTitle}>
+        <div style={{ width: 6, height: 6, borderRadius: '50%', background: termDot }} />
+        <span style={{ fontSize: 12, color: '#6B7280' }}>{term.name}</span>
       </div>
       {/* Live notification bell — aggregates unread announcements + messages */}
       {comms && window.NotificationBell
@@ -192,19 +251,6 @@ const TopBar = ({ view, page, onBack, accent, comms, onNavigate, collapsed, onTo
             <Icon name="bell" size={16} />
           </button>
         )}
-      <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6B7280', padding: '4px', display: 'flex' }}>
-        <Icon name="search" size={16} />
-      </button>
-      <div style={{ width: 1, height: 18, background: DS.border, margin: '0 2px' }} />
-      <button onClick={onBack}
-        onMouseEnter={() => setHovBack(true)} onMouseLeave={() => setHovBack(false)}
-        style={{
-          display: 'flex', alignItems: 'center', gap: 5,
-          background: hovBack ? DS.surfaceHover : 'none', border: 'none', cursor: 'pointer',
-          color: '#6B7280', fontSize: 12, padding: '5px 8px', borderRadius: 6,
-        }}>
-        ← Exit
-      </button>
     </div>
   );
 };
@@ -258,6 +304,9 @@ const App = () => {
   // centre (with its granted roles). Admin/teacher only; students/superadmin keep
   // the static product header. Reuses the onboarding store's membership list.
   const sub = window.useSubscriptionStore ? window.useSubscriptionStore() : null;
+  // Subscribe so the sidebar storage meter re-derives live when files are deleted
+  // or an add-on block / plan changes (usage is computed, never stored).
+  const stg = window.useStorageStore ? window.useStorageStore() : null;
   const centreNav = React.useMemo(() => {
     if (!sub || (view !== 'admin' && view !== 'teacher') || !window.ONB_SESSION) return null;
     // The Centres page (subscription store) is the single source of truth for the
@@ -364,6 +413,10 @@ const App = () => {
     }
     if (view === 'teacher') {
       if (parent === 'classes')        return <TeacherPages page="classes" />;
+      if (parent === 'class_detail')   return <TeacherPages page="class_detail" />;
+      if (parent === 'students')       return <TeacherPages page="students" />;
+      // Shared rich profile (AdminPages.jsx), read-only for teachers — no Fees/Account tabs.
+      if (parent === 'student_profile') return <StudentProfilePage role="teacher" />;
       if (parent === 'timetable')      return <TeacherPages page="timetable" />;
       if (parent === 'homework')       return <TeacherPages page="homework" section={section} />;
       if (parent === 'progress')       return <TeacherPages page="progress" />;
@@ -402,7 +455,15 @@ const App = () => {
             centre={centreNav ? centreNav.centre : null}
             centres={centreNav ? centreNav.centres : null}
             planUsage={centreNav ? centreNav.planUsage : null}
-            cloudStorage={view === 'admin' && sub ? { usedGb: sub.storageUsedGb ?? 0, totalGb: (sub.plan && sub.plan.storageGb) || 0 } : null}
+            cloudStorage={view === 'admin' && sub && window.stgUsageByAccount ? (() => {
+              // Derived live from file records — never a stored running total. Admin sees
+              // their own account's usage against the plan quota (+ any add-on blocks).
+              const GB = window.STORAGE_GB || (1024 ** 3);
+              const acctId = window.STG_SELF_ACCT || 'acc_brightminds';
+              const used = window.stgUsageByAccount(acctId);
+              const quota = window.stgQuotaForAccount({ accountId: acctId, planId: sub.planId });
+              return { usedGb: +(used / GB).toFixed(1), totalGb: Math.round(quota / GB) };
+            })() : null}
             identityName={centreNav ? window.ONB_SESSION.name : null}
             onSwitchCentre={(id) => {
               window.__setCentre && window.__setCentre(id);
@@ -416,7 +477,7 @@ const App = () => {
             {/* The header is sticky *inside* the scroll area so page content
                 scrolls beneath it — that's what makes the glass blur visible. */}
             <div style={{ flex: 1, overflow: 'auto', position: 'relative' }}>
-              <TopBar view={view} page={page} onBack={() => setView('landing')} accent={tweaks.accent}
+              <TopBar view={view} page={page}
                 comms={comms} onNavigate={(role, pg) => window.__navigate(role, pg)}
                 collapsed={sidebarCollapsed} onToggleSidebar={() => setSidebarCollapsed(c => !c)} />
               {renderContent()}
@@ -464,6 +525,7 @@ const App = () => {
             ['admin',    'students',   'Admin — Students'],
             ['admin',    'classes',    'Admin — Classes'],
             ['admin',    'teachers',   'Admin — Staff · Teachers'],
+            ['admin',    'team',       'Admin — Staff · Roles & access'],
             ['admin',    'timesheets:review', 'Admin — Staff · Timesheets'],
             ['admin',    'schedule',   'Admin — Schedule'],
             ['admin',    'invoices',   'Admin — Invoices'],

@@ -12,7 +12,7 @@
 //    { id, centreId, teacherId, sessionId, type, date, durationMinutes,
 //      status, note, approvedBy, approvedAt }
 //
-//  Persisted to localStorage `tutoros.timesheets.v1`, seeded from
+//  Persisted to localStorage `tutoros.timesheets.v2`, seeded from
 //  SEED_TIME_ENTRIES. Like the admin store, each page/component calls
 //  useTimesheetStore() independently — state syncs through localStorage, so a
 //  change on one surface reflects on another after remount (fine for the demo;
@@ -24,7 +24,7 @@
 //  into a plain document layout.
 // ══════════════════════════════════════════════════════════════
 
-const TIMESHEET_KEY    = 'tutoros.timesheets.v1';
+const TIMESHEET_KEY    = 'tutoros.timesheets.v2';   // v2: reseed for the wider staff set + pay fields
 const TIMESHEET_CENTRE = 'centre-001';                  // single demo centre
 const TIMESHEET_ADMIN  = { id: 'a1', name: 'Lisa Chen' }; // current admin (matches sidebar identity)
 
@@ -62,7 +62,101 @@ const TS_FREQUENCIES = [
   { id: 'month',     label: 'Monthly',     mode: 'month',     noun: 'month'     },
 ];
 const TS_FREQ = Object.fromEntries(TS_FREQUENCIES.map(f => [f.id, f]));
-const TS_DEFAULT_CONFIG = { submissionFrequency: 'week' };
+
+// Centre pay policy lives in the timesheet store config (NOT the settings store) so
+// the derived timesheet recomputes the moment an admin flips a toggle. `payNonSession`
+// is the master switch; `paidCategories` then gates each non-session category. 'other'
+// is intentionally never listed here → it is recorded but never pay-eligible.
+const TS_PAID_CATEGORIES = [
+  { id: 'prep',     label: 'Prep'     },
+  { id: 'marking',  label: 'Marking'  },
+  { id: 'meeting',  label: 'Meetings' },
+  { id: 'training', label: 'Training' },
+];
+const TS_DEFAULT_CONFIG = {
+  submissionFrequency: 'week',
+  payNonSession: true,
+  paidCategories: { prep: true, marking: true, meeting: true, training: true },
+};
+
+// ─── Employment + pay-eligibility (derivation only — never stored on the line) ───
+// Each teacher carries an employment type + hourly rate on the admin store record
+// (payType / hourlyRate, edited inline in Settings → Centre). These seed defaults give
+// the demo a realistic spread (Sarah = mixed, David/Tom = hourly) before any edit; a
+// stored value on the teacher always wins.
+const TS_EMPLOYMENT_TYPES = [
+  { id: 'salaried', label: 'Salaried' },
+  { id: 'hourly',   label: 'Hourly'   },
+  { id: 'mixed',    label: 'Mixed'    },
+];
+const TS_EMP_LABEL = Object.fromEntries(TS_EMPLOYMENT_TYPES.map(e => [e.id, e.label]));
+const TS_EMP_DEFAULTS = {
+  t1: { payType: 'mixed',  hourlyRate: 35 },  // Sarah Clarke — salary + paid cover/extras
+  t3: { payType: 'hourly', hourlyRate: 32 },  // David Park
+  t8: { payType: 'hourly', hourlyRate: 28 },  // Tom Rivera
+};
+const tsEmployment = (teacher) => {
+  if (!teacher) return { payType: 'salaried', hourlyRate: 0 };
+  const d = TS_EMP_DEFAULTS[teacher.id] || { payType: 'salaried', hourlyRate: 0 };
+  return {
+    payType: teacher.payType || d.payType,
+    hourlyRate: (teacher.hourlyRate != null ? teacher.hourlyRate : d.hourlyRate) || 0,
+  };
+};
+
+const tsIsTeachingType = (type) => type === 'teaching' || type === 'cover';
+
+// Who the class is rostered to (sessionId = `${classId}|date`) — used to tell a
+// teacher's own session apart from cover/extra delivery.
+const tsRosteredTeacherId = (sessionId, teachers, classes) => {
+  if (!sessionId) return null;
+  const classId = String(sessionId).split('|')[0];
+  const cls = (classes || window.SEED_CLASSES || []).find(c => c.id === classId);
+  if (!cls) return null;
+  const t = (teachers || window.SEED_TEACHERS || []).find(x => x.name === cls.teacher);
+  return t ? t.id : null;
+};
+
+// The pay rules, in one place. ctx = { teacher, rosteredTeacherId, config }.
+//   Teaching/cover : hourly → paid · salaried → never · mixed → only cover/extra
+//   Non-session    : paid only if centre pays non-session AND the category is paid
+//                    AND the teacher is hourly or mixed
+// Salaried lines always report hours but no pay (kept for the audit trail).
+const tsPayFor = (entry, ctx) => {
+  const { payType, hourlyRate } = tsEmployment(ctx.teacher);
+  const hours = tsHours(entry.durationMinutes);
+  const isTeaching = tsIsTeachingType(entry.type);
+  const isCoverExtra = entry.type === 'cover'
+    || (!!entry.sessionId && !!ctx.rosteredTeacherId && entry.teacherId !== ctx.rosteredTeacherId);
+  let eligible = false;
+  if (isTeaching) {
+    if (payType === 'hourly') eligible = true;
+    else if (payType === 'mixed') eligible = isCoverExtra;
+    else eligible = false;                                   // salaried
+  } else {
+    const cfg = ctx.config || {};
+    const catPaid = cfg.payNonSession && (cfg.paidCategories || {})[entry.type];
+    eligible = !!catPaid && (payType === 'hourly' || payType === 'mixed');
+  }
+  return {
+    payType, rate: hourlyRate, hours, eligible, isCoverExtra,
+    estPay: eligible ? Math.round(hours * hourlyRate * 100) / 100 : 0,
+  };
+};
+const tsMoney = (n) => '£' + (Math.round((n || 0) * 100) / 100).toFixed(2);
+
+// Build a pay-context resolver for a set of entries from the admin store (teachers +
+// classes) and the centre pay config. One place wires the derivation inputs together.
+const tsMakeResolve = (adminStore, config) => (entry) => {
+  const teacher = adminStore.teachers.find(t => t.id === entry.teacherId);
+  const rosteredTeacherId = tsRosteredTeacherId(entry.sessionId, adminStore.teachers, adminStore.classes);
+  let scheduledMinutes = entry.durationMinutes;
+  if (entry.sessionId) {
+    const cls = adminStore.classes.find(c => c.id === String(entry.sessionId).split('|')[0]);
+    if (cls) scheduledMinutes = tsSessionMinutes(cls.time);
+  }
+  return { teacher, rosteredTeacherId, config, scheduledMinutes };
+};
 
 // ─── Pure helpers ────────────────────────────────────────────────────────────
 const tsUID = (p = 'te') => p + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -134,37 +228,59 @@ const tsSetAdminPeriod = (p) => { TS_ADMIN_PERIOD = p; };
 
 // ─── Store (localStorage-backed) ─────────────────────────────────────────────
 const useTimesheetStore = () => {
+  const mergeConfig = (c) => ({
+    ...TS_DEFAULT_CONFIG, ...(c || {}),
+    paidCategories: { ...TS_DEFAULT_CONFIG.paidCategories, ...((c || {}).paidCategories || {}) },
+  });
   const read = () => {
     try {
       const raw = localStorage.getItem(TIMESHEET_KEY);
-      if (raw) { const p = JSON.parse(raw); return { entries: p.entries || SEED_TIME_ENTRIES, config: { ...TS_DEFAULT_CONFIG, ...(p.config || {}) } }; }
+      if (raw) { const p = JSON.parse(raw); return { entries: p.entries || SEED_TIME_ENTRIES, config: mergeConfig(p.config), cancelled: p.cancelled || [] }; }
     } catch (e) { /* ignore */ }
-    return { entries: SEED_TIME_ENTRIES, config: { ...TS_DEFAULT_CONFIG } };
+    return { entries: SEED_TIME_ENTRIES, config: mergeConfig(), cancelled: [] };
   };
   const [store, setStore] = React.useState(read);
   const persist = (next) => { setStore(next); try { localStorage.setItem(TIMESHEET_KEY, JSON.stringify(next)); } catch (e) {} };
 
-  // Submission policy (e.g. how often teachers submit). Admin-set, centre-wide.
-  const setConfig = (patch) => persist({ ...store, config: { ...store.config, ...patch } });
+  // Submission policy + pay policy. Admin-set, centre-wide. Patching paidCategories
+  // merges (so toggling one category doesn't drop the others).
+  const setConfig = (patch) => persist({
+    ...store,
+    config: { ...store.config, ...patch, paidCategories: { ...store.config.paidCategories, ...(patch.paidCategories || {}) } },
+  });
+
+  // A cancelled session produces no timesheet line. We remember its sessionId so the
+  // day view can grey it; cancelling also removes any teaching line already captured.
+  const setCancelled = (sessionId, flag) => {
+    const set = new Set(store.cancelled || []);
+    if (flag) set.add(sessionId); else set.delete(sessionId);
+    persist({ ...store, cancelled: [...set], entries: flag ? store.entries.filter(e => e.sessionId !== sessionId) : store.entries });
+  };
 
   // Capture from the register — upsert keyed on sessionId so confirming the
   // register a second time updates the existing entry, never duplicates it. We
   // never clobber a non-draft status (e.g. the entry was already submitted).
-  const captureTeaching = ({ sessionId, teacherId, centreId, date, durationMinutes, note }) => {
+  // `type` is 'teaching' for the rostered teacher, 'cover' when delivered by someone
+  // else. Confirming a register also lifts any prior cancellation on that session.
+  const captureTeaching = ({ sessionId, teacherId, centreId, date, durationMinutes, note, type }) => {
+    const kind = type || 'teaching';
     const existing = store.entries.find(e => e.sessionId === sessionId);
+    const cancelled = (store.cancelled || []).filter(id => id !== sessionId);
     if (existing) {
-      // Update duration/note in place; never touch the status (it may already be submitted).
-      persist({ ...store, entries: store.entries.map(e => e.sessionId === sessionId
-        ? { ...e, durationMinutes, note: note != null ? note : e.note }
+      // Keep duration/note/deliverer in sync while still teacher-editable; never touch
+      // a submitted/approved line (status nor deliverer).
+      const live = TS_TEACHER_EDITABLE.has(existing.status);
+      persist({ ...store, cancelled, entries: store.entries.map(e => e.sessionId === sessionId
+        ? { ...e, durationMinutes, note: note != null ? note : e.note, ...(live ? { teacherId, type: kind } : {}) }
         : e) });
       return existing.id;
     }
     const entry = {
       id: tsUID(), centreId: centreId || TIMESHEET_CENTRE, teacherId, sessionId,
-      type: 'teaching', date, durationMinutes, status: 'draft', note: note || '',
+      type: kind, date, durationMinutes, status: 'draft', note: note || '',
       approvedBy: null, approvedAt: null,
     };
-    persist({ ...store, entries: [entry, ...store.entries] });
+    persist({ ...store, cancelled, entries: [entry, ...store.entries] });
     return entry.id;
   };
 
@@ -205,18 +321,27 @@ const useTimesheetStore = () => {
     persist({ ...store, entries: store.entries.map(e => set.has(e.id) && e.status === 'approved' ? { ...e, status: 'exported' } : e) });
   };
 
-  return { entries: store.entries, config: store.config, setConfig, captureTeaching, addManual, updateEntry, removeEntry, submitEntries, approve, approveMany, reject, markExported };
+  return { entries: store.entries, config: store.config, cancelled: store.cancelled || [], setConfig, setCancelled, captureTeaching, addManual, updateEntry, removeEntry, submitEntries, approve, approveMany, reject, markExported };
 };
 
 // ─── CSV + PDF export (no libraries) ─────────────────────────────────────────
 const tsCsvEsc = (s) => { const v = String(s == null ? '' : s); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
-const tsBuildCSV = (entries) => {
-  const head = ['Teacher', 'Date', 'Type', 'Hours', 'Session reference', 'Status', 'Note'];
-  const rows = entries.map(e => [
-    tsTeacherName(e.teacherId), e.date, (TS_TYPE[e.type] || {}).label || e.type,
-    tsHours(e.durationMinutes).toFixed(2), e.sessionId ? tsSessionRef(e.sessionId) : '—',
-    (TS_STATUS_META[e.status] || {}).label || e.status, e.note || '',
-  ]);
+// `resolve(entry)` returns { teacher, rosteredTeacherId, config, scheduledMinutes }
+// so the export reports derived scheduled hours, pay-eligibility, rate and est. pay.
+const tsBuildCSV = (entries, resolve) => {
+  const head = ['Date', 'Teacher', 'Employment', 'Type', 'Detail', 'Scheduled hrs', 'Delivered hrs', 'Pay-eligible', 'Rate', 'Est. pay', 'Status'];
+  const rows = entries.map(e => {
+    const ctx = (resolve && resolve(e)) || {};
+    const pay = tsPayFor(e, ctx);
+    const sched = ctx.scheduledMinutes != null ? ctx.scheduledMinutes : e.durationMinutes;
+    return [
+      e.date, tsTeacherName(e.teacherId), TS_EMP_LABEL[pay.payType] || pay.payType,
+      (TS_TYPE[e.type] || {}).label || e.type, e.sessionId ? tsSessionRef(e.sessionId) : (e.note || '—'),
+      tsHours(sched).toFixed(2), tsHours(e.durationMinutes).toFixed(2),
+      pay.eligible ? 'Yes' : 'No', pay.rate ? pay.rate.toFixed(2) : '—',
+      pay.eligible ? pay.estPay.toFixed(2) : '—', (TS_STATUS_META[e.status] || {}).label || e.status,
+    ];
+  });
   return [head, ...rows].map(r => r.map(tsCsvEsc).join(',')).join('\r\n');
 };
 const tsDownloadCSV = (filename, text) => {
@@ -270,6 +395,47 @@ const tsRollup = (entries) => {
   return { total, byType };
 };
 
+// Derived pay summary for a set of entries. `resolve(entry)` → pay ctx (teacher etc.).
+// Returns total minutes, estimated eligible pay, and the count awaiting approval.
+const tsPaySummary = (entries, resolve) => {
+  let total = 0, eligiblePay = 0, awaiting = 0;
+  entries.forEach(e => {
+    total += e.durationMinutes || 0;
+    if (e.status === 'submitted') awaiting += 1;
+    eligiblePay += tsPayFor(e, (resolve && resolve(e)) || {}).estPay;
+  });
+  return { total, eligiblePay: Math.round(eligiblePay * 100) / 100, awaiting };
+};
+
+// A small "cover / extra" tag for lines paid as extra delivery.
+const TsCoverTag = () => (
+  <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '0.04em', color: TS_TYPE.cover.color, background: TS_TYPE.cover.color + '18', padding: '1px 6px', borderRadius: 5, textTransform: 'uppercase' }}>Cover</span>
+);
+
+// A stacked stat list — the single summary card on the timesheet pages.
+const TsSummaryRows = ({ rows }) => (
+  <div>
+    {rows.map((r, i) => (
+      <div key={r.label} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 20px', borderBottom: i < rows.length - 1 ? `1px solid ${DS.border}` : 'none' }}>
+        <div style={{ width: 32, height: 32, borderRadius: 8, flexShrink: 0, background: r.accent ? DS.accentLight : DS.surface, color: r.accent ? DS.accent : DS.muted, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Icon name={r.icon} size={16} />
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 12.5, color: DS.muted }}>{r.label}</div>
+          {r.sub && <div style={{ fontSize: 11, color: DS.faint, marginTop: 1 }}>{r.sub}</div>}
+        </div>
+        <div style={{ fontSize: 18, fontWeight: 700, color: r.accent ? DS.accent : DS.text, fontVariantNumeric: 'tabular-nums' }}>{r.value}</div>
+      </div>
+    ))}
+  </div>
+);
+
+// Compact est-pay / eligibility chip used on review rows.
+const TsPayChip = ({ pay }) => {
+  if (pay.eligible) return <span style={{ fontSize: 12.5, fontWeight: 700, color: DS.success, fontVariantNumeric: 'tabular-nums' }}>{tsMoney(pay.estPay)}</span>;
+  return <span style={{ fontSize: 11.5, color: DS.faint }} title={pay.payType === 'salaried' ? 'Salaried — recorded, not pay-eligible' : 'Not pay-eligible'}>{pay.payType === 'salaried' ? 'Salaried' : 'No pay'}</span>;
+};
+
 const TsTypeBreakdown = ({ entries }) => {
   const { total, byType } = tsRollup(entries);
   const rows = TS_TYPES.filter(t => byType[t.id]).map(t => ({ ...t, min: byType[t.id] }));
@@ -321,10 +487,14 @@ const TsPeriodControl = ({ period, onChange }) => (
 // case. The teacher can nudge the duration (ran over / started late) and add an
 // optional note. The draft TimeEntry is upserted on sessionId when the register
 // is confirmed (`registered`) and stays in sync with later tweaks.
-const TimesheetCapture = ({ session, registered }) => {
-  const store = useTimesheetStore();
+const TimesheetCapture = ({ session, registered, store: propStore, teachers, deliveredBy, onDeliveredBy, rosteredTeacherId, cancelled }) => {
+  const ownStore = useTimesheetStore();
+  const store = propStore || ownStore;
   const existing = session && session.sessionId ? store.entries.find(e => e.sessionId === session.sessionId) : null;
   const sched = (session && session.scheduledMinutes) || 90;
+  const rostered = rosteredTeacherId || (session && session.teacherId);
+  const isCover = !!deliveredBy && !!rostered && deliveredBy !== rostered;
+  const locked = registered && existing && !TS_TEACHER_EDITABLE.has(existing.status);
 
   const [minutes, setMinutes] = React.useState(existing ? existing.durationMinutes : sched);
   const [note, setNote] = React.useState(existing ? (existing.note || '') : '');
@@ -337,44 +507,60 @@ const TimesheetCapture = ({ session, registered }) => {
   }, [session && session.sessionId]); // eslint-disable-line
 
   // Persist on confirm + keep in sync with later adjustments (idempotent upsert).
+  // A cancelled session never produces a line.
   React.useEffect(() => {
-    if (!registered || !session || !session.sessionId) return;
+    if (!registered || cancelled || !session || !session.sessionId) return;
     store.captureTeaching({
-      sessionId: session.sessionId, teacherId: session.teacherId, centreId: session.centreId,
-      date: session.date, durationMinutes: minutes, note,
+      sessionId: session.sessionId, teacherId: deliveredBy || session.teacherId, centreId: session.centreId,
+      date: session.date, durationMinutes: minutes, note, type: isCover ? 'cover' : 'teaching',
     });
-  }, [registered, minutes, note]); // eslint-disable-line
+  }, [registered, minutes, note, deliveredBy, cancelled]); // eslint-disable-line
 
   if (!session) return null;
-  const adjust = (delta) => setMinutes(m => Math.max(15, m + delta));
+  const adjust = (delta) => !locked && setMinutes(m => Math.max(15, m + delta));
   const changed = minutes !== sched;
+  const teacherList = teachers || [];
 
   return (
-    <div style={{ padding: '14px 16px', borderTop: `1px solid ${DS.border}`, background: DS.surface }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+    <div style={{ padding: '14px 16px', borderTop: `1px solid ${DS.border}`, background: DS.surface, opacity: cancelled ? 0.55 : 1 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
         <Icon name="clock" size={15} color={DS.accent} />
-        <span style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>Working time</span>
-        {registered && <TsStatusBadge status={existing ? existing.status : 'draft'} />}
+        <span style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>Confirm delivery</span>
+        {isCover && <TsCoverTag />}
+        {registered && !cancelled && <TsStatusBadge status={existing ? existing.status : 'draft'} />}
         <span style={{ marginLeft: 'auto', fontSize: 11.5, color: DS.faint }}>Scheduled {tsFmtDuration(sched)}</span>
       </div>
 
+      {/* Delivered by — defaults to the rostered teacher; a different adult = cover */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 12.5, color: DS.sub, fontWeight: 500, minWidth: 80 }}>Delivered by</span>
+        <Select value={deliveredBy || ''} onChange={e => onDeliveredBy && onDeliveredBy(e.target.value)}
+          style={{ width: 220, opacity: locked ? 0.6 : 1, pointerEvents: locked ? 'none' : 'auto' }}>
+          {teacherList.map(t => (
+            <option key={t.id} value={t.id}>{t.name}{t.id === rostered ? ' (rostered)' : ''}</option>
+          ))}
+        </Select>
+        {isCover && <span style={{ fontSize: 11.5, color: TS_TYPE.cover.color }}>Logged as cover on their timesheet</span>}
+      </div>
+
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 12.5, color: DS.sub, fontWeight: 500, minWidth: 80 }}>Delivered</span>
         {/* Duration stepper — defaults to scheduled; ±15 for ran-over / started-late */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <button onClick={() => adjust(-15)} title="Started late / shorter" style={tsStepBtn}>−15m</button>
+          <button onClick={() => adjust(-15)} title="Started late / shorter" style={{ ...tsStepBtn, opacity: locked ? 0.5 : 1 }}>−15m</button>
           <div style={{ minWidth: 86, textAlign: 'center' }}>
             <div style={{ fontSize: 18, fontWeight: 700, color: DS.text, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{tsFmtDuration(minutes)}</div>
             <div style={{ fontSize: 10.5, color: changed ? DS.accent : DS.faint, marginTop: 2 }}>{changed ? 'adjusted' : 'as scheduled'}</div>
           </div>
-          <button onClick={() => adjust(15)} title="Ran over / longer" style={tsStepBtn}>+15m</button>
-          {changed && (
+          <button onClick={() => adjust(15)} title="Ran over / longer" style={{ ...tsStepBtn, opacity: locked ? 0.5 : 1 }}>+15m</button>
+          {changed && !locked && (
             <button onClick={() => setMinutes(sched)} style={{ ...tsLinkBtn, marginLeft: 2 }}>Reset</button>
           )}
         </div>
 
         {/* Optional note */}
         <input
-          value={note} onChange={e => setNote(e.target.value)}
+          value={note} onChange={e => !locked && setNote(e.target.value)} disabled={locked}
           placeholder="Add a note (optional) — e.g. ran 15 min over"
           style={{
             flex: 1, minWidth: 200, padding: '8px 11px', borderRadius: 7,
@@ -384,14 +570,16 @@ const TimesheetCapture = ({ session, registered }) => {
       </div>
 
       <div style={{ marginTop: 9, fontSize: 11.5, color: DS.muted, display: 'flex', alignItems: 'center', gap: 6 }}>
-        {registered ? (
+        {cancelled ? (
+          <span>Session cancelled — no working time is logged.</span>
+        ) : registered ? (
           <>
             <Icon name="check" size={13} color={DS.success} />
-            <span>Saved as a draft on your timesheet — adjust anytime before you submit.</span>
+            <span>{locked ? 'Confirmed delivery — this record is now locked.' : 'Saved as a draft on your timesheet — adjust anytime before you submit.'}</span>
             <button onClick={() => window.__navigate && window.__navigate('teacher', 'timesheet')} style={tsLinkBtn}>View timesheet →</button>
           </>
         ) : (
-          <span>Defaults to the scheduled time. Saving the register logs these hours to your timesheet.</span>
+          <span>Defaults to the scheduled time. Saving the register logs these hours to {isCover ? 'the cover teacher’s' : 'your'} timesheet.</span>
         )}
       </div>
     </div>
@@ -465,10 +653,12 @@ const TeacherTimesheetPage = () => {
   const [period, setPeriod] = React.useState(() => tsPeriodForFreq(store.config.submissionFrequency));
   const [adding, setAdding] = React.useState(false);
 
+  const resolve = tsMakeResolve(adminStore, store.config);
   const range = tsRangeOf(period);
   const mine = store.entries.filter(e => me && e.teacherId === me.id);
   const inPeriod = mine.filter(e => tsInRange(e.date, range)).sort((a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : 0);
   const { total, byType } = tsRollup(inPeriod);
+  const pay = tsPaySummary(inPeriod, resolve);
   const submittable = inPeriod.filter(e => TS_TEACHER_EDITABLE.has(e.status));
 
   // Group by day (newest first), each with a subtotal.
@@ -504,12 +694,6 @@ const TeacherTimesheetPage = () => {
         <span style={{ fontSize: 12.5, color: DS.muted }}>{tsRangeLabel(range)}</span>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 20 }}>
-        <KPICard label="Total hours" value={tsFmtDuration(total)} sub={`${inPeriod.length} entr${inPeriod.length === 1 ? 'y' : 'ies'}`} icon="clock" />
-        <KPICard label="Teaching" value={tsFmtDuration(byType.teaching || 0)} sub="from the register" icon="graduation" />
-        <KPICard label="Awaiting / to submit" value={submittable.length} sub="draft or sent back" icon="send" />
-      </div>
-
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 20, alignItems: 'start' }}>
         {/* Entries grouped by day */}
         <Card title="Entries" subtitle={tsRangeLabel(range)}>
@@ -522,7 +706,7 @@ const TeacherTimesheetPage = () => {
                   <span style={{ fontSize: 12, fontWeight: 600, color: DS.muted, fontVariantNumeric: 'tabular-nums' }}>{tsFmtDuration(dTotal)}</span>
                 </div>
                 {d.entries.map((e, i) => (
-                  <TeacherEntryRow key={e.id} entry={e} store={store} isLast={i === d.entries.length - 1} />
+                  <TeacherEntryRow key={e.id} entry={e} store={store} resolve={resolve} isLast={i === d.entries.length - 1} />
                 ))}
               </div>
             );
@@ -532,8 +716,17 @@ const TeacherTimesheetPage = () => {
           )}
         </Card>
 
-        {/* Breakdown */}
+        {/* Summary + breakdown */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {/* Single summary card — hours, teaching, awaiting + estimated eligible pay */}
+          <Card title="This period" subtitle={tsRangeLabel(range)}>
+            <TsSummaryRows rows={[
+              { label: 'Total hours',      value: tsFmtDuration(total),               sub: `${inPeriod.length} entr${inPeriod.length === 1 ? 'y' : 'ies'}`, icon: 'clock' },
+              { label: 'Teaching',         value: tsFmtDuration(byType.teaching || 0), sub: 'from the register',  icon: 'graduation' },
+              { label: 'Awaiting / to submit', value: submittable.length,             sub: 'draft or sent back', icon: 'send' },
+              { label: 'Est. eligible pay', value: tsMoney(pay.eligiblePay),           sub: 'before approval',    icon: 'invoice', accent: true },
+            ]} />
+          </Card>
           <Card title="Breakdown by type" icon="chart" accent={DS.accent}>
             <TsTypeBreakdown entries={inPeriod} />
           </Card>
@@ -552,21 +745,24 @@ const TeacherTimesheetPage = () => {
   );
 };
 
-const TeacherEntryRow = ({ entry, store, isLast }) => {
+const TeacherEntryRow = ({ entry, store, resolve, isLast }) => {
   const editable = TS_TEACHER_EDITABLE.has(entry.status);
   const t = TS_TYPE[entry.type] || TS_TYPE.other;
+  const pay = tsPayFor(entry, (resolve && resolve(entry)) || {});
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 20px', borderBottom: isLast ? 'none' : `1px solid ${DS.border}` }}>
       <div style={{ width: 30, height: 30, borderRadius: 8, background: t.color + '18', color: t.color, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
         <Icon name={t.icon} size={15} />
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13.5, fontWeight: 600, color: DS.text }}>
-          {t.label}{entry.sessionId ? <span style={{ color: DS.muted, fontWeight: 500 }}> · {tsSessionRef(entry.sessionId)}</span> : ''}
+        <div style={{ fontSize: 13.5, fontWeight: 600, color: DS.text, display: 'flex', alignItems: 'center', gap: 7 }}>
+          <span>{t.label}{entry.sessionId ? <span style={{ color: DS.muted, fontWeight: 500 }}> · {tsSessionRef(entry.sessionId)}</span> : ''}</span>
+          {pay.isCoverExtra && <TsCoverTag />}
         </div>
         {entry.note && <div style={{ fontSize: 12, color: DS.muted, marginTop: 2 }}>{entry.note}</div>}
       </div>
       <span style={{ fontSize: 13.5, fontWeight: 700, color: DS.text, fontVariantNumeric: 'tabular-nums', width: 64, textAlign: 'right' }}>{tsFmtDuration(entry.durationMinutes)}</span>
+      <div style={{ width: 72, display: 'flex', justifyContent: 'flex-end' }}><TsPayChip pay={pay} /></div>
       <div style={{ width: 92, display: 'flex', justifyContent: 'flex-end' }}><TsStatusBadge status={entry.status} /></div>
       <div style={{ width: 28, display: 'flex', justifyContent: 'flex-end' }}>
         {editable && entry.sessionId == null && (
@@ -607,6 +803,7 @@ const AdminTimesheetsPage = () => {
   const [period, setPeriod] = React.useState(tsAdminPeriod);
   const changePeriod = (p) => { tsSetAdminPeriod(p); setPeriod(p); };
 
+  const resolve = tsMakeResolve(adminStore, store.config);
   const range = tsRangeOf(period);
   const inPeriod = store.entries.filter(e => tsInRange(e.date, range));
   const teacherRows = tsTeacherRollup(inPeriod);
@@ -614,6 +811,7 @@ const AdminTimesheetsPage = () => {
   const overall = inPeriod.reduce((s, e) => s + (e.durationMinutes || 0), 0);
   const approvedMin = inPeriod.filter(tsIsApprovedLike).reduce((s, e) => s + (e.durationMinutes || 0), 0);
   const submittedIds = inPeriod.filter(e => e.status === 'submitted').map(e => e.id);
+  const eligiblePay = tsPaySummary(inPeriod, resolve).eligiblePay;
 
   return (
     <div style={{ padding: '32px' }}>
@@ -640,9 +838,10 @@ const AdminTimesheetsPage = () => {
       </div>
 
       {/* Totals */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 20 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 16, marginBottom: 20 }}>
         <KPICard label="Total hours" value={tsFmtDuration(overall)} sub={tsRangeLabel(range)} icon="clock" />
         <KPICard label="Approved hours" value={tsFmtDuration(approvedMin)} sub="signed off" icon="check" />
+        <KPICard label="Est. eligible pay" value={tsMoney(eligiblePay)} sub="derived from rates" icon="invoice" />
         <KPICard label="Awaiting approval" value={submittedIds.length} sub="submitted entries" icon="send" />
         <KPICard label="Teachers" value={teacherRows.length} sub="in this period" icon="users" />
       </div>
@@ -688,20 +887,26 @@ const TeacherSummaryRow = ({ row, color, isLast, onOpen }) => {
 };
 
 // One reviewable entry on the detail page — approve / reject when submitted.
-const AdminTimesheetEntryRow = ({ entry, store, isLast }) => {
+const AdminTimesheetEntryRow = ({ entry, store, resolve, isLast }) => {
   const t = TS_TYPE[entry.type] || TS_TYPE.other;
+  const pay = tsPayFor(entry, (resolve && resolve(entry)) || {});
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 20px', borderBottom: isLast ? 'none' : `1px solid ${DS.border}` }}>
       <div style={{ width: 30, height: 30, borderRadius: 8, background: t.color + '18', color: t.color, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
         <Icon name={t.icon} size={15} />
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13.5, fontWeight: 600, color: DS.text }}>
-          {t.label}{entry.sessionId ? <span style={{ color: DS.muted, fontWeight: 500 }}> · {tsSessionRef(entry.sessionId)}</span> : ''}
+        <div style={{ fontSize: 13.5, fontWeight: 600, color: DS.text, display: 'flex', alignItems: 'center', gap: 7 }}>
+          <span>{t.label}{entry.sessionId ? <span style={{ color: DS.muted, fontWeight: 500 }}> · {tsSessionRef(entry.sessionId)}</span> : ''}</span>
+          {pay.isCoverExtra && <TsCoverTag />}
         </div>
         {entry.note && <div style={{ fontSize: 12, color: DS.muted, marginTop: 2 }}>{entry.note}</div>}
       </div>
       <span style={{ fontSize: 13.5, fontWeight: 700, color: DS.text, fontVariantNumeric: 'tabular-nums', width: 64, textAlign: 'right' }}>{tsFmtDuration(entry.durationMinutes)}</span>
+      <div style={{ width: 78, display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+        <TsPayChip pay={pay} />
+        {pay.eligible && <span style={{ fontSize: 10, color: DS.faint, marginTop: 1 }}>@ {tsMoney(pay.rate)}/h</span>}
+      </div>
       <div style={{ width: 92, display: 'flex', justifyContent: 'flex-end' }}><TsStatusBadge status={entry.status} /></div>
       <div style={{ width: 150, display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
         {entry.status === 'submitted' ? (
@@ -735,6 +940,8 @@ const AdminTimesheetDetailPage = () => {
   const teacher = adminStore.teachers.find(t => t.id === teacherId);
   const name = tsTeacherName(teacherId);
 
+  const resolve = tsMakeResolve(adminStore, store.config);
+  const emp = tsEmployment(teacher);
   const mine = store.entries.filter(e => e.teacherId === teacherId && tsInRange(e.date, range));
   const filtered = mine.filter(e => status === 'all' || e.status === status)
     .sort((a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : 0);
@@ -742,6 +949,7 @@ const AdminTimesheetDetailPage = () => {
   const approvedScope = mine.filter(tsIsApprovedLike);
   const approvedMin = approvedScope.reduce((s, e) => s + (e.durationMinutes || 0), 0);
   const submittedIds = mine.filter(e => e.status === 'submitted').map(e => e.id);
+  const eligiblePay = tsPaySummary(mine, resolve).eligiblePay;
 
   // Group the (status-filtered) entries by day, newest first.
   const byDay = {};
@@ -751,7 +959,7 @@ const AdminTimesheetDetailPage = () => {
   const exportRows = approvedScope.slice().sort((a, b) => a.date < b.date ? -1 : 1);
   const doExportCSV = () => {
     if (!exportRows.length) return;
-    tsDownloadCSV(`timesheet-${name.toLowerCase().replace(/\s+/g, '-')}-${range.from}_${range.to}.csv`, tsBuildCSV(exportRows));
+    tsDownloadCSV(`timesheet-${name.toLowerCase().replace(/\s+/g, '-')}-${range.from}_${range.to}.csv`, tsBuildCSV(exportRows, resolve));
     if (markExp) store.markExported(exportRows.filter(e => e.status === 'approved').map(e => e.id));
   };
   const doPrint = () => {
@@ -790,7 +998,11 @@ const AdminTimesheetDetailPage = () => {
           <Avatar name={name} size={40} color={teacher.color} />
           <div>
             <h1 style={{ fontSize: 22, fontWeight: 700, color: DS.text, margin: 0, letterSpacing: '-0.4px' }}>{name}</h1>
-            <p style={{ fontSize: 14, color: DS.muted, margin: '4px 0 0' }}>Timesheet sessions · {tsRangeLabel(range)}</p>
+            <p style={{ fontSize: 14, color: DS.muted, margin: '4px 0 0', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span>{TS_EMP_LABEL[emp.payType]}{emp.payType !== 'salaried' && emp.hourlyRate ? ` · ${tsMoney(emp.hourlyRate)}/h` : ''}</span>
+              <span style={{ color: DS.faint }}>·</span>
+              <span>{tsRangeLabel(range)}</span>
+            </p>
           </div>
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
@@ -806,14 +1018,6 @@ const AdminTimesheetDetailPage = () => {
           <option value="all">All statuses</option>
           {Object.keys(TS_STATUS_META).map(s => <option key={s} value={s}>{TS_STATUS_META[s].label}</option>)}
         </Select>
-      </div>
-
-      {/* Totals */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 20 }}>
-        <KPICard label="Total hours" value={tsFmtDuration(total)} sub={`${mine.length} entr${mine.length === 1 ? 'y' : 'ies'}`} icon="clock" />
-        <KPICard label="Teaching" value={tsFmtDuration(byType.teaching || 0)} sub="from the register" icon="graduation" />
-        <KPICard label="Approved hours" value={tsFmtDuration(approvedMin)} sub="signed off" icon="check" />
-        <KPICard label="Awaiting approval" value={submittedIds.length} sub="submitted entries" icon="send" />
       </div>
 
       {/* Bulk approve + export options */}
@@ -839,7 +1043,7 @@ const AdminTimesheetDetailPage = () => {
                   <span style={{ fontSize: 12, fontWeight: 600, color: DS.muted, fontVariantNumeric: 'tabular-nums' }}>{tsFmtDuration(dTotal)}</span>
                 </div>
                 {d.entries.map((e, i) => (
-                  <AdminTimesheetEntryRow key={e.id} entry={e} store={store} isLast={i === d.entries.length - 1} />
+                  <AdminTimesheetEntryRow key={e.id} entry={e} store={store} resolve={resolve} isLast={i === d.entries.length - 1} />
                 ))}
               </div>
             );
@@ -849,8 +1053,18 @@ const AdminTimesheetDetailPage = () => {
           )}
         </Card>
 
-        {/* Breakdown */}
+        {/* Summary + breakdown */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {/* Single summary card — hours, teaching, pay, approved + awaiting */}
+          <Card title="This period" subtitle={tsRangeLabel(range)}>
+            <TsSummaryRows rows={[
+              { label: 'Total hours',       value: tsFmtDuration(total),                sub: `${mine.length} entr${mine.length === 1 ? 'y' : 'ies'}`, icon: 'clock' },
+              { label: 'Teaching',          value: tsFmtDuration(byType.teaching || 0),  sub: 'from the register', icon: 'graduation' },
+              { label: 'Est. eligible pay', value: tsMoney(eligiblePay),                 sub: emp.payType === 'salaried' ? 'salaried' : `@ ${tsMoney(emp.hourlyRate)}/h`, icon: 'invoice', accent: true },
+              { label: 'Approved hours',    value: tsFmtDuration(approvedMin),            sub: 'signed off', icon: 'check' },
+              { label: 'Awaiting approval', value: submittedIds.length,                  sub: 'submitted entries', icon: 'send' },
+            ]} />
+          </Card>
           <Card title="Breakdown by type" icon="chart" accent={DS.accent}>
             <TsTypeBreakdown entries={mine} />
           </Card>
@@ -931,4 +1145,6 @@ const TimesheetPrintDoc = ({ data }) => (
 Object.assign(window, {
   useTimesheetStore, TimesheetCapture, TeacherTimesheetPage, AdminTimesheetsPage, AdminTimesheetDetailPage,
   tsSessionMinutes, tsTodayISO, TIMESHEET_CENTRE,
+  // Shared with Settings (centre pay config + per-teacher employment) and the register.
+  TS_PAID_CATEGORIES, TS_EMPLOYMENT_TYPES, TS_EMP_LABEL, tsEmployment, tsMoney, tsRosteredTeacherId,
 });

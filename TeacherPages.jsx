@@ -8,9 +8,17 @@
 // (window.TeacherReports).
 
 // ─── Classes Page ───────────────────────────────────────────────────────────────
-const TeacherClassesPage = () => {
-  const [expandedClass, setExpandedClass] = React.useState(null);
+// The class list is a launch pad into each class, not a register. A row click opens
+// the read-only class detail page (schedule + roster + stats). Attendance is taken
+// from the Timetable / Attendance pages, which are driven by the centre timetable
+// (see schedule-timetable architecture) — so there's deliberately no "take register"
+// action here.
+const openTeacherClass = (cls) => {
+  window.__adminParam = cls.id;
+  if (window.__navigate) window.__navigate('teacher', 'class_detail');
+};
 
+const TeacherClassesPage = () => {
   return (
     <div style={{ padding:'32px' }}>
       <PageHeader
@@ -35,75 +43,225 @@ const TeacherClassesPage = () => {
             </thead>
             <tbody>
               {teacherClasses.map(cls => {
-                const isOpen = expandedClass === cls.id;
                 const scoreColor = cls.avgScore > 80 ? DS.success : DS.warning;
                 const attColor   = cls.attendance > 90 ? DS.success : DS.warning;
                 return (
-                  <React.Fragment key={cls.id}>
-                    <tr
-                      style={{ borderBottom: isOpen ? 'none' : `1px solid ${DS.border}`, cursor:'pointer', background: isOpen ? DS.surface : 'transparent' }}
-                      onClick={() => setExpandedClass(isOpen ? null : cls.id)}
-                    >
-                      <td style={{ padding:'12px 16px' }}>
-                        <div style={{ display:'flex', alignItems:'center', gap:12 }}>
-                          <div style={{ width:4, alignSelf:'stretch', minHeight:34, borderRadius:2, background:cls.color, flexShrink:0 }} />
-                          <Icon name={isOpen ? 'chevron_d' : 'chevron_r'} size={14} color={DS.faint} />
-                          <div>
-                            <div style={{ fontSize:13, fontWeight:600, color:DS.text }}>{cls.name}</div>
-                            <div style={{ fontSize:12, color:DS.muted, marginTop:1 }}>{cls.group}</div>
-                          </div>
+                  <tr
+                    key={cls.id}
+                    style={{ borderBottom:`1px solid ${DS.border}`, cursor:'pointer' }}
+                    onClick={() => openTeacherClass(cls)}
+                  >
+                    <td style={{ padding:'12px 16px' }}>
+                      <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+                        <div style={{ width:4, alignSelf:'stretch', minHeight:34, borderRadius:2, background:cls.color, flexShrink:0 }} />
+                        <Icon name="chevron_r" size={14} color={DS.faint} />
+                        <div>
+                          <div style={{ fontSize:13, fontWeight:600, color:DS.text }}>{cls.name}</div>
+                          <div style={{ fontSize:12, color:DS.muted, marginTop:1 }}>{cls.group}</div>
                         </div>
-                      </td>
-                      <td style={{ padding:'12px 16px', whiteSpace:'nowrap' }}>
-                        <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-                          <Icon name="clock" size={12} color={DS.faint} />
-                          <span style={{ fontSize:13, color:DS.sub }}>{cls.nextSession}</span>
-                        </div>
-                        <div style={{ fontSize:12, color:DS.muted, marginTop:2, marginLeft:18 }}>{cls.room}</div>
-                      </td>
-                      <td style={{ padding:'12px 16px', textAlign:'center', fontSize:13, fontWeight:600, color:DS.text }}>{cls.students}</td>
-                      <td style={{ padding:'12px 16px', textAlign:'center', fontSize:13, fontWeight:600, color:scoreColor }}>{cls.avgScore}%</td>
-                      <td style={{ padding:'12px 16px', textAlign:'center', fontSize:13, fontWeight:600, color:attColor }}>{cls.attendance}%</td>
-                      <td style={{ padding:'12px 16px', textAlign:'center' }}>
-                        {cls.hwPending > 0
-                          ? <Badge variant="warning">{cls.hwPending} to mark</Badge>
-                          : <span style={{ fontSize:12, color:DS.faint }}>—</span>}
-                      </td>
-                      <td style={{ padding:'12px 16px', textAlign:'right', whiteSpace:'nowrap' }} onClick={e => e.stopPropagation()}>
-                        <Btn variant="primary" small>Take Attendance</Btn>
-                      </td>
-                    </tr>
-
-                    {/* Student list expand */}
-                    {isOpen && (
-                      <tr style={{ borderBottom:`1px solid ${DS.border}` }}>
-                        <td colSpan={7} style={{ padding:0, background:DS.surface }}>
-                          <div style={{ padding:'10px 16px 10px 36px' }}>
-                            <span style={{ fontSize:11, fontWeight:600, color:DS.muted, textTransform:'uppercase', letterSpacing:'0.06em' }}>
-                              Student List · {cls.studentList.length}
-                            </span>
-                          </div>
-                          {cls.studentList.map((name, i) => (
-                            <div key={name} style={{
-                              display:'flex', alignItems:'center', gap:12, padding:'8px 16px 8px 36px',
-                              borderTop:`1px solid ${DS.border}`, background:DS.bg,
-                            }}>
-                              <Avatar name={name} size={28} />
-                              <span style={{ flex:1, fontSize:13, color:DS.sub }}>{name}</span>
-                              <Sparkline data={[70,72,74,71,76,78,79,80].map(v => v + Math.round(Math.random()*10-5))} color={cls.color} width={60} height={22} />
-                              <Btn variant="ghost" icon="eye" small>Profile</Btn>
-                            </div>
-                          ))}
-                        </td>
-                      </tr>
-                    )}
-                  </React.Fragment>
+                      </div>
+                    </td>
+                    <td style={{ padding:'12px 16px', whiteSpace:'nowrap' }}>
+                      <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                        <Icon name="clock" size={12} color={DS.faint} />
+                        <span style={{ fontSize:13, color:DS.sub }}>{cls.nextSession}</span>
+                      </div>
+                      <div style={{ fontSize:12, color:DS.muted, marginTop:2, marginLeft:18 }}>{cls.room}</div>
+                    </td>
+                    <td style={{ padding:'12px 16px', textAlign:'center', fontSize:13, fontWeight:600, color:DS.text }}>{cls.students}</td>
+                    <td style={{ padding:'12px 16px', textAlign:'center', fontSize:13, fontWeight:600, color:scoreColor }}>{cls.avgScore}%</td>
+                    <td style={{ padding:'12px 16px', textAlign:'center', fontSize:13, fontWeight:600, color:attColor }}>{cls.attendance}%</td>
+                    <td style={{ padding:'12px 16px', textAlign:'center' }}>
+                      {cls.hwPending > 0
+                        ? <Badge variant="warning">{cls.hwPending} to mark</Badge>
+                        : <span style={{ fontSize:12, color:DS.faint }}>—</span>}
+                    </td>
+                    <td style={{ padding:'12px 16px', textAlign:'right', whiteSpace:'nowrap' }} onClick={e => e.stopPropagation()}>
+                      <Btn variant="secondary" icon="eye" small onClick={() => openTeacherClass(cls)}>View class</Btn>
+                    </td>
+                  </tr>
                 );
               })}
             </tbody>
           </table>
         </div>
       </Card>
+    </div>
+  );
+};
+
+// ─── Class Detail (teacher, read-only) ──────────────────────────────────────────
+// Opened from the class list. Presents a single class the way a teacher needs it:
+// headline stats, schedule, roster and the homework set for the group. Enrolment
+// and the timetable are owned by the admin (see schedule-timetable architecture),
+// so this is a view — the register is taken from the Timetable / Attendance pages.
+
+// Deterministic per-student trend so sparklines don't jitter on re-render.
+const teacherClassTrend = (name, avg) => {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) & 0x7fff;
+  return Array.from({ length: 8 }, (_, i) => {
+    const wobble = ((h >> (i % 11)) % 13) - 6;
+    return Math.max(35, Math.min(99, (avg || 70) - 5 + i + wobble));
+  });
+};
+
+const TeacherClassDetailPage = () => {
+  const store = useAdminStore();
+  const id  = window.__adminParam;
+  const cls = teacherClasses.find(c => c.id === id);
+  const backToClasses = () => window.__navigate && window.__navigate('teacher', 'classes');
+
+  if (!cls) return (
+    <div style={{ padding:'32px' }}>
+      <EmptyState icon="book" title="Class not found"
+        message="This class may have been removed or you no longer teach it."
+        action={<Btn variant="primary" onClick={backToClasses}>Back to My Classes</Btn>} />
+    </div>
+  );
+
+  const color      = cls.color || DS.accent;
+  const scoreColor = cls.avgScore > 80 ? DS.success : DS.warning;
+  const attColor   = cls.attendance > 90 ? DS.success : DS.warning;
+  const level      = /A-?level/i.test(cls.name) ? 'A-Level' : /GCSE/i.test(cls.name) ? 'GCSE' : null;
+  const subject    = cls.name.replace(/^(GCSE|A-?Level)\s+/i, '');
+
+  // Homework set for this group — match homeworkFull rows by year number + group letter
+  // ('Year 10 – Group A' ↔ 'Yr 10 Group A').
+  const yr  = (cls.group.match(/\d+/) || [])[0];
+  const grp = (cls.group.match(/Group\s+([A-Za-z])/i) || [])[1];
+  const classHw = homeworkFull.filter(h => {
+    const hy = (h.class.match(/\d+/) || [])[0];
+    const hg = (h.class.match(/Group\s+([A-Za-z])/i) || [])[1];
+    return hy === yr && grp && hg === grp;
+  });
+
+  // Best-effort link to the shared student profile — only if the roster name resolves
+  // to a real record in the admin store.
+  const goProfile = (name) => {
+    const s = store.students.find(st => studentName(st) === name);
+    if (s) { window.__adminParam = s.id; window.__navigate && window.__navigate('teacher', 'student_profile'); }
+  };
+
+  const stat = (label, value, c) => (
+    <div style={{ padding:'16px 24px', borderLeft:`1px solid ${DS.border}` }}>
+      <div style={{ fontSize:12, color:DS.muted }}>{label}</div>
+      <div style={{ fontSize:22, fontWeight:700, color:c || DS.text, marginTop:2 }}>{value}</div>
+    </div>
+  );
+
+  const hwStatusVariant = { open:'default', marking:'warning', complete:'success' };
+
+  return (
+    <div style={{ padding:'32px', maxWidth:1040, margin:'0 auto' }}>
+      <FlowHeader title={cls.name} subtitle={`${cls.group} · ${cls.day} ${cls.time} · ${cls.room}`} onBack={backToClasses} />
+
+      {/* Hero */}
+      <Card style={{ marginBottom:20 }}>
+        <div style={{ padding:'22px 24px', display:'flex', alignItems:'center', gap:18 }}>
+          <div style={{ width:64, height:64, borderRadius:14, background:color+'18', color, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}><Icon name="book" size={28} /></div>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ fontSize:20, fontWeight:700, color:DS.text }}>{cls.name}</div>
+            <div style={{ fontSize:13, color:DS.muted, marginTop:2 }}>{cls.group} · {cls.day} {cls.time} · {cls.room}</div>
+            <div style={{ marginTop:8, display:'flex', gap:6, flexWrap:'wrap' }}>
+              <Badge variant="success">Active</Badge>
+              <Badge variant="accent">{subject}</Badge>
+              {level && <Badge variant="default">{level}</Badge>}
+            </div>
+          </div>
+          <div style={{ display:'flex', gap:8 }}>
+            <Btn variant="secondary" icon="calendar" onClick={() => window.__navigate && window.__navigate('teacher', 'timetable')}>View timetable</Btn>
+            <Btn variant="secondary" icon="message" onClick={() => window.__navigate && window.__navigate('teacher', 'comms')}>Message class</Btn>
+          </div>
+        </div>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', borderTop:`1px solid ${DS.border}` }}>
+          <div style={{ padding:'16px 24px' }}>
+            <div style={{ fontSize:12, color:DS.muted }}>Students</div>
+            <div style={{ fontSize:22, fontWeight:700, color:DS.text, marginTop:2 }}>{cls.students}</div>
+          </div>
+          {stat('Avg Score', cls.avgScore + '%', scoreColor)}
+          {stat('Attendance', cls.attendance + '%', attColor)}
+          {stat('Homework', cls.hwPending > 0 ? `${cls.hwPending} to mark` : 'Up to date', cls.hwPending > 0 ? DS.warning : DS.success)}
+        </div>
+      </Card>
+
+      {/* Details + schedule */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 320px', gap:20, alignItems:'start', marginBottom:20 }}>
+        <Card title="Class Details">
+          <div style={{ padding:'20px 24px' }}>
+            {[
+              ['Subject', subject],
+              level && ['Level', level],
+              ['Year group', cls.group],
+              ['Teacher', 'You'],
+              ['Schedule', `${cls.day} · ${cls.time}`],
+              ['Room', cls.room],
+              ['Enrolment', `${cls.students} student${cls.students === 1 ? '' : 's'}`],
+              ['Status', 'Active'],
+            ].filter(Boolean).map(([l, v]) => (
+              <div key={l} style={{ display:'flex', justifyContent:'space-between', padding:'10px 0', borderBottom:`1px solid ${DS.border}`, fontSize:13.5, gap:16 }}>
+                <span style={{ color:DS.muted, flexShrink:0 }}>{l}</span><span style={{ color:DS.text, fontWeight:500, textAlign:'right' }}>{v}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+        <Card title="Schedule">
+          <div style={{ padding:'18px 20px', display:'flex', flexDirection:'column', gap:14 }}>
+            <div style={{ padding:'14px 16px', borderRadius:10, background:color+'12', border:`1px solid ${color}33` }}>
+              <div style={{ fontSize:10.5, color:DS.muted, textTransform:'uppercase', letterSpacing:0.5, fontWeight:600 }}>Next session</div>
+              <div style={{ fontSize:15, fontWeight:700, color:DS.text, marginTop:3 }}>{cls.nextSession}</div>
+              <div style={{ fontSize:12.5, color:DS.muted, marginTop:2 }}>{cls.room}</div>
+            </div>
+            <div style={{ display:'flex', alignItems:'center', gap:10, fontSize:13, color:DS.sub }}>
+              <Icon name="calendar" size={14} color={DS.faint} />
+              <span>Weekly on <strong style={{ color:DS.text }}>{cls.day}</strong> at <strong style={{ color:DS.text }}>{cls.time}</strong></span>
+            </div>
+            <div style={{ fontSize:12, color:DS.muted, lineHeight:1.5 }}>
+              Your timetable is set by the centre admin. Ask them to make changes to this session.
+            </div>
+          </div>
+        </Card>
+      </div>
+
+      {/* Roster */}
+      <Card title={`Students · ${cls.studentList.length}`} style={{ marginBottom:20 }}
+        actions={<Btn variant="secondary" icon="users" small onClick={() => window.__navigate && window.__navigate('teacher', 'students')}>All students</Btn>}>
+        <div>
+          {cls.studentList.map((name) => (
+            <div key={name} style={{
+              display:'flex', alignItems:'center', gap:12, padding:'10px 20px',
+              borderTop:`1px solid ${DS.border}`,
+            }}>
+              <Avatar name={name} size={30} />
+              <span style={{ flex:1, fontSize:13, color:DS.text, fontWeight:500 }}>{name}</span>
+              <Sparkline data={teacherClassTrend(name, cls.avgScore)} color={color} width={64} height={24} />
+              <Btn variant="ghost" icon="eye" small onClick={() => goProfile(name)}>Profile</Btn>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {/* Homework set for this group */}
+      {classHw.length > 0 && (
+        <Card title={`Homework · ${classHw.length}`}
+          actions={<Btn variant="secondary" icon="clip" small onClick={() => window.__navigate && window.__navigate('teacher', 'homework')}>Manage homework</Btn>}>
+          <div>
+            {classHw.map((h) => (
+              <div key={h.id} style={{
+                display:'flex', alignItems:'center', gap:12, padding:'12px 20px',
+                borderTop:`1px solid ${DS.border}`,
+              }}>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:13, fontWeight:600, color:DS.text }}>{h.title}</div>
+                  <div style={{ fontSize:12, color:DS.muted, marginTop:1 }}>Set {h.set} · Due {h.due} · {h.submitted}/{h.total} in</div>
+                </div>
+                {h.avgScore != null && <span style={{ fontSize:13, fontWeight:600, color:h.avgScore >= 70 ? DS.success : DS.warning }}>{h.avgScore}%</span>}
+                <Badge variant={hwStatusVariant[h.status] || 'default'}>{h.status === 'marking' ? 'To mark' : h.status === 'complete' ? 'Complete' : 'Open'}</Badge>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
     </div>
   );
 };
@@ -431,9 +589,13 @@ const TeacherProgressPage = () => {
 // Shares the date/time/colour helpers + useAdminStore defined in AdminPages.jsx.
 const TeacherTimetablePage = () => {
   const store = useAdminStore();
+  const tsStore = window.useTimesheetStore ? window.useTimesheetStore() : null;
   const me = store.teachers.find(t => t.name === 'Sarah Clarke') || store.teachers[0];
   const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
   const todayName = new Date().toLocaleDateString('en-GB', { weekday:'long' });
+  const todayISO = window.tsTodayISO ? window.tsTodayISO() : new Date().toISOString().slice(0, 10);
+  // A class is cancelled in the Today view if its session for today is in the cancelled set.
+  const isCancelledToday = (cls) => !!(tsStore && (tsStore.cancelled || []).includes(`${cls.id}|${todayISO}`)) && (todaySessions.length > 0);
 
   const myClasses = store.classes.filter(c => me && c.teacher === me.name && c.status !== 'paused');
   const byTime = arr => [...arr].sort((a, b) => startTimeOf(a.time).localeCompare(startTimeOf(b.time)));
@@ -478,18 +640,22 @@ const TeacherTimetablePage = () => {
           <div style={{ padding:'8px 0' }}>
             {focusSessions.map((c, i) => {
               const color = subjectColor(c.name);
+              const cancelled = isCancelledToday(c);
               return (
-                <div key={c.id} style={{ display:'flex', alignItems:'center', gap:14, padding:'14px 20px', borderBottom: i < focusSessions.length-1 ? `1px solid ${DS.border}` : 'none' }}>
+                <div key={c.id} style={{ display:'flex', alignItems:'center', gap:14, padding:'14px 20px', borderBottom: i < focusSessions.length-1 ? `1px solid ${DS.border}` : 'none', opacity: cancelled ? 0.55 : 1 }}>
                   <div style={{ width:60, textAlign:'center' }}>
-                    <div style={{ fontSize:14, fontWeight:700, color:DS.text, fontVariantNumeric:'tabular-nums' }}>{startTimeOf(c.time)}</div>
+                    <div style={{ fontSize:14, fontWeight:700, color:DS.text, fontVariantNumeric:'tabular-nums', textDecoration: cancelled ? 'line-through' : 'none' }}>{startTimeOf(c.time)}</div>
                     <div style={{ fontSize:11, color:DS.faint }}>{(c.time||'').split(/[–-]/)[1]?.trim()}</div>
                   </div>
-                  <div style={{ width:4, alignSelf:'stretch', borderRadius:2, background:color }} />
+                  <div style={{ width:4, alignSelf:'stretch', borderRadius:2, background: cancelled ? DS.border : color }} />
                   <div style={{ flex:1, minWidth:0 }}>
-                    <div style={{ fontSize:14, fontWeight:600, color:DS.text }}>{c.name}</div>
+                    <div style={{ fontSize:14, fontWeight:600, color:DS.text, display:'flex', alignItems:'center', gap:8 }}>
+                      <span style={{ textDecoration: cancelled ? 'line-through' : 'none' }}>{c.name}</span>
+                      {cancelled && <span style={{ fontSize:10.5, fontWeight:700, letterSpacing:'0.04em', color:DS.danger, background:DS.dangerBg, padding:'1px 6px', borderRadius:5, textTransform:'uppercase' }}>Cancelled</span>}
+                    </div>
                     <div style={{ fontSize:12, color:DS.muted }}>{c.group} · {c.room || 'No room'} · {c.students} students</div>
                   </div>
-                  <Btn variant="primary" icon="check" small onClick={() => takeRegister(c)}>Take register</Btn>
+                  <Btn variant={cancelled ? 'secondary' : 'primary'} icon="check" small onClick={() => takeRegister(c)}>{cancelled ? 'Review' : 'Take register'}</Btn>
                 </div>
               );
             })}
@@ -591,34 +757,51 @@ const TeacherAttendancePage = () => {
   // truth — see schedule-timetable architecture). teacherAllClasses groups match
   // Sarah's store classes c1–c4; a no-match (e.g. Yr13) falls back to 90 min.
   const adminStore = useAdminStore();
+  const tsStore = window.useTimesheetStore ? window.useTimesheetStore() : null;
   const me = adminStore.teachers.find(t => t.name === 'Sarah Clarke') || adminStore.teachers[0];
   const matchedClass = adminStore.classes.find(c => me && c.teacher === me.name && c.group === cls.group);
   const scheduledMinutes = window.tsSessionMinutes ? window.tsSessionMinutes(matchedClass && matchedClass.time) : 90;
   const classId = matchedClass ? matchedClass.id : `tc${selectedClass}`;
+  // The adult who delivered this session — defaults to the rostered teacher; choosing
+  // someone else records it as cover. Active teachers only.
+  const activeTeachers = adminStore.teachers.filter(t => t.status === 'active');
+  const rosteredTeacherId = me && me.id;
+  const [deliveredBy, setDeliveredBy] = React.useState(rosteredTeacherId);
+  const [noStudents, setNoStudents] = React.useState(false);
   const session = {
     sessionId: `${classId}|${selectedDate}`, classId, teacherId: me && me.id,
     centreId: window.TIMESHEET_CENTRE || 'centre-001', date: selectedDate,
     scheduledMinutes, label: `${cls.group} · ${cls.subject}`,
   };
-  // Which session's register has been confirmed (drives working-time capture).
+  // A cancelled session shows greyed and produces no timesheet line.
+  const cancelled = !!(tsStore && (tsStore.cancelled || []).includes(session.sessionId));
+  // Which session's register has been confirmed (drives delivery capture + lock).
   const [registeredSession, setRegisteredSession] = React.useState(null);
   const registered = registeredSession === session.sessionId;
+  const existingEntry = tsStore ? tsStore.entries.find(e => e.sessionId === session.sessionId) : null;
+  const locked = registered && existingEntry && !['draft', 'rejected'].includes(existingEntry.status);
   const Capture = window.TimesheetCapture;
 
   React.useEffect(() => {
     setRecords(Object.fromEntries(cls.students.map(n => [n, null])));
     setSaved(false);
     setRegisteredSession(null);
+    setNoStudents(false);
+    setDeliveredBy(rosteredTeacherId);
   }, [selectedClass]);
 
-  const mark = (name, status) => { setRecords(p => ({...p, [name]:status})); setSaved(false); };
-  const markAll = (status) => { setRecords(Object.fromEntries(cls.students.map(n => [n, status]))); setSaved(false); };
-  // Confirming the register also captures a draft "teaching" TimeEntry (upsert on
-  // sessionId, so a second save never duplicates) — see Timesheets.jsx.
+  const mark = (name, status) => { if (locked || noStudents) return; setRecords(p => ({...p, [name]:status})); setSaved(false); };
+  const markAll = (status) => { if (locked) return; setNoStudents(false); setRecords(Object.fromEntries(cls.students.map(n => [n, status]))); setSaved(false); };
+  // Confirming the register is the single delivery-confirmation action: it records
+  // that the session ran, who delivered it, and (via the per-student marks) who
+  // attended. It also captures the teaching/cover TimeEntry (see Timesheets.jsx).
   const handleSave = () => { setSaved(true); setRegisteredSession(session.sessionId); setTimeout(() => setSaved(false), 2500); };
+  const cancelSession = () => { if (tsStore) tsStore.setCancelled(session.sessionId, true); setRegisteredSession(null); };
+  const reinstate = () => { if (tsStore) tsStore.setCancelled(session.sessionId, false); };
 
   const counts = { present:0, absent:0, late:0, unmarked:0 };
-  Object.values(records).forEach(v => { if (v) counts[v]++; else counts.unmarked++; });
+  if (noStudents) { counts.absent = 0; counts.unmarked = 0; }
+  else Object.values(records).forEach(v => { if (v) counts[v]++; else counts.unmarked++; });
 
   // Past attendance log (mock)
   const pastLog = [
@@ -658,8 +841,20 @@ const TeacherAttendancePage = () => {
               style={{ padding:'5px 10px', borderRadius:6, border:`1px solid ${DS.border}`, fontSize:13, outline:'none' }} />
           </div>
         ]}>
-          {/* Bulk actions */}
-          <div style={{ display:'flex', gap:8, padding:'12px 16px', borderBottom:`1px solid ${DS.border}`, background:DS.surface }}>
+          {/* Status banner — confirmed (locked) or cancelled */}
+          {(locked || cancelled) && (
+            <div style={{ display:'flex', alignItems:'center', gap:10, padding:'11px 16px', borderBottom:`1px solid ${DS.border}`,
+              background: cancelled ? DS.dangerBg : DS.successBg }}>
+              <Icon name={cancelled ? 'x' : 'check'} size={16} color={cancelled ? DS.danger : DS.success} />
+              <span style={{ fontSize:12.5, fontWeight:600, color: cancelled ? DS.danger : DS.success }}>
+                {cancelled ? 'Session cancelled — no timesheet line was produced.' : 'Delivery confirmed — this register is locked.'}
+              </span>
+              {cancelled && <button onClick={reinstate} style={{ marginLeft:'auto', background:'none', border:'none', color:DS.accent, fontSize:12, fontWeight:600, cursor:'pointer' }}>Reinstate session</button>}
+            </div>
+          )}
+
+          {/* Bulk actions + the "no students attended" path (settable directly) */}
+          <div style={{ display:'flex', alignItems:'center', gap:8, padding:'12px 16px', borderBottom:`1px solid ${DS.border}`, background:DS.surface, opacity: (locked||cancelled) ? 0.5 : 1, pointerEvents: (locked||cancelled) ? 'none' : 'auto' }}>
             <span style={{ fontSize:12, color:DS.muted, alignSelf:'center', marginRight:4 }}>Mark all:</span>
             {['present','absent','late'].map(st => (
               <button key={st} onClick={() => markAll(st)} style={{
@@ -669,9 +864,14 @@ const TeacherAttendancePage = () => {
                 color: st==='present' ? DS.success : st==='absent' ? DS.danger : DS.warning,
               }}>{st.charAt(0).toUpperCase() + st.slice(1)}</button>
             ))}
+            <button onClick={() => setNoStudents(v => !v)} title="Confirm the session ran with nobody present (e.g. a 1:1 no-show)" style={{
+              marginLeft:'auto', padding:'5px 12px', borderRadius:6, fontSize:12, fontWeight:600, cursor:'pointer',
+              border:`1px solid ${noStudents ? DS.accentBorder : DS.border}`,
+              background: noStudents ? DS.accentLight : DS.bg, color: noStudents ? DS.accent : DS.muted,
+            }}>{noStudents ? '✓ ' : ''}No students attended</button>
           </div>
 
-          <div>
+          <div style={{ opacity: noStudents ? 0.4 : 1, pointerEvents: (noStudents||locked||cancelled) ? 'none' : 'auto' }}>
             {cls.students.map((name, i) => {
               const status = records[name];
               return (
@@ -704,17 +904,27 @@ const TeacherAttendancePage = () => {
             })}
           </div>
 
-          {/* Working-time capture — rides this register flow (no separate clock-in) */}
-          {Capture && <Capture session={session} registered={registered} />}
+          {/* Delivery confirmation — delivered-by + working time ride this register flow */}
+          {Capture && !cancelled && (
+            <Capture session={session} registered={registered} store={tsStore}
+              teachers={activeTeachers} deliveredBy={deliveredBy} onDeliveredBy={setDeliveredBy}
+              rosteredTeacherId={rosteredTeacherId} cancelled={cancelled} />
+          )}
 
-          <div style={{ padding:'14px 16px', borderTop:`1px solid ${DS.border}`, background:DS.surface, display:'flex', alignItems:'center', gap:16 }}>
+          <div style={{ padding:'14px 16px', borderTop:`1px solid ${DS.border}`, background:DS.surface, display:'flex', alignItems:'center', gap:12 }}>
             <div style={{ display:'flex', gap:14, flex:1 }}>
-              {[['present',DS.success],['absent',DS.danger],['late',DS.warning],['unmarked',DS.faint]].map(([k,c])=>(
+              {noStudents ? (
+                <span style={{ fontSize:12, color:DS.muted, fontWeight:600 }}>No students attended — session still confirmed</span>
+              ) : [['present',DS.success],['absent',DS.danger],['late',DS.warning],['unmarked',DS.faint]].map(([k,c])=>(
                 <span key={k} style={{ fontSize:12, color:c, fontWeight:600 }}>{counts[k]} {k}</span>
               ))}
             </div>
-            <Btn variant={saved ? 'secondary' : 'primary'} icon={saved ? 'check' : 'clip'} onClick={handleSave}>
-              {saved ? 'Saved!' : 'Save Register'}
+            {!cancelled && !locked && (
+              <Btn variant="secondary" icon="x" small onClick={cancelSession}>Cancel session</Btn>
+            )}
+            <Btn variant={saved ? 'secondary' : 'primary'} icon={saved ? 'check' : 'clip'} onClick={handleSave}
+              style={(locked || cancelled) ? { opacity:0.5, pointerEvents:'none' } : {}}>
+              {cancelled ? 'Cancelled' : locked ? 'Confirmed' : saved ? 'Saved!' : 'Confirm register'}
             </Btn>
           </div>
         </Card>
@@ -2359,9 +2569,158 @@ const TeacherTrackingPage = () => {
   );
 };
 
+// ─── Teacher Students Page ──────────────────────────────────────────────────────
+// The teacher's own slice of the centre roster: only students enrolled in a class
+// this teacher teaches (store.classes.filter(c => c.teacher === me.name) → classIds
+// → store.students). Read-only — the admin owns enrolment; the teacher views and
+// messages from here. Mirrors AdminStudentsPage's list + detail-drawer pattern but
+// scoped to "my" classes, with an extra per-class filter. `me` is resolved the same
+// way as TeacherTimetablePage (Sarah Clarke, falling back to the first teacher).
+const TeacherStudentsPage = () => {
+  const store = useAdminStore();
+  const me = store.teachers.find(t => t.name === 'Sarah Clarke') || store.teachers[0];
+
+  const [search, setSearch]     = React.useState('');
+  const [status, setStatus]     = React.useState('all');
+  const [classId, setClassId]   = React.useState('all');
+  const [selected, setSelected] = React.useState(null);
+
+  // My classes (read-only, assigned by the admin) and their ids used to scope students.
+  const myClasses = React.useMemo(
+    () => store.classes.filter(c => me && c.teacher === me.name),
+    [store.classes, me && me.name]
+  );
+  const myClassIds = React.useMemo(() => new Set(myClasses.map(c => c.id)), [myClasses]);
+  const classesOf = s => myClasses.filter(c => (s.classIds || []).includes(c.id));
+
+  // Only students in at least one of my classes.
+  const myStudents = React.useMemo(
+    () => store.students.filter(s => (s.classIds || []).some(id => myClassIds.has(id))),
+    [store.students, myClassIds]
+  );
+
+  const filtered = myStudents.filter(s => {
+    const q = search.toLowerCase();
+    const matchSearch = studentName(s).toLowerCase().includes(q) ||
+      (s.subjects || []).some(sub => sub.toLowerCase().includes(q));
+    const matchStatus = status === 'all' || status === s.status;
+    const matchClass  = classId === 'all' || (s.classIds || []).includes(classId);
+    return matchSearch && matchStatus && matchClass;
+  });
+
+  // Keep the open drawer pointed at the live record (it may update underneath).
+  const sel = selected && myStudents.find(s => s.id === selected.id);
+
+  const classChip = c => (
+    <span key={c.id} title={`${c.group} · ${c.day} ${c.time}`} style={{ display:'inline-flex', alignItems:'center', gap:5, fontSize:11, padding:'2px 7px', background:subjectColor(c.name)+'14', color:subjectColor(c.name), borderRadius:5, fontWeight:600 }}>
+      <span style={{ width:6, height:6, borderRadius:'50%', background:subjectColor(c.name) }} />{c.name}
+    </span>
+  );
+
+  if (!myStudents.length) {
+    return (
+      <div style={{ padding:'32px' }}>
+        <PageHeader title="My Students" subtitle="Students enrolled in your classes" />
+        <Card>
+          <EmptyState icon="users" title="No students yet"
+            message="When your centre admin enrols students into the classes you teach, they'll appear here." />
+        </Card>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding:'32px' }}>
+      <PageHeader
+        title="My Students"
+        subtitle={`${myStudents.length} across your ${myClasses.length} class${myClasses.length===1?'':'es'} · ${myStudents.filter(s=>s.status==='at-risk').length} at risk`}
+        actions={[<Btn key="export" variant="secondary" icon="download" small>Export CSV</Btn>]}
+      />
+
+      {/* Filters — search · status · which of my classes */}
+      <div style={{ display:'flex', gap:12, marginBottom:20, alignItems:'center', flexWrap:'wrap' }}>
+        <SearchInput value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name or subject…" />
+        <Segmented value={status} onChange={setStatus} options={[
+          { id:'all', label:'All', count:myStudents.length },
+          { id:'active', label:'Active', count:myStudents.filter(s=>s.status==='active').length },
+          { id:'at-risk', label:'At risk', count:myStudents.filter(s=>s.status==='at-risk').length },
+        ]} />
+        <Select value={classId} onChange={e => setClassId(e.target.value)} style={{ maxWidth:220 }}>
+          <option value="all">All my classes</option>
+          {myClasses.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </Select>
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns: sel ? '1fr 360px' : '1fr', gap:20 }}>
+        <Card>
+          <Table
+            cols={['Student','Year','My Classes','Attendance','HW %','Avg Score','Status','']}
+            rows={filtered.map(s => [
+              <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+                <Avatar name={studentName(s)} size={30} />
+                <div>
+                  <div style={{ fontSize:13, fontWeight:500, color:DS.text }}>{studentName(s)}</div>
+                  <div style={{ fontSize:11, color:DS.faint }}>Last seen {s.lastSeen || '—'}</div>
+                </div>
+              </div>,
+              <span style={{ fontSize:13, color:DS.muted }}>{s.year}</span>,
+              <div style={{ display:'flex', flexWrap:'wrap', gap:4 }}>{classesOf(s).map(classChip)}</div>,
+              <span style={{ fontSize:13, fontWeight:600, color: s.attendance < 80 ? DS.danger : s.attendance < 90 ? DS.warning : DS.success }}>{s.attendance}%</span>,
+              <span style={{ fontSize:13, fontWeight:600, color: s.hw < 50 ? DS.danger : s.hw < 70 ? DS.warning : DS.success }}>{s.hw}%</span>,
+              <ScorePill score={s.score} />,
+              <Badge variant={s.status === 'at-risk' ? 'danger' : 'success'}>{s.status === 'at-risk' ? 'At risk' : 'Active'}</Badge>,
+              <Btn variant="secondary" small onClick={() => setSelected(sel && sel.id === s.id ? null : s)}>View</Btn>,
+            ])}
+          />
+        </Card>
+
+        {sel && (
+          <Card title={studentName(sel)} actions={[
+            <button key="x" onClick={() => setSelected(null)} style={{ background:'none', border:'none', cursor:'pointer', color:DS.muted }}><Icon name="x" size={16} /></button>
+          ]}>
+            <div style={{ padding:'16px' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:18 }}>
+                <Avatar name={studentName(sel)} size={44} />
+                <div>
+                  <div style={{ fontSize:15, fontWeight:700, color:DS.text }}>{studentName(sel)}</div>
+                  <div style={{ fontSize:13, color:DS.muted }}>{sel.year} · {sel.status === 'at-risk' ? '⚠ At risk' : 'Active'}</div>
+                </div>
+              </div>
+
+              <div style={{ fontSize:11, fontWeight:600, color:DS.muted, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:8 }}>In your classes</div>
+              <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:16 }}>{classesOf(sel).map(classChip)}</div>
+
+              {[
+                ['Subjects', (sel.subjects || []).join(', ') || '—'],
+                ['Attendance', `${sel.attendance}%`],
+                ['HW completion', `${sel.hw}%`],
+                ['Average score', `${sel.score}%`],
+                ['Guardian', sel.guardianName || '—'],
+                ['Last seen', sel.lastSeen || '—'],
+              ].map(([l,v]) => (
+                <div key={l} style={{ display:'flex', justifyContent:'space-between', padding:'9px 0', borderBottom:`1px solid ${DS.border}`, fontSize:13 }}>
+                  <span style={{ color:DS.muted }}>{l}</span>
+                  <span style={{ color:DS.text, fontWeight:500, textAlign:'right', maxWidth:180 }}>{v}</span>
+                </div>
+              ))}
+
+              <div style={{ marginTop:16, display:'flex', flexDirection:'column', gap:8 }}>
+                <Btn variant="primary" icon="user" onClick={() => { window.__adminParam = sel.id; window.__navigate && window.__navigate('teacher', 'student_profile'); }}>View full profile</Btn>
+                <Btn variant="secondary" icon="message" onClick={() => window.__navigate && window.__navigate('teacher', 'comms')}>Message</Btn>
+              </div>
+            </div>
+          </Card>
+        )}
+      </div>
+    </div>
+  );
+};
+
 // ─── Router ─────────────────────────────────────────────────────────────────────
 const TeacherPages = ({ page, plannerArgs, section }) => {
   if (page === 'classes')        return <TeacherClassesPage />;
+  if (page === 'class_detail')   return <TeacherClassDetailPage />;
+  if (page === 'students')       return <TeacherStudentsPage />;
   if (page === 'timetable')      return <TeacherTimetablePage />;
   if (page === 'homework')       return <TeacherHomework section={section} />;
   if (page === 'progress')       return <TeacherProgressPage />;

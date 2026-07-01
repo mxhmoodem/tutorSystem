@@ -1654,6 +1654,7 @@ const SAControlsPage = () => {
   const plansStore = usePlansStore();
   const codesStore = usePlanCodesStore();
   const [planModal, setPlanModal] = React.useState({ open: false, plan: null });
+  const [deletePlanTarget, setDeletePlanTarget] = React.useState(null);
   const [codeModal, setCodeModal] = React.useState({ open: false, code: null });
   const [copied, setCopied] = React.useState('');
   const copyCode = c => { try { navigator.clipboard.writeText(c); } catch (e) {} setCopied(c); setTimeout(() => setCopied(''), 1400); };
@@ -1763,6 +1764,7 @@ const SAControlsPage = () => {
                 {plan.archived
                   ? <Btn variant="ghost" small onClick={() => plansStore.restorePlan(plan.id)}>Restore</Btn>
                   : <Btn variant="ghost" small onClick={() => plansStore.archivePlan(plan.id)}>Archive</Btn>}
+                <Btn variant="ghost" icon="trash" small onClick={() => setDeletePlanTarget(plan)} style={{ marginLeft: 'auto' }} />
               </div>
             </div>
             );
@@ -1842,6 +1844,14 @@ const SAControlsPage = () => {
         onClose={() => setPlanModal({ open: false, plan: null })}
         onSave={draft => { if (planModal.plan) plansStore.updatePlan(planModal.plan.id, draft); else plansStore.addPlan(draft); }}
       />
+      <Modal open={!!deletePlanTarget} onClose={() => setDeletePlanTarget(null)} title="Delete plan?" icon="trash" iconColor={DS.danger} width={440}
+        footer={<><Btn variant="ghost" small onClick={() => setDeletePlanTarget(null)}>Cancel</Btn>
+          <Btn variant="danger" small icon="trash" onClick={() => { plansStore.deletePlan(deletePlanTarget.id); setDeletePlanTarget(null); }}>Delete plan</Btn></>}>
+        <p style={{ fontSize: 13.5, color: DS.sub, lineHeight: 1.6, margin: 0 }}>
+          This permanently removes the <b>{deletePlanTarget ? deletePlanTarget.name : ''}</b> plan from the catalogue platform-wide. Centres already on this plan keep their current price, but it can no longer be selected. This can’t be undone — to hide it instead, use <b>Archive</b>.
+        </p>
+      </Modal>
+
       <PlanCodeModal
         open={codeModal.open}
         code={codeModal.code}

@@ -297,46 +297,57 @@ const commsSub = (role) => {
   return COMMS_BASE;
 };
 
+// Items are grouped under quiet uppercase section labels via an optional
+// `section` field — items sharing a section are contiguous, and the Sidebar
+// emits the label before the first item of each run (see the nav render).
+// Items with no `section` render flat (the "(no label)" groups). Student stays
+// flat (no sections). Section labels are presentational product groupings only —
+// they map to no route and never surface internal data-model terms.
+//
+// `Settings` (bottom dock) is a single navigating button — it carries `chevron:
+// true` and no `sub`, so it routes to the Settings page (which now owns its own
+// in-page tabs) instead of expanding sub-items in the sidebar.
 const NAV_CONFIG = {
   superadmin: {
     label: 'Platform Owner',
     color: '#7C3AED',
     items: [
       { id: 'dashboard',     icon: 'dashboard',   label: 'Overview' },
-      { id: 'centres',       icon: 'book',        label: 'Centres' },
-      { id: 'users',         icon: 'users',       label: 'Users' },
-      { id: 'revenue',       icon: 'invoice',     label: 'Revenue' },
-      { id: 'engagement',    icon: 'chart',       label: 'Engagement' },
-      { id: 'system',        icon: 'zap',         label: 'System Health' },
-      { id: 'comms',         icon: 'message',     label: 'Communications', sub: commsSub('superadmin') },
-      { id: 'security',      icon: 'alert',       label: 'Security & Audit' },
-      { id: 'controls',      icon: 'settings',    label: 'Platform Controls' },
+      { id: 'centres',       icon: 'book',        label: 'Centres',          section: 'Platform' },
+      { id: 'users',         icon: 'users',       label: 'Users',            section: 'Platform' },
+      { id: 'revenue',       icon: 'invoice',     label: 'Revenue',          section: 'Business' },
+      { id: 'engagement',    icon: 'chart',       label: 'Engagement',       section: 'Business' },
+      { id: 'comms',         icon: 'message',     label: 'Communications',   section: 'Trust & Safety', sub: commsSub('superadmin') },
+      { id: 'security',      icon: 'alert',       label: 'Security & Audit', section: 'Trust & Safety' },
+      { id: 'system',        icon: 'zap',         label: 'System Health',    section: 'System' },
+      { id: 'controls',      icon: 'settings',    label: 'Platform Controls',section: 'System' },
     ],
-    bottom: [{ id: 'settings', icon: 'settings', label: 'Settings', sub: SETTINGS_SUB('superadmin') }],
+    bottom: [{ id: 'settings', icon: 'settings', label: 'Settings', chevron: true }],
   },
   admin: {
     label: 'Centre Admin',
     color: DS.accent,
     items: [
       { id: 'dashboard', icon: 'dashboard', label: 'Dashboard' },
-      { id: 'centres',   icon: 'grid',     label: 'Centres' },
-      { id: 'students',  icon: 'users',    label: 'Students' },
-      { id: 'people',    icon: 'send',     label: 'People & invites' },
-      { id: 'classes',   icon: 'book',     label: 'Classes', sub: [
-        { id: 'classes:classes',  label: 'Classes',  icon: 'grid' },
-        { id: 'classes:subjects', label: 'Subjects', icon: 'book' },
-      ] },
+      { id: 'centres',   icon: 'grid',     label: 'Centres', section: 'Organisation' },
+      { id: 'students',  icon: 'users',    label: 'Students', section: 'People' },
       // Staff grouping — operational staff admin (Teachers + Timesheets) under one
       // dropdown. Subs keep their own page ids (`teachers`, `timesheets:review`) which
       // don't share the parent id, so the sidebar/breadcrumb resolve a group by
       // matching the active page against its subs (see subMatches in Sidebar).
-      { id: 'staff', icon: 'users', label: 'Staff', sub: [
+      { id: 'staff', icon: 'users', label: 'Staff', section: 'People', sub: [
         { id: 'teachers',          label: 'Teachers',   icon: 'teacher' },
+        { id: 'team',              label: 'Roles & access', icon: 'shield' },
         { id: 'timesheets:review', label: 'Timesheets', icon: 'clock' },
       ] },
-      { id: 'schedule',  icon: 'calendar', label: 'Schedule' },
-      { id: 'invoices',  icon: 'invoice',  label: 'Invoices' },
-      { id: 'reports',   icon: 'chart',    label: 'Reports', sub: [
+      { id: 'people',    icon: 'send',     label: 'People & invites', section: 'People' },
+      { id: 'classes',   icon: 'book',     label: 'Classes', section: 'Academic', sub: [
+        { id: 'classes:classes',  label: 'Classes',  icon: 'grid' },
+        { id: 'classes:subjects', label: 'Subjects', icon: 'book' },
+      ] },
+      { id: 'schedule',  icon: 'calendar', label: 'Schedule', section: 'Academic' },
+      { id: 'invoices',  icon: 'invoice',  label: 'Invoices', section: 'Operations' },
+      { id: 'reports',   icon: 'chart',    label: 'Reports', section: 'Operations', sub: [
         { id: 'reports:overview', label: 'Overview',    icon: 'dashboard' },
         { id: 'reports:browse',   label: 'All Reports', icon: 'list' },
         { id: 'reports:generate', label: 'Generate',    icon: 'plus' },
@@ -344,28 +355,29 @@ const NAV_CONFIG = {
       ] },
       { id: 'comms',     icon: 'message',  label: 'Communications', sub: commsSub('admin') },
     ],
-    bottom: [{ id: 'settings', icon: 'settings', label: 'Settings', sub: SETTINGS_SUB('admin') }],
+    bottom: [{ id: 'settings', icon: 'settings', label: 'Settings', chevron: true }],
   },
   teacher: {
     label: 'Teacher',
     color: '#0891B2',
     items: [
       { id: 'dashboard',       icon: 'dashboard', label: 'Dashboard' },
-      { id: 'classes',         icon: 'book',      label: 'My Classes' },
-      { id: 'timetable',       icon: 'calendar',  label: 'Timetable' },
-      { id: 'lesson_planner',  icon: 'edit',      label: 'Lesson Planner' },
-      { id: 'homework',        icon: 'clip',      label: 'Homework', sub: [
+      { id: 'classes',         icon: 'book',      label: 'My Classes', section: 'Teaching' },
+      { id: 'students',        icon: 'users',     label: 'My Students', section: 'Teaching' },
+      { id: 'timetable',       icon: 'calendar',  label: 'Timetable', section: 'Teaching' },
+      { id: 'lesson_planner',  icon: 'edit',      label: 'Lesson Planner', section: 'Teaching' },
+      { id: 'homework',        icon: 'clip',      label: 'Homework', section: 'Work', sub: [
         { id: 'homework:assignments', label: 'Assignments', icon: 'clip' },
         { id: 'homework:analytics',   label: 'Analytics',   icon: 'chart' },
       ] },
-      { id: 'attendance',      icon: 'check',     label: 'Attendance' },
-      { id: 'timesheet',       icon: 'clock',     label: 'Timesheet' },
-      { id: 'progress',        icon: 'chart',     label: 'Progress' },
-      { id: 'tracking',        icon: 'star',      label: 'Tracking' },
-      { id: 'reports',         icon: 'file',      label: 'Reports' },
+      { id: 'attendance',      icon: 'check',     label: 'Attendance', section: 'Work' },
+      { id: 'timesheet',       icon: 'clock',     label: 'Timesheet', section: 'Work' },
+      { id: 'progress',        icon: 'chart',     label: 'Progress', section: 'Progress' },
+      { id: 'tracking',        icon: 'star',      label: 'Tracking', section: 'Progress' },
+      { id: 'reports',         icon: 'file',      label: 'Reports', section: 'Progress' },
       { id: 'comms',           icon: 'message',   label: 'Communications', sub: commsSub('teacher') },
     ],
-    bottom: [{ id: 'settings', icon: 'settings', label: 'Settings', sub: SETTINGS_SUB('teacher') }],
+    bottom: [{ id: 'settings', icon: 'settings', label: 'Settings', chevron: true }],
   },
   student: {
     label: 'Student',
@@ -382,7 +394,7 @@ const NAV_CONFIG = {
       { id: 'reports',   icon: 'file',      label: 'Reports'},
       { id: 'comms',     icon: 'message',   label: 'Communications', sub: commsSub('student') },
     ],
-    bottom: [{ id: 'settings', icon: 'settings', label: 'Settings', sub: SETTINGS_SUB('student') }],
+    bottom: [{ id: 'settings', icon: 'settings', label: 'Settings', chevron: true }],
   },
 };
 
@@ -432,10 +444,13 @@ const CentreSwitcher = ({ collapsed, centre, centres, onSwitchCentre, onAddCentr
         style={{
           display: 'flex', alignItems: 'center', gap: 10, width: '100%',
           justifyContent: collapsed ? 'center' : 'flex-start',
-          background: open ? SIDE_HOVER : 'transparent', border: 'none',
-          borderRadius: 8, padding: collapsed ? '8px 0' : '6px 8px', cursor: 'pointer',
-          textAlign: 'left', transition: 'background 0.12s',
-        }}>
+          background: open ? DS.surfaceHover : DS.surface,
+          border: `1px solid ${DS.border}`,
+          borderRadius: 10, padding: collapsed ? '7px 0' : '7px 8px', cursor: 'pointer',
+          textAlign: 'left', transition: 'background 0.12s, border-color 0.12s',
+        }}
+        onMouseEnter={e => { if (!open) e.currentTarget.style.background = DS.surfaceHover; }}
+        onMouseLeave={e => { if (!open) e.currentTarget.style.background = DS.surface; }}>
         {tile(centre.name, true)}
         {!collapsed && (
           <React.Fragment>
@@ -608,6 +623,12 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
             >
               <Icon name="chevron_d" size={15} color={isActive ? DS.accent : DS.faint} />
             </span>
+          ) : item.chevron ? (
+            /* A leaf that navigates (Settings) — a right chevron signals "opens a
+               page", not an expander. */
+            <span style={{ display: 'flex', alignItems: 'center', marginLeft: 'auto' }}>
+              <Icon name="chevron_r" size={15} color={isActive ? DS.accent : DS.faint} />
+            </span>
           ) : isActive && (
             <div style={{
               width: 5, height: 5, borderRadius: '50%',
@@ -698,37 +719,42 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
       padding: collapsed ? '0 10px' : '0 12px',
       transition: 'width 0.16s ease',
     }}>
-      {/* Header — centre switcher for staff identities, else the product logo.
-          Fixed to 52px (matching the TopBar height) so its bottom border lines
-          up exactly with the header's, forming one continuous line across the
-          sidebar + content header. */}
+      {/* Header — the TutorOS product logo sits at the top. Fixed to 52px
+          (matching the TopBar height) so its bottom border lines up exactly
+          with the content header's, forming one continuous line across the
+          sidebar + content header. The centre switcher (staff identities with
+          one or more centres) sits just beneath it as its own row. */}
       <div style={{
         height: 52, boxSizing: 'border-box',
         display: 'flex', flexDirection: 'column', justifyContent: 'center',
         borderBottom: `1px solid ${DS.border}`,
-        marginBottom: 8,
+        marginBottom: switcherOn ? 6 : 8,
       }}>
-        {switcherOn ? (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-start', gap: 10, padding: collapsed ? 0 : '0 4px' }}>
+          <div style={{
+            width: 32, height: 32, borderRadius: 8, flexShrink: 0,
+            background: DS.accent,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <span style={{ color: '#fff', fontSize: 14, fontWeight: 800, letterSpacing: '-0.5px' }}>T</span>
+          </div>
+          {!collapsed && (
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: DS.text, letterSpacing: '-0.3px' }}>TutorOS</div>
+              {!switcherOn && <div style={{ fontSize: 10, color: DS.muted, marginTop: 1 }}>{cfg.label}</div>}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Centre switcher — staff identities whose account resolves to one or
+          more centres. Sits beneath the product logo. */}
+      {switcherOn && (
+        <div style={{ marginBottom: 8 }}>
           <CentreSwitcher collapsed={collapsed} centre={centre} centres={centres} planUsage={planUsage}
             onSwitchCentre={onSwitchCentre} onAddCentre={onAddCentre} roleLabel={cfg.label} />
-        ) : (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-start', gap: 10, padding: collapsed ? 0 : '0 4px' }}>
-            <div style={{
-              width: 32, height: 32, borderRadius: 8, flexShrink: 0,
-              background: DS.accent,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}>
-              <span style={{ color: '#fff', fontSize: 14, fontWeight: 800, letterSpacing: '-0.5px' }}>T</span>
-            </div>
-            {!collapsed && (
-              <div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: DS.text, letterSpacing: '-0.3px' }}>TutorOS</div>
-                <div style={{ fontSize: 10, color: DS.muted, marginTop: 1 }}>{cfg.label}</div>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Role switcher (demo) — hidden while collapsed */}
       {onRoleSwitch && !collapsed && (
@@ -747,25 +773,50 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
         </div>
       )}
 
-      {/* Nav items */}
+      {/* Nav items — grouped under quiet uppercase section labels. The label is
+          emitted before the first item of each contiguous `section` run; items
+          with no section (and the whole student nav) render flat. Labels are
+          hidden in the icon-only collapsed bar. */}
       <nav style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2, overflow: collapsed ? 'visible' : 'auto' }}>
-        {cfg.items.map(item => <NavItem key={item.id} item={item} />)}
+        {cfg.items.map((item, i) => {
+          const prev = cfg.items[i - 1];
+          const showLabel = !collapsed && item.section && (!prev || prev.section !== item.section);
+          return (
+            <React.Fragment key={item.id}>
+              {showLabel && (
+                <div style={{
+                  fontSize: 10, fontWeight: 600, color: DS.faint,
+                  textTransform: 'uppercase', letterSpacing: '0.07em',
+                  padding: '0 12px', margin: i === 0 ? '2px 0 4px' : '12px 0 4px',
+                }}>{item.section}</div>
+              )}
+              <NavItem item={item} />
+            </React.Fragment>
+          );
+        })}
       </nav>
 
-      {/* Bottom items */}
+      {/* Bottom dock — fixed order: storage meter (Admin/Owner) → Settings →
+          user/account row → "powered by TutorOS" wordmark. */}
       <div style={{ paddingBottom: 12, borderTop: `1px solid ${DS.border}`, paddingTop: 8 }}>
-        {cfg.bottom.map(item => <NavItem key={item.id} item={item} />)}
-
-        {/* Cloud-storage usage — admin only, just above the user profile.
-            Quota comes from the account's plan (cloudStorage.totalGb). */}
+        {/* Cloud-storage usage — Admin only (gated by the cloudStorage prop).
+            Used/quota are DERIVED live from file records (index.html), never a
+            stored total. Clicking deep-links to Settings → Storage. */}
         {cloudStorage && !collapsed && (() => {
           const { usedGb = 0, totalGb = 0 } = cloudStorage;
           const pct = totalGb ? Math.min(100, Math.round((usedGb / totalGb) * 100)) : 0;
           return (
-            <div style={{ margin: '8px 0 4px', padding: '12px 14px', borderRadius: 12, background: DS.accent, color: '#fff' }}>
+            <button
+              onClick={() => onNav && onNav('settings:storage')}
+              title="Manage storage in Settings"
+              style={{
+                display: 'block', width: '100%', textAlign: 'left', border: 'none', cursor: 'pointer',
+                margin: '0 0 8px', padding: '12px 14px', borderRadius: 12, background: DS.accent, color: '#fff',
+              }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                 <Icon name="cloud" size={16} color="#fff" />
                 <span style={{ fontSize: 13, fontWeight: 600 }}>Cloud storage</span>
+                <Icon name="chevron_r" size={14} color="rgba(255,255,255,0.85)" />
               </div>
               <div style={{ height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.28)', overflow: 'hidden' }}>
                 <div style={{ width: `${pct}%`, height: '100%', background: '#fff', borderRadius: 3, transition: 'width 0.3s' }} />
@@ -773,9 +824,12 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
               <div style={{ fontSize: 11.5, marginTop: 8, color: 'rgba(255,255,255,0.92)' }}>
                 {usedGb} GB of {totalGb} GB used
               </div>
-            </div>
+            </button>
           );
         })()}
+
+        {/* Settings — a single navigating button (no sidebar expander). */}
+        {cfg.bottom.map(item => <NavItem key={item.id} item={item} />)}
 
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-start',
@@ -791,15 +845,21 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
             </div>
           )}
         </div>
-        {/* Platform wordmark — the top-left slot now belongs to the centre, so
-            the "TutorOS" branding lives here as a quiet "powered by" footer. */}
+        {/* Platform wordmark — the top-left slot belongs to the centre, so the
+            TutorOS branding sits here as a small, quiet "powered by" footer
+            directly below the account dock. It must not compete with the centre
+            name above. */}
         <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-          paddingTop: 8, marginTop: 4, borderTop: `1px solid ${DS.border}`,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+          paddingTop: 10, marginTop: 6, borderTop: `1px solid ${DS.border}`,
         }}>
-          <span style={{ fontSize: 11, fontWeight: 700, color: DS.faint, letterSpacing: '-0.2px' }}>
-            {collapsed ? 'T' : 'TutorOS'}
-          </span>
+          {collapsed ? (
+            <span style={{ fontSize: 11, fontWeight: 700, color: DS.faint, letterSpacing: '-0.2px' }}>T</span>
+          ) : (
+            <span style={{ fontSize: 10.5, fontWeight: 500, color: DS.faint, letterSpacing: '0.01em' }}>
+              powered by <span style={{ fontWeight: 700, color: DS.muted }}>TutorOS</span>
+            </span>
+          )}
         </div>
       </div>
     </div>
@@ -948,205 +1008,144 @@ const TableRow = ({ cells, isLast }) => {
   );
 };
 
-// ─── Sparkline ─────────────────────────────────────────────────────────────────
-const Sparkline = ({ data = [], color = DS.accent, width = 80, height = 30 }) => {
-  if (data.length < 2) return null;
-  const min = Math.min(...data), max = Math.max(...data);
-  const range = max - min || 1;
-  const pad = 2;
-  const pts = data.map((v, i) => {
-    const x = pad + (i / (data.length - 1)) * (width - pad * 2);
-    const y = pad + (1 - (v - min) / range) * (height - pad * 2);
-    return `${x},${y}`;
-  }).join(' ');
-  const last = pts.split(' ').pop().split(',');
-  return (
-    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
-      <polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx={last[0]} cy={last[1]} r="2.5" fill={color} />
-    </svg>
-  );
-};
+// ─── Charts (Recharts-powered · shadcn/ui-styled) ───────────────────────────────
+// Recharts is loaded via CDN (UMD) in index.html as window.Recharts — the same
+// engine shadcn/ui charts are built on. These wrappers keep the original
+// <Sparkline/> / <LineChart/> / <BarChart/> prop APIs (so every existing call
+// site works unchanged) while rendering the premium shadcn look: muted dashed
+// gridlines, no axis spines, soft tick labels, gradient area fills, rounded bars
+// and a floating card tooltip. If Recharts fails to load, charts render nothing
+// rather than throwing.
+const RC = (typeof window !== 'undefined' && window.Recharts) || {};
+const {
+  AreaChart: RcAreaChart, Area: RcArea,
+  LineChart: RcLineChart, Line: RcLine,
+  BarChart: RcBarChart, Bar: RcBar,
+  XAxis: RcXAxis, YAxis: RcYAxis, CartesianGrid: RcGrid,
+  Tooltip: RcTooltip, ResponsiveContainer: RcResponsive,
+} = RC;
 
-// ─── Multi-series Line Chart ────────────────────────────────────────────────────
-// Picks a "nice" round number ≥ raw, e.g. 12400 → 13000, 142 → 150.
-const niceCeil = (raw) => {
-  if (raw <= 0) return 1;
-  const pow = Math.pow(10, Math.floor(Math.log10(raw)));
-  const norm = raw / pow;
-  const niceNorm = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10;
-  return niceNorm * pow;
-};
-const niceFloor = (raw) => {
-  if (raw <= 0) return 0;
-  const pow = Math.pow(10, Math.floor(Math.log10(raw)));
-  const norm = raw / pow;
-  const niceNorm = norm >= 5 ? 5 : norm >= 2 ? 2 : norm >= 1 ? 1 : 0;
-  return niceNorm * pow;
-};
+// Currency vs plain-number tick formatter (kept from the previous charts).
 const fmtTick = (v, isCurrency) => {
-  if (isCurrency) return v >= 1000 ? `£${Math.round(v/1000)}k` : `£${Math.round(v)}`;
-  return v >= 1000 ? `${(v/1000).toFixed(v % 1000 === 0 ? 0 : 1)}k` : Math.round(v).toString();
+  if (isCurrency) return v >= 1000 ? `£${Math.round(v / 1000)}k` : `£${Math.round(v)}`;
+  return v >= 1000 ? `${(v / 1000).toFixed(v % 1000 === 0 ? 0 : 1)}k` : Math.round(v).toString();
 };
 
-const LineChart = ({ labels = [], series = [], height = 200, area = false }) => {
-  const uid = React.useId().replace(/[^a-zA-Z0-9]/g, '');
-  const wrapRef = React.useRef(null);
-  const [w, setW] = React.useState(600);
-  const [measuredH, setMeasuredH] = React.useState(200);
-
-  React.useLayoutEffect(() => {
-    if (!wrapRef.current) return;
-    const measure = () => {
-      setW(wrapRef.current.clientWidth || 600);
-      if (height === 'auto') setMeasuredH(wrapRef.current.clientHeight || 200);
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(wrapRef.current);
-    return () => ro.disconnect();
-  }, [height]);
-
-  const pL = 52, pR = 16, pT = 14, pB = 28;
-  const totalW = Math.max(w, 280);
-  const svgH = height === 'auto' ? Math.max(measuredH, 120) : height;
-  const chartH = svgH - pT - pB;
-  const ticks = 4;
-
-  // Decide whether series share an axis or each gets its own scale.
-  // Auto-split when the ratio between the largest and smallest series-max exceeds 5×.
-  const seriesMax = series.map(s => Math.max(...s.data));
-  const seriesMin = series.map(s => Math.min(...s.data));
-  const overallMax = Math.max(...seriesMax);
-  const overallMinPos = Math.min(...seriesMax) || 1;
-  const splitScales = series.length > 1 && overallMax / overallMinPos > 5;
-
-  // Build a per-series scale: { min, max } in data units
-  const scales = series.map((s, i) => {
-    if (!splitScales) {
-      const lo = niceFloor(Math.min(...seriesMin));
-      const hi = niceCeil(overallMax * 1.05);
-      return { min: lo, max: hi };
-    }
-    const lo = niceFloor(seriesMin[i]);
-    const hi = niceCeil(seriesMax[i] * 1.1);
-    return { min: lo, max: hi };
-  });
-
-  const yPos = (v, scale) => {
-    const r = scale.max - scale.min || 1;
-    return pT + (1 - (v - scale.min) / r) * chartH;
-  };
-  const xPos = (i, len) => pL + (i / (len - 1 || 1)) * (totalW - pL - pR);
-
-  const isCurrency0 = (series[0]?.label || '').includes('£');
-
+// Floating card tooltip — white surface, soft shadow, colour-dotted value rows.
+const ChartTooltip = ({ active, payload, label, isCurrency }) => {
+  if (!active || !payload || !payload.length) return null;
   return (
-    <div ref={wrapRef} style={{ width: '100%', height: height === 'auto' ? '100%' : svgH }}>
-      <svg width={totalW} height={svgH} style={{ display: 'block' }}>
-        {/* Optional gradient area fill beneath each line */}
-        {area && (
-          <defs>
-            {series.map((s, si) => (
-              <linearGradient key={si} id={`tos-area-${uid}-${si}`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={s.color} stopOpacity="0.24" />
-                <stop offset="100%" stopColor={s.color} stopOpacity="0" />
-              </linearGradient>
-            ))}
-          </defs>
-        )}
-        {area && series.map((s, si) => {
-          const baseline = pT + chartH;
-          const dArea = `M ${xPos(0, s.data.length)},${baseline} ` +
-            s.data.map((v, i) => `L ${xPos(i, s.data.length)},${yPos(v, scales[si])}`).join(' ') +
-            ` L ${xPos(s.data.length - 1, s.data.length)},${baseline} Z`;
-          return <path key={`area-${si}`} d={dArea} fill={`url(#tos-area-${uid}-${si})`} stroke="none" />;
-        })}
-
-        {/* Grid lines + left axis (uses series[0] scale) */}
-        {Array.from({ length: ticks + 1 }, (_, i) => {
-          const y = pT + (i / ticks) * chartH;
-          const val0 = scales[0].max - (i / ticks) * (scales[0].max - scales[0].min);
-          return (
-            <g key={i}>
-              <line x1={pL} y1={y} x2={totalW - pR} y2={y} stroke={DS.border} strokeWidth="1" />
-              <text x={pL - 8} y={y + 3} textAnchor="end" fontSize="10" fill={DS.faint}>
-                {fmtTick(val0, isCurrency0)}
-              </text>
-            </g>
-          );
-        })}
-
-        {/* X labels */}
-        {labels.map((l, i) => (
-          <text key={i} x={xPos(i, labels.length)} y={svgH - 8}
-            textAnchor="middle" fontSize="10" fill={DS.faint}>{l}</text>
-        ))}
-
-        {/* Lines */}
-        {series.map((s, si) => {
-          const d = s.data.map((v, i) =>
-            `${i === 0 ? 'M' : 'L'}${xPos(i, s.data.length)},${yPos(v, scales[si])}`
-          ).join(' ');
-          return (
-            <path key={si} d={d} fill="none" stroke={s.color}
-              strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-          );
-        })}
-
-        {/* Dots */}
-        {series.map((s, si) =>
-          s.data.map((v, i) => (
-            <circle key={`${si}-${i}`}
-              cx={xPos(i, s.data.length)} cy={yPos(v, scales[si])}
-              r="3" fill={s.color} />
-          ))
-        )}
-      </svg>
+    <div style={{
+      background: DS.bg, border: `1px solid ${DS.border}`, borderRadius: 10,
+      boxShadow: DS.cardShadowHi, padding: '8px 11px', minWidth: 128,
+    }}>
+      {label != null && (
+        <div style={{ fontSize: 11, fontWeight: 600, color: DS.muted, marginBottom: 6 }}>{label}</div>
+      )}
+      {payload.map((p, i) => (
+        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, lineHeight: 1.7 }}>
+          <span style={{ width: 8, height: 8, borderRadius: 2, background: p.color || p.stroke || p.fill, flexShrink: 0 }} />
+          <span style={{ color: DS.muted, flex: 1 }}>{p.name}</span>
+          <span style={{ color: DS.text, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+            {isCurrency ? fmtTick(p.value, true) : p.value}
+          </span>
+        </div>
+      ))}
     </div>
   );
 };
 
-// ─── Bar Chart ─────────────────────────────────────────────────────────────────
-const BarChart = ({ labels = [], data = [], color = DS.accent, height = 160 }) => {
-  const wrapRef = React.useRef(null);
-  const [w, setW] = React.useState(600);
-
-  React.useLayoutEffect(() => {
-    if (!wrapRef.current) return;
-    const measure = () => setW(wrapRef.current.clientWidth || 600);
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(wrapRef.current);
-    return () => ro.disconnect();
-  }, []);
-
-  const max = Math.max(...data) * 1.1 || 1;
-  const pL = 8, pR = 8, pT = 8, pB = 24;
-  const totalW = Math.max(w, 240);
-  const svgH = height;
-  const chartH = svgH - pT - pB;
-  const slot = (totalW - pL - pR) / Math.max(data.length, 1);
-  const barW = slot * 0.6;
-
+// ─── Sparkline ──────────────────────────────────────────────────────────────────
+// Compact fixed-size trend line with a gradient fill and an end-point marker.
+const Sparkline = ({ data = [], color = DS.accent, width = 80, height = 30 }) => {
+  const uid = React.useId().replace(/[^a-zA-Z0-9]/g, '');
+  if (data.length < 2 || !RcAreaChart) return null;
+  const rows = data.map((v, i) => ({ i, v }));
+  const lastIdx = rows.length - 1;
+  const EndDot = ({ cx, cy, index }) =>
+    index === lastIdx && cx != null ? <circle cx={cx} cy={cy} r={2.5} fill={color} /> : null;
   return (
-    <div ref={wrapRef} style={{ width: '100%', height: svgH }}>
-      <svg width={totalW} height={svgH} style={{ display: 'block' }}>
-        {data.map((v, i) => {
-          const bh = (v / max) * chartH;
-          const x = pL + i * slot + (slot - barW) / 2;
-          const y = pT + chartH - bh;
-          return (
-            <g key={i}>
-              <rect x={x} y={y} width={barW} height={bh}
-                rx="3" fill={color} opacity="0.85" />
-              <text x={x + barW / 2} y={svgH - 6} textAnchor="middle" fontSize="10" fill={DS.faint}>
-                {labels[i]}
-              </text>
-            </g>
-          );
-        })}
-      </svg>
+    <RcAreaChart width={width} height={height} data={rows} margin={{ top: 3, right: 3, bottom: 3, left: 3 }}>
+      <defs>
+        <linearGradient id={`spark-${uid}`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity={0.28} />
+          <stop offset="100%" stopColor={color} stopOpacity={0} />
+        </linearGradient>
+      </defs>
+      <RcYAxis hide domain={['dataMin', 'dataMax']} />
+      <RcArea type="monotone" dataKey="v" stroke={color} strokeWidth={1.5}
+        fill={`url(#spark-${uid})`} isAnimationActive={false} dot={<EndDot />} activeDot={false} />
+    </RcAreaChart>
+  );
+};
+
+// ─── Multi-series Line / Area Chart ─────────────────────────────────────────────
+// `series` is [{ label, data:[…], color }] aligned to `labels` (the x-axis).
+// Renders smooth lines by default, or soft gradient areas when `area` is set.
+// `height` may be a number, or 'auto' to fill the parent's height.
+const LineChart = ({ labels = [], series = [], height = 200, area = false }) => {
+  const uid = React.useId().replace(/[^a-zA-Z0-9]/g, '');
+  if (!RcResponsive || !series.length) return null;
+  const isCurrency = (series[0]?.label || '').includes('£');
+  const rows = labels.map((l, i) => {
+    const row = { _x: l };
+    series.forEach((s, si) => { row[`s${si}`] = s.data[i]; });
+    return row;
+  });
+  const Chart  = area ? RcAreaChart : RcLineChart;
+  const Series = area ? RcArea : RcLine;
+  return (
+    <div style={{ width: '100%', height: height === 'auto' ? '100%' : height }}>
+      <RcResponsive width="100%" height="100%">
+        <Chart data={rows} margin={{ top: 12, right: 12, bottom: 4, left: 4 }}>
+          {area && (
+            <defs>
+              {series.map((s, si) => (
+                <linearGradient key={si} id={`area-${uid}-${si}`} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={s.color} stopOpacity={0.24} />
+                  <stop offset="100%" stopColor={s.color} stopOpacity={0} />
+                </linearGradient>
+              ))}
+            </defs>
+          )}
+          <RcGrid vertical={false} stroke={DS.border} strokeDasharray="3 3" />
+          <RcXAxis dataKey="_x" stroke="transparent" tickLine={false} axisLine={false}
+            tick={{ fill: DS.faint, fontSize: 11, fontWeight: 500 }} dy={6} minTickGap={16} />
+          <RcYAxis stroke="transparent" tickLine={false} axisLine={false} width={44}
+            tick={{ fill: DS.faint, fontSize: 11, fontWeight: 500 }}
+            tickFormatter={(v) => fmtTick(v, isCurrency)} />
+          <RcTooltip cursor={{ stroke: DS.borderDark, strokeWidth: 1, strokeDasharray: '3 3' }}
+            content={<ChartTooltip isCurrency={isCurrency} />} />
+          {series.map((s, si) => (
+            <Series key={si} type="monotone" dataKey={`s${si}`} name={s.label}
+              stroke={s.color} strokeWidth={2}
+              fill={area ? `url(#area-${uid}-${si})` : 'none'}
+              dot={false} activeDot={{ r: 4, strokeWidth: 0 }} isAnimationActive={false} />
+          ))}
+        </Chart>
+      </RcResponsive>
+    </div>
+  );
+};
+
+// ─── Bar Chart ──────────────────────────────────────────────────────────────────
+// Single-series bars aligned to `labels`, with rounded tops and a hover highlight.
+const BarChart = ({ labels = [], data = [], color = DS.accent, height = 160 }) => {
+  if (!RcResponsive || !data.length) return null;
+  const rows = labels.map((l, i) => ({ _x: l, v: data[i] }));
+  return (
+    <div style={{ width: '100%', height }}>
+      <RcResponsive width="100%" height="100%">
+        <RcBarChart data={rows} margin={{ top: 8, right: 8, bottom: 4, left: 4 }}>
+          <RcGrid vertical={false} stroke={DS.border} strokeDasharray="3 3" />
+          <RcXAxis dataKey="_x" stroke="transparent" tickLine={false} axisLine={false}
+            tick={{ fill: DS.faint, fontSize: 11, fontWeight: 500 }} dy={6} minTickGap={8} />
+          <RcYAxis stroke="transparent" tickLine={false} axisLine={false} width={36}
+            tick={{ fill: DS.faint, fontSize: 11, fontWeight: 500 }} tickFormatter={(v) => fmtTick(v, false)} />
+          <RcTooltip cursor={{ fill: DS.accentLight, opacity: 0.6 }} content={<ChartTooltip />} />
+          <RcBar dataKey="v" name="Value" fill={color} radius={[6, 6, 0, 0]} maxBarSize={48} isAnimationActive={false} />
+        </RcBarChart>
+      </RcResponsive>
     </div>
   );
 };
@@ -1470,10 +1469,57 @@ const Toggle = ({ on }) => (
   </span>
 );
 
+// ─── Academic terms ──────────────────────────────────────────────────────────
+// Centres define a schedule of academic terms (Autumn/Spring/Summer, etc.) in
+// Settings → Centre. Terms are distinct from invoicing. The "current" term is
+// resolved from today's date so the header indicator switches automatically
+// when a new term begins. Shared by the header (index.html) and Settings.jsx.
+// Distinct name (TeacherDashboard.jsx already owns a global `TODAY_ISO` string).
+const termTodayISO = () => new Date().toISOString().slice(0, 10);
+
+// Normalise a centre settings block into a term list, migrating the legacy
+// single term/termStart/termEnd fields when no `terms` array exists yet.
+const getCentreTerms = (centre) => {
+  const c = centre || {};
+  let terms = Array.isArray(c.terms) ? c.terms.filter(Boolean) : [];
+  if (!terms.length && c.term) {
+    terms = [{ id: 't_legacy', name: c.term, start: c.termStart || '', end: c.termEnd || '' }];
+  }
+  return terms;
+};
+
+// Classify a single term relative to `today`: running now / yet to start /
+// finished / incomplete dates.
+const termStatus = (t, today) => {
+  const d = today || termTodayISO();
+  if (!t) return 'draft';
+  if (t.start && t.end && t.start <= d && d <= t.end) return 'active';
+  if (t.start && t.start > d) return 'upcoming';
+  if (t.end && t.end < d) return 'ended';
+  return 'draft';
+};
+
+// Pick the term that applies on `today`: the one running now, else the next
+// upcoming, else the most recently ended. Returns { term, status }.
+const resolveActiveTerm = (terms, today) => {
+  const d = today || termTodayISO();
+  const list = (terms || []).filter(t => t && (t.name || t.start || t.end));
+  const active = list.find(t => termStatus(t, d) === 'active');
+  if (active) return { term: active, status: 'active' };
+  const upcoming = list.filter(t => t.start && t.start > d)
+    .sort((a, b) => a.start.localeCompare(b.start))[0];
+  if (upcoming) return { term: upcoming, status: 'upcoming' };
+  const past = list.filter(t => t.end && t.end < d)
+    .sort((a, b) => b.end.localeCompare(a.end))[0];
+  if (past) return { term: past, status: 'ended' };
+  return { term: list[0] || null, status: 'none' };
+};
+
 // ─── Export ────────────────────────────────────────────────────────────────────
 Object.assign(window, {
   DS, Icon, Badge, Avatar, KPICard, StatCard, shadeColor, Sidebar, PageHeader, Btn, Card,
   Table, TableRow, Sparkline, LineChart, BarChart, ScorePill, Divider, NAV_CONFIG, navParentId,
   Modal, Field, Input, Textarea, Select, Segmented, SearchInput, EmptyState,
   useDashboardPrefs, CustomiseModal, Toggle,
+  termTodayISO, getCentreTerms, termStatus, resolveActiveTerm,
 });

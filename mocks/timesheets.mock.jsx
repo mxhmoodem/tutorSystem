@@ -2,7 +2,7 @@
 //  Mock data — Timesheets / Teacher working hours
 //  Loaded as a global script before Timesheets.jsx (see index.html).
 //
-//  SEED_TIME_ENTRIES seeds the localStorage store `tutoros.timesheets.v1`.
+//  SEED_TIME_ENTRIES seeds the localStorage store `tutoros.timesheets.v2`.
 //  One TimeEntry per row:
 //    { id, centreId, teacherId, sessionId, type, date, durationMinutes,
 //      status, note, approvedBy, approvedAt }
@@ -58,4 +58,57 @@ const SEED_TIME_ENTRIES = [
   { id:'te_d05', centreId:TS_SEED_CENTRE, teacherId:'t3', sessionId:'c7|2026-06-18',  type:'teaching', date:'2026-06-18', durationMinutes:90, status:'approved', note:'',                                    approvedBy:'a1', approvedAt:'2026-06-22T09:20:00' },
   { id:'te_d06', centreId:TS_SEED_CENTRE, teacherId:'t3', sessionId:'c13|2026-06-18', type:'teaching', date:'2026-06-18', durationMinutes:90, status:'approved', note:'',                                    approvedBy:'a1', approvedAt:'2026-06-22T09:20:00' },
   { id:'te_d07', centreId:TS_SEED_CENTRE, teacherId:'t3', sessionId:'c14|2026-06-15', type:'cover',    date:'2026-06-15', durationMinutes:90, status:'approved', note:'Covered for Tom Rivera (Year 10 Maths)', approvedBy:'a1', approvedAt:'2026-06-22T09:20:00' },
+
+  // ─────────────────────────────────────────────────────────────
+  //  THIS WEEK — wider staff (Mon 22 – Fri 26 Jun 2026), mixed
+  //  statuses/types so the admin overview lists every teacher with
+  //  pending/approved totals and the derived pay shows variety
+  //  (salaried → no pay, hourly → paid, cover → paid extra).
+  // ─────────────────────────────────────────────────────────────
+  //  Priya Nair (t2) — salaried: hours recorded, never pay-eligible
+  { id:'te_p01', centreId:TS_SEED_CENTRE, teacherId:'t2', sessionId:'c5|2026-06-24',  type:'teaching', date:'2026-06-24', durationMinutes:90,  status:'submitted', note:'',                                  approvedBy:null, approvedAt:null },
+  { id:'te_p02', centreId:TS_SEED_CENTRE, teacherId:'t2', sessionId:'c6|2026-06-24',  type:'teaching', date:'2026-06-24', durationMinutes:90,  status:'submitted', note:'',                                  approvedBy:null, approvedAt:null },
+  { id:'te_p03', centreId:TS_SEED_CENTRE, teacherId:'t2', sessionId:null,             type:'prep',     date:'2026-06-22', durationMinutes:45,  status:'submitted', note:'Set up Year 10 cells practical',     approvedBy:null, approvedAt:null },
+
+  //  Marcus Webb (t4)
+  { id:'te_m01', centreId:TS_SEED_CENTRE, teacherId:'t4', sessionId:'c8|2026-06-23',  type:'teaching', date:'2026-06-23', durationMinutes:90,  status:'submitted', note:'',                                  approvedBy:null, approvedAt:null },
+  { id:'te_m02', centreId:TS_SEED_CENTRE, teacherId:'t4', sessionId:'c23|2026-06-24', type:'teaching', date:'2026-06-24', durationMinutes:105, status:'submitted', note:'Ran 15 min over — essay feedback',   approvedBy:null, approvedAt:null },
+  { id:'te_m03', centreId:TS_SEED_CENTRE, teacherId:'t4', sessionId:null,             type:'marking',  date:'2026-06-25', durationMinutes:90,  status:'draft',     note:'Year 11 mock essays',               approvedBy:null, approvedAt:null },
+
+  //  Helen Yoo (t5) — closed out this week
+  { id:'te_h01', centreId:TS_SEED_CENTRE, teacherId:'t5', sessionId:'c9|2026-06-22',  type:'teaching', date:'2026-06-22', durationMinutes:90,  status:'approved',  note:'',                                  approvedBy:'a1', approvedAt:'2026-06-26T08:30:00' },
+  { id:'te_h02', centreId:TS_SEED_CENTRE, teacherId:'t5', sessionId:'c24|2026-06-24', type:'teaching', date:'2026-06-24', durationMinutes:90,  status:'approved',  note:'',                                  approvedBy:'a1', approvedAt:'2026-06-26T08:30:00' },
+  { id:'te_h03', centreId:TS_SEED_CENTRE, teacherId:'t5', sessionId:null,             type:'meeting',  date:'2026-06-23', durationMinutes:30,  status:'approved',  note:'Humanities planning',               approvedBy:'a1', approvedAt:'2026-06-26T08:30:00' },
+
+  //  Daniel Mehta (t6)
+  { id:'te_n01', centreId:TS_SEED_CENTRE, teacherId:'t6', sessionId:'c10|2026-06-23', type:'teaching', date:'2026-06-23', durationMinutes:90,  status:'submitted', note:'',                                  approvedBy:null, approvedAt:null },
+  { id:'te_n02', centreId:TS_SEED_CENTRE, teacherId:'t6', sessionId:'c11|2026-06-25', type:'teaching', date:'2026-06-25', durationMinutes:90,  status:'submitted', note:'',                                  approvedBy:null, approvedAt:null },
+  { id:'te_n03', centreId:TS_SEED_CENTRE, teacherId:'t6', sessionId:'c29|2026-06-26', type:'teaching', date:'2026-06-26', durationMinutes:90,  status:'draft',     note:'',                                  approvedBy:null, approvedAt:null },
+  { id:'te_n04', centreId:TS_SEED_CENTRE, teacherId:'t6', sessionId:null,             type:'training', date:'2026-06-22', durationMinutes:90,  status:'submitted', note:'New exam-board spec briefing',       approvedBy:null, approvedAt:null },
+
+  //  Aisha Begum (t7)
+  { id:'te_a01', centreId:TS_SEED_CENTRE, teacherId:'t7', sessionId:'c12|2026-06-22', type:'teaching', date:'2026-06-22', durationMinutes:90,  status:'submitted', note:'',                                  approvedBy:null, approvedAt:null },
+  { id:'te_a02', centreId:TS_SEED_CENTRE, teacherId:'t7', sessionId:'c18|2026-06-23', type:'teaching', date:'2026-06-23', durationMinutes:90,  status:'submitted', note:'',                                  approvedBy:null, approvedAt:null },
+  { id:'te_a03', centreId:TS_SEED_CENTRE, teacherId:'t7', sessionId:null,             type:'prep',     date:'2026-06-24', durationMinutes:60,  status:'draft',     note:'Fieldwork data pack',               approvedBy:null, approvedAt:null },
+
+  //  Tom Rivera (t8) — hourly: teaching + a covered session both pay-eligible
+  { id:'te_t01', centreId:TS_SEED_CENTRE, teacherId:'t8', sessionId:'c14|2026-06-22', type:'teaching', date:'2026-06-22', durationMinutes:90,  status:'submitted', note:'',                                  approvedBy:null, approvedAt:null },
+  { id:'te_t02', centreId:TS_SEED_CENTRE, teacherId:'t8', sessionId:'c25|2026-06-25', type:'teaching', date:'2026-06-25', durationMinutes:90,  status:'submitted', note:'',                                  approvedBy:null, approvedAt:null },
+  { id:'te_t03', centreId:TS_SEED_CENTRE, teacherId:'t8', sessionId:'c9|2026-06-15',  type:'cover',    date:'2026-06-15', durationMinutes:90,  status:'approved',  note:'Covered for Helen Yoo (Year 11 History)', approvedBy:'a1', approvedAt:'2026-06-22T10:05:00' },
+  { id:'te_t04', centreId:TS_SEED_CENTRE, teacherId:'t8', sessionId:null,             type:'marking',  date:'2026-06-26', durationMinutes:45,  status:'submitted', note:'Year 10 algebra retakes',           approvedBy:null, approvedAt:null },
+
+  //  Claire Dubois (t9)
+  { id:'te_c01', centreId:TS_SEED_CENTRE, teacherId:'t9', sessionId:'c15|2026-06-22', type:'teaching', date:'2026-06-22', durationMinutes:90,  status:'submitted', note:'',                                  approvedBy:null, approvedAt:null },
+  { id:'te_c02', centreId:TS_SEED_CENTRE, teacherId:'t9', sessionId:'c19|2026-06-23', type:'teaching', date:'2026-06-23', durationMinutes:90,  status:'submitted', note:'',                                  approvedBy:null, approvedAt:null },
+  { id:'te_c03', centreId:TS_SEED_CENTRE, teacherId:'t9', sessionId:'c26|2026-06-25', type:'teaching', date:'2026-06-25', durationMinutes:90,  status:'submitted', note:'',                                  approvedBy:null, approvedAt:null },
+
+  //  James Okafor (t10) — last week closed (approved + exported), one new submission
+  { id:'te_j01', centreId:TS_SEED_CENTRE, teacherId:'t10', sessionId:'c16|2026-06-22', type:'teaching', date:'2026-06-22', durationMinutes:90, status:'approved',  note:'',                                  approvedBy:'a1', approvedAt:'2026-06-26T08:40:00' },
+  { id:'te_j02', centreId:TS_SEED_CENTRE, teacherId:'t10', sessionId:'c21|2026-06-24', type:'teaching', date:'2026-06-24', durationMinutes:90, status:'exported',  note:'',                                  approvedBy:'a1', approvedAt:'2026-06-26T08:40:00' },
+  { id:'te_j03', centreId:TS_SEED_CENTRE, teacherId:'t10', sessionId:'c28|2026-06-26', type:'teaching', date:'2026-06-26', durationMinutes:90, status:'submitted', note:'',                                  approvedBy:null, approvedAt:null },
+
+  //  Rebecca Stone (t11)
+  { id:'te_r01', centreId:TS_SEED_CENTRE, teacherId:'t11', sessionId:'c17|2026-06-23', type:'teaching', date:'2026-06-23', durationMinutes:90, status:'submitted', note:'',                                  approvedBy:null, approvedAt:null },
+  { id:'te_r02', centreId:TS_SEED_CENTRE, teacherId:'t11', sessionId:'c22|2026-06-24', type:'teaching', date:'2026-06-24', durationMinutes:90, status:'submitted', note:'',                                  approvedBy:null, approvedAt:null },
+  { id:'te_r03', centreId:TS_SEED_CENTRE, teacherId:'t11', sessionId:null,             type:'meeting',  date:'2026-06-25', durationMinutes:45, status:'submitted', note:'Sixth-form options evening prep',    approvedBy:null, approvedAt:null },
 ];
