@@ -5,7 +5,7 @@
 // ─── Shared admin store (localStorage-backed) ───────────────────────────────────
 // Teachers, classes and students live here so that add / invite / create flows
 // actually persist and reflect across the admin pages.
-const ADMIN_STORE_KEY = 'admin_store_v3';
+const ADMIN_STORE_KEY = 'admin_store_v4';
 
 // Seed data (SEED_TEACHERS, SEED_CLASSES, SEED_STUDENTS, SEED_SUBJECTS) and the
 // read-only roster (allStudents) live in mocks/adminPages.mock.jsx, loaded
@@ -255,27 +255,50 @@ const TEACHER_PALETTE = ['#4F46E5','#0891B2','#0D9488','#D97706','#DC2626','#7C3
 // ─── Students List ─────────────────────────────────────────────────────────────
 const AdminStudentsPage = () => {
   const store = useAdminStore();
+  const cm = window.centreMetrics;
   const [search, setSearch] = React.useState('');
   const [filter, setFilter] = React.useState('all');
   const [selected, setSelected] = React.useState(null);
 
-  const students = store.students;
+  // The Students page is the ACTIVE academic roster — provisioned-but-unclaimed
+  // (pending/invited) accounts live on People & invites, not here (§Students:
+  // purge the "not yet active" noise). Filtering the live store by the SAME
+  // predicate the selector counts use keeps this list == the Dashboard headcount.
+  const students = store.students.filter(cm.isActiveStudent);
+  // ONE at-risk definition (§2/§6) — threshold breach OR staff flag, explainable.
+  const atRiskCount = students.filter(cm.isAtRisk).length;
 
   const filtered = students.filter(s => {
     const name = studentName(s).toLowerCase();
     const matchSearch = name.includes(search.toLowerCase()) ||
       (s.subjects || []).some(sub => sub.toLowerCase().includes(search.toLowerCase()));
-    const matchFilter = filter === 'all' || filter === s.status;
+    const matchFilter = filter === 'all' || (filter === 'at-risk' ? cm.isAtRisk(s) : !cm.isAtRisk(s));
     return matchSearch && matchFilter;
   });
+
+  // Export writes an audit entry (§6) and is DATA-MINIMISED (§9): it emits only
+  // the fields already shown on this screen — no extra PII is pulled in for the
+  // export. This surfaces minors' data, so AADC / Children's-Code minimisation
+  // applies; a real backend would also gate this behind a permission + rate limit.
+  const exportCsv = () => {
+    const header = ['name', 'year', 'attendance', 'hw', 'score', 'status'];
+    const rows = filtered.map(s => [studentName(s), s.year, s.attendance, s.hw, s.score, cm.isAtRisk(s) ? 'at-risk' : 'on-track']);
+    (window.klayoAudit || (() => {}))('export_csv', `students (${rows.length} records)`);
+    try {
+      const csv = [header, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+      const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+      const a = document.createElement('a'); a.href = url; a.download = 'students.csv'; a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) { /* ignore in prototype */ }
+  };
 
   return (
     <div style={{ padding:'32px' }}>
       <PageHeader
         title="Students"
-        subtitle={`${students.length} enrolled · ${students.filter(s=>s.status==='at-risk').length} at risk`}
+        subtitle={`${students.length} students · ${atRiskCount} at risk`}
         actions={[
-          <Btn key="export" variant="secondary" icon="download" small>Export CSV</Btn>,
+          <Btn key="export" variant="secondary" icon="download" small onClick={exportCsv}>Export CSV</Btn>,
           <Btn key="add"    variant="primary"   icon="plus"     small onClick={() => adminNav('students_add')}>Add Student</Btn>,
         ]}
       />
@@ -287,8 +310,8 @@ const AdminStudentsPage = () => {
           value={filter} onChange={setFilter}
           options={[
             { id:'all', label:'All', count:students.length },
-            { id:'active', label:'Active', count:students.filter(s=>s.status==='active').length },
-            { id:'at-risk', label:'At risk', count:students.filter(s=>s.status==='at-risk').length },
+            { id:'active', label:'On track', count:students.length - atRiskCount },
+            { id:'at-risk', label:'At risk', count:atRiskCount },
           ]}
         />
       </div>
@@ -296,14 +319,11 @@ const AdminStudentsPage = () => {
       <div style={{ display:'grid', gridTemplateColumns: selected ? '1fr 360px' : '1fr', gap:20 }}>
         <Card>
           <Table
-            cols={['Student','Year','Subjects','Attendance','HW %','Avg Score','Status','Actions']}
+            cols={['Student','Year','Subjects','Attendance','HW %','Avg Score','Status',{ label:'Actions', align:'right' }]}
             rows={filtered.map(s => [
-              <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-                <Avatar name={studentName(s)} size={30} />
-                <div>
-                  <div style={{ fontSize:13, fontWeight:500, color:DS.text }}>{studentName(s)}</div>
-                  <div style={{ fontSize:11, color:DS.faint }}>Last seen {s.lastSeen}</div>
-                </div>
+              <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
+                <span onClick={() => setSelected(s.id === (selected && selected.id) ? null : s)} style={{ fontSize:13, fontWeight:600, color:DS.text, cursor:'pointer' }}>{studentName(s)}</span>
+                <span style={{ fontSize:11.5, color:DS.faint }}>Last seen {s.lastSeen}</span>
               </div>,
               <span style={{ fontSize:13, color:DS.muted }}>{s.year}</span>,
               <div style={{ display:'flex', flexWrap:'wrap', gap:4 }}>
@@ -312,16 +332,25 @@ const AdminStudentsPage = () => {
                 ))}
                 {(s.subjects || []).length > 2 && <span style={{ fontSize:11, color:DS.faint }}>+{s.subjects.length-2}</span>}
               </div>,
-              <span style={{ fontSize:13, color: s.attendance < 80 ? DS.danger : s.attendance < 90 ? DS.warning : DS.success, fontWeight:600 }}>{s.attendance}%</span>,
-              <span style={{ fontSize:13, color: s.hw < 50 ? DS.danger : s.hw < 70 ? DS.warning : DS.success, fontWeight:600 }}>{s.hw}%</span>,
+              // Colour + an icon cue for the danger tier, so "below threshold" doesn't
+              // rely on colour alone (§8 accessibility). Numbers are the text backup.
+              <span style={{ display:'inline-flex', alignItems:'center', justifyContent:'flex-end', gap:3, fontSize:13, fontWeight:600, color: s.attendance < 80 ? DS.danger : s.attendance < 90 ? DS.warning : DS.success }}>
+                {s.attendance < 80 && <Icon name="alert" size={11} />}{s.attendance}%
+              </span>,
+              <span style={{ display:'inline-flex', alignItems:'center', justifyContent:'flex-end', gap:3, fontSize:13, fontWeight:600, color: s.hw < 50 ? DS.danger : s.hw < 70 ? DS.warning : DS.success }}>
+                {s.hw < 50 && <Icon name="alert" size={11} />}{s.hw}%
+              </span>,
               <ScorePill score={s.score} />,
-              <Badge variant={s.status === 'at-risk' ? 'danger' : 'success'}>
-                {s.status === 'at-risk' ? 'At risk' : 'Active'}
-              </Badge>,
-              <div style={{ display:'flex', gap:6 }}>
-                <Btn variant="secondary" small onClick={() => setSelected(s.id === (selected && selected.id) ? null : s)}>Profile</Btn>
-                <Btn variant="ghost" icon="message" small>Message</Btn>
-              </div>,
+              // At-risk is explainable on hover (the reason travels with the pill) —
+              // advisory, never opaque (Children's-Code Part D).
+              <span title={cm.isAtRisk(s) ? cm.atRiskReason(s) : 'On track'}>
+                <StatusPill status={cm.isAtRisk(s) ? 'At risk' : 'On track'} />
+              </span>,
+              <RowActionsMenu items={[
+                { label:'View profile', icon:'user', onClick:() => setSelected(s.id === (selected && selected.id) ? null : s) },
+                { label:'Message', icon:'message', onClick:() => {} },
+                { label:'Resend invite', icon:'send', onClick:() => {} },
+              ]} />,
             ])}
           />
         </Card>
@@ -337,7 +366,7 @@ const AdminStudentsPage = () => {
                 <Avatar name={studentName(selected)} size={44} />
                 <div>
                   <div style={{ fontSize:15, fontWeight:700 }}>{studentName(selected)}</div>
-                  <div style={{ fontSize:13, color:DS.muted }}>{selected.year} · {selected.status === 'at-risk' ? '⚠ At risk' : 'Active'}</div>
+                  <div style={{ fontSize:13, color:DS.muted }}>{selected.year} · {cm.isAtRisk(selected) ? `⚠ At risk — ${cm.atRiskReason(selected)}` : 'On track'}</div>
                 </div>
               </div>
               {[
@@ -900,7 +929,7 @@ const StudentAnalyticsView = ({ student, enrolledClasses, role = 'admin' }) => {
             <span style={{ fontSize:13.5, fontWeight:700, color:DS.text }}>{s.predicted}</span>,
             <span style={{ fontSize:13, color:DS.muted }}>{s.target}</span>,
             <Sparkline data={s.spark} color={subjectColor(s.name)} width={84} height={26} />,
-            <Badge variant={s.onTrack?'success':'warning'}>{s.onTrack?'On track':'Below target'}</Badge>,
+            <StatusPill status={s.onTrack?'On track':'Below target'} tone={s.onTrack?'positive':'warning'} />,
           ])} />
       </Card>
 
@@ -957,7 +986,7 @@ const StudentAnalyticsView = ({ student, enrolledClasses, role = 'admin' }) => {
             <span style={{ fontSize:13, color:DS.sub }}>{l.day} {l.date}</span>,
             <span style={{ fontSize:13, fontWeight:500, color:DS.text }}>{l.subject}</span>,
             <span style={{ fontSize:13, color:DS.muted }}>{l.topic}</span>,
-            <Badge variant={l.attendance==='Present'?'success':l.attendance==='Late'?'warning':'danger'}>{l.attendance}</Badge>,
+            <StatusPill status={l.attendance} />,
             <span style={{ fontSize:13, color:DS.muted }}>{l.participation}</span>,
           ])} />
       </Card>
@@ -973,7 +1002,7 @@ const StudentAnalyticsView = ({ student, enrolledClasses, role = 'admin' }) => {
             <span style={{ fontSize:13, fontWeight:500, color:DS.text }}>{h.title}</span>,
             <span style={{ fontSize:13, color:DS.muted }}>{h.subject}</span>,
             <span style={{ fontSize:12.5, color:DS.muted }}>{h.set}d ago</span>,
-            <Badge variant={hwBadge(h.status)}>{h.status}</Badge>,
+            <StatusPill status={h.status} tone={hwBadge(h.status)} />,
             h.score==null ? <span style={{ fontSize:13, color:DS.faint }}>—</span> : <ScorePill score={h.score} />,
           ])} />
       </Card>
@@ -1604,7 +1633,7 @@ const SubjectsView = ({ store, search }) => {
           <EmptyState icon="book" title="No subjects found" message={q ? `No subjects match “${search}”.` : 'Add your first subject to group classes and students.'} action={!q && <Btn variant="primary" icon="plus" onClick={openAdd}>Add Subject</Btn>} />
         ) : (
           <Table
-            cols={['Subject','Level','Classes','Teachers','Students','']}
+            cols={['Subject','Level','Classes','Teachers','Students',{ label:'', align:'right' }]}
             rows={subjects.map(sub => {
               const { classes, teachers, students } = subjectRollup(store, sub);
               const color = sub.color || subjectColor(sub.name);
@@ -1620,11 +1649,11 @@ const SubjectsView = ({ store, search }) => {
                 <span style={{ fontSize:13, color:DS.sub, display:'inline-flex', alignItems:'center', gap:6 }}><Icon name="book" size={13} color={DS.faint} />{classes.length}</span>,
                 <span style={{ fontSize:13, color:DS.sub, display:'inline-flex', alignItems:'center', gap:6 }}><Icon name="users" size={13} color={DS.faint} />{teachers.length}</span>,
                 <span style={{ fontSize:13, color:DS.sub, display:'inline-flex', alignItems:'center', gap:6 }}><Icon name="graduation" size={13} color={DS.faint} />{students.length}</span>,
-                <div style={{ display:'flex', gap:6, justifyContent:'flex-end' }}>
-                  <Btn variant="ghost" icon="eye" small onClick={() => adminNav('subject_detail', sub.id)}>View</Btn>
-                  <Btn variant="ghost" icon="edit" small onClick={() => openEdit(sub)}>Edit</Btn>
-                  <Btn variant="ghost" icon="x" small onClick={() => remove(sub)}>Remove</Btn>
-                </div>,
+                <RowActionsMenu items={[
+                  { label:'View subject', icon:'eye', onClick:() => adminNav('subject_detail', sub.id) },
+                  { label:'Edit', icon:'edit', onClick:() => openEdit(sub) },
+                  { label:'Remove', icon:'trash', danger:true, onClick:() => remove(sub) },
+                ]} />,
               ];
             })}
           />
@@ -1703,7 +1732,7 @@ const SubjectDetailPage = () => {
                   <span style={{ width:9, height:9, borderRadius:'50%', background:cc, flexShrink:0 }} />
                   <div><div style={{ fontSize:13.5, fontWeight:600, color:DS.accent }}>{c.name}</div><div style={{ fontSize:11.5, color:DS.faint }}>{c.group}</div></div>
                 </button>,
-                <div style={{ display:'flex', alignItems:'center', gap:8 }}><Avatar name={c.teacher} size={24} color={teacher && teacher.color} /><span style={{ fontSize:13, color:DS.sub }}>{c.teacher}</span></div>,
+                <span style={{ fontSize:13, color:DS.sub }}>{c.teacher}</span>,
                 <span style={{ fontSize:12.5, color:DS.sub }}>{c.students}/{c.capacity}</span>,
                 <span style={{ fontSize:12.5, color:DS.muted, display:'inline-flex', alignItems:'center', gap:5 }}><Icon name="clock" size={13} color={DS.faint} />{c.day} {c.time}</span>,
                 <span style={{ fontSize:12.5, color:DS.muted, display:'inline-flex', alignItems:'center', gap:5 }}><Icon name="pin" size={13} color={DS.faint} />{c.room || '—'}</span>,
@@ -1722,9 +1751,8 @@ const SubjectDetailPage = () => {
           <Table
             cols={['Teacher','Subjects','Classes','Email','']}
             rows={teachers.map(t => [
-              <button onClick={() => adminNav('teacher_profile', t.id)} style={{ display:'flex', alignItems:'center', gap:10, background:'none', border:'none', padding:0, cursor:'pointer', textAlign:'left' }}>
-                <Avatar name={t.name} size={30} color={t.color} />
-                <span style={{ fontSize:13, fontWeight:500, color:DS.accent }}>{t.name}</span>
+              <button onClick={() => adminNav('teacher_profile', t.id)} style={{ background:'none', border:'none', padding:0, cursor:'pointer', textAlign:'left' }}>
+                <span style={{ fontSize:13, fontWeight:600, color:DS.accent }}>{t.name}</span>
               </button>,
               <span style={{ fontSize:12.5, color:DS.muted }}>{t.subject || (t.subjects || []).join(' / ') || '—'}</span>,
               <span style={{ fontSize:13, color:DS.sub }}>{store.classes.filter(c => c.teacher === t.name).length}</span>,
@@ -1743,9 +1771,8 @@ const SubjectDetailPage = () => {
           <Table
             cols={['Student','Year','Attendance','HW %','Avg Score','']}
             rows={students.map(s => [
-              <button onClick={() => adminNav('student_profile', s.id)} style={{ display:'flex', alignItems:'center', gap:10, background:'none', border:'none', padding:0, cursor:'pointer', textAlign:'left' }}>
-                <Avatar name={studentName(s)} size={30} />
-                <span style={{ fontSize:13, fontWeight:500, color:DS.accent }}>{studentName(s)}</span>
+              <button onClick={() => adminNav('student_profile', s.id)} style={{ background:'none', border:'none', padding:0, cursor:'pointer', textAlign:'left' }}>
+                <span style={{ fontSize:13, fontWeight:600, color:DS.accent }}>{studentName(s)}</span>
               </button>,
               <span style={{ fontSize:13, color:DS.muted }}>{s.year}</span>,
               <span style={{ fontSize:13, fontWeight:600, color: s.attendance < 80 ? DS.danger : DS.success }}>{s.attendance}%</span>,
@@ -1788,7 +1815,7 @@ const AdminClassesPage = ({ section }) => {
     <div style={{ padding:'32px' }}>
       <PageHeader
         title={view === 'subjects' ? 'Subjects' : 'Classes'}
-        subtitle={`${classes.length} classes · ${store.subjects.length} subjects · ${filledSeats} students enrolled · ${avgFill}% avg capacity`}
+        subtitle={`${classes.length} classes · ${store.subjects.length} subjects · ${filledSeats} enrolments · ${avgFill}% avg capacity`}
         actions={[view === 'classes'
           ? <Btn key="new" variant="primary" icon="plus" small onClick={() => adminNav('classes_add')}>Add Class</Btn>
           : null]}
@@ -1815,7 +1842,7 @@ const AdminClassesPage = ({ section }) => {
           <EmptyState icon="book" title="No classes found" message={search ? `No classes match “${search}”.` : 'Create your first class to start scheduling sessions.'} action={!search && <Btn variant="primary" icon="plus" onClick={() => adminNav('classes_add')}>Add Class</Btn>} />
         ) : (
           <Table
-            cols={['Class','Subject','Teacher','Students','Schedule','Room','']}
+            cols={['Class','Subject','Teacher','Students','Schedule','Room',{ label:'', align:'right' }]}
             rows={filtered.map(cls => {
               const color = subjectColor(cls.name);
               const fill = cls.capacity ? Math.min(100, Math.round((cls.students / cls.capacity) * 100)) : 0;
@@ -1830,10 +1857,7 @@ const AdminClassesPage = ({ section }) => {
                   </div>
                 </button>,
                 <span style={{ fontSize:11.5, padding:'3px 9px', background:color+'14', color, borderRadius:14, fontWeight:500 }}>{cls.name.replace(/^(GCSE|A-Level)\s/, '')}</span>,
-                <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                  <Avatar name={cls.teacher} size={24} color={teacher && teacher.color} />
-                  <span style={{ fontSize:13, color:DS.sub }}>{cls.teacher}</span>
-                </div>,
+                <span style={{ fontSize:13, color:DS.sub }}>{cls.teacher}</span>,
                 <div style={{ display:'flex', alignItems:'center', gap:8 }}>
                   <div style={{ width:54, height:6, background:DS.surface, borderRadius:3, overflow:'hidden' }}>
                     <div style={{ width:`${fill}%`, height:'100%', background:fillColor }} />
@@ -1842,10 +1866,10 @@ const AdminClassesPage = ({ section }) => {
                 </div>,
                 <span style={{ fontSize:12.5, color:DS.muted, display:'inline-flex', alignItems:'center', gap:5 }}><Icon name="clock" size={13} color={DS.faint} />{cls.day} {cls.time}</span>,
                 <span style={{ fontSize:12.5, color:DS.muted, display:'inline-flex', alignItems:'center', gap:5 }}><Icon name="pin" size={13} color={DS.faint} />{cls.room || '—'}</span>,
-                <div style={{ display:'flex', gap:6, justifyContent:'flex-end' }}>
-                  <Btn variant="ghost" icon="eye" small onClick={() => adminNav('class_detail', cls.id)}>View</Btn>
-                  <Btn variant="ghost" icon="edit" small onClick={() => { setEditing(cls); setModalOpen(true); }}>Edit</Btn>
-                </div>,
+                <RowActionsMenu items={[
+                  { label:'View class', icon:'eye', onClick:() => adminNav('class_detail', cls.id) },
+                  { label:'Edit', icon:'edit', onClick:() => { setEditing(cls); setModalOpen(true); } },
+                ]} />,
               ];
             })}
           />
@@ -2396,9 +2420,8 @@ const ClassDetailPage = () => {
           <Table
             cols={['Student','Year','Attendance','HW %','Avg Score','']}
             rows={roster.map(s => [
-              <button onClick={() => adminNav('student_profile', s.id)} style={{ display:'flex', alignItems:'center', gap:10, background:'none', border:'none', padding:0, cursor:'pointer', textAlign:'left' }}>
-                <Avatar name={studentName(s)} size={30} />
-                <span style={{ fontSize:13, fontWeight:500, color:DS.accent }}>{studentName(s)}</span>
+              <button onClick={() => adminNav('student_profile', s.id)} style={{ background:'none', border:'none', padding:0, cursor:'pointer', textAlign:'left' }}>
+                <span style={{ fontSize:13, fontWeight:600, color:DS.accent }}>{studentName(s)}</span>
               </button>,
               <span style={{ fontSize:13, color:DS.muted }}>{s.year}</span>,
               <span style={{ fontSize:13, fontWeight:600, color: s.attendance < 80 ? DS.danger : DS.success }}>{s.attendance}%</span>,
@@ -2424,7 +2447,7 @@ const ClassDetailPage = () => {
             </div>,
             <ScorePill score={h.avg} />,
             <span style={{ fontSize:12.5, color:DS.muted }}>{h.daysAgo}d ago</span>,
-            <Badge variant={h.status === 'open' ? 'warning' : 'success'}>{h.status === 'open' ? 'Open' : 'Marked'}</Badge>,
+            <StatusPill status={h.status === 'open' ? 'Open' : 'Marked'} tone={h.status === 'open' ? 'warning' : 'positive'} />,
           ])}
         />
       </Card>
@@ -2857,7 +2880,10 @@ const AdminTeachersPage = () => {
   const [sort, setSort] = React.useState('name');
 
   const teachers = store.teachers;
-  const totalStudents = teachers.reduce((s, t) => s + (t.students || 0), 0);
+  // Σ of each teacher's roster sizes = ENROLMENTS, not distinct students (a student
+  // taught by 3 teachers counts 3×). Labelled "enrolments" (§2) — the distinct
+  // headcount lives on the Students page (centreMetrics.getActiveStudentCount).
+  const totalEnrolments = teachers.reduce((s, t) => s + (t.students || 0), 0);
   const totalClasses  = teachers.reduce((s, t) => s + (t.classes || 0), 0);
   const activeT = teachers.filter(t => t.status === 'active');
   const avgAttendance = activeT.length ? Math.round(activeT.reduce((s, t) => s + (t.attendance || 0), 0) / activeT.length) : 0;
@@ -2879,7 +2905,7 @@ const AdminTeachersPage = () => {
     <div style={{ padding:'32px' }}>
       <PageHeader
         title="Teachers"
-        subtitle={`${activeT.length} active teachers · ${totalStudents} students across ${totalClasses} classes`}
+        subtitle={`${activeT.length} active teachers · ${totalEnrolments} enrolments across ${totalClasses} classes`}
         actions={[<Btn key="add" variant="primary" icon="plus" small onClick={() => adminNav('teachers_add')}>Add Teacher</Btn>]}
       />
 
@@ -2888,7 +2914,7 @@ const AdminTeachersPage = () => {
         <KPICard label="Teachers"       value={activeT.length}      sub="active staff" icon="users" iconBg={DS.accentLight} accent={DS.accent} />
         <KPICard label="Avg Attendance" value={avgAttendance + '%'} sub="this term"    icon="check" iconBg={DS.successBg} accent={DS.success} />
         <KPICard label="Sick Days (term)" value={sickDays}          sub="recorded absences" icon="alert" iconBg={DS.dangerBg} accent={DS.danger} />
-        <KPICard label="Total Students" value={totalStudents}       sub="across all classes" icon="graduation" iconBg={DS.infoBg} accent={DS.info} />
+        <KPICard label="Enrolments"     value={totalEnrolments}      sub="across all classes" icon="graduation" iconBg={DS.infoBg} accent={DS.info} />
       </div>
 
       {/* Toolbar */}
@@ -2902,17 +2928,14 @@ const AdminTeachersPage = () => {
           <EmptyState icon="users" title="No teachers found" message={search ? `No teachers match “${search}”.` : 'Add your first teacher to get started.'} action={!search && <Btn variant="primary" icon="plus" onClick={() => adminNav('teachers_add')}>Add Teacher</Btn>} />
         ) : (
           <Table
-            cols={['Teacher','Subjects','Students','Classes','Attendance',"Today's register",'']}
+            cols={['Teacher','Subjects','Students','Classes',{ label:'Attendance', align:'left' },"Today's register",{ label:'', align:'right' }]}
             rows={filtered.map(t => {
               const subs = teacherSubjects(t);
               const todayVal = store.attendance[`${t.id}|${today}`] || null;
               return [
-                <div style={{ display:'flex', alignItems:'center', gap:10, cursor:'pointer' }} onClick={() => adminNav('teacher_profile', t.id)}>
-                  <Avatar name={t.name} size={34} color={t.color} />
-                  <div>
-                    <div style={{ fontSize:13.5, fontWeight:600, color:DS.text }}>{t.name}</div>
-                    <div style={{ fontSize:11.5, color:DS.faint, display:'flex', alignItems:'center', gap:4 }}><Icon name="mail" size={11} />{t.email}</div>
-                  </div>
+                <div style={{ cursor:'pointer' }} onClick={() => adminNav('teacher_profile', t.id)}>
+                  <div style={{ fontSize:13.5, fontWeight:600, color:DS.text }}>{t.name}</div>
+                  <div style={{ fontSize:11.5, color:DS.faint, display:'flex', alignItems:'center', gap:4, marginTop:2 }}><Icon name="mail" size={11} />{t.email}</div>
                 </div>,
                 <div style={{ display:'flex', flexWrap:'wrap', gap:4 }}>
                   {subs.slice(0,2).map(s => <span key={s} style={{ fontSize:11, padding:'2px 8px', background:DS.surface, border:`1px solid ${DS.border}`, borderRadius:14, color:DS.sub }}>{s}</span>)}

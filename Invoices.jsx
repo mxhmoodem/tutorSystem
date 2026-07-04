@@ -375,6 +375,9 @@ const useInvoiceStore = () => {
       reminders: [{ id:invUID('rem'), invoiceId, sentAt, toEmail }, ...store.reminders],
       audit: logAudit([{ id:invUID('a'), invoiceId, paymentId:null, action:'reminder_sent', actor:INV_ACTOR, at:sentAt, meta:{ toEmail } }]),
     });
+    // Also mirror money/comms actions into the unified account audit (§6). The
+    // ledger keeps its own rich audit; this is the cross-module security trail.
+    window.klayoAudit && window.klayoAudit('invoice_reminder_sent', invoiceId);
   };
 
   // Apply reconciliation — only ever called from the import preview's Confirm.
@@ -438,7 +441,7 @@ const invReminderState = (store, inv, family) => {
 // ─── Small UI atoms ──────────────────────────────────────────────────────────
 const InvStatusBadge = ({ status }) => {
   const m = INV_STATUS_META[status] || INV_STATUS_META.scheduled;
-  return <Badge variant={m.variant}>{m.label}</Badge>;
+  return <StatusPill tone={m.variant}>{m.label}</StatusPill>;
 };
 
 // "£160 of £360" rollup + thin progress bar.
@@ -1186,6 +1189,8 @@ const AdminInvoicesPage = () => {
   };
   React.useEffect(() => () => clearTimeout(toastTimer.current), []);
 
+  const [invPage, setInvPage] = React.useState(0);
+
   // Derive everything from the schedule, every render.
   const entries = store.invoices.map(inv => ({ inv, status: invComputeStatus(inv, today), totals: invTotals(inv, today), family: store.familyOf(inv.familyId) }));
   const agg = invAggregate(store.invoices, today);
@@ -1200,6 +1205,14 @@ const AdminInvoicesPage = () => {
     const hay = [e.inv.number, e.family ? e.family.name : '', e.family ? e.family.parent : '', (e.inv.studentIds || []).map(invStudentName).join(' '), (e.inv.classes || []).join(' ')].join(' ').toLowerCase();
     return hay.includes(q);
   }).sort((a, b) => a.inv.number < b.inv.number ? 1 : -1);
+
+  // Pagination (§8) — a consistent 10 rows/page so the ledger never becomes a
+  // scroll-wall. Page is clamped (not reset) so it survives a re-derive; filter/
+  // search changing naturally shrinks the range and the clamp keeps it valid.
+  const INV_PER_PAGE = 10;
+  const invPageCount = Math.max(1, Math.ceil(filtered.length / INV_PER_PAGE));
+  const curInvPage = Math.min(invPage, invPageCount - 1);
+  const pageRows = filtered.slice(curInvPage * INV_PER_PAGE, (curInvPage + 1) * INV_PER_PAGE);
 
   const openEntry = openId ? entries.find(e => e.inv.id === openId) : null;
 
@@ -1281,8 +1294,8 @@ const AdminInvoicesPage = () => {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((e, i) => (
-                  <InvoiceRow key={e.inv.id} entry={e} isLast={i === filtered.length - 1} onOpen={setOpenId} onRemind={quickRemind} />
+                {pageRows.map((e, i) => (
+                  <InvoiceRow key={e.inv.id} entry={e} isLast={i === pageRows.length - 1} onOpen={setOpenId} onRemind={quickRemind} />
                 ))}
               </tbody>
             </table>
@@ -1290,8 +1303,17 @@ const AdminInvoicesPage = () => {
         )}
       </Card>
 
-      <div style={{ fontSize:12, color:DS.faint, marginTop:12 }}>
-        Showing {filtered.length} of {entries.length} invoices · status is derived live from each payment schedule.
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, marginTop:12, flexWrap:'wrap' }}>
+        <div style={{ fontSize:12, color:DS.faint }}>
+          Showing {filtered.length === 0 ? 0 : curInvPage * INV_PER_PAGE + 1}–{Math.min((curInvPage + 1) * INV_PER_PAGE, filtered.length)} of {filtered.length} invoices · status is derived live from each payment schedule.
+        </div>
+        {invPageCount > 1 && (
+          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <Btn small variant="secondary" icon="chevron_l" onClick={() => setInvPage(p => Math.max(0, p - 1))} style={curInvPage === 0 ? { opacity:0.5, pointerEvents:'none' } : {}}>Prev</Btn>
+            <span style={{ fontSize:12, color:DS.muted, whiteSpace:'nowrap' }}>Page {curInvPage + 1} of {invPageCount}</span>
+            <Btn small variant="secondary" icon="chevron_r" onClick={() => setInvPage(p => Math.min(invPageCount - 1, p + 1))} style={curInvPage >= invPageCount - 1 ? { opacity:0.5, pointerEvents:'none' } : {}}>Next</Btn>
+          </div>
+        )}
       </div>
 
       {/* Detail drawer + modals + toast */}
@@ -1304,4 +1326,7 @@ const AdminInvoicesPage = () => {
   );
 };
 
-Object.assign(window, { AdminInvoicesPage });
+// Export the ledger's own rollup + money formatter so the centre-metrics layer
+// (centreMetrics.getInvoiceRollup) and the Dashboard can REFERENCE the derived
+// outstanding/overdue figures instead of re-deriving (forking) invoice maths.
+Object.assign(window, { AdminInvoicesPage, invAggregate, invMoney });

@@ -58,7 +58,7 @@ const SUBJECTS = {
 const subColor = (name) => SUBJECTS[name] || { color: C.muted, soft: C.surface };
 
 // ─── localStorage store ────────────────────────────────────────
-const STORAGE_KEY = 'homework_store_v5';
+const STORAGE_KEY = 'homework_store_v6';
 
 // Class roster, student seed roster and PDF question banks are mock data,
 // defined as globals in mocks/homework.mock.jsx (loaded before this file in
@@ -163,7 +163,7 @@ const populateCohort = (a, students) => {
 };
 
 const seedStore = () => {
-  const me = { id: 's_oliver', name: 'Oliver Chen', role: 'student', classLabel: 'Class 10A' };
+  const me = { id: 's_oliver', name: 'Oliver Chen', role: 'student', classLabel: 'Year 12 – Group A' };
   const teacher = { id: 't_clarke', name: 'Sarah Clarke', role: 'teacher' };
   // Current student ("me") first, then the seed roster from mocks/homework.mock.jsx.
   const students = [me, ...HW_STUDENTS];
@@ -180,8 +180,8 @@ const seedStore = () => {
     id: 'hw_simul',
     title: 'Simultaneous Equations',
     subject: 'Mathematics',
-    classLabel: 'Class 10A',
-    teacherName: 'Mahmood Mahalawy',
+    classLabel: 'Year 10 – Group A',
+    teacherName: 'Sarah Clarke',
     folderId: 'f_gcse',
     teacherId: teacher.id,
     studentIds: ['s_oliver','s_emma','s_sophia','s_james'],
@@ -206,8 +206,8 @@ const seedStore = () => {
     id: 'hw_quad_prac',
     title: 'Quadratic Equations — Practice Set',
     subject: 'Mathematics',
-    classLabel: 'Class 10A',
-    teacherName: 'Ms. Chen',
+    classLabel: 'Year 10 – Group A',
+    teacherName: 'Sarah Clarke',
     folderId: 'f_gcse',
     teacherId: teacher.id,
     studentIds: ['s_oliver','s_emma','s_sophia'],
@@ -257,8 +257,8 @@ const seedStore = () => {
     id: 'hw_macbeth3',
     title: "Shakespeare's Macbeth — Act 3 Analysis",
     subject: 'English',
-    classLabel: 'Class 9A',
-    teacherName: 'Mr. Thompson',
+    classLabel: 'Year 9 – Group A',
+    teacherName: 'Marcus Webb',
     folderId: 'f_hum',
     teacherId: teacher.id,
     studentIds: ['s_oliver','s_emma','s_james'],
@@ -284,8 +284,8 @@ const seedStore = () => {
     id: 'hw_chem_fg',
     title: 'Organic Chemistry — Functional Groups',
     subject: 'Chemistry',
-    classLabel: 'Class 10B',
-    teacherName: 'Dr. Patel',
+    classLabel: 'Year 10 – Group B',
+    teacherName: 'David Park',
     folderId: 'f_sci',
     teacherId: teacher.id,
     studentIds: ['s_oliver','s_sophia','s_james'],
@@ -313,8 +313,8 @@ const seedStore = () => {
     id: 'hw_ww2',
     title: 'World War II — Key Events Timeline',
     subject: 'History',
-    classLabel: 'Class 8A',
-    teacherName: 'Mr. Thompson',
+    classLabel: 'Year 8 – Group A',
+    teacherName: 'Helen Yoo',
     folderId: 'f_hum',
     teacherId: teacher.id,
     studentIds: ['s_oliver','s_emma','s_sophia','s_james'],
@@ -337,8 +337,8 @@ const seedStore = () => {
     id: 'hw_photo',
     title: 'Cell Biology — Photosynthesis',
     subject: 'Biology',
-    classLabel: 'Class 8A',
-    teacherName: 'Dr. Patel',
+    classLabel: 'Year 8 – Group A',
+    teacherName: 'Priya Nair',
     folderId: 'f_sci',
     teacherId: teacher.id,
     studentIds: ['s_oliver','s_emma'],
@@ -363,8 +363,8 @@ const seedStore = () => {
     id: 'hw_quad_ch5',
     title: 'Quadratic Equations – Chapter 5',
     subject: 'Mathematics',
-    classLabel: 'Class 10A',
-    teacherName: 'Ms. Chen',
+    classLabel: 'Year 10 – Group A',
+    teacherName: 'Sarah Clarke',
     folderId: 'f_gcse',
     teacherId: teacher.id,
     studentIds: ['s_oliver','s_emma','s_sophia','s_james'],
@@ -426,8 +426,8 @@ const seedStore = () => {
     id: 'hw_newton',
     title: "Newton's Laws of Motion",
     subject: 'Physics',
-    classLabel: 'Class 9B',
-    teacherName: 'Mr. Park',
+    classLabel: 'Year 9 – Group B',
+    teacherName: 'David Park',
     folderId: 'f_sci',
     teacherId: teacher.id,
     studentIds: ['s_oliver','s_james'],
@@ -477,8 +477,8 @@ const seedStore = () => {
     id: 'hw_mitosis',
     title: 'Mitosis and Cell Division',
     subject: 'Biology',
-    classLabel: 'Class 8A',
-    teacherName: 'Dr. Patel',
+    classLabel: 'Year 8 – Group A',
+    teacherName: 'Priya Nair',
     folderId: 'f_sci',
     teacherId: teacher.id,
     studentIds: ['s_oliver','s_emma','s_sophia'],
@@ -524,8 +524,8 @@ const seedStore = () => {
     id: 'hw_macbeth2',
     title: 'Shakespeare – Macbeth Act 2',
     subject: 'English Literature',
-    classLabel: 'Class 9A',
-    teacherName: 'Mr. Thompson',
+    classLabel: 'Year 9 – Group A',
+    teacherName: 'Marcus Webb',
     folderId: 'f_hum',
     teacherId: teacher.id,
     studentIds: ['s_oliver','s_emma'],
@@ -575,8 +575,8 @@ const seedStore = () => {
     id: 'hw_supply',
     title: 'Supply and Demand Curves',
     subject: 'Economics',
-    classLabel: 'A-Level Maths',
-    teacherName: 'Mr. Hughes',
+    classLabel: 'Year 12 – Group A',
+    teacherName: 'Rebecca Stone',
     folderId: 'f_alevel',
     teacherId: teacher.id,
     studentIds: ['s_oliver'],
@@ -618,7 +618,210 @@ const seedStore = () => {
     },
   };
 
-  const allAssignments = [a1, a2, a3, a4, a5, a6, r1, r2, r3, r4, r5]
+  // ── New round: more homework across topics & every question type, with
+  //    LaTeX-rich maths (prompts use $…$, math answers are LaTeX). a7 & a8 are
+  //    left PENDING for Oliver (the demo student) so he can open them and see
+  //    the MathLive editor + rendered equations live. ──
+  const a7 = {
+    id: 'hw_diff',
+    title: 'Calculus: Differentiation Basics',
+    subject: 'Mathematics',
+    classLabel: 'Year 12 – Group A',
+    teacherName: 'Sarah Clarke',
+    folderId: 'f_alevel',
+    teacherId: teacher.id,
+    studentIds: ['s_oliver'],
+    dueAt: dayOffset(5),
+    timeLimitMins: null,
+    allowReview: true,
+    status: 'active',
+    createdAt: dayOffset(-2),
+    instructions: 'Differentiate each expression fully and simplify. Enter maths using the equation editor.',
+    questions: [
+      { id: 'q1', type: 'math', prompt: 'Differentiate $y = 3x^4 - 5x^2 + 2x$ with respect to $x$. Enter $\\dfrac{dy}{dx}$.',
+        answer: '12x^3-10x+2', points: 3, hint: 'Multiply by the power, then reduce the power by one.' },
+      { id: 'q2', type: 'math', prompt: 'Find $\\dfrac{d}{dx}\\left(\\sin x\\right)$.', answer: '\\cos x', points: 2 },
+      { id: 'q3', type: 'numeric', prompt: 'The curve $y = x^2 - 4x + 1$ has gradient $\\dfrac{dy}{dx} = 2x - 4$. Find its gradient at $x = 3$.',
+        answer: 2, tolerance: 0, points: 2 },
+      { id: 'q4', type: 'mcq', prompt: 'Which of these is $\\dfrac{d}{dx}\\left(e^{2x}\\right)$?',
+        choices: ['2eˣ', 'e²ˣ', '2e²ˣ', 'x·e²ˣ⁻¹'], correctIndex: 2, points: 2 },
+      { id: 'q5', type: 'long', prompt: 'Differentiate $y = x^3 e^{x}$ using the product rule. Show every step of your working.', points: 5 },
+    ],
+    submissions: {},
+  };
+
+  const a8 = {
+    id: 'hw_integ_al',
+    title: 'Integration: Definite & Indefinite',
+    subject: 'Mathematics',
+    classLabel: 'Year 12 – Group A',
+    teacherName: 'Sarah Clarke',
+    folderId: 'f_alevel',
+    teacherId: teacher.id,
+    studentIds: ['s_oliver'],
+    dueAt: dayOffset(9),
+    timeLimitMins: 40,
+    allowReview: true,
+    status: 'active',
+    createdAt: dayOffset(-1),
+    instructions: "Don't forget the constant of integration on indefinite integrals.",
+    questions: [
+      { id: 'q1', type: 'math', prompt: 'Evaluate $\\displaystyle\\int 6x^2 \\, dx$. Include the constant of integration.',
+        answer: '2x^3+c', points: 3 },
+      { id: 'q2', type: 'numeric', prompt: 'Evaluate the definite integral $\\displaystyle\\int_0^3 2x \\, dx$.',
+        answer: 9, tolerance: 0, points: 3 },
+      { id: 'q3', type: 'math', prompt: 'Find $\\displaystyle\\int \\dfrac{1}{x} \\, dx$.', answer: '\\ln x + c', points: 2 },
+      { id: 'q4', type: 'truefalse', prompt: 'The definite integral $\\displaystyle\\int_a^b f(x)\\,dx$ represents the signed area between the curve and the $x$-axis.',
+        answer: true, points: 1 },
+      { id: 'q5', type: 'upload', prompt: 'Upload a clear photo of your handwritten working for the trapezium-rule estimate.', points: 3 },
+    ],
+    submissions: {},
+  };
+
+  const a9 = {
+    id: 'hw_surds',
+    title: 'Number: Surds & Indices',
+    subject: 'Mathematics',
+    classLabel: 'Year 10 – Group A',
+    teacherName: 'Sarah Clarke',
+    folderId: 'f_gcse',
+    teacherId: teacher.id,
+    studentIds: [],
+    dueAt: dayOffset(6),
+    timeLimitMins: null,
+    allowReview: true,
+    status: 'active',
+    createdAt: dayOffset(-2),
+    instructions: 'Give surds in their simplest form. No calculators.',
+    questions: [
+      { id: 'q1', type: 'math', prompt: 'Simplify $\\sqrt{50}$ into the form $a\\sqrt{2}$.', answer: '5\\sqrt{2}', points: 2 },
+      { id: 'q2', type: 'numeric', prompt: 'Evaluate $2^5$.', answer: 32, tolerance: 0, points: 1 },
+      { id: 'q3', type: 'mcq', prompt: 'Which of the following is equal to $\\dfrac{1}{\\sqrt{2}}$ once rationalised?',
+        choices: ['√2', '√2 / 2', '2√2', '1 / 2'], correctIndex: 1, points: 2 },
+      { id: 'q4', type: 'fillblank', prompt: 'Complete the index laws: xᵃ × xᵇ = x^(blank 1), and (xᵃ)ᵇ = x^(blank 2).',
+        blanks: ['a+b', 'ab'], points: 2 },
+      { id: 'q5', type: 'short', prompt: 'Explain in one sentence why $x^0 = 1$ for any non-zero $x$.', points: 2 },
+    ],
+    submissions: {},
+  };
+
+  const a10 = {
+    id: 'hw_trig',
+    title: 'Trigonometry: Ratios & Identities',
+    subject: 'Mathematics',
+    classLabel: 'Year 11 – Group B',
+    teacherName: 'Sarah Clarke',
+    folderId: 'f_gcse',
+    teacherId: teacher.id,
+    studentIds: [],
+    dueAt: dayOffset(8),
+    timeLimitMins: null,
+    allowReview: true,
+    status: 'active',
+    createdAt: dayOffset(-3),
+    instructions: 'Use exact values where possible.',
+    questions: [
+      { id: 'q1', type: 'mcq', prompt: 'What is the exact value of $\\sin 30°$?',
+        choices: ['0', '1 / 2', '√3 / 2', '1'], correctIndex: 1, points: 1 },
+      { id: 'q2', type: 'math', prompt: 'Simplify $\\sin^2\\theta + \\cos^2\\theta$.', answer: '1', points: 2 },
+      { id: 'q3', type: 'numeric', prompt: 'A right-angled triangle has legs of length 6 and 8. Find the length of the hypotenuse.',
+        answer: 10, tolerance: 0, points: 2 },
+      { id: 'q4', type: 'match', prompt: 'Match each trigonometric ratio to its definition.',
+        pairs: [
+          { left: 'sin θ', right: 'opposite ÷ hypotenuse' },
+          { left: 'cos θ', right: 'adjacent ÷ hypotenuse' },
+          { left: 'tan θ', right: 'opposite ÷ adjacent' },
+        ], points: 3 },
+      { id: 'q5', type: 'long', prompt: 'Using a right-angled triangle, prove the identity $\\tan\\theta = \\dfrac{\\sin\\theta}{\\cos\\theta}$.', points: 4 },
+    ],
+    submissions: {},
+  };
+
+  const a11 = {
+    id: 'hw_prob',
+    title: 'Statistics: Probability',
+    subject: 'Mathematics',
+    classLabel: 'Year 10 – Group A',
+    teacherName: 'Sarah Clarke',
+    folderId: 'f_gcse',
+    teacherId: teacher.id,
+    studentIds: [],
+    dueAt: dayOffset(10),
+    timeLimitMins: null,
+    allowReview: true,
+    status: 'active',
+    createdAt: dayOffset(-1),
+    instructions: 'Give probabilities as fractions or decimals to 3 d.p. as asked.',
+    questions: [
+      { id: 'q1', type: 'numeric', prompt: 'A fair six-sided die is rolled. What is the probability of rolling a 4? Give your answer as a decimal to 3 d.p.',
+        answer: 0.167, tolerance: 0.005, points: 2 },
+      { id: 'q2', type: 'multi', prompt: 'When rolling a single fair die, which of these pairs of events are mutually exclusive?',
+        choices: [
+          'Rolling a 2 and rolling a 5',
+          'Rolling an even number and rolling a 3',
+          'Rolling a 6 and rolling an even number',
+          'Rolling an odd number and rolling a 4',
+        ], correctIndices: [0, 1, 3], points: 3 },
+      { id: 'q3', type: 'truefalse', prompt: 'The probabilities of all outcomes in a sample space always sum to 1.', answer: true, points: 1 },
+      { id: 'q4', type: 'math', prompt: 'Two independent events have $P(A) = \\dfrac{1}{2}$ and $P(B) = \\dfrac{1}{3}$. Enter $P(A \\cap B)$ as a fraction.',
+        answer: '\\frac{1}{6}', points: 2 },
+      { id: 'q5', type: 'short', prompt: 'In one or two sentences, explain the difference between independent events and mutually exclusive events.', points: 3 },
+    ],
+    submissions: {},
+  };
+
+  // ── A new marked result for Oliver (shows in his Results, LaTeX throughout) ──
+  const r6 = {
+    id: 'hw_vectors_fm',
+    title: 'Further Maths: Vectors',
+    subject: 'Further Maths',
+    classLabel: 'Year 12 – Group A',
+    teacherName: 'Sarah Clarke',
+    folderId: 'f_alevel',
+    teacherId: teacher.id,
+    studentIds: ['s_oliver'],
+    dueAt: dayOffset(-3),
+    timeLimitMins: null,
+    allowReview: true,
+    status: 'closed',
+    createdAt: dayOffset(-13),
+    instructions: 'Show full working for the proofs. Give unit vectors in component form.',
+    questions: [
+      { id: 'q1', type: 'math', prompt: 'Given $\\mathbf{a} = 3\\mathbf{i} + 4\\mathbf{j}$, find the magnitude $|\\mathbf{a}|$.',
+        answer: '5', points: 6 },
+      { id: 'q2', type: 'numeric', prompt: 'Find the scalar (dot) product of $\\begin{pmatrix} 2 \\\\ 3 \\end{pmatrix}$ and $\\begin{pmatrix} 4 \\\\ 1 \\end{pmatrix}$.',
+        answer: 11, tolerance: 0, points: 6 },
+      { id: 'q3', type: 'long', prompt: 'Prove that if two non-zero vectors are perpendicular, their scalar product is zero.', points: 8 },
+      { id: 'q4', type: 'math', prompt: 'Find a unit vector in the direction of $\\mathbf{b} = 6\\mathbf{i} - 8\\mathbf{j}$.',
+        answer: '\\frac{3}{5}\\mathbf{i}-\\frac{4}{5}\\mathbf{j}', points: 6 },
+    ],
+    submissions: {
+      's_oliver': {
+        answers: {
+          q1: '5',
+          q2: 11,
+          q3: 'If a·b = 0 and neither vector is zero, then |a||b|cosθ = 0, so cosθ = 0 and θ = 90°. Conversely, perpendicular vectors have θ = 90°, cosθ = 0, so a·b = 0.',
+          q4: '\\frac{3}{5}\\mathbf{i}-\\frac{4}{5}\\mathbf{j}',
+        },
+        submittedAt: dayOffset(-4, '18:12:00'),
+        status: 'approved',
+        markedAt: dayOffset(-2, '10:40:00'),
+        marks: { q1: 6, q2: 6, q3: 6, q4: 6 },
+        results: { q1: 'correct', q2: 'correct', q3: 'partial', q4: 'correct' },
+        feedback: {
+          q1: 'Correct — |a| = √(3² + 4²) = 5.',
+          q2: 'Right: (2)(4) + (3)(1) = 11.',
+          q3: 'The forward direction is perfect. State the converse a little more carefully for full marks.',
+          q4: 'Exactly right — dividing by the magnitude of 10 gives the unit vector.',
+        },
+        timeSpentMins: 34,
+        classAvg: 73, rank: 3, classSize: 24,
+        overallFeedback: 'Excellent command of vector algebra. Your magnitude and unit-vector work is flawless — just tighten the converse in the perpendicularity proof.',
+      },
+    },
+  };
+
+  const allAssignments = [a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, r1, r2, r3, r4, r5, r6]
     .map(a => normalizeAssignment(populateCohort(a, students)));
 
   return {
@@ -1832,8 +2035,9 @@ const QuestionAnswerDisplay = ({ question, answer }) => {
         padding:'10px 14px', background: C.surface, borderRadius:8,
         border:`1px solid ${C.border}`, fontFamily: F.mono, fontSize: 14,
       }}>
+        {/* Render the student's LaTeX through KaTeX only — the raw markup dump
+            ("· raw: (x-2)(x-3)") that used to sit beside it is removed (§9). */}
         <MathDisplay tex={answer} inline />
-        <span style={{ marginLeft:8, color: C.faint, fontSize: 11 }}>· raw: {answer}</span>
       </div>
     );
   }
@@ -1861,7 +2065,13 @@ const TeacherHomework = ({ section }) => {
   const [view, setView] = React.useState({ name: 'list' }); // list | builder | review
   const me = Object.values(store.users).find(u => u.role === 'teacher') || { id: 't_clarke', name: 'Sarah Clarke' };
 
-  const myAssignments = Object.values(store.assignments).filter(a => a.teacherId === me.id);
+  // (D1) Teacher-scoped: the teacher only sees homework for the subjects/classes
+  // they actually teach. The shared store also holds this student's other-subject
+  // homework (for the student view); scope by the canonical teacherName so those
+  // don't leak onto the teacher's list/analytics. Fallback to teacherId keeps any
+  // teacher-authored item created in-session (which stamps teacherName) visible.
+  const myAssignments = Object.values(store.assignments).filter(a =>
+    a.teacherName ? a.teacherName === me.name : a.teacherId === me.id);
   const folders = Object.values(store.folders || {});
 
   const createFolder = (name) => {
@@ -2575,14 +2785,19 @@ const HomeworkAnalytics = ({ assignments, users = {}, classes = [] }) => {
   const lateRows = subs.filter(s => s.sub && s.a.dueAt && new Date(s.sub.submittedAt) > new Date(s.a.dueAt));
   const inProgressN = subs.filter(s => s.sub && s.sub.status === 'submitted').length;
   const notStartedN = subs.filter(s => !s.sub).length;
+  // "Pending review" counts SUBMISSIONS awaiting a mark; "Awaiting marking" counts
+  // ASSIGNMENTS that still have any unmarked submission — two different units, kept
+  // labelled distinctly (Homework Analytics P0).
   const pendingReview = submittedRows.filter(s => !isGraded(s.sub)).length;
+  const awaitingMarking = filtered.filter(a =>
+    a.studentIds.some(sid => { const sub = a.submissions[sid]; return sub && !isGraded(sub); })).length;
 
   const totalAssigned = subs.length;
   const completionRate = totalAssigned ? Math.round(submittedRows.length / totalAssigned * 100) : 0;
   const scored = gradedRows.filter(s => s.pct != null);
   const avgScore = scored.length ? Math.round(scored.reduce((n, s) => n + s.pct, 0) / scored.length) : 0;
-  const times = submittedRows.map(s => s.sub.timeSpentMins).filter(Boolean);
-  const avgTime = times.length ? Math.round(times.reduce((a, b) => a + b, 0) / times.length) : 0;
+  // (D7) "Avg time spent" removed — the per-submission timing field is synthetic,
+  // not a measured value, so it is not surfaced as a metric.
 
   // Highest scorer
   let highest = null;
@@ -2614,19 +2829,24 @@ const HomeworkAnalytics = ({ assignments, users = {}, classes = [] }) => {
     label, value: Math.round(arr.reduce((a, b) => a + b, 0) / arr.length), color: subColor(label).color,
   })).sort((a, b) => b.value - a.value);
 
-  // ── Grade distribution ──
-  const gradeBuckets = { 'A (90-100)':0, 'B (80-89)':0, 'C (70-79)':0, 'D (60-69)':0, 'E (50-59)':0, 'F (<50)':0 };
+  // ── Grade distribution (canonical scale · F3) ──
+  // Raw scores are bucketed onto the ONE grade model (GCSE 9–1 / A-Level A*–E /
+  // KS3 descriptors) via window.klayoGrades — never a bespoke A–F map. The scale
+  // follows the active class filter's year; with "All classes" selected we default
+  // to GCSE (the teacher's most common level). pctToGrade is explicitly INDICATIVE
+  // (documented boundaries), not an official result — percentages stay raw scores.
+  const KG = window.klayoGrades;
+  const gradeScaleOpts = classF !== 'All' ? { year: classF } : { level: 'GCSE' };
+  const gradeBuckets = KG ? KG.emptyDistribution(gradeScaleOpts)
+    : { 'A':0, 'B':0, 'C':0, 'D':0, 'E':0, 'U':0 };
   scored.forEach(s => {
-    const p = s.pct;
-    if (p >= 90) gradeBuckets['A (90-100)']++;
-    else if (p >= 80) gradeBuckets['B (80-89)']++;
-    else if (p >= 70) gradeBuckets['C (70-79)']++;
-    else if (p >= 60) gradeBuckets['D (60-69)']++;
-    else if (p >= 50) gradeBuckets['E (50-59)']++;
-    else gradeBuckets['F (<50)']++;
+    const g = KG ? KG.pctToGrade(s.pct, gradeScaleOpts)
+      : (s.pct >= 80 ? 'A' : s.pct >= 70 ? 'B' : s.pct >= 60 ? 'C' : s.pct >= 50 ? 'D' : s.pct >= 40 ? 'E' : 'U');
+    if (g in gradeBuckets) gradeBuckets[g]++;
   });
-  const gradeColors = ['#16A34A','#4F46E5','#0EA5E9','#D97706','#F97316','#DC2626'];
-  const gradeRows = Object.entries(gradeBuckets).map(([label, value], i) => ({ label, value, color: gradeColors[i] }));
+  const gradeRows = Object.entries(gradeBuckets).map(([label, value]) => ({
+    label, value, color: KG ? KG.toneForGrade(label, gradeScaleOpts) : '#4F46E5',
+  }));
 
   // ── Average over time (group graded by month) ──
   const monthAgg = {};
@@ -2721,11 +2941,11 @@ const HomeworkAnalytics = ({ assignments, users = {}, classes = [] }) => {
         {kpi('book', 'brand', filtered.length, 'Total Assigned', `Across ${classOptions.length - 1 || 1} classes`)}
         {kpi('target', 'success', `${completionRate}%`, 'Completion Rate', `${submittedRows.length} / ${totalAssigned} students`)}
         {kpi('trend', 'brand', `${avgScore}%`, 'Average Score', 'Across graded work')}
-        {kpi('clock', 'amber', `${avgTime}m`, 'Avg Time Spent', 'Per submission')}
+        {kpi('clip', 'amber', awaitingMarking, 'Awaiting Marking', 'Assignments with unmarked work')}
       </div>
       <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap: 12 }}>
         {kpi('alertCircle', 'danger', lateRows.length, 'Late Submissions', `${totalAssigned ? Math.round(lateRows.length/totalAssigned*100) : 0}% of all`)}
-        {kpi('file', 'info', pendingReview, 'Pending Review', 'Awaiting marking')}
+        {kpi('file', 'info', pendingReview, 'Pending Review', 'Submissions to mark')}
         {kpi('award', 'success', highest ? `${highest.pct}%` : '—', 'Highest Score', highest ? (users[highest.sid]?.name || '') : '')}
         {kpi('alertCircle', 'amber', flaggedN, 'Students Flagged', 'Need intervention')}
       </div>
@@ -2911,13 +3131,22 @@ const TeacherBuilder = ({ assignment, students, folders = [], classes = [], defa
     if (!q.prompt.trim()) errors.push(`Q${i + 1}: prompt required`);
   });
 
+  // IDEMPOTENCY GUARD: block a double-click from firing Publish/Save twice (which
+  // would create two assignments / two publish events). Cleared shortly after.
+  const savingRef = React.useRef(false);
   const trySave = (status) => {
+    if (savingRef.current) return;
     if (errors.length > 0) {
       toast(errors[0], 'danger');
       if (errors[0].startsWith('Title')) setTab('settings');
       return;
     }
+    savingRef.current = true;
+    // On publish, assigned students would be notified via Comms (follow-up: write a
+    // class-channel message to a.studentIds); logged to the audit trail meanwhile.
+    if (status === 'active' && window.klayoAudit) window.klayoAudit('publish_homework', a.id || a.title, { assigned: (a.studentIds || []).length });
     onSave({ ...a, status });
+    setTimeout(() => { savingRef.current = false; }, 800);
   };
 
   const toggleStudent = (sid) => setA(prev => ({
@@ -2930,6 +3159,10 @@ const TeacherBuilder = ({ assignment, students, folders = [], classes = [], defa
   // Class-driven student selection. The chosen class filters which students are
   // shown, and "select all" assigns everyone in that class.
   const classStudents = a.classLabel ? students.filter(s => s.classLabel === a.classLabel) : students;
+  // Assigned MUST be a subset of the class roster (F1 / Homework P0): count only
+  // assigned students who are actually on this class's roster so the header
+  // "N in <class> · M assigned" always reconciles (M ≤ N).
+  const assignedInClass = classStudents.filter(s => a.studentIds.includes(s.id)).length;
   const allClassSelected = classStudents.length > 0 && classStudents.every(s => a.studentIds.includes(s.id));
   const selectAllInClass = () => setA(prev => {
     const ids = new Set(prev.studentIds);
@@ -3109,7 +3342,7 @@ const TeacherBuilder = ({ assignment, students, folders = [], classes = [], defa
                 </div>
                 <div style={{ fontFamily: F.body, fontSize: 12, color: C.muted, marginBottom: 12 }}>
                   {a.classLabel
-                    ? <>Showing {classStudents.length} student{classStudents.length === 1 ? '' : 's'} in {a.classLabel} · {a.studentIds.length} assigned</>
+                    ? <>{assignedInClass} of {classStudents.length} student{classStudents.length === 1 ? '' : 's'} in {a.classLabel} assigned</>
                     : <>Choose a class above to narrow the list · {a.studentIds.length} assigned</>}
                 </div>
                 <div style={{ display:'flex', flexWrap:'wrap', gap: 6 }}>
@@ -4282,7 +4515,13 @@ const HwHome = ({ store, me, section, setSection, assignments, onOpen, onOpenSub
   const submitted = withState.filter(x => x.state === 'submitted');
   const marked = withState.filter(x => x.state === 'marked');
 
-  const subjects = Array.from(new Set(open.map(x => x.a.subject)));
+  // §9: the subject filter populates from the student's ENROLLED subjects only
+  // (intersected with subjects that actually have open assignments), never an
+  // arbitrary set invented from the assignment rows.
+  const enrolled = window.klayoStudent ? window.klayoStudent.getSubjects() : null;
+  const subjects = enrolled
+    ? enrolled.filter(s => open.some(x => x.a.subject === s))
+    : Array.from(new Set(open.map(x => x.a.subject)));
 
   const inTab = (x) =>
     tab === 'all' ? true :
@@ -4897,7 +5136,9 @@ const HwResultReview = ({ a, me, store, onBack }) => {
   const nCorrect = results.filter(r => r === 'correct').length;
   const nPartial = results.filter(r => r === 'partial').length;
   const nIncorrect = results.filter(r => r === 'incorrect').length;
-  const accuracy = a.questions.length ? Math.round((nCorrect / a.questions.length) * 100) : 0;
+  // NOTE: no standalone "Accuracy %" — an all-or-nothing correct/total percentage
+  // contradicts the marks-based score (§4). The question outcome counts below feed
+  // the breakdown header + the Questions meta tile as plain counts instead.
 
   const vsAvg = sub.classAvg != null ? pct - sub.classAvg : null;
   const heroMsg = (pct >= 80 ? 'Excellent work!' : pct >= 65 ? 'Good effort!' : 'Keep practising!')
@@ -4955,7 +5196,10 @@ const HwResultReview = ({ a, me, store, onBack }) => {
             <div style={{ fontSize: 13, color: C.muted, margin: '5px 0 16px' }}>{heroMsg}</div>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
               {sub.classAvg != null && heroStat('Class Avg', `${sub.classAvg}%`, C.amber)}
-              {sub.rank != null && heroStat('Your Rank', <span>{sub.rank}<span style={{ color: C.muted }}>/{sub.classSize}</span></span>, C.brand)}
+              {/* §8/AADC: class rank is banded ("Top 15%"), never a precise n/28 —
+                  precise rank only behind a future opt-in. */}
+              {sub.rank != null && sub.classSize
+                && heroStat('Class Rank', `Top ${Math.max(1, Math.min(99, Math.round((sub.rank / sub.classSize) * 100)))}%`, C.brand)}
               {sub.timeSpentMins != null && heroStat('Time Spent', `${sub.timeSpentMins}m`, C.text)}
             </div>
           </div>
@@ -4967,7 +5211,7 @@ const HwResultReview = ({ a, me, store, onBack }) => {
         {metaCard('calendar', 'Submitted', fmtDateTime(sub.submittedAt))}
         {metaCard('check', 'Marked', fmtDateTime(sub.markedAt || sub.approvedAt))}
         {metaCard('award', 'Grade', grade)}
-        {metaCard('target', 'Accuracy', `${accuracy}%`)}
+        {metaCard('target', 'Questions correct', `${nCorrect} / ${a.questions.length}`)}
       </div>
 
       {/* Overall teacher feedback */}

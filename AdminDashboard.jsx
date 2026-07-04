@@ -32,7 +32,8 @@ const adminSubjectColor = (name = '') => {
   return pool[h % pool.length];
 };
 
-const CENTRE_NAME = 'Hillcrest Tuition Centre';   // demo centre
+// The centre name/identity now comes from centreMetrics.getActiveCentre()
+// (single source of truth) — no per-screen "demo centre" literal.
 
 // ── Small presentational subcomponents ──────────────────────────
 
@@ -155,28 +156,47 @@ const AdminDashboard = () => {
   const setupSteps = (setupState && setupState.steps) || {};
   const setupRemaining = ['invite', 'students', 'classes'].filter(k => !setupSteps[k]).length;
 
-  // ── Alerts (render a row only when its count > 0) ───────────────
-  // Attendance-flagged students is real (atRiskStudents). Overdue invoices
-  // and unstaffed sessions today have no data source yet → count 0 (hidden).
-  const flaggedCount = atRiskStudents.length;
-  const overdueInvoices = 0;   // TODO: wire from invoices store when available
-  const unstaffedToday  = 0;   // TODO: wire from schedule store when available
+  // ── Everything below derives from the centre-metrics selector layer
+  //    (single source of truth). No hardcoded student / at-risk / session /
+  //    capacity / outstanding figures — one number per concept, centre-scoped.
+  const cm = window.centreMetrics;
+  const money = window.invMoney || (n => `£${Math.round(n || 0).toLocaleString()}`);
+  const invRollup = cm.getInvoiceRollup();
+  const sessions  = cm.getSessionsWeek();
+  const capacity  = cm.getCapacityUsed();
+
+  // ONE at-risk definition (§2/§6): threshold breach OR staff flag, kept
+  // advisory + explainable (the reason travels with each row — Children's-Code
+  // Part D forbids opaque profiling of a minor).
+  const flaggedRows = cm.getAtRiskStudents().map(s => ({
+    name: `${s.firstName || ''} ${s.lastName || ''}`.trim() || s.name || 'Student',
+    subject: (s.subjects || [])[0] || '—',
+    reason: cm.atRiskReason(s),
+    severity: ((typeof s.attendance === 'number' && s.attendance < 70) ||
+               (typeof s.score === 'number' && s.score < 55)) ? 'danger' : 'warning',
+  }));
+  const flaggedCount = flaggedRows.length;
+
+  // ── Alerts (render a row only when its count > 0) — all derived ──
+  const classesToday   = cm.getClassesForCentre().filter(c => c.day ===
+    ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date().getDay()] && c.status !== 'archived');
+  const unstaffedToday = classesToday.filter(c => !c.teacher).length;
   const alerts = [
-    overdueInvoices > 0 && { key: 'inv', tone: 'danger', icon: 'invoice',
-      text: `${overdueInvoices} overdue invoice${overdueInvoices !== 1 ? 's' : ''} need chasing`, cta: 'View invoices', onClick: () => go('invoices') },
+    invRollup.overdue > 0 && { key: 'inv', tone: 'danger', icon: 'invoice',
+      text: `${money(invRollup.overdue)} in overdue invoices to chase`, cta: 'View invoices', onClick: () => go('invoices') },
     unstaffedToday > 0 && { key: 'staff', tone: 'warning', icon: 'calendar',
       text: `${unstaffedToday} session${unstaffedToday !== 1 ? 's' : ''} today without a teacher`, cta: 'Open schedule', onClick: () => go('schedule') },
     flaggedCount > 0 && { key: 'flag', tone: 'warning', icon: 'alert',
       text: `${flaggedCount} student${flaggedCount !== 1 ? 's' : ''} flagged on attendance or progress`, cta: 'Review students', onClick: () => go('students') },
   ].filter(Boolean);
 
-  // ── KPIs — keep wired literals; show — + TODO where no source ──
+  // ── KPIs — every hero value is wired (no dashes, §8). ──
   const kpis = [
-    { label: 'Active students',    value: '142',    trend: '+8 this month',     trendDir: 'up',   icon: 'users',   iconBg: DS.accentLight, accent: DS.accent  },
-    { label: 'Attendance (week)',  value: '94.2%',  trend: '+1.3% vs last wk',  trendDir: 'up',   icon: 'check',   iconBg: DS.successBg,   accent: DS.success },
-    { label: 'Outstanding',        value: '—',      sub: 'awaiting invoices',   icon: 'invoice', iconBg: DS.warningBg,   accent: DS.warning }, // TODO: wire outstanding £
-    { label: 'Sessions (week)',    value: '64',     sub: '12 today',            icon: 'calendar', iconBg: DS.infoBg,     accent: DS.info    },
-    { label: 'Capacity used',      value: '—',      sub: 'awaiting schedule',   icon: 'chart',   iconBg: DS.accentLight, accent: DS.accent  }, // TODO: wire capacity %
+    { label: 'Active students',   value: String(cm.getActiveStudentCount()), sub: `${cm.getClassEnrolments()} enrolments`,        icon: 'users',    iconBg: DS.accentLight, accent: DS.accent  },
+    { label: 'Attendance (week)', value: `${cm.getAttendanceWeek()}%`,        sub: 'across active students',                       icon: 'check',    iconBg: DS.successBg,   accent: DS.success },
+    { label: 'Outstanding',       value: money(invRollup.outstanding),        sub: invRollup.overdue > 0 ? `${money(invRollup.overdue)} overdue` : 'all current', icon: 'invoice', iconBg: DS.warningBg, accent: DS.warning },
+    { label: 'Sessions (week)',   value: String(sessions.total),              sub: `${sessions.today} today`,                      icon: 'calendar', iconBg: DS.infoBg,      accent: DS.info    },
+    { label: 'Capacity used',     value: `${capacity.pct}%`,                  sub: `${capacity.used}/${capacity.cap} seats`,       icon: 'chart',    iconBg: DS.accentLight, accent: DS.accent  },
   ];
 
   const quickActions = [
@@ -218,7 +238,7 @@ const AdminDashboard = () => {
     <div style={{ padding: '32px' }}>
       <PageHeader
         title="Centre overview"
-        subtitle={`${CENTRE_NAME} · Friday, 25 April 2026`}
+        subtitle={`${cm.getActiveCentre().name} · ${new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}`}
         actions={[
           <Btn key="cust" variant="secondary" icon="settings" small onClick={() => setCustomiseOpen(true)}>Customise</Btn>,
         ]}
@@ -342,7 +362,7 @@ const AdminDashboard = () => {
       </div>
       )}
 
-      {/* ── Flagged students preview (real — atRiskStudents) ──────── */}
+      {/* ── Flagged students preview (derived — centreMetrics.getAtRiskStudents) ── */}
       {show('flagged') && (
       <Card
         title="Students needing attention"
@@ -352,7 +372,7 @@ const AdminDashboard = () => {
           <Btn key="v" variant="ghost" icon="chevron_r" small onClick={() => go('students')}>See all</Btn>,
         ]}
       >
-        {atRiskStudents.slice(0, 6).map((s, i, arr) => {
+        {flaggedRows.slice(0, 6).map((s, i, arr) => {
           const last = i === Math.min(arr.length, 6) - 1;
           return (
             <div key={s.name} onClick={() => go('students')} style={{

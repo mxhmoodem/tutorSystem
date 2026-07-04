@@ -5,88 +5,108 @@
 //  Homework.jsx runs inside an IIFE; it aliases these globals to its
 //  internal names (CLASSES, PDF_BANKS, the seed roster). Names are
 //  HW_-prefixed to keep the global namespace clean.
+//
+//  ── SINGLE TEACHER COHORT (F1) ────────────────────────────────
+//  These classes, students and subjects are the SAME canonical cohort every
+//  other teacher screen reads (the admin store / teacherPages.mock). Class
+//  labels are the canonical "Year N – Group X" form with an optional short
+//  `code` (10A) as a SECONDARY field only — never a primary label. Student
+//  names are the canonical roster; there is no second "Class 10A / Noah
+//  Bennett" universe any more. The logged-in student view (Oliver Chen) still
+//  sees homework across all his subjects, but every name/label here reconciles
+//  with the rest of the app.
 // ══════════════════════════════════════════════════════════════
 
 // Class roster used by the teacher builder (assign-by-class) and analytics.
+// `label` is the canonical primary label; `code` is the secondary short form.
 const HW_CLASSES = [
-  { id: 'c_8a',     label: 'Class 8A',      subjects: ['History','Biology','English'] },
-  { id: 'c_8b',     label: 'Class 8B',      subjects: ['History','Biology','English'] },
-  { id: 'c_9a',     label: 'Class 9A',      subjects: ['English','English Literature'] },
-  { id: 'c_9b',     label: 'Class 9B',      subjects: ['Physics','Mathematics'] },
-  { id: 'c_10a',    label: 'Class 10A',     subjects: ['Mathematics','Physics'] },
-  { id: 'c_10b',    label: 'Class 10B',     subjects: ['Chemistry','Biology'] },
-  { id: 'c_11a',    label: 'Class 11A',     subjects: ['Mathematics','Chemistry'] },
-  { id: 'c_alevel', label: 'A-Level Maths', subjects: ['Mathematics','Economics'] },
+  { id: 'c_8a',     label: 'Year 8 – Group A',   code: '8A',  subjects: ['History','Biology','English'] },
+  { id: 'c_8b',     label: 'Year 8 – Group B',   code: '8B',  subjects: ['History','Biology','English'] },
+  { id: 'c_9a',     label: 'Year 9 – Group A',   code: '9A',  subjects: ['English','English Literature'] },
+  { id: 'c_9b',     label: 'Year 9 – Group B',   code: '9B',  subjects: ['Physics','Mathematics'] },
+  { id: 'c_10a',    label: 'Year 10 – Group A',  code: '10A', subjects: ['Mathematics','Physics'] },
+  { id: 'c_10b',    label: 'Year 10 – Group B',  code: '10B', subjects: ['Chemistry','Biology'] },
+  { id: 'c_11a',    label: 'Year 11 – Group B',  code: '11B', subjects: ['Mathematics','Chemistry'] },
+  { id: 'c_alevel', label: 'Year 12 – Group A',  code: '12A', subjects: ['Mathematics','Economics'] },
 ];
 
 // Seed student roster. Each entry: { id, name, role, classLabel }.
 // Consumed by seedStore() in Homework.jsx (plus a hardcoded "me" / teacher).
+// Every name is drawn from the canonical roster — the four ids referenced by
+// hand-authored submissions (s_oliver, s_emma, s_sophia, s_james) are kept.
 const HW_STUDENTS = [
-  // ── Class 9A ──
-  { id: 's_emma',   name: 'Emma Thompson', role: 'student', classLabel: 'Class 9A' },
-  { id: 's_sophie', name: 'Sophie Chen',   role: 'student', classLabel: 'Class 9A' },
-  { id: 's_ethan',  name: 'Ethan Müller',  role: 'student', classLabel: 'Class 9A' },
-  { id: 's_layla',  name: 'Layla Ahmed',   role: 'student', classLabel: 'Class 9A' },
-  { id: 's_ben',    name: 'Ben Carter',    role: 'student', classLabel: 'Class 9A' },
-  { id: 's_maria',  name: 'Maria Santos',  role: 'student', classLabel: 'Class 9A' },
-  { id: 's_jack',   name: 'Jack Donnelly', role: 'student', classLabel: 'Class 9A' },
+  // ── Year 9 – Group A ──
+  { id: 's_emma',   name: 'Emma Thompson',    role: 'student', classLabel: 'Year 9 – Group A' },
+  { id: 's_sophie', name: 'Sophie Chen',      role: 'student', classLabel: 'Year 9 – Group A' },
+  { id: 's_ethan',  name: 'Ethan Huang',      role: 'student', classLabel: 'Year 9 – Group A' },
+  { id: 's_layla',  name: 'Layla Ahmed',      role: 'student', classLabel: 'Year 9 – Group A' },
+  { id: 's_ben',    name: 'Ben Carter',       role: 'student', classLabel: 'Year 9 – Group A' },
+  { id: 's_maria',  name: 'Maria Santos',     role: 'student', classLabel: 'Year 9 – Group A' },
+  { id: 's_grace2', name: 'Grace Mitchell',   role: 'student', classLabel: 'Year 9 – Group A' },
 
-  // ── Class 9B ──
-  { id: 's_james',  name: 'James Wilson',  role: 'student', classLabel: 'Class 9B' },
-  { id: 's_priya',  name: 'Priya Sharma',  role: 'student', classLabel: 'Class 9B' },
-  { id: 's_kofi',   name: 'Kofi Mensah',   role: 'student', classLabel: 'Class 9B' },
-  { id: 's_ella',   name: 'Ella Robinson', role: 'student', classLabel: 'Class 9B' },
-  { id: 's_sam',    name: 'Sam Lewis',     role: 'student', classLabel: 'Class 9B' },
-  { id: 's_aria',   name: 'Aria Petrova',  role: 'student', classLabel: 'Class 9B' },
+  // ── Year 9 – Group B ──
+  { id: 's_james',  name: 'James Wilson',     role: 'student', classLabel: 'Year 9 – Group B' },
+  { id: 's_priya',  name: 'Priya Sharma',     role: 'student', classLabel: 'Year 9 – Group B' },
+  { id: 's_kofi',   name: 'Kofi Mensah',      role: 'student', classLabel: 'Year 9 – Group B' },
+  { id: 's_ella',   name: 'Ella Robinson',    role: 'student', classLabel: 'Year 9 – Group B' },
+  { id: 's_sam',    name: 'Sam Lewis',        role: 'student', classLabel: 'Year 9 – Group B' },
+  { id: 's_aria',   name: 'Aria Petrova',     role: 'student', classLabel: 'Year 9 – Group B' },
 
-  // ── Class 10A ──
-  { id: 's_aisha',    name: 'Aisha Rahman',     role: 'student', classLabel: 'Class 10A' },
-  { id: 's_jamesoc',  name: "James O'Connor",   role: 'student', classLabel: 'Class 10A' },
-  { id: 's_marcus',   name: 'Marcus Williams',  role: 'student', classLabel: 'Class 10A' },
-  { id: 's_liam',     name: 'Liam Patel',       role: 'student', classLabel: 'Class 10A' },
-  { id: 's_fatima',   name: 'Fatima Al-Hassan', role: 'student', classLabel: 'Class 10A' },
-  { id: 's_isabella', name: 'Isabella Torres',  role: 'student', classLabel: 'Class 10A' },
-  { id: 's_dylan',    name: 'Dylan Foster',     role: 'student', classLabel: 'Class 10A' },
-  { id: 's_chloe',    name: 'Chloe Bennett',    role: 'student', classLabel: 'Class 10A' },
-  { id: 's_omar',     name: 'Omar Haddad',      role: 'student', classLabel: 'Class 10A' },
-  { id: 's_grace',    name: 'Grace Mitchell',   role: 'student', classLabel: 'Class 10A' },
+  // ── Year 10 – Group A ──
+  { id: 's_aisha',    name: 'Aisha Rahman',     role: 'student', classLabel: 'Year 10 – Group A' },
+  { id: 's_liam',     name: 'Liam Thornton',    role: 'student', classLabel: 'Year 10 – Group A' },
+  { id: 's_mia',      name: 'Mia Okonkwo',      role: 'student', classLabel: 'Year 10 – Group A' },
+  { id: 's_aiden',    name: 'Aiden Foster',     role: 'student', classLabel: 'Year 10 – Group A' },
+  { id: 's_fatima',   name: 'Fatima Al-Hassan', role: 'student', classLabel: 'Year 10 – Group A' },
+  { id: 's_zoe',      name: 'Zoe Patterson',    role: 'student', classLabel: 'Year 10 – Group A' },
+  { id: 's_dylan',    name: 'Dylan Foster',     role: 'student', classLabel: 'Year 10 – Group A' },
+  { id: 's_chloe',    name: 'Chloe Bennett',    role: 'student', classLabel: 'Year 10 – Group A' },
+  { id: 's_omar',     name: 'Omar Haddad',      role: 'student', classLabel: 'Year 10 – Group A' },
+  { id: 's_grace',    name: 'Grace Okafor',     role: 'student', classLabel: 'Year 10 – Group A' },
+  { id: 's_ryanm',    name: 'Ryan Mitchell',    role: 'student', classLabel: 'Year 10 – Group A' },
+  { id: 's_gracea',   name: 'Grace Adeyemi',    role: 'student', classLabel: 'Year 10 – Group A' },
 
-  // ── Class 10B ──
-  { id: 's_sophia', name: 'Sophia Patel',  role: 'student', classLabel: 'Class 10B' },
-  { id: 's_arjun',  name: 'Arjun Nair',    role: 'student', classLabel: 'Class 10B' },
-  { id: 's_zoe',    name: 'Zoe Thompson',  role: 'student', classLabel: 'Class 10B' },
-  { id: 's_hannah', name: 'Hannah Cole',   role: 'student', classLabel: 'Class 10B' },
-  { id: 's_leo',    name: 'Leo Vasquez',   role: 'student', classLabel: 'Class 10B' },
-  { id: 's_nina',   name: 'Nina Kapoor',   role: 'student', classLabel: 'Class 10B' },
-  { id: 's_tom',    name: 'Tom Walker',    role: 'student', classLabel: 'Class 10B' },
-  { id: 's_yuki',   name: 'Yuki Tanaka',   role: 'student', classLabel: 'Class 10B' },
+  // ── Year 10 – Group B ──
+  { id: 's_sophia', name: 'Sophia Patel',   role: 'student', classLabel: 'Year 10 – Group B' },
+  { id: 's_arjun',  name: 'Arjun Nair',     role: 'student', classLabel: 'Year 10 – Group B' },
+  { id: 's_zoe2',   name: 'Zoe Ellison',    role: 'student', classLabel: 'Year 10 – Group B' },
+  { id: 's_hannah', name: 'Hannah Cole',    role: 'student', classLabel: 'Year 10 – Group B' },
+  { id: 's_leo',    name: 'Leo Vasquez',    role: 'student', classLabel: 'Year 10 – Group B' },
+  { id: 's_nina',   name: 'Nina Kapoor',    role: 'student', classLabel: 'Year 10 – Group B' },
+  { id: 's_amelia', name: 'Amelia Roberts', role: 'student', classLabel: 'Year 10 – Group B' },
+  { id: 's_yuki',   name: 'Yuki Tanaka',    role: 'student', classLabel: 'Year 10 – Group B' },
 
-  // ── Class 11A ──
-  { id: 's_aaron',  name: 'Aaron Blake',   role: 'student', classLabel: 'Class 11A' },
-  { id: 's_mei2',   name: 'Mei Sato',      role: 'student', classLabel: 'Class 11A' },
-  { id: 's_kira',   name: 'Kira Novak',    role: 'student', classLabel: 'Class 11A' },
-  { id: 's_paolo',  name: 'Paolo Bianchi', role: 'student', classLabel: 'Class 11A' },
-  { id: 's_hana',   name: 'Hana Yilmaz',   role: 'student', classLabel: 'Class 11A' },
+  // ── Year 11 – Group B ──
+  { id: 's_aaron',  name: 'Aaron Blake',    role: 'student', classLabel: 'Year 11 – Group B' },
+  { id: 's_mei2',   name: 'Mei Sato',       role: 'student', classLabel: 'Year 11 – Group B' },
+  { id: 's_kira',   name: 'Kira Novak',     role: 'student', classLabel: 'Year 11 – Group B' },
+  { id: 's_paolo',  name: 'Paolo Bianchi',  role: 'student', classLabel: 'Year 11 – Group B' },
+  { id: 's_hana',   name: 'Hana Yilmaz',    role: 'student', classLabel: 'Year 11 – Group B' },
+  { id: 's_maya',   name: 'Maya Choudhury', role: 'student', classLabel: 'Year 11 – Group B' },
+  { id: 's_oscar',  name: 'Oscar Whitfield',role: 'student', classLabel: 'Year 11 – Group B' },
+  { id: 's_yasmin', name: 'Yasmin Karimi',  role: 'student', classLabel: 'Year 11 – Group B' },
 
-  // ── Class 8A ──
-  { id: 's_noah',  name: 'Noah Bennett',  role: 'student', classLabel: 'Class 8A' },
-  { id: 's_ava',   name: 'Ava Robinson',  role: 'student', classLabel: 'Class 8A' },
-  { id: 's_jad',   name: 'Jad Khalil',    role: 'student', classLabel: 'Class 8A' },
-  { id: 's_ruby',  name: 'Ruby Hughes',   role: 'student', classLabel: 'Class 8A' },
-  { id: 's_ivan',  name: 'Ivan Petrov',   role: 'student', classLabel: 'Class 8A' },
+  // ── Year 8 – Group A ──
+  { id: 's_noah',  name: 'Noah Fitzgerald', role: 'student', classLabel: 'Year 8 – Group A' },
+  { id: 's_ava',   name: 'Ava Sinclair',    role: 'student', classLabel: 'Year 8 – Group A' },
+  { id: 's_jad',   name: 'Jad Nasser',      role: 'student', classLabel: 'Year 8 – Group A' },
+  { id: 's_ruby',  name: 'Ruby Patterson',  role: 'student', classLabel: 'Year 8 – Group A' },
+  { id: 's_ivan',  name: 'Ivan Kowalski',   role: 'student', classLabel: 'Year 8 – Group A' },
 
-  // ── Class 8B ──
-  { id: 's_ryan',  name: 'Ryan Okafor',    role: 'student', classLabel: 'Class 8B' },
-  { id: 's_lily',  name: 'Lily Andersson', role: 'student', classLabel: 'Class 8B' },
-  { id: 's_max',   name: 'Max Schneider',  role: 'student', classLabel: 'Class 8B' },
-  { id: 's_tara',  name: 'Tara Singh',     role: 'student', classLabel: 'Class 8B' },
+  // ── Year 8 – Group B ──
+  { id: 's_ryan',  name: 'Ryan Okafor',    role: 'student', classLabel: 'Year 8 – Group B' },
+  { id: 's_lily',  name: 'Lily Andersson', role: 'student', classLabel: 'Year 8 – Group B' },
+  { id: 's_max',   name: 'Max Schneider',  role: 'student', classLabel: 'Year 8 – Group B' },
+  { id: 's_tara',  name: 'Tara Singh',     role: 'student', classLabel: 'Year 8 – Group B' },
 
-  // ── A-Level Maths ──
-  { id: 's_mei',    name: 'Mei Lin',       role: 'student', classLabel: 'A-Level Maths' },
-  { id: 's_daniel', name: 'Daniel Cohen',  role: 'student', classLabel: 'A-Level Maths' },
-  { id: 's_freya',  name: 'Freya Olsen',   role: 'student', classLabel: 'A-Level Maths' },
-  { id: 's_raj',    name: 'Raj Malhotra',  role: 'student', classLabel: 'A-Level Maths' },
-  { id: 's_nadia',  name: 'Nadia Hassan',  role: 'student', classLabel: 'A-Level Maths' },
+  // ── Year 12 – Group A (A-Level) ──
+  { id: 's_mei',    name: 'Isabella Martinez', role: 'student', classLabel: 'Year 12 – Group A' },
+  { id: 's_daniel', name: 'Daniel Owusu',      role: 'student', classLabel: 'Year 12 – Group A' },
+  { id: 's_freya',  name: 'Freya Lindqvist',   role: 'student', classLabel: 'Year 12 – Group A' },
+  { id: 's_raj',    name: 'Raj Malhotra',      role: 'student', classLabel: 'Year 12 – Group A' },
+  { id: 's_nadia',  name: 'Thomas Hughes',     role: 'student', classLabel: 'Year 12 – Group A' },
+  { id: 's_ananya', name: 'Ananya Iyer',       role: 'student', classLabel: 'Year 12 – Group A' },
+  { id: 's_toby',   name: 'Toby Grant',        role: 'student', classLabel: 'Year 12 – Group A' },
 ];
 
 // Question banks the PDF-import flow draws from, keyed by detected topic.

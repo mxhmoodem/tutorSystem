@@ -46,16 +46,20 @@ const REPORTS_CONFIG = {
     viewOthers:      true,
   },
   branding: {
-    centreName: 'Brighton Academy of Excellence',
-    logo: 'BA',                 // initials shown in PDF crest (no real upload in demo)
-    primaryColor: '#4F46E5',
+    // Centre IDENTITY (name / logo / brand accent / contact) is NOT stored here —
+    // it comes from the single centre-profile record (§1) via
+    // reportBrandingResolved() in Reports.jsx. Only the report-SPECIFIC fields
+    // below live locally; the identity fields are left blank as a fallback.
+    centreName: '',
+    logo: '',
+    primaryColor: '',           // falls back to the centre's brand accent
     pdfTheme: 'classic',        // classic | modern | minimal
     headerText: 'Termly Progress Report',
-    footerText: 'Brighton Academy of Excellence · 14 Marlborough Place, Brighton BN1 1UB · 01273 555 0199',
+    footerText: 'Confidential — issued to the recipient family only.',
     signatureName: 'Dr. Eleanor Whitfield',
     signatureTitle: 'Head of Centre',
-    contactEmail: 'reports@brightonacademy.co.uk',
-    contactPhone: '01273 555 0199',
+    contactEmail: '',           // from Centre profile
+    contactPhone: '',           // from Centre profile
     watermark: '',              // optional watermark text
   },
   notifications: {
@@ -220,7 +224,7 @@ const _SUBJECTS = [
   { name: 'Mathematics',   color: '#43b190', teacher: 'Ms. Sarah Clarke', folder: 'f_math', predicted: 'A*' },
   { name: 'Further Maths', color: '#7C3AED', teacher: 'Ms. Sarah Clarke', folder: 'f_fm',   predicted: 'A'  },
   { name: 'Physics',       color: '#0891B2', teacher: 'Mr. David Park',   folder: 'f_phys', predicted: 'A'  },
-  { name: 'Chemistry',     color: '#D97706', teacher: 'Dr. Hannah Owens', folder: 'f_chem', predicted: 'A'  },
+  { name: 'Chemistry',     color: '#D97706', teacher: 'Mr. David Park',   folder: 'f_chem', predicted: 'A'  },
 ];
 
 const _PERIODS = ['Autumn Term 2025', 'Spring Term 2026'];

@@ -174,10 +174,12 @@ const AdminTeamPage = () => {
     const res = canGrantRole({ account, target, role, by: me });
     if (!res.ok) return flashMsg('err', res.reason);
     onb.grantRole(target.email, centreId, role, me.email);
+    window.klayoAudit && window.klayoAudit('role_grant', `${target.email} → ${role}`, { centreId });
     flashMsg('ok', `${target.name} is now ${role === 'admin' ? 'an Admin' : 'a Teacher'} at ${centre.name}.`);
   };
   const reallyRevoke = (target, role) => {
     onb.revokeRole(target.email, centreId, role, me.email);
+    window.klayoAudit && window.klayoAudit('role_revoke', `${target.email} ✕ ${role}`, { centreId });
     flashMsg('ok', `Removed ${ROLE_META[role].label} from ${target.name}.`);
   };
   const doRevoke = (target, role) => {
@@ -196,6 +198,7 @@ const AdminTeamPage = () => {
     if (!isAdmin(target)) return flashMsg('err', 'The new owner must be an Admin — grant Admin first.');
     sub.setOwner(target.email);
     onb.logRoleChange({ action: 'transfer', email: target.email, centreId, by: me.email });
+    window.klayoAudit && window.klayoAudit('ownership_transfer', target.email, { centreId });
     setTransferOpen(false);
     flashMsg('ok', `${target.name} is now the account owner. You remain an Admin.`);
   };
@@ -263,7 +266,6 @@ const AdminTeamPage = () => {
             cols={['Staff', 'Contact', 'Roles & access']}
             rows={members.map(m => [
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <Avatar name={m.name} size={34} color={m.color} />
                 <div style={{ minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                     <span style={{ fontSize: 13.5, fontWeight: 600, color: DS.text }}>{m.name}</span>
@@ -301,7 +303,7 @@ const AdminTeamPage = () => {
         <Card title="Account owner powers" subtitle="Reserved to the account owner — separate from role management." icon="lock" accent={DS.accent} style={{ marginBottom: 22 }}>
           <div style={{ padding: '4px 4px 8px' }}>
             <PowerRow icon="invoice" title="Billing & subscription" desc="Change plan, redeem codes, manage billing details."
-              allowed={canManageBilling(me, account)} onManage={() => window.__navigate('admin', 'settings:billing')} />
+              allowed={canManageBilling(me, account)} onManage={() => window.__navigate('admin', 'plans')} />
             <PowerRow icon="grid" title="Centres" desc="Create or close centres on the account." last
               allowed={canManageCentres(me, account)} onManage={() => window.__navigate('admin', 'centres')} />
           </div>

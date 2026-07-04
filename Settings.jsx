@@ -270,7 +270,7 @@ const AccountTab = ({ data, set, roleLabel, viewRoles = [], currentRole, onSwitc
       </SetGrid>
       <SettingRow
         title="Two-factor authentication"
-        desc="Require a verification code from your phone when signing in."
+        desc="Use an authenticator app (TOTP) to generate a one-time code when signing in."
         checked={!!a.twoFactor} onToggle={v => set('account', 'twoFactor', v)}
         last
       />
@@ -407,7 +407,7 @@ const AppearanceTab = ({ data, set, role, wide }) => {
     </SettingsSection>
   );
   const themeCard = (
-    <SettingsSection title="Theme" subtitle="Personalise how TutorOS looks for you" icon="grid">
+    <SettingsSection title="Theme" subtitle="Personalise how Klayo looks for you" icon="grid">
       <div style={{ display: 'flex', gap: 10, padding: '12px 0', borderBottom: `1px solid ${DS.border}` }}>
         <ThemeOpt id="light" label="☀ Light" />
         <ThemeOpt id="dark" label="🌙 Dark" />
@@ -501,13 +501,19 @@ const PlatformTab = ({ data, set, wide }) => {
   const billing = (
     <SettingsSection title="Billing & data" subtitle="Platform-wide policies" icon="invoice">
       <Field label="Billing contact email" style={{ padding: '10px 0 0' }}>
-        <Input type="email" value={p.billingEmail || ''} onChange={e => set('platform', 'billingEmail', e.target.value)} />
+        <Input type="email" value={p.billingEmail || (window.BRAND && window.BRAND.billingEmail) || ''} onChange={e => set('platform', 'billingEmail', e.target.value)} />
       </Field>
+      {/* Auto-suspend feeds the Revenue → Failed Payments dunning workflow: once
+          an invoice is unpaid past the grace period, the "Suspend account" step
+          fires automatically instead of manually. */}
       <SettingRow
         title="Auto-suspend on failed payment"
         desc="Suspend a centre's access if an invoice is unpaid after the grace period."
         checked={!!p.autoSuspend} onToggle={v => set('platform', 'autoSuspend', v)}
       />
+      {/* DPA dependency: this retention window drives the (stubbed) deletion
+          job and MUST match the tenant Data Processing Agreement promise — the
+          owner console's account-delete uses this countdown before erasure. */}
       <SettingRow
         title="Data retention"
         desc="How long to keep records after a centre is deleted."
@@ -675,6 +681,22 @@ const WorkingHoursPaySection = () => {
 const CentreTab = ({ data, set, wide }) => {
   const c = data.centre || {};
 
+  // Centre IDENTITY (name / contact / address / brand accent) is the ONE
+  // centre-profile record (§1), stored on the subscription's active centre and
+  // read everywhere via centreMetrics.getCentreProfile. Editing it HERE is the
+  // only editor — writes go to the subscription store, so the topbar chip,
+  // sidebar switcher, invoice header and report PDFs all update at once.
+  // (Term schedule + invoicing defaults below stay centre-config in settings.)
+  const sub = window.useSubscriptionStore ? window.useSubscriptionStore() : null;
+  const activeCentreId = window.__getCentre ? window.__getCentre() : ((window.ONB_CENTRE && window.ONB_CENTRE.id) || 'bm');
+  const profile = window.centreMetrics ? window.centreMetrics.getCentreProfile(activeCentreId) : {};
+  const isActiveCentre = true;   // the Settings centre tab always edits the active centre
+  const setProfile = (patch) => { if (sub && sub.updateCentre) sub.updateCentre(activeCentreId, patch); };
+  const setAccent = (hex) => {
+    setProfile({ accent: hex });
+    if (isActiveCentre && window.__setAccent) window.__setAccent(hex || null);   // apply live
+  };
+
   // Left rail — brand identity (logo + colour), mirroring the reference layout.
   const logoCard = (
     <SettingsSection title="Logo" subtitle="Shown on reports and the portal" icon="image">
@@ -689,13 +711,14 @@ const CentreTab = ({ data, set, wide }) => {
       </div>
     </SettingsSection>
   );
+  const brandAccent = profile.brandAccent || DS.accent;
   const colourCard = (
-    <SettingsSection title="Brand colour" subtitle="Used for headers on generated reports" icon="star">
+    <SettingsSection title="Brand colour" subtitle="Applied live across the app + on report/invoice headers for this centre" icon="star">
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 0 6px' }}>
-        <input type="color" value={c.brandColor || '#43b190'}
-          onChange={e => set('centre', 'brandColor', e.target.value)}
+        <input type="color" value={brandAccent}
+          onChange={e => setAccent(e.target.value)}
           style={{ width: 46, height: 38, border: `1px solid ${DS.border}`, borderRadius: 9, padding: 0, cursor: 'pointer', background: DS.bg, flexShrink: 0 }} />
-        <Input value={c.brandColor || '#43b190'} onChange={e => set('centre', 'brandColor', e.target.value)}
+        <Input value={brandAccent} onChange={e => setAccent(e.target.value)}
           style={{ fontFamily: 'monospace' }} />
       </div>
     </SettingsSection>
@@ -705,20 +728,20 @@ const CentreTab = ({ data, set, wide }) => {
     <SettingsSection title="Centre profile" subtitle="Details shown on reports, invoices and the portal" icon="book">
       <SetGrid>
         <Field label="Centre name">
-          <Input value={c.name || ''} onChange={e => set('centre', 'name', e.target.value)} />
+          <Input value={profile.name || ''} onChange={e => setProfile({ name: e.target.value })} />
         </Field>
         <Field label="Contact email">
-          <Input type="email" value={c.email || ''} onChange={e => set('centre', 'email', e.target.value)} />
+          <Input type="email" value={profile.contactEmail || ''} onChange={e => setProfile({ email: e.target.value })} />
         </Field>
         <Field label="Phone">
-          <Input value={c.phone || ''} onChange={e => set('centre', 'phone', e.target.value)} />
+          <Input value={profile.contactPhone || ''} onChange={e => setProfile({ phone: e.target.value })} />
         </Field>
         <Field label="Website">
           <Input value={c.website || ''} onChange={e => set('centre', 'website', e.target.value)} />
         </Field>
       </SetGrid>
       <Field label="Address" style={{ padding: '0 0 10px' }}>
-        <Textarea value={c.address || ''} onChange={e => set('centre', 'address', e.target.value)} style={{ minHeight: 60 }} />
+        <Textarea value={profile.address || ''} onChange={e => setProfile({ address: e.target.value })} style={{ minHeight: 60 }} />
       </Field>
     </SettingsSection>
   );
@@ -745,7 +768,7 @@ const CentreTab = ({ data, set, wide }) => {
         <Field label="Invoice due (days)">
           <Input type="number" value={c.invoiceDueDays ?? 14} onChange={e => set('centre', 'invoiceDueDays', +e.target.value)} />
         </Field>
-        <Field label="Tax rate (%)">
+        <Field label="VAT on parent invoices (%)" hint="Output tax you charge families on tuition — separate from your Klayo subscription VAT (Plans & Billing).">
           <Input type="number" value={c.taxRate ?? 0} onChange={e => set('centre', 'taxRate', +e.target.value)} />
         </Field>
       </SetGrid>
@@ -827,18 +850,31 @@ const TeachingTab = ({ data, set, wide }) => {
 // Student → Learning (guardian, accessibility, reminders) — lighter weight
 const LearningTab = ({ data, set, wide }) => {
   const l = data.learning || {};
+  // §8: the guardian is the student's LINKED PARENT ACCOUNT — not free-text
+  // contact metadata. It is read-only to the student (display only; centre/parent-
+  // managed). "Share reports with guardian" is governed by centre policy, not a
+  // free student toggle, so it renders read-only with a "managed by your centre"
+  // note.
+  const readonlyBox = (v) => (
+    <div style={{ padding: '9px 12px', border: `1px solid ${DS.border}`, borderRadius: 8, background: DS.surface, fontSize: 13, color: DS.text }}>{v || '—'}</div>
+  );
+  const managedPill = (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: DS.muted, background: DS.surface, border: `1px solid ${DS.border}`, borderRadius: 999, padding: '4px 10px' }}>
+      <Icon name="lock" size={12} color={DS.muted} /> Managed by your centre
+    </span>
+  );
   const guardian = (
-    <SettingsSection title="Guardian & contact" subtitle="Who we keep in the loop about your progress" icon="users">
+    <SettingsSection title="Guardian & contact" subtitle="Your linked parent/guardian account" icon="users">
       <SetGrid>
-        <Field label="Guardian name">
-          <Input value={l.guardianName || ''} onChange={e => set('learning', 'guardianName', e.target.value)} />
-        </Field>
-        <Field label="Guardian email">
-          <Input type="email" value={l.guardianEmail || ''} onChange={e => set('learning', 'guardianEmail', e.target.value)} />
-        </Field>
+        <Field label="Guardian name">{readonlyBox(l.guardianName)}</Field>
+        <Field label="Guardian email">{readonlyBox(l.guardianEmail)}</Field>
       </SetGrid>
-      <SettingRow title="Share reports with guardian" desc="Email new reports and feedback to your guardian."
-        checked={!!l.shareWithGuardian} onToggle={v => set('learning', 'shareWithGuardian', v)} last />
+      <SettingRow title="Share reports with guardian"
+        desc="Whether new reports and feedback are shared with your guardian is set by your centre's policy."
+        control={managedPill} last />
+      <div style={{ fontSize: 11.5, color: DS.faint, marginTop: 8 }}>
+        Guardian details come from your linked parent account and can only be changed by your centre.
+      </div>
     </SettingsSection>
   );
   const reminders = (
@@ -854,12 +890,14 @@ const LearningTab = ({ data, set, wide }) => {
           </Select>
         }
       />
-      <SettingRow title="Streak nudges" desc="Encourage me to keep my study streak going."
+      {/* §8/AADC: de-gamified and default OFF — a neutral study reminder, no
+          streaks and no loss-aversion "don't break your streak" framing. */}
+      <SettingRow title="Study reminders" desc="Occasional gentle reminders to keep up with your studies. No streaks, no pressure."
         checked={!!l.streakNudges} onToggle={v => set('learning', 'streakNudges', v)} last />
     </SettingsSection>
   );
   const accessibility = (
-    <SettingsSection title="Accessibility" subtitle="Make TutorOS easier to use" icon="star">
+    <SettingsSection title="Accessibility" subtitle="Make Klayo easier to use" icon="star">
       <Field label="Text size" style={{ padding: '10px 0 0' }}>
         <Select value={l.textSize || 'normal'} onChange={e => set('learning', 'textSize', e.target.value)}>
           <option value="normal">Normal</option>
@@ -1070,7 +1108,7 @@ const BillingTab = () => {
     } catch (e) {}
   };
   const downloadInvoice = h => downloadText(h.label.replace(/[^\w]+/g, '_') + '.txt',
-    `TutorOS subscription invoice\n${h.label}\nAmount: £${h.amount}\nDate: ${fmtDate(h.date)}\nStatus: ${h.status === 'paid' ? 'Paid' : 'Declined'}\n`);
+    `${(window.BRAND && window.BRAND.name) || 'Klayo'} subscription invoice\n${h.label}\nAmount: £${h.amount}\nDate: ${fmtDate(h.date)}\nStatus: ${h.status === 'paid' ? 'Paid' : 'Declined'}\n`);
   const downloadAll = () => downloadText('tutoros-billing-history.csv',
     'Invoice,Amount,Date,Status\n' + history.map(h => `"${h.label}",£${h.amount},${fmtDate(h.date)},${h.status === 'paid' ? 'Paid' : 'Declined'}`).join('\n'), 'text/csv');
 
@@ -1170,7 +1208,7 @@ const BillingTab = () => {
               </div>
             ) : (
               <div>
-                <div style={{ fontSize: 12.5, color: DS.muted, marginBottom: 12 }}>Have a promo or free-trial code from TutorOS? Enter it to update your price.</div>
+                <div style={{ fontSize: 12.5, color: DS.muted, marginBottom: 12 }}>Have a promo or free-trial code from Klayo? Enter it to update your price.</div>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <Input value={codeInput} onChange={e => { setCodeInput(e.target.value.toUpperCase()); setCodeMsg(null); }} placeholder="Enter code" style={{ flex: 1 }} />
                   <Btn variant="primary" small icon="check" onClick={onApply}>Apply</Btn>
@@ -1183,7 +1221,7 @@ const BillingTab = () => {
       </div>
 
       {/* Billing details */}
-      <SettingsSection title="Billing details" subtitle="Shown on your TutorOS subscription invoices" icon="book">
+      <SettingsSection title="Billing details" subtitle="Shown on your Klayo subscription invoices" icon="book">
         <SetGrid>
           <Field label="Company / billing name">
             <Input value={b.company || ''} onChange={e => setB('company', e.target.value)} />
@@ -1191,7 +1229,7 @@ const BillingTab = () => {
           <Field label="Billing email">
             <Input type="email" value={b.email || ''} onChange={e => setB('email', e.target.value)} />
           </Field>
-          <Field label="VAT number">
+          <Field label="Account VAT number" hint="Your business VAT number for Klayo's subscription invoices — separate from the VAT you charge families (Centre → Invoicing).">
             <Input value={b.vat || ''} onChange={e => setB('vat', e.target.value)} />
           </Field>
         </SetGrid>
@@ -1207,12 +1245,12 @@ const BillingTab = () => {
           <Input value={histSearch} onChange={e => setHistSearch(e.target.value)} placeholder="Search invoices…" icon="search" style={{ maxWidth: 280 }} />
         </div>
         <Table
-          cols={['Invoice', 'Amount', 'Date', 'Status', '']}
+          cols={['Invoice', 'Amount', 'Date', 'Status', { label: '', align: 'right' }]}
           rows={filteredHist.map(h => [
             <span style={{ fontSize: 13, fontWeight: 500, color: DS.text }}>{h.label}</span>,
             <span style={{ fontSize: 13, color: DS.sub }}>£{h.amount}</span>,
             <span style={{ fontSize: 12, color: DS.muted }}>{fmtDate(h.date)}</span>,
-            <Badge variant={h.status === 'paid' ? 'success' : 'danger'}>{h.status === 'paid' ? 'Paid' : 'Declined'}</Badge>,
+            <StatusPill status={h.status === 'paid' ? 'Paid' : 'Declined'} />,
             <button onClick={() => downloadInvoice(h)} title="Download invoice" style={{ background: 'none', border: 'none', cursor: 'pointer', color: DS.faint, display: 'flex', padding: 4 }}><Icon name="download" size={15} /></button>,
           ])}
         />
@@ -1269,11 +1307,9 @@ const SettingsPage = ({ role = 'admin', section }) => {
 
   const tabs = [
     { id: roleMeta.tab.id, label: roleMeta.tab.label, icon: roleMeta.tab.icon, render: () => <roleMeta.tab.Comp data={data} set={set} wide={wide} /> },
-    // Admins get a 2nd role-specific tab: plan change · override code · billing details.
-    ...(role === 'admin' ? [{ id: 'billing', label: 'Plans & Billing', icon: 'invoice', render: () => <BillingTab /> }] : []),
-    // Storage (usage + quota). Admin/Account-Owner get the account view; the
-    // superadmin owner gets the platform view (R2 config, totals, pooled-vs-split).
-    ...(role === 'admin' ? [{ id: 'storage', label: 'Storage', icon: 'cloud', render: () => <StorageAdmin /> }] : []),
+    // NOTE (§3): admin "Plans & Billing" and "Storage" moved OUT of Settings into
+    // their own ACCOUNT-tier routes (owner-only) — they are account-wide, not
+    // centre-scoped or personal. The superadmin platform view keeps its Storage tab.
     ...(role === 'superadmin' ? [{ id: 'storage', label: 'Storage', icon: 'cloud', render: () => <StorageOwner /> }] : []),
     { id: 'notifications', label: 'Notifications', icon: 'bell', render: () => <NotificationsTab data={data} set={set} wide={wide} /> },
     { id: 'appearance',    label: 'Appearance',    icon: 'star', render: () => <AppearanceTab data={data} set={set} role={role} wide={wide} /> },
@@ -1315,8 +1351,15 @@ const SettingsPage = ({ role = 'admin', section }) => {
   );
 };
 
+// Platform new-centre defaults, read by the owner console's Onboard-Centre
+// wizard (SuperAdmin.jsx) so account provisioning matches the tenant path.
+function saPlatformDefaults() {
+  const p = ((setLoad().superadmin || {}).platform) || {};
+  return { planId: p.defaultPlan || 'growth', trialDays: p.trialDays ?? 14, seats: p.defaultSeats ?? 10, currency: p.currency || 'GBP', autoSuspend: !!p.autoSuspend, retention: p.retention || '90d' };
+}
+
 Object.assign(window, {
-  useSettingsStore, SettingsPage, CommsTab,
+  useSettingsStore, SettingsPage, CommsTab, saPlatformDefaults,
   AccountTab, NotificationsTab, AppearanceTab,
   PlatformTab, CentreTab, TeachingTab, LearningTab, BillingTab,
 });

@@ -60,6 +60,9 @@ const PATHS = {
   plus:        'M12 4v16m8-8H4',
   chevron_r:   'M9 5l7 7-7 7',
   chevron_d:   'M19 9l-7 7-7-7',
+  chevron_l:   'M15 19l-7-7 7-7',
+  chevrons_l:  'M11 19l-7-7 7-7M18 19l-7-7 7-7',
+  chevrons_r:  'M13 5l7 7-7 7M6 5l7 7-7 7',
   search:      'M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z',
   clock:       'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z',
   trending_up: 'M13 7h8m0 0v8m0-8l-8 8-4-4-6 6',
@@ -121,6 +124,27 @@ const Icon = ({ name, size = 16, color = 'currentColor', strokeWidth = 1.5 }) =>
   )
 );
 
+// ─── Klayo brand mark ─────────────────────────────────────────────────────────
+// The product logo glyph: an open ring (a near-complete circle with a small gap
+// at the top), rendered in the live accent so it follows centre branding. Pairs
+// with the "Klayo" wordmark in the sidebar header.
+const KlayoMark = ({ size = 28, color }) => {
+  const c = color || DS.accent;
+  const r = 8.4, cx = 12, cy = 12;
+  const circ = 2 * Math.PI * r;
+  const gap = circ * 0.17;              // ~17% opening, rotated to the top
+  return React.createElement('svg', {
+    width: size, height: size, viewBox: '0 0 24 24', fill: 'none',
+    style: { flexShrink: 0, display: 'block' },
+  },
+    React.createElement('circle', {
+      cx, cy, r, fill: 'none', stroke: c, strokeWidth: 3.4, strokeLinecap: 'round',
+      strokeDasharray: `${(circ - gap).toFixed(2)} ${gap.toFixed(2)}`,
+      transform: `rotate(-100 ${cx} ${cy})`,
+    })
+  );
+};
+
 // ─── Badge ─────────────────────────────────────────────────────────────────────
 const Badge = ({ variant = 'default', children, size = 'sm' }) => {
   const variants = {
@@ -141,6 +165,65 @@ const Badge = ({ variant = 'default', children, size = 'sm' }) => {
       background: v.bg, color: v.color,
       border: `1px solid ${v.border}`,
     }}>{children}</span>
+  );
+};
+
+// ─── Status Pill ─────────────────────────────────────────────────────────────────
+// Soft-filled semantic status pill (tinted background + darker same-hue text).
+// Pass a `status` string and it auto-maps to a tone; override with `tone`, or set
+// a `dot` for a leading indicator. Unknown statuses fall back to neutral grey.
+const STATUS_TONES = {
+  positive: { bg: DS.successBg, color: DS.success },
+  warning:  { bg: DS.warningBg, color: DS.warning },
+  negative: { bg: DS.dangerBg,  color: DS.danger  },
+  neutral:  { bg: DS.surface,   color: DS.muted   },
+  accent:   { bg: DS.accentLight, color: DS.accent },
+  info:     { bg: DS.infoBg,    color: DS.info    },
+};
+const STATUS_TONE_MAP = {
+  // positive · emerald (brand success)
+  active: 'positive', 'on-track': 'positive', 'on track': 'positive', ontrack: 'positive',
+  paid: 'positive', delivered: 'positive', approved: 'positive', complete: 'positive',
+  completed: 'positive', enrolled: 'positive', online: 'positive', live: 'positive',
+  resolved: 'positive', operational: 'positive', healthy: 'positive', success: 'positive',
+  sent: 'positive', confirmed: 'positive', open: 'positive', verified: 'positive',
+  present: 'positive', graded: 'positive', published: 'positive',
+  // warning · amber
+  pending: 'warning', 'at-risk': 'warning', 'at risk': 'warning', atrisk: 'warning',
+  'due soon': 'warning', due: 'warning', scheduled: 'warning', partial: 'warning',
+  'in progress': 'warning', 'in-progress': 'warning', processing: 'warning', review: 'warning',
+  invited: 'warning', degraded: 'warning', trial: 'warning', warning: 'warning', late: 'warning',
+  excused: 'warning', submitted: 'warning', 'below target': 'warning',
+  // negative · red
+  inactive: 'negative', overdue: 'negative', failed: 'negative', flagged: 'negative',
+  suspended: 'negative', cancelled: 'negative', canceled: 'negative', declined: 'negative',
+  rejected: 'negative', error: 'negative', down: 'negative', critical: 'negative',
+  blocked: 'negative', unpaid: 'negative', missed: 'negative', expired: 'negative', closed: 'negative',
+  absent: 'negative', missing: 'negative',
+  // neutral · grey
+  draft: 'neutral', archived: 'neutral', 'n/a': 'neutral', na: 'neutral', none: 'neutral',
+  unknown: 'neutral', disabled: 'neutral', inactive_grey: 'neutral',
+};
+// Accept semantic tones (positive/warning/negative/neutral/accent) OR the
+// legacy Badge variant names, so converting a Badge to a StatusPill is a drop-in.
+const TONE_ALIAS = { success: 'positive', danger: 'negative', default: 'neutral', muted: 'neutral' };
+const StatusPill = ({ status, tone, children, dot = false, size = 'sm' }) => {
+  const label = children != null ? children : (status != null ? status : '');
+  const rawKey = (status != null ? status : (typeof label === 'string' ? label : '')).toString().toLowerCase().trim();
+  const t0 = tone || STATUS_TONE_MAP[rawKey] || 'neutral';
+  const t = TONE_ALIAS[t0] || t0;
+  const c = STATUS_TONES[t] || STATUS_TONES.neutral;
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 5,
+      padding: size === 'sm' ? '2px 9px' : '3px 11px',
+      borderRadius: 6, fontSize: size === 'sm' ? 12 : 12.5,
+      fontWeight: 600, letterSpacing: '0.01em', lineHeight: 1.5,
+      whiteSpace: 'nowrap', background: c.bg, color: c.color,
+    }}>
+      {dot && <span style={{ width: 6, height: 6, borderRadius: '50%', background: c.color, flexShrink: 0 }} />}
+      {label}
+    </span>
   );
 };
 
@@ -273,9 +356,8 @@ const SETTINGS_ROLE_TAB = {
 };
 const SETTINGS_SUB = (role) => {
   const first = SETTINGS_ROLE_TAB[role] || SETTINGS_ROLE_TAB.admin;
-  // Admins get a 2nd role-specific tab (plan + billing) after the Centre tab.
-  const billing = role === 'admin' ? [{ id: 'billing', label: 'Plans & Billing', icon: 'invoice' }] : [];
-  return [first, ...billing,
+  // Plans & Billing + Storage moved to the ACCOUNT tier (§3) — no longer settings tabs.
+  return [first,
     { id: 'notifications', label: 'Notifications', icon: 'bell' },
     { id: 'appearance',    label: 'Appearance',    icon: 'grid' },
     { id: 'account',       label: 'Account',       icon: 'user' },
@@ -293,7 +375,10 @@ const COMMS_BASE = [
 ];
 const commsSub = (role) => {
   if (role === 'admin')      return [...COMMS_BASE, { id: 'comms:safeguarding', label: 'Safeguarding', icon: 'shield' }, { id: 'comms:settings', label: 'Comms settings', icon: 'settings' }];
-  if (role === 'superadmin') return [...COMMS_BASE, { id: 'comms:support',      label: 'Support',      icon: 'message' }];
+  // Owner console has no Messages surface (platform owners don't DM tenants) —
+  // its Communications is Announcements + Support only. Messages stays for
+  // admin/teacher/student, where Inbox + Safeguarding depend on it.
+  if (role === 'superadmin') return [COMMS_BASE[0], { id: 'comms:support', label: 'Support', icon: 'message' }];
   return COMMS_BASE;
 };
 
@@ -329,7 +414,14 @@ const NAV_CONFIG = {
     color: DS.accent,
     items: [
       { id: 'dashboard', icon: 'dashboard', label: 'Dashboard' },
-      { id: 'centres',   icon: 'grid',     label: 'Centres', section: 'Organisation' },
+      // ── ACCOUNT tier (§3) — the account-wide surface. Rendered ONLY for the
+      //    single account owner (isAccountOwner); a plain centre admin sees none
+      //    of it. These are the only screens where data crosses centre lines
+      //    (centres CRUD, the pooled plan/seat/storage entitlement).
+      { id: 'centres',   icon: 'grid',     label: 'Centres',         section: 'Account', tier: 'account' },
+      { id: 'plans',     icon: 'invoice',  label: 'Plans & Billing', section: 'Account', tier: 'account' },
+      { id: 'storage',   icon: 'cloud',    label: 'Storage',         section: 'Account', tier: 'account' },
+      // ── CENTRE tier — scoped to the active centre; visible to any centre admin.
       { id: 'students',  icon: 'users',    label: 'Students', section: 'People' },
       // Staff grouping — operational staff admin (Teachers + Timesheets) under one
       // dropdown. Subs keep their own page ids (`teachers`, `timesheets:review`) which
@@ -414,7 +506,7 @@ const SIDE_HOVER = 'rgba(17,24,39,0.045)';
 // opens a dropdown to switch between them or start a new one. Module-scoped (not
 // nested in Sidebar) so its open/dropdown state survives parent re-renders. The
 // open/close + click-away mirror NotificationBell (Communications.jsx).
-const CentreSwitcher = ({ collapsed, centre, centres, onSwitchCentre, onAddCentre, roleLabel, planUsage }) => {
+const CentreSwitcher = ({ collapsed, centre, centres, onSwitchCentre, onAddCentre, roleLabel, planUsage, dropUp }) => {
   const [open, setOpen] = React.useState(false);
   const ref = React.useRef(null);
   React.useEffect(() => {
@@ -466,7 +558,9 @@ const CentreSwitcher = ({ collapsed, centre, centres, onSwitchCentre, onAddCentr
       {open && (
         <div style={{
           position: 'absolute', zIndex: 60,
-          ...(collapsed ? { left: '100%', top: 0, marginLeft: 10, width: 248 } : { left: 0, right: 0, top: '100%', marginTop: 6 }),
+          ...(collapsed
+            ? { left: '100%', ...(dropUp ? { bottom: 0 } : { top: 0 }), marginLeft: 10, width: 248 }
+            : { left: 0, right: 0, ...(dropUp ? { bottom: '100%', marginBottom: 6 } : { top: '100%', marginTop: 6 }) }),
           background: DS.bg, border: `1px solid ${DS.border}`, borderRadius: 11,
           boxShadow: DS.cardShadowHi, padding: 6, animation: 'tos-fade 0.1s ease',
         }}>
@@ -496,6 +590,16 @@ const CentreSwitcher = ({ collapsed, centre, centres, onSwitchCentre, onAddCentr
               {planUsage.used} of {planUsage.max} centre{planUsage.max === 1 ? '' : 's'} used
             </div>
           )}
+          {/* Pooled account headroom (§8) — seats + storage summed across centres. */}
+          {window.centreMetrics && (() => {
+            const s = window.centreMetrics.getSeatUsage();
+            const st = window.centreMetrics.getStoragePool();
+            return (
+              <div style={{ fontSize: 10.5, color: DS.faint, padding: '0 8px 4px' }}>
+                Seats {s.students.used}/{s.students.cap}{st ? ` · Storage ${st.usedGb}/${st.totalGb} GB` : ''}
+              </div>
+            );
+          })()}
           <div style={{ height: 1, background: DS.border, margin: '6px 4px' }} />
           <button onClick={add}
             onMouseEnter={e => { e.currentTarget.style.background = DS.surfaceHover; }}
@@ -519,8 +623,12 @@ const CentreSwitcher = ({ collapsed, centre, centres, onSwitchCentre, onAddCentr
   );
 };
 
-const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, collapsed = false, centre, centres, onSwitchCentre, onAddCentre, identityName, planUsage, cloudStorage }) => {
+const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, collapsed = false, centre, centres, onSwitchCentre, onAddCentre, identityName, planUsage, cloudStorage, accountOwner = false }) => {
   const cfg = NAV_CONFIG[role];
+  // ACCOUNT-tier items (Centres, Plans & Billing, Storage — §3) render ONLY for
+  // the single account owner. Removing `accountOwner` hides that whole tier while
+  // every centre-scoped item still works for a plain centre admin.
+  const navItems = (cfg.items || []).filter(it => it.tier !== 'account' || accountOwner);
   const [hoveredItem, setHoveredItem] = React.useState(null);
 
   // A sub-item matches the active page when it's an exact compound-section match
@@ -705,9 +813,8 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
     );
   };
 
-  const userName = identityName || (role === 'superadmin' ? 'Marcus Hale' : role === 'admin' ? 'Lisa Chen' : role === 'teacher' ? 'Sarah Clarke' : 'Oliver Chen');
-  // Centre switcher (top-left) shows for staff identities whose account resolves
-  // to one or more centres; otherwise the header is the static product logo.
+  // Centre switcher (now docked at the bottom of the bar) shows for staff
+  // identities whose account resolves to one or more centres.
   const switcherOn = !!(centre && centres && centres.length);
 
   return (
@@ -719,42 +826,24 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
       padding: collapsed ? '0 10px' : '0 12px',
       transition: 'width 0.16s ease',
     }}>
-      {/* Header — the TutorOS product logo sits at the top. Fixed to 52px
+      {/* Header — the Klayo product logo (ring mark + wordmark). Fixed to 52px
           (matching the TopBar height) so its bottom border lines up exactly
           with the content header's, forming one continuous line across the
-          sidebar + content header. The centre switcher (staff identities with
-          one or more centres) sits just beneath it as its own row. */}
+          sidebar + content header. The centre switcher now lives at the bottom
+          of the bar. */}
       <div style={{
         height: 52, boxSizing: 'border-box',
         display: 'flex', flexDirection: 'column', justifyContent: 'center',
         borderBottom: `1px solid ${DS.border}`,
-        marginBottom: switcherOn ? 6 : 8,
+        marginBottom: 8,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-start', gap: 10, padding: collapsed ? 0 : '0 4px' }}>
-          <div style={{
-            width: 32, height: 32, borderRadius: 8, flexShrink: 0,
-            background: DS.accent,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <span style={{ color: '#fff', fontSize: 14, fontWeight: 800, letterSpacing: '-0.5px' }}>T</span>
-          </div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-start', gap: 9, padding: collapsed ? 0 : '0 4px' }}>
+          <KlayoMark size={28} />
           {!collapsed && (
-            <div>
-              <div style={{ fontSize: 15, fontWeight: 700, color: DS.text, letterSpacing: '-0.3px' }}>TutorOS</div>
-              {!switcherOn && <div style={{ fontSize: 10, color: DS.muted, marginTop: 1 }}>{cfg.label}</div>}
-            </div>
+            <span style={{ fontSize: 19, fontWeight: 800, color: DS.text, letterSpacing: '-0.6px' }}>Klayo</span>
           )}
         </div>
       </div>
-
-      {/* Centre switcher — staff identities whose account resolves to one or
-          more centres. Sits beneath the product logo. */}
-      {switcherOn && (
-        <div style={{ marginBottom: 8 }}>
-          <CentreSwitcher collapsed={collapsed} centre={centre} centres={centres} planUsage={planUsage}
-            onSwitchCentre={onSwitchCentre} onAddCentre={onAddCentre} roleLabel={cfg.label} />
-        </div>
-      )}
 
       {/* Role switcher (demo) — hidden while collapsed */}
       {onRoleSwitch && !collapsed && (
@@ -778,8 +867,8 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
           with no section (and the whole student nav) render flat. Labels are
           hidden in the icon-only collapsed bar. */}
       <nav style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2, overflow: collapsed ? 'visible' : 'auto' }}>
-        {cfg.items.map((item, i) => {
-          const prev = cfg.items[i - 1];
+        {navItems.map((item, i) => {
+          const prev = navItems[i - 1];
           const showLabel = !collapsed && item.section && (!prev || prev.section !== item.section);
           return (
             <React.Fragment key={item.id}>
@@ -796,72 +885,52 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
         })}
       </nav>
 
-      {/* Bottom dock — fixed order: storage meter (Admin/Owner) → Settings →
-          user/account row → "powered by TutorOS" wordmark. */}
-      <div style={{ paddingBottom: 12, borderTop: `1px solid ${DS.border}`, paddingTop: 8 }}>
-        {/* Cloud-storage usage — Admin only (gated by the cloudStorage prop).
-            Used/quota are DERIVED live from file records (index.html), never a
-            stored total. Clicking deep-links to Settings → Storage. */}
-        {cloudStorage && !collapsed && (() => {
-          const { usedGb = 0, totalGb = 0 } = cloudStorage;
-          const pct = totalGb ? Math.min(100, Math.round((usedGb / totalGb) * 100)) : 0;
-          return (
-            <button
-              onClick={() => onNav && onNav('settings:storage')}
-              title="Manage storage in Settings"
-              style={{
-                display: 'block', width: '100%', textAlign: 'left', border: 'none', cursor: 'pointer',
-                margin: '0 0 8px', padding: '12px 14px', borderRadius: 12, background: DS.accent, color: '#fff',
-              }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                <Icon name="cloud" size={16} color="#fff" />
-                <span style={{ fontSize: 13, fontWeight: 600 }}>Cloud storage</span>
-                <Icon name="chevron_r" size={14} color="rgba(255,255,255,0.85)" />
-              </div>
-              <div style={{ height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.28)', overflow: 'hidden' }}>
-                <div style={{ width: `${pct}%`, height: '100%', background: '#fff', borderRadius: 3, transition: 'width 0.3s' }} />
-              </div>
-              <div style={{ fontSize: 11.5, marginTop: 8, color: 'rgba(255,255,255,0.92)' }}>
-                {usedGb} GB of {totalGb} GB used
-              </div>
-            </button>
-          );
-        })()}
-
-        {/* Settings — a single navigating button (no sidebar expander). */}
-        {cfg.bottom.map(item => <NavItem key={item.id} item={item} />)}
-
+      {/* Bottom dock — storage meter (Admin/Owner) → tuition-centre switcher.
+          Settings, the account row and the old "powered by" wordmark now live in
+          the content header's top-right cluster. */}
+      {(switcherOn || (cloudStorage && !collapsed)) && (
         <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-start',
-          gap: 10, padding: collapsed ? '8px 0' : '8px 12px', marginTop: 4,
-        }} title={collapsed ? userName : undefined}>
-          <Avatar name="User" size={28} color={cfg.color} />
-          {!collapsed && (
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 500, color: DS.sub, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {userName}
-              </div>
-              <div style={{ fontSize: 11, color: DS.faint }}>{cfg.label}</div>
-            </div>
-          )}
-        </div>
-        {/* Platform wordmark — the top-left slot belongs to the centre, so the
-            TutorOS branding sits here as a small, quiet "powered by" footer
-            directly below the account dock. It must not compete with the centre
-            name above. */}
-        <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
-          paddingTop: 10, marginTop: 6, borderTop: `1px solid ${DS.border}`,
+          paddingBottom: 12, borderTop: `1px solid ${DS.border}`, paddingTop: 8,
+          display: 'flex', flexDirection: 'column', gap: 8,
         }}>
-          {collapsed ? (
-            <span style={{ fontSize: 11, fontWeight: 700, color: DS.faint, letterSpacing: '-0.2px' }}>T</span>
-          ) : (
-            <span style={{ fontSize: 10.5, fontWeight: 500, color: DS.faint, letterSpacing: '0.01em' }}>
-              powered by <span style={{ fontWeight: 700, color: DS.muted }}>TutorOS</span>
-            </span>
+          {/* Cloud-storage usage — Admin only (gated by the cloudStorage prop).
+              Used/quota are DERIVED live from file records (index.html), never a
+              stored total. Clicking deep-links to Settings → Storage. */}
+          {cloudStorage && !collapsed && (() => {
+            const { usedGb = 0, totalGb = 0 } = cloudStorage;
+            const pct = totalGb ? Math.min(100, Math.round((usedGb / totalGb) * 100)) : 0;
+            return (
+              <button
+                onClick={() => onNav && onNav('storage')}
+                title="Manage storage in Settings"
+                style={{
+                  display: 'block', width: '100%', textAlign: 'left', border: 'none', cursor: 'pointer',
+                  padding: '12px 14px', borderRadius: 12, background: DS.accent, color: '#fff',
+                }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                  <Icon name="cloud" size={16} color="#fff" />
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>Cloud storage</span>
+                  <Icon name="chevron_r" size={14} color="rgba(255,255,255,0.85)" />
+                </div>
+                <div style={{ height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.28)', overflow: 'hidden' }}>
+                  <div style={{ width: `${pct}%`, height: '100%', background: '#fff', borderRadius: 3, transition: 'width 0.3s' }} />
+                </div>
+                <div style={{ fontSize: 11.5, marginTop: 8, color: 'rgba(255,255,255,0.92)' }}>
+                  {usedGb} GB of {totalGb} GB used
+                </div>
+              </button>
+            );
+          })()}
+
+          {/* Tuition-centre switcher — docked at the foot of the bar; its menu
+              opens upward (dropUp) so it doesn't run off the bottom of the screen. */}
+          {switcherOn && (
+            <CentreSwitcher collapsed={collapsed} centre={centre} centres={centres} planUsage={planUsage}
+              onSwitchCentre={onSwitchCentre} onAddCentre={onAddCentre}
+              roleLabel={role === 'admin' && accountOwner ? 'Account Owner' : cfg.label} dropUp />
           )}
         </div>
-      </div>
+      )}
     </div>
   );
 };
@@ -881,7 +950,7 @@ const PageHeader = ({ title, subtitle, actions }) => (
 );
 
 // ─── Button ────────────────────────────────────────────────────────────────────
-const Btn = ({ variant = 'primary', children, icon, onClick, small, style = {} }) => {
+const Btn = ({ variant = 'primary', children, icon, onClick, small, style = {}, disabled = false }) => {
   const [hov, setHov] = React.useState(false);
   const styles = {
     primary: {
@@ -904,7 +973,8 @@ const Btn = ({ variant = 'primary', children, icon, onClick, small, style = {} }
   const s = styles[variant] || styles.primary;
   return (
     <button
-      onClick={onClick}
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
       onMouseEnter={() => setHov(true)}
       onMouseLeave={() => setHov(false)}
       style={{
@@ -913,7 +983,8 @@ const Btn = ({ variant = 'primary', children, icon, onClick, small, style = {} }
         borderRadius: 7, border: `1px solid ${s.border}`,
         background: s.bg, color: s.color,
         fontSize: small ? 13 : 14, fontWeight: 500,
-        cursor: 'pointer', whiteSpace: 'nowrap',
+        cursor: disabled ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap',
+        opacity: disabled ? 0.5 : 1,
         transition: 'background 0.12s', ...style,
       }}
     >
@@ -967,28 +1038,315 @@ const Card = ({ children, style = {}, title, subtitle, actions, icon, accent }) 
 };
 
 // ─── Table ─────────────────────────────────────────────────────────────────────
-const Table = ({ cols, rows }) => (
-  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-    <thead>
-      <tr style={{ borderBottom: `1px solid ${DS.border}` }}>
-        {cols.map((c, i) => (
-          <th key={i} style={{
-            padding: '10px 16px', textAlign: 'left',
-            fontSize: 11, fontWeight: 600, color: DS.muted,
-            textTransform: 'uppercase', letterSpacing: '0.06em',
-            background: DS.surface,
-          }}>{c}</th>
-        ))}
-      </tr>
-    </thead>
-    <tbody>
-      {rows.map((row, ri) => (
-        <TableRow key={ri} cells={row} isLast={ri === rows.length - 1} />
-      ))}
-    </tbody>
-  </table>
+// One professional table system every consumer inherits. Backward-compatible:
+//   <Table cols={['Name','Score']} rows={[[<a/>, 92], …]} />
+// still works unchanged. Opt into richer behaviour via props:
+//   • pagination (default ON, footer appears only when rows > pageSize)
+//   • client-side sort (default ON for data tables; per-column opt-out)
+//   • auto right-alignment + tabular figures for numeric columns
+//   • optional leading-checkbox selection
+// `cols` entries may be a string / node (header label) OR a def object:
+//   { label, align:'left'|'right'|'center', width, sortable:false, action:true }
+
+// Extract comparable text from an arbitrary cell node (string, number, element…).
+// For prop-based primitives with no children (e.g. <ScorePill score/>,
+// <StatusPill status/>) fall back to a few well-known scalar content props so
+// those columns still align and sort sensibly.
+const nodeText = (node) => {
+  if (node == null || node === false || node === true) return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(nodeText).join(' ');
+  if (React.isValidElement(node)) {
+    const p = node.props || {};
+    if (p.children != null && p.children !== '') return nodeText(p.children);
+    for (const key of ['score', 'value', 'status', 'label', 'amount', 'count']) {
+      if (p[key] != null) return nodeText(p[key]);
+    }
+    return '';
+  }
+  return '';
+};
+// Common placeholders that shouldn't count against a column's "all numeric" test.
+const TABLE_PLACEHOLDERS = new Set(['', '-', '–', '—', '…', 'n/a', 'na']);
+// Parse a currency/percent/plain number out of cell text, else null.
+const numericVal = (text) => {
+  const t = String(text).trim();
+  if (t === '' || !/\d/.test(t)) return null;
+  const cleaned = t.replace(/[£$€,%\s]/g, '');
+  if (!/^[-+]?\d*\.?\d+$/.test(cleaned)) return null;
+  const n = parseFloat(cleaned);
+  return isNaN(n) ? null : n;
+};
+const sortCompareValue = (node) => {
+  const text = nodeText(node).trim();
+  const n = numericVal(text);
+  return n != null ? n : text.toLowerCase();
+};
+const cellsOf = (row) => Array.isArray(row) ? row : (row && row.cells) || [];
+const cellAt = (row, ci) => cellsOf(row)[ci];
+// A column is numeric when every non-placeholder cell parses as a number.
+// Composite/block cells (progress bars, chip groups rendered as a <div>) opt the
+// column out: text-align can't move their block content, so right-aligning the
+// header would only misalign it against left-hugging content.
+const colIsNumeric = (rows, ci) => {
+  let seen = 0;
+  for (const row of rows) {
+    const cell = cellAt(row, ci);
+    if (React.isValidElement(cell) && cell.type === 'div') return false;
+    const text = nodeText(cell).trim();
+    if (text === '' || TABLE_PLACEHOLDERS.has(text.toLowerCase())) continue;
+    if (numericVal(text) == null) return false;
+    seen++;
+  }
+  return seen > 0;
+};
+
+// Brand-accent native checkbox with indeterminate support; swallows row clicks.
+const Checkbox = ({ checked, indeterminate, onChange, disabled }) => {
+  const ref = React.useRef(null);
+  React.useEffect(() => { if (ref.current) ref.current.indeterminate = !!indeterminate; }, [indeterminate]);
+  return (
+    <input ref={ref} type="checkbox" checked={!!checked} disabled={disabled}
+      onClick={(e) => e.stopPropagation()}
+      onChange={(e) => { e.stopPropagation(); onChange && onChange(e); }}
+      style={{ width: 15, height: 15, accentColor: DS.accent, cursor: disabled ? 'default' : 'pointer', margin: 0, verticalAlign: 'middle' }} />
+  );
+};
+
+// Low-contrast sort chevron: faint when idle, rotates for asc/desc.
+const SortChevron = ({ dir }) => (
+  <span style={{
+    display: 'inline-flex', alignItems: 'center',
+    opacity: dir ? 1 : 0.4, transition: 'opacity 0.12s, transform 0.12s',
+    transform: dir === 'asc' ? 'rotate(180deg)' : 'none',
+  }}>
+    <Icon name="chevron_d" size={12} color={dir ? DS.sub : DS.faint} />
+  </span>
 );
 
+const PagerBtn = ({ icon, disabled, onClick, title }) => (
+  <button type="button" title={title} disabled={disabled} onClick={disabled ? undefined : onClick}
+    style={{
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+      width: 28, height: 28, borderRadius: 6, border: `1px solid ${DS.border}`,
+      background: DS.bg, color: disabled ? DS.borderDark : DS.sub, padding: 0,
+      cursor: disabled ? 'default' : 'pointer', transition: 'background 0.1s',
+    }}
+    onMouseEnter={(e) => { if (!disabled) e.currentTarget.style.background = DS.surface; }}
+    onMouseLeave={(e) => { e.currentTarget.style.background = DS.bg; }}>
+    <Icon name={icon} size={14} />
+  </button>
+);
+
+const TablePagination = ({ page, pageSize, total, options, onPage, onSize }) => {
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const start = total === 0 ? 0 : page * pageSize + 1;
+  const end = Math.min((page + 1) * pageSize, total);
+  const atStart = page <= 0;
+  const atEnd = page >= pageCount - 1;
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12,
+      padding: '11px 16px', borderTop: `1px solid ${DS.border}`, fontSize: 12.5, color: DS.muted,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+        <span>Rows per page</span>
+        <select value={pageSize} onChange={(e) => onSize(Number(e.target.value))}
+          style={{
+            fontSize: 12.5, color: DS.sub, padding: '5px 8px', borderRadius: 7,
+            border: `1px solid ${DS.border}`, background: DS.bg, cursor: 'pointer',
+          }}>
+          {options.map((o) => <option key={o} value={o}>{o}</option>)}
+        </select>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+        <span style={{ fontVariantNumeric: 'tabular-nums', color: DS.sub }}>{start}–{end} of {total}</span>
+        <div style={{ display: 'flex', gap: 4 }}>
+          <PagerBtn icon="chevrons_l" title="First page" disabled={atStart} onClick={() => onPage(0)} />
+          <PagerBtn icon="chevron_l" title="Previous page" disabled={atStart} onClick={() => onPage(page - 1)} />
+          <PagerBtn icon="chevron_r" title="Next page" disabled={atEnd} onClick={() => onPage(page + 1)} />
+          <PagerBtn icon="chevrons_r" title="Last page" disabled={atEnd} onClick={() => onPage(pageCount - 1)} />
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const TBodyRow = ({ cells, aligns, hover, selectable, selected, onToggle, onClick }) => {
+  const [hov, setHov] = React.useState(false);
+  const bg = selected ? DS.accentLight : (hover && hov ? DS.surface : DS.bg);
+  return (
+    <tr
+      onMouseEnter={hover ? () => setHov(true) : undefined}
+      onMouseLeave={hover ? () => setHov(false) : undefined}
+      onClick={onClick}
+      style={{
+        borderBottom: `1px solid ${DS.border}`, background: bg,
+        boxShadow: selected ? `inset 3px 0 0 ${DS.accent}` : 'none',
+        transition: 'background 0.1s', cursor: onClick ? 'pointer' : 'default',
+      }}>
+      {selectable && (
+        <td style={{ padding: '0 4px 0 16px', width: 40, verticalAlign: 'middle' }}>
+          <Checkbox checked={selected} onChange={onToggle} />
+        </td>
+      )}
+      {cells.map((cell, ci) => (
+        <td key={ci} style={{
+          padding: '15px 16px', color: DS.sub, verticalAlign: 'middle',
+          textAlign: aligns[ci] === 'right' ? 'right' : aligns[ci] === 'center' ? 'center' : 'left',
+          fontVariantNumeric: aligns[ci] === 'right' ? 'tabular-nums' : undefined,
+        }}>{cell}</td>
+      ))}
+    </tr>
+  );
+};
+
+const Table = ({
+  cols = [], rows = [],
+  // One standard page size across every table (§8) so heights are predictable and
+  // pagination is consistent — the pager only appears once rows overflow one page.
+  // Users can raise it via the page-size selector for power scanning.
+  pagination = true, defaultPageSize = 10, pageSizeOptions = [10, 25, 50, 100],
+  page: pageProp, onPageChange, pageSize: pageSizeProp, onPageSizeChange,
+  sortable = true, hover = true,
+  selectable = false, selectedKeys, onSelectionChange, rowKey,
+  empty = 'No records to display',
+}) => {
+  // Normalise heterogeneous column defs (string | node | object) → uniform shape.
+  const ncols = cols.map((c) => {
+    const def = (c && typeof c === 'object' && !React.isValidElement(c)) ? c : { label: c };
+    const headerText = nodeText(def.label).trim().toLowerCase();
+    const isAction = def.action != null ? def.action : (headerText === 'actions' || headerText === '');
+    return {
+      label: def.label, align: def.align || null, width: def.width, isAction,
+      canSort: def.sortable != null ? def.sortable : !isAction,
+    };
+  });
+  // Auto right-align numeric columns unless the call site set an explicit align.
+  const aligns = ncols.map((c, ci) => c.align || (colIsNumeric(rows, ci) ? 'right' : 'left'));
+
+  // Sort: click a header to cycle asc → desc → none (client-side, non-destructive).
+  const [sort, setSort] = React.useState({ col: null, dir: null });
+  const toggleSort = (ci) => setSort((s) =>
+    s.col !== ci ? { col: ci, dir: 'asc' }
+      : s.dir === 'asc' ? { col: ci, dir: 'desc' }
+        : { col: null, dir: null });
+  const order = (() => {
+    const idx = rows.map((_, i) => i);
+    if (sortable && sort.col != null && sort.dir) {
+      const ci = sort.col;
+      idx.sort((a, b) => {
+        const va = sortCompareValue(cellAt(rows[a], ci));
+        const vb = sortCompareValue(cellAt(rows[b], ci));
+        const cmp = (typeof va === 'number' && typeof vb === 'number')
+          ? va - vb : String(va).localeCompare(String(vb), undefined, { numeric: true });
+        return sort.dir === 'asc' ? cmp : -cmp;
+      });
+    }
+    return idx;
+  })();
+
+  // Pagination — uncontrolled by default; `page`/`pageSize` props take over if given.
+  const [pageU, setPageU] = React.useState(0);
+  const [sizeU, setSizeU] = React.useState(defaultPageSize);
+  const pageSize = pageSizeProp != null ? pageSizeProp : sizeU;
+  const total = rows.length;
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(pageProp != null ? pageProp : pageU, pageCount - 1);
+  const setPage = (p) => {
+    const np = Math.max(0, Math.min(p, pageCount - 1));
+    if (onPageChange) onPageChange(np);
+    if (pageProp == null) setPageU(np);
+  };
+  const setPageSize = (s) => {
+    if (onPageSizeChange) onPageSizeChange(s);
+    if (pageSizeProp == null) setSizeU(s);
+    if (pageProp == null) setPageU(0);
+  };
+  const showFooter = pagination && total > pageSize;
+  const startIdx = pagination ? page * pageSize : 0;
+  const endIdx = pagination ? Math.min(startIdx + pageSize, total) : total;
+  const visible = order.slice(startIdx, endIdx);
+
+  // Selection (opt-in). Header checkbox toggles the current page's rows.
+  const keyOf = (ri) => rowKey ? rowKey(rows[ri], ri) : ri;
+  const selArr = selectedKeys || [];
+  const selSet = new Set(selArr);
+  const pageKeys = visible.map(keyOf);
+  const allSel = pageKeys.length > 0 && pageKeys.every((k) => selSet.has(k));
+  const someSel = !allSel && pageKeys.some((k) => selSet.has(k));
+  const toggleAll = () => {
+    if (!onSelectionChange) return;
+    onSelectionChange(allSel
+      ? selArr.filter((k) => !pageKeys.includes(k))
+      : [...selArr, ...pageKeys.filter((k) => !selSet.has(k))]);
+  };
+  const toggleOne = (k) => {
+    if (!onSelectionChange) return;
+    onSelectionChange(selSet.has(k) ? selArr.filter((x) => x !== k) : [...selArr, k]);
+  };
+
+  const colCount = ncols.length + (selectable ? 1 : 0);
+  const th = (align, width, extra) => ({
+    padding: '11px 16px', textAlign: align === 'right' ? 'right' : align === 'center' ? 'center' : 'left',
+    fontSize: 12, fontWeight: 600, color: DS.muted, letterSpacing: '0.03em',
+    whiteSpace: 'nowrap', width, background: DS.bg, ...extra,
+  });
+
+  return (
+    <div>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+        <thead>
+          <tr style={{ borderBottom: `1px solid ${DS.border}` }}>
+            {selectable && (
+              <th style={th('left', 40)}>
+                <Checkbox checked={allSel} indeterminate={someSel} onChange={toggleAll} />
+              </th>
+            )}
+            {ncols.map((c, ci) => {
+              const align = aligns[ci];
+              const active = sort.col === ci;
+              const canSort = sortable && c.canSort && total > 1;
+              return (
+                <th key={ci} onClick={canSort ? () => toggleSort(ci) : undefined}
+                  style={th(align, c.width, { cursor: canSort ? 'pointer' : 'default', userSelect: 'none' })}>
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 4,
+                    flexDirection: align === 'right' ? 'row-reverse' : 'row',
+                  }}>
+                    {c.label}
+                    {canSort && <SortChevron dir={active ? sort.dir : null} />}
+                  </span>
+                </th>
+              );
+            })}
+          </tr>
+        </thead>
+        <tbody>
+          {visible.length === 0 ? (
+            <tr>
+              <td colSpan={colCount} style={{ padding: '30px 16px', textAlign: 'center', color: DS.faint, fontSize: 13 }}>{empty}</td>
+            </tr>
+          ) : visible.map((ri) => {
+            const k = keyOf(ri);
+            const row = rows[ri];
+            return (
+              <TBodyRow key={k} cells={cellsOf(row)} aligns={aligns} hover={hover}
+                selectable={selectable} selected={selSet.has(k)} onToggle={() => toggleOne(k)}
+                onClick={row && !Array.isArray(row) && row.onClick ? row.onClick : undefined} />
+            );
+          })}
+        </tbody>
+      </table>
+      {showFooter && (
+        <TablePagination page={page} pageSize={pageSize} total={total}
+          options={pageSizeOptions} onPage={setPage} onSize={setPageSize} />
+      )}
+    </div>
+  );
+};
+
+// Backward-compatible standalone row (kept for any external consumer / print use).
 const TableRow = ({ cells, isLast }) => {
   const [hov, setHov] = React.useState(false);
   return (
@@ -999,12 +1357,80 @@ const TableRow = ({ cells, isLast }) => {
         borderBottom: isLast ? 'none' : `1px solid ${DS.border}`,
         background: hov ? DS.surface : DS.bg,
         transition: 'background 0.1s',
-      }}
-    >
+      }}>
       {cells.map((cell, ci) => (
-        <td key={ci} style={{ padding: '11px 16px', color: DS.sub }}>{cell}</td>
+        <td key={ci} style={{ padding: '15px 16px', color: DS.sub }}>{cell}</td>
       ))}
     </tr>
+  );
+};
+
+// ─── Row actions menu (kebab) ────────────────────────────────────────────────────
+// Trailing ··· trigger that collapses 2+ row actions into a popover menu.
+//   <RowActionsMenu items={[{ label, icon, onClick, danger, disabled }, …]} />
+// Uses fixed positioning off the trigger rect so it escapes card overflow.
+const RowActionsMenu = ({ items = [], icon = 'dots', align = 'right' }) => {
+  const [open, setOpen] = React.useState(false);
+  const [pos, setPos] = React.useState({ top: 0, left: 0 });
+  const btnRef = React.useRef(null);
+  const menuRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => {
+      if (btnRef.current && btnRef.current.contains(e.target)) return;
+      if (menuRef.current && menuRef.current.contains(e.target)) return;
+      setOpen(false);
+    };
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey); };
+  }, [open]);
+  const MENU_W = 184;
+  const openMenu = (e) => {
+    e.stopPropagation();
+    const r = btnRef.current.getBoundingClientRect();
+    setPos({ top: r.bottom + 5, left: align === 'right' ? Math.max(8, r.right - MENU_W) : r.left });
+    setOpen((o) => !o);
+  };
+  if (!items.length) return null;
+  return (
+    <React.Fragment>
+      <button ref={btnRef} type="button" title="Actions" onClick={openMenu}
+        style={{
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          width: 28, height: 28, borderRadius: 6, border: '1px solid transparent',
+          background: open ? DS.surfaceHover : 'transparent', color: DS.muted,
+          cursor: 'pointer', transition: 'background 0.1s',
+        }}
+        onMouseEnter={(e) => { if (!open) e.currentTarget.style.background = DS.surface; }}
+        onMouseLeave={(e) => { if (!open) e.currentTarget.style.background = 'transparent'; }}>
+        <Icon name={icon} size={16} />
+      </button>
+      {open && (
+        <div ref={menuRef} style={{
+          position: 'fixed', top: pos.top, left: pos.left, width: MENU_W, zIndex: 1200,
+          background: DS.bg, border: `1px solid ${DS.border}`, borderRadius: 10,
+          boxShadow: DS.cardShadowHi, padding: 4,
+        }}>
+          {items.map((it, i) => (
+            <button key={i} type="button" disabled={it.disabled}
+              onClick={(e) => { e.stopPropagation(); setOpen(false); it.onClick && it.onClick(e); }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left',
+                padding: '8px 10px', border: 'none', background: 'transparent', borderRadius: 6,
+                fontSize: 13, color: it.danger ? DS.danger : DS.sub,
+                cursor: it.disabled ? 'not-allowed' : 'pointer', opacity: it.disabled ? 0.5 : 1,
+              }}
+              onMouseEnter={(e) => { if (!it.disabled) e.currentTarget.style.background = it.danger ? DS.dangerBg : DS.surface; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
+              {it.icon && <Icon name={it.icon} size={15} color={it.danger ? DS.danger : DS.muted} />}
+              {it.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </React.Fragment>
   );
 };
 
@@ -1517,8 +1943,8 @@ const resolveActiveTerm = (terms, today) => {
 
 // ─── Export ────────────────────────────────────────────────────────────────────
 Object.assign(window, {
-  DS, Icon, Badge, Avatar, KPICard, StatCard, shadeColor, Sidebar, PageHeader, Btn, Card,
-  Table, TableRow, Sparkline, LineChart, BarChart, ScorePill, Divider, NAV_CONFIG, navParentId,
+  DS, Icon, Badge, StatusPill, Avatar, KPICard, StatCard, shadeColor, Sidebar, PageHeader, Btn, Card,
+  Table, TableRow, RowActionsMenu, Checkbox, Sparkline, LineChart, BarChart, ScorePill, Divider, NAV_CONFIG, navParentId,
   Modal, Field, Input, Textarea, Select, Segmented, SearchInput, EmptyState,
   useDashboardPrefs, CustomiseModal, Toggle,
   termTodayISO, getCentreTerms, termStatus, resolveActiveTerm,

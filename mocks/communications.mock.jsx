@@ -65,7 +65,7 @@ const COMMS_ANNOUNCEMENTS = [
     authorId: 'u_marcus', authorName: 'Marcus Hale', authorRole: 'superadmin',
     audience: { centreIds: 'all', roles: 'all', classIds: [] },
     title: 'Scheduled maintenance — Sunday 02:00–04:00 BST',
-    body: 'TutorOS will be briefly unavailable during a platform upgrade this Sunday. No action needed — homework and reports already submitted are safe.',
+    body: 'Klayo will be briefly unavailable during a platform upgrade this Sunday. No action needed — homework and reports already submitted are safe.',
     priority: 'important', pinned: true, requiresAck: false,
     createdAt: _ago(2 * DAY), expiresAt: null,
     reads: { u_lisa: _ago(2 * DAY - 30), u_daniel: _ago(2 * DAY - 90) }, acks: {},
@@ -86,9 +86,12 @@ const COMMS_ANNOUNCEMENTS = [
     id: 'an_bm_fees',
     scope: 'centre', centreId: 'bm', classId: null,
     authorId: 'u_lisa', authorName: 'Lisa Chen', authorRole: 'admin',
-    audience: { centreIds: ['bm'], roles: 'all', classIds: [] },
-    title: 'Summer-term invoices now available',
-    body: 'Summer-term invoices have gone out. Parents can view and pay from the portal. Any queries, drop me a message.',
+    // §5: Klayo invoicing is ledger-only (payments are external), and payment/
+    // invoice lines never appear on the student surface — retargeted to staff only
+    // and reworded to drop the "view and pay from the portal" capture language.
+    audience: { centreIds: ['bm'], roles: ['admin', 'teacher'], classIds: [] },
+    title: 'Summer-term invoices issued',
+    body: 'Summer-term invoices have been issued to guardians. Any billing queries, drop me a message.',
     priority: 'normal', pinned: false, requiresAck: false,
     createdAt: _ago(8 * HOUR), expiresAt: null,
     reads: { u_sarah: _ago(7 * HOUR) }, acks: {},
@@ -273,7 +276,7 @@ const COMMS_MESSAGES = [
     body: "Oh that makes sense. My WhatsApp is 07700 900182 if it's easier to text?", attachments: [],
     createdAt: _ago(2 * DAY - 55), readBy: { u_aiden: _ago(2 * DAY - 55), u_david: _ago(2 * DAY - 58) } },
   { id: 'm_ad_6', threadId: 'th_aiden_david', senderId: 'u_david', senderName: 'David Park', senderRole: 'teacher',
-    body: "Let's keep everything here on TutorOS, Aiden — that's our centre policy and it keeps us both safe. Happy to help with anything in this channel any time. 👍", attachments: [],
+    body: "Let's keep everything here on Klayo, Aiden — that's our centre policy and it keeps us both safe. Happy to help with anything in this channel any time. 👍", attachments: [],
     createdAt: _ago(2 * DAY - 60), readBy: { u_david: _ago(2 * DAY - 60), u_aiden: _ago(2 * DAY - 70) } },
   { id: 'm_ad_7', threadId: 'th_aiden_david', senderId: 'u_aiden', senderName: 'Aiden Foster', senderRole: 'student',
     body: 'Understood! Can we go over Q4 next session?', attachments: [],
@@ -314,6 +317,55 @@ const COMMS_MESSAGES = [
 // hours, images, DSL observer). Seeds the `standard` preset so the demo shows live
 // monitored DMs + channels; an admin can switch to Locked-down to see DMs disabled
 // and the quiet-hours composer lock kick in.
+// --- Extra activity notifications -------------------------------------------------
+// Messages and announcements come from the comms store above. These items cover
+// cross-module updates that are relevant to the signed-in demo user.
+const COMMS_ACTIVITY_NOTIFICATIONS = [
+  // Platform owner
+  { id: 'sa-plan-upgrade', roles: ['superadmin'], icon: 'zap', tone: 'info', page: 'revenue',
+    title: 'Bright Minds upgraded to Pro', sub: 'Plans - subscription changed 18 minutes ago',
+    time: _ago(18 * MIN), sig: 'sa-plan-upgrade:2026-06-18T09:12' },
+  { id: 'sa-storage-spike', roles: ['superadmin'], icon: 'archive', tone: 'warning', page: 'system',
+    title: 'Storage usage jumped at Riverside', sub: 'Storage - 1.2 GB of uploads today',
+    time: _ago(42 * MIN), sig: 'sa-storage-spike:riverside:1200' },
+
+  // Centre admin
+  { id: 'adm-submissions-review', roles: ['admin'], centreIds: ['bm'], icon: 'clip', tone: 'success', page: 'classes:classes',
+    title: '18 submissions waiting for review', sub: 'Homework - across 4 active classes',
+    time: _ago(14 * MIN), sig: 'adm-submissions-review:18' },
+  { id: 'adm-report-updated', roles: ['admin'], centreIds: ['bm'], icon: 'file', tone: 'info', page: 'reports',
+    title: 'Year 11 progress reports updated', sub: 'Reports - David Park changed 6 drafts',
+    time: _ago(36 * MIN), sig: 'adm-report-updated:y11:6' },
+  { id: 'adm-timesheet-submitted', roles: ['admin'], centreIds: ['bm'], icon: 'clock', tone: 'warning', page: 'timesheets:review',
+    title: '3 timesheets need approval', sub: 'Timesheets - due before payroll export',
+    time: _ago(51 * MIN), sig: 'adm-timesheet-submitted:3' },
+  { id: 'adm-invoice-paid', roles: ['admin'], centreIds: ['bm'], icon: 'invoice', tone: 'success', page: 'invoices',
+    title: 'Invoice BM-1042 was paid', sub: 'Invoices - Emma Thompson account updated',
+    time: _ago(2 * HOUR), sig: 'adm-invoice-paid:BM-1042' },
+
+  // Teacher
+  { id: 't-submission-emma', userIds: ['u_sarah'], icon: 'clip', tone: 'success', page: 'homework',
+    title: 'Emma submitted Worksheet 4B', sub: 'Homework - GCSE Maths Group B',
+    time: _ago(9 * MIN), sig: 't-submission-emma:worksheet-4b' },
+  { id: 't-lesson-updated', userIds: ['u_sarah'], icon: 'calendar', tone: 'info', page: 'timetable',
+    title: 'Room changed for Year 12 Maths', sub: 'Timetable - moved to Room 5 at 16:00',
+    time: _ago(28 * MIN), sig: 't-lesson-updated:c3:room5' },
+  { id: 't-report-comment', userIds: ['u_sarah'], icon: 'file', tone: 'warning', page: 'reports',
+    title: 'Predicted grades need comments', sub: 'Reports - 5 students still missing notes',
+    time: _ago(1 * HOUR + 12), sig: 't-report-comment:5' },
+
+  // Student
+  { id: 's-feedback-ready', userIds: ['u_oliver'], icon: 'star', tone: 'success', page: 'homework',
+    title: 'Integration sheet feedback is ready', sub: 'Homework - Sarah Clarke left comments',
+    time: _ago(11 * MIN), sig: 's-feedback-ready:integration-sheet' },
+  { id: 's-resource-added', userIds: ['u_oliver'], icon: 'book', tone: 'info', page: 'homework',
+    title: 'New revision resource added', sub: 'A-Level Maths - integration practice pack',
+    time: _ago(44 * MIN), sig: 's-resource-added:integration-pack' },
+  { id: 's-report-published', userIds: ['u_oliver'], icon: 'file', tone: 'warning', page: 'reports',
+    title: 'Your June progress report was published', sub: 'Reports - parent copy also available',
+    time: _ago(3 * HOUR), sig: 's-report-published:june' },
+];
+
 const COMMS_CONFIG = {
   bm: {
     preset: 'standard',

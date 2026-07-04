@@ -12,7 +12,9 @@
 // ══════════════════════════════════════════════════════════════
 
 const REPORTS_KEY = 'reports_store_v2';
-const REPORTS_STUDENT_SELF = 's_oliver';   // logged-in student in the student app
+// §1: the logged-in student resolves from the one canonical principal (falls back
+// to the seed id if the SoT hasn't loaded).
+const REPORTS_STUDENT_SELF = (window.klayoStudent && window.klayoStudent.currentStudent.id) || 's_oliver';
 const REPORTS_TEACHER_SELF = 'Ms. Sarah Clarke';
 const REPORTS_TODAY = '2026-06-15';
 
@@ -364,8 +366,26 @@ function rptRatingText(scale, v) {
 // `sections` (optional): when provided, only those section keys render — this lets
 // a template drive the export, one source of truth with the live preview. When
 // omitted, every section renders (existing teacher/student/admin export behaviour).
-function reportPdfBody(r, branding, sections) {
+// Centre identity on a report/PDF is the ONE centre-profile record (§1) — never a
+// duplicate. Merge the live centreProfile (name / logo / brand accent / contact)
+// OVER the report-specific branding (header/footer/signature/theme/watermark),
+// which is the only part Reports owns. Editing the centre name in Settings →
+// Centre profile therefore changes every exported report at once.
+function reportBrandingResolved(branding) {
   branding = branding || REPORTS_CONFIG.branding;
+  const p = (window.centreMetrics && window.centreMetrics.getActiveCentre()) || {};
+  return {
+    ...branding,
+    centreName:   p.name         || branding.centreName,
+    logo:         p.logo         || branding.logo,
+    primaryColor: p.brandAccent  || branding.primaryColor || DS.accent,
+    contactEmail: p.contactEmail || branding.contactEmail,
+    contactPhone: p.contactPhone || branding.contactPhone,
+  };
+}
+
+function reportPdfBody(r, branding, sections) {
+  branding = reportBrandingResolved(branding);
   const acc = branding.primaryColor || '#4F46E5';
   const show = (key) => !sections || sections.includes(key);
   const ratingRows = Object.keys(r.ratings || {}).map(k =>
@@ -468,9 +488,14 @@ function reportPdfBody(r, branding, sections) {
 }
 
 function printReportPDF(reports, branding, opts) {
-  branding = branding || REPORTS_CONFIG.branding;
+  branding = reportBrandingResolved(branding);   // centre identity from centreProfile (§1)
   opts = opts || {};
   const list = Array.isArray(reports) ? reports : [reports];
+  // Exporting a child's report → append a local audit entry (maps to a real
+  // audit table with RLS later). AADC data-minimisation: only the report itself
+  // is rendered — no bulk roster or contact data.
+  if (window.klayoAudit) window.klayoAudit('export_report_pdf', 'reports',
+    { count: list.length, students: list.map(r => r && r.studentName).filter(Boolean) });
   const landscape = opts.layout === 'landscape';
   const watermark = branding.watermark
     ? `<div class="watermark">${rptEsc(branding.watermark)}</div>` : '';
@@ -743,7 +768,10 @@ const ReportEditor = ({ report, store, onBack, onSaved }) => {
 
   const saveDraft = () => { commit('draft'); };
   // Publishing = "submit for review" — blocked until the centre-standards floors are met.
+  // IDEMPOTENCY GUARD: a report that is already published/locked can't be
+  // re-submitted, so a double-click can't push a second "Published" history entry.
   const publish   = () => {
+    if (r.status === 'published' || r.status === 'archived') return;
     const blocking = unmetStandards(r, standards);
     if (blocking.length) { setGateMsg('Can’t submit yet — ' + blocking.join('; ') + '.'); return; }
     setGateMsg(''); commit('published');
@@ -797,7 +825,26 @@ const ReportEditor = ({ report, store, onBack, onSaved }) => {
                 <Field label="Subject"><Input value={r.subject} onChange={e => set({ subject: e.target.value })} /></Field>
                 <Field label="Teacher"><Input value={r.teacher} onChange={e => set({ teacher: e.target.value })} /></Field>
                 <Field label="Report period"><Input value={r.period} onChange={e => set({ period: e.target.value })} /></Field>
-                <Field label="Predicted grade"><Input value={r.predicted || ''} onChange={e => set({ predicted: e.target.value })} /></Field>
+                {/* Predicted grade is a CONSTRAINED picker off the canonical scale
+                    (F3) for this student's year/subject — never a free-text field.
+                    A legacy value outside the scale is preserved as an option. */}
+                <Field label="Predicted grade">
+                  {window.klayoGrades ? (() => {
+                    const grades = window.klayoGrades.gradesFor({ year: r.year, subject: r.subject });
+                    const opts = (r.predicted && !grades.includes(r.predicted)) ? [r.predicted, ...grades] : grades;
+                    const scale = window.klayoGrades.scaleFor({ year: r.year, subject: r.subject });
+                    return (
+                      <select value={r.predicted || ''} onChange={e => set({ predicted: e.target.value })}
+                        title={scale.label}
+                        style={{ width: '100%', padding: '9px 11px', border: `1px solid ${DS.border}`, borderRadius: 8, fontSize: 13, color: DS.text, background: DS.surface, fontFamily: 'inherit' }}>
+                        <option value="">Select grade… ({scale.label})</option>
+                        {opts.map(g => <option key={g} value={g}>{g}</option>)}
+                      </select>
+                    );
+                  })() : (
+                    <Input value={r.predicted || ''} onChange={e => set({ predicted: e.target.value })} />
+                  )}
+                </Field>
               </div>
             </div>
           </Card>
@@ -1002,7 +1049,7 @@ const TeacherReports = () => {
   const [sort, setSort] = React.useState('newest');
   const [layout, setLayout] = React.useState('table');
   const [page, setPage] = React.useState(1);
-  const PER_PAGE = 8;
+  const PER_PAGE = 10;   // matches the shared Table page size (§8)
   const [sel, setSel] = React.useState([]);
   const [showNew, setShowNew] = React.useState(false);
   const [moveOpen, setMoveOpen] = React.useState(false);
@@ -1297,7 +1344,7 @@ const StudentReports = () => {
   const [teacherF, setTeacherF] = React.useState('all');
   const [sort, setSort] = React.useState('newest');
   const [page, setPage] = React.useState(1);
-  const PER_PAGE = 8;
+  const PER_PAGE = 10;   // matches the shared Table page size (§8)
 
   // only this student's published (or archived) reports
   const mine = store.reportsArr.filter(r => r.studentId === REPORTS_STUDENT_SELF && r.status === 'published');
@@ -1959,7 +2006,7 @@ function blankTemplate() {
 
 // Illustrative sample data so the preview shows a realistic, populated report.
 const RPT_SAMPLE = {
-  centreName: 'Brighton Academy of Excellence', logo: 'BA',
+  centreName: '', logo: '',   // identity comes from centreProfile (§1); blank fallback
   studentName: 'Oliver Chen', className: 'Mathematics — Year 12 (Set A)', subject: 'Mathematics',
   teacher: 'Ms. Sarah Clarke', year: 'Year 12', predicted: 'A*', period: 'Summer Term 2026',
   understanding: 0.9, participation: 0.78, homeworkCompletion: '94%', testPerformance: '88%',
@@ -1989,7 +2036,7 @@ const AdminTemplateBuilder = ({ template, store, onClose, onSaved }) => {
   const years = Array.from(new Set(students.map(s => s.year))).sort();
   const subjects = Array.from(new Set(store.reportsArr.map(r => r.subject))).filter(Boolean).sort();
   const classes = Array.from(new Set(store.reportsArr.map(r => r.className))).filter(Boolean).sort();
-  const branding = store.store.config.branding;
+  const branding = reportBrandingResolved(store.store.config.branding);   // centre identity from centreProfile (§1)
   const acc = branding.primaryColor || DS.accent;
 
   const has = (s) => (t.sections || []).includes(s);
@@ -2280,7 +2327,7 @@ const AdminReportsBrowser = ({ store }) => {
     return sort === 'oldest' ? da.localeCompare(db) : db.localeCompare(da);
   });
 
-  const branding = store.store.config.branding;
+  const branding = reportBrandingResolved(store.store.config.branding);   // centre identity from centreProfile (§1)
   const resetFilters = () => { setTeacher('all'); setSubject('all'); setYear('all'); setKlass('all'); setStatus('all'); setSearch(''); };
   const activeFilters = [teacher, subject, year, klass, status].filter(v => v !== 'all').length + (search.trim() ? 1 : 0);
 
@@ -2374,7 +2421,12 @@ const AdminReportsSettings = ({ store, onEditTemplate, savedToast }) => {
     setStd({ sectionsRequiredEverywhere: cur.includes(sec) ? cur.filter(s => s !== sec) : [...cur, sec] });
   };
 
-  const b = c.branding;
+  // Centre identity (name / logo / accent / contact) comes from the ONE
+  // centre-profile record (§1); only the report-specific fields below are
+  // editable here. `b` resolves the identity fields for the live preview +
+  // read-only display, while writes (updNested) still target the report config.
+  const b = reportBrandingResolved(c.branding);
+  const goCentreProfile = () => window.__navigate && window.__navigate('admin', 'settings');
   const permLabels = {
     editPublished: ['Edit published reports', 'Edit is greyed out on a published report; teachers must duplicate to revise.'],
     deleteReports: ['Delete reports', 'The Delete action is hidden in the report toolbar.'],
@@ -2470,15 +2522,20 @@ const AdminReportsSettings = ({ store, onEditTemplate, savedToast }) => {
               <div style={{ padding: '8px 18px 12px', fontSize: 9.5, color: '#9ca3af', textAlign: 'center' }}>{b.footerText || 'Footer text'}</div>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-              <Field label="Centre name"><Input value={b.centreName} onChange={e => updNested('branding', { centreName: e.target.value })} /></Field>
-              <Field label="Logo initials"><Input value={b.logo} onChange={e => updNested('branding', { logo: e.target.value })} /></Field>
-              <Field label="Primary colour">
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <input type="color" value={b.primaryColor} onChange={e => updNested('branding', { primaryColor: e.target.value })} style={{ width: 44, height: 34, border: `1px solid ${DS.border}`, borderRadius: 8, cursor: 'pointer', background: 'none' }} />
-                  <Input value={b.primaryColor} onChange={e => updNested('branding', { primaryColor: e.target.value })} style={{ flex: 1 }} />
+            {/* Centre identity is the single centre-profile record (§1) — shown
+                here read-only, edited only in Settings → Centre profile. */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', marginBottom: 14, border: `1px solid ${DS.border}`, borderRadius: 10, background: DS.surface }}>
+              <div style={{ width: 40, height: 40, borderRadius: 9, background: b.primaryColor, color: '#fff', fontWeight: 800, fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{b.logo}</div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 700, color: DS.text }}>{b.centreName}</div>
+                <div style={{ fontSize: 11.5, color: DS.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {[b.contactEmail, b.contactPhone].filter(Boolean).join(' · ') || 'Name, logo, accent & contact come from Centre profile'}
                 </div>
-              </Field>
+              </div>
+              <Btn variant="ghost" small icon="chevron_r" onClick={goCentreProfile}>Centre profile</Btn>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
               <Field label="PDF theme">
                 <Select value={b.pdfTheme} onChange={e => updNested('branding', { pdfTheme: e.target.value })}>
                   <option value="classic">Classic</option><option value="modern">Modern</option><option value="minimal">Minimal</option>
@@ -2489,8 +2546,6 @@ const AdminReportsSettings = ({ store, onEditTemplate, savedToast }) => {
               <Field label="Footer text" style={{ gridColumn: '1 / -1' }}><Input value={b.footerText} onChange={e => updNested('branding', { footerText: e.target.value })} /></Field>
               <Field label="Signature name"><Input value={b.signatureName} onChange={e => updNested('branding', { signatureName: e.target.value })} /></Field>
               <Field label="Signature title"><Input value={b.signatureTitle} onChange={e => updNested('branding', { signatureTitle: e.target.value })} /></Field>
-              <Field label="Contact email"><Input value={b.contactEmail} onChange={e => updNested('branding', { contactEmail: e.target.value })} /></Field>
-              <Field label="Contact phone"><Input value={b.contactPhone} onChange={e => updNested('branding', { contactPhone: e.target.value })} /></Field>
               <div style={{ gridColumn: '1 / -1' }}>
                 <Btn variant="secondary" icon="eye" small onClick={() => { const any = store.reportsArr.find(r => r.status === 'published') || store.reportsArr[0]; if (any) printReportPDF(any, b); }}>Preview branded PDF</Btn>
               </div>
@@ -2654,17 +2709,19 @@ function buildAdminReport(type, store, f) {
     title: 'Student Progress Report',
     summary: [
       ['Average score', avg(students, 'score') + '%'],
-      ['On track', String(students.filter(s => s.status !== 'at-risk').length)],
-      ['Needs support', String(students.filter(s => s.status === 'at-risk').length)],
+      // ONE at-risk definition (§6) — centreMetrics.isAtRisk, same as the Dashboard
+      // + Students page. Term unified to "At risk" / "On track" (§8 lexicon).
+      ['On track', String(students.filter(s => !window.centreMetrics.isAtRisk(s)).length)],
+      ['At risk', String(students.filter(s => window.centreMetrics.isAtRisk(s)).length)],
       ['Students', String(students.length)],
     ],
     columns: ['Student', 'Year', 'Avg score', 'Attendance', 'Status'],
-    rows: students.map(s => [s.name, s.year, s.score + '%', s.attendance + '%', s.status === 'at-risk' ? 'Needs support' : 'On track']),
+    rows: students.map(s => [s.name, s.year, s.score + '%', s.attendance + '%', window.centreMetrics.isAtRisk(s) ? 'At risk' : 'On track']),
   };
 }
 
 function printCentreReport(report, branding, period) {
-  branding = branding || REPORTS_CONFIG.branding;
+  branding = reportBrandingResolved(branding);   // centre identity from centreProfile (§1)
   const acc = branding.primaryColor || '#4F46E5';
   const head = report.columns.map(c => `<th>${rptEsc(c)}</th>`).join('');
   const body = report.rows.map(r => '<tr>' + r.map((c, i) => `<td${i === 0 ? ' class="b"' : ''}>${rptEsc(c)}</td>`).join('') + '</tr>').join('');
@@ -2710,7 +2767,7 @@ const AdminReportsOverview = ({ store, onGenerate, onBrowse, onViewDue }) => {
   const students = adminStudentsData();
   const reports = store.reportsArr;
   const f = financialTotals();
-  const atRisk = students.filter(s => s.status === 'at-risk');
+  const atRisk = students.filter(s => window.centreMetrics.isAtRisk(s));   // one definition (§6)
   const pub = reports.filter(r => r.status === 'published');
   const drafts = reports.filter(r => r.status === 'draft');
 
@@ -2794,7 +2851,7 @@ const AdminReportsGenerate = ({ store, initialType }) => {
   const [teacher, setTeacher] = React.useState('all');
   const [status, setStatus] = React.useState('all');
   const [period, setPeriod] = React.useState('Spring Term 2026');
-  const branding = store.store.config.branding;
+  const branding = reportBrandingResolved(store.store.config.branding);   // centre identity from centreProfile (§1)
   const students = adminStudentsData();
   const years = ['all', ...Array.from(new Set(students.map(s => s.year))).sort()];
   const uniq = (key) => Array.from(new Set(store.reportsArr.map(r => r[key]).filter(Boolean))).sort();

@@ -24,6 +24,11 @@ const studentHomework = [
   { id:7, title: 'Organic: Alkanes & Alkenes',        subject:'Chemistry',     teacher:'Dr. Owens',  due:'Fri 2 May',         status:'pending',   urgent:false, desc:'Complete the reaction mechanisms worksheet, Q1–10.' },
   { id:8, title: 'Stoichiometry: Mole Calculations',  subject:'Chemistry',     teacher:'Dr. Owens',  due:'18 Apr',            status:'marked',    urgent:false, score:84, feedback:'Solid working. Q6 — remember to convert grams to moles before using the ratio.' },
   { id:9, title: 'Differential Equations: Modelling', subject:'Further Maths', teacher:'Ms. Clarke', due:'14 Apr',            status:'marked',    urgent:false, score:90, feedback:'Excellent setup of the model. Take care with the constant of integration in Q5.' },
+  // ── Reconciled with the new homework-store assignments (Homework.jsx seed) so
+  //    the dashboard homework tiles match the full Homework page. ──
+  { id:10, title: 'Calculus: Differentiation Basics',    subject:'Mathematics',   teacher:'Ms. Clarke', due:'Tomorrow, 11:59 PM', status:'pending', urgent:false, desc:'Differentiate each expression fully and simplify — Q1–5.' },
+  { id:11, title: 'Integration: Definite & Indefinite',  subject:'Mathematics',   teacher:'Ms. Clarke', due:'Fri 9 May',          status:'pending', urgent:false, desc:'Remember the constant of integration on indefinite integrals.' },
+  { id:12, title: 'Further Maths: Vectors',              subject:'Further Maths', teacher:'Ms. Clarke', due:'2 May',              status:'marked',  urgent:false, score:88, feedback:'Excellent vector algebra — just tighten the converse in the perpendicularity proof.' },
 ];
 
 const studentSessions = [

@@ -32,10 +32,24 @@ const teacherClasses = [
     studentList: ['Mia Okonkwo','Aiden Foster','Emma Thompson','Sophia Patel','James Wilson','Amelia Roberts','Noah Fitzgerald','Ethan Huang','Isabella Martinez'],
   },
   {
-    id: 5, name: 'A-Level Mathematics', group: 'Year 13 – Group A', day: 'Thu', time: '16:30', room: 'Room 5',
-    students: 4, nextSession: 'Thu 24 Apr, 16:30', color: '#7C3AED',
+    id: 5, name: 'A-Level Mathematics', group: 'Year 13 – Group A', day: 'Wed', time: '13:00', room: 'Room 5',
+    students: 5, nextSession: 'Wed 30 Apr, 13:00', color: '#7C3AED',
     hwPending: 1, avgScore: 85, attendance: 95,
-    studentList: ['Thomas Hughes','Isabella Martinez','Oliver Chen','Freya Lindqvist'],
+    studentList: ['Thomas Hughes','Isabella Martinez','Freya Lindqvist','Toby Grant','Ben Carter'],
+  },
+  // ── New Sarah Clarke groups added in round 2 (match the admin-store classes
+  //    c34/c36 by group name so My Classes extras + the register roster resolve). ──
+  {
+    id: 6, name: 'GCSE Mathematics', group: 'Year 10 – Group C', day: 'Mon', time: '09:00', room: 'Room 3',
+    students: 7, nextSession: 'Mon 28 Apr, 09:00', color: DS.accent,
+    hwPending: 1, avgScore: 78, attendance: 93,
+    studentList: ['Ryan Mitchell','Grace Adeyemi','Harry Brooks','Sofia Ricci','Marcus Lowe','Dylan Foster','Chloe Bennett'],
+  },
+  {
+    id: 7, name: 'GCSE Mathematics', group: 'Year 11 – Group C', day: 'Tue', time: '11:00', room: 'Room 3',
+    students: 6, nextSession: 'Tue 29 Apr, 11:00', color: DS.accent,
+    hwPending: 2, avgScore: 70, attendance: 86,
+    studentList: ['Oscar Whitfield','Yasmin Karimi','Maya Choudhury','Aaron Blake','Kira Novak','Hana Yilmaz'],
   },
 ];
 
@@ -57,7 +71,9 @@ const teacherAllClasses = [
   { group:'Year 11 – Group B', subject:'GCSE Mathematics', students:['Amelia Roberts','Noah Fitzgerald','Ethan Huang','Isabella Martinez','James Wilson','Sophia Patel','Emma Thompson'] },
   { group:'Year 12 – Group A', subject:'A-Level Mathematics', students:['Oliver Chen','Isabella Martinez','Ethan Huang','Mia Okonkwo','Aiden Foster'] },
   { group:'Year 9 – Group C',  subject:'GCSE Mathematics', students:['Mia Okonkwo','Aiden Foster','Emma Thompson','Sophia Patel','James Wilson','Amelia Roberts','Noah Fitzgerald','Ethan Huang','Isabella Martinez'] },
-  { group:'Year 13 – Group A', subject:'A-Level Mathematics', students:['Thomas Hughes','Isabella Martinez','Oliver Chen','Freya Lindqvist'] },
+  { group:'Year 13 – Group A', subject:'A-Level Mathematics', students:['Thomas Hughes','Isabella Martinez','Freya Lindqvist','Toby Grant','Ben Carter'] },
+  { group:'Year 10 – Group C', subject:'GCSE Mathematics',    students:['Ryan Mitchell','Grace Adeyemi','Harry Brooks','Sofia Ricci','Marcus Lowe','Dylan Foster','Chloe Bennett'] },
+  { group:'Year 11 – Group C', subject:'GCSE Mathematics',    students:['Oscar Whitfield','Yasmin Karimi','Maya Choudhury','Aaron Blake','Kira Novak','Hana Yilmaz'] },
 ];
 
 const DEFAULT_TRACKERS = [
@@ -195,3 +211,8 @@ const DEFAULT_TRACKERS = [
     entries: {},
   },
 ];
+
+// Expose on window so the teacher-metrics selector layer (teacherMetrics.jsx) can
+// read them (Babel-standalone top-level consts are lexical globals, NOT window
+// properties — same pattern as SEED_* in adminPages.mock). Additive.
+Object.assign(window, { teacherClasses, homeworkFull, teacherAllClasses, DEFAULT_TRACKERS });

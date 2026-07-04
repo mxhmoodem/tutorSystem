@@ -33,6 +33,11 @@ const studentProgress = [
   { name: 'Daniel Owusu',     scores: [74, 70, 66, 63, 61], predicted: 'C',  trend: 'down' },
   { name: 'Freya Lindqvist',  scores: [90, 86, 84, 80, 76], predicted: 'B',  trend: 'down' },
   { name: 'Aisha Rahman',     scores: [68, 72, 75, 79, 82], predicted: 'B',  trend: 'up'   },
+  { name: 'Ryan Mitchell',    scores: [66, 70, 72, 73, 74], predicted: 'C',  trend: 'up'   },
+  { name: 'Grace Adeyemi',    scores: [78, 80, 81, 82, 83], predicted: 'B',  trend: 'up'   },
+  { name: 'Toby Grant',       scores: [83, 82, 80, 81, 81], predicted: 'B',  trend: 'flat' },
+  { name: 'Ananya Iyer',      scores: [86, 88, 89, 90, 90], predicted: 'A*', trend: 'up'   },
+  { name: 'Oscar Whitfield',  scores: [64, 61, 60, 58, 59], predicted: 'D',  trend: 'down' },
 ];
 
 const attendanceClass = {
@@ -48,3 +53,7 @@ const attendanceClass = {
     { name: 'Ethan Huang',    status: null },
   ],
 };
+
+// Expose on window for the teacher-metrics selector layer (teacherMetrics.jsx) —
+// Babel-standalone top-level consts are lexical globals, not window properties.
+Object.assign(window, { todaySchedule, homeworkItems, studentProgress, attendanceClass });

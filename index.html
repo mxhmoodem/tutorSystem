@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TutorOS — Tuition Centre Management</title>
+  <title>Klayo — Tuition Centre Management</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -58,6 +58,10 @@
 <script type="text/babel" src="mocks/settings.mock.jsx"></script>
 <script type="text/babel" src="mocks/communications.mock.jsx"></script>
 <script type="text/babel" src="mocks/onboarding.mock.jsx"></script>
+<!-- Canonical centre-profile record (one identity per centre) — consumed by
+     centreMetrics.getCentreProfile; loads after onboarding.mock so it sits with
+     the tenancy seeds. -->
+<script type="text/babel" src="mocks/centreProfile.mock.jsx"></script>
 <script type="text/babel" src="mocks/plans.mock.jsx"></script>
 <script type="text/babel" src="mocks/timesheets.mock.jsx"></script>
 <script type="text/babel" src="mocks/storage.mock.jsx"></script>
@@ -66,6 +70,25 @@
      Loads after the mocks (needs ONB_* globals) and before the page modules that
      route role/permission checks through it. -->
 <script type="text/babel" src="permissions.jsx"></script>
+
+<!-- Centre-metrics selector layer (window.centreMetrics) — the single source of
+     truth for every centre rollup (headcount, enrolments, at-risk, seats,
+     attendance, capacity) + getCentreProfile. Loads after the mocks + permissions;
+     reads every store lazily so files loaded later (Plans/Storage/Invoices) are
+     available by render time. -->
+<script type="text/babel" src="centreMetrics.jsx"></script>
+
+<!-- Teacher-tier single sources of truth (F2/F3): the grade model + the teacher
+     metrics selector layer. Load after the mocks/centreMetrics (they read those
+     stores lazily) and before every teacher screen. -->
+<script type="text/babel" src="teacherGrades.jsx"></script>
+<script type="text/babel" src="teacherMetrics.jsx"></script>
+
+<!-- Student-tier single sources of truth (§1–§7): canonical principal, enrolments,
+     grade model, rollup metrics, teacher resolution + active term. Loads after the
+     mocks + klayoGrades (reads them) and before every student screen (StudentDashboard,
+     Reports, Settings) which resolve identity/subjects/grades/numbers through it. -->
+<script type="text/babel" src="studentData.jsx"></script>
 
 <!-- Reports module (consumes reports.mock; consumed by Teacher/Student/Admin pages) -->
 <script type="text/babel" src="Reports.jsx"></script>
@@ -154,7 +177,11 @@ const buildCrumbs = (role, page) => {
   }
   if (!item) item = all.find(i => page.startsWith(i.id));
   if (!item) return [{ label: parentId.charAt(0).toUpperCase() + parentId.slice(1) }];
-  const crumbs = [{ label: item.label }];
+  // Lead with the item's nav section (e.g. "People", "Academic") so the trail
+  // reads section → page → sub-section (e.g. "Operations › Reports › Overview").
+  const crumbs = [];
+  if (item.section) crumbs.push({ label: item.section });
+  crumbs.push({ label: item.label });
   if (!sub && section && Array.isArray(item.sub)) sub = item.sub.find(s => s.id === `${parentId}:${section}`);
   if (sub) crumbs.push({ label: sub.label });
   return crumbs;
@@ -185,7 +212,72 @@ const readTermIndicator = () => {
   return { name: 'No term set', start: '', end: '', status: 'none' };
 };
 
-const TopBar = ({ view, page, comms, onNavigate, collapsed, onToggleSidebar }) => {
+// Account chip in the header's top-right cluster (moved out of the sidebar).
+// Avatar + name + role that opens a small menu (Settings, Log out). Click-away
+// close mirrors the CentreSwitcher / NotificationBell pattern.
+const HeaderUserMenu = ({ role, name, roleLabel, color, onNavigate }) => {
+  const [open, setOpen] = React.useState(false);
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey); };
+  }, [open]);
+  const menuItem = (icon, label, onClick, danger) => (
+    <button onClick={() => { setOpen(false); onClick && onClick(); }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = danger ? DS.dangerBg : DS.surface; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left',
+        padding: '8px 10px', border: 'none', background: 'transparent', borderRadius: 7,
+        fontSize: 13, color: danger ? DS.danger : DS.sub, cursor: 'pointer',
+      }}>
+      <Icon name={icon} size={15} color={danger ? DS.danger : DS.muted} />{label}
+    </button>
+  );
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <button onClick={() => setOpen(o => !o)} title={name}
+        onMouseEnter={(e) => { if (!open) e.currentTarget.style.background = DS.surface; }}
+        onMouseLeave={(e) => { if (!open) e.currentTarget.style.background = 'transparent'; }}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
+          background: open ? DS.surface : 'transparent', border: 'none',
+          borderRadius: 9, padding: '3px 6px 3px 3px', transition: 'background 0.12s',
+        }}>
+        <Avatar name={name} size={28} color={color} />
+        <div style={{ minWidth: 0, textAlign: 'left', lineHeight: 1.15 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 600, color: DS.text, whiteSpace: 'nowrap' }}>{name}</div>
+          <div style={{ fontSize: 10.5, color: DS.faint, whiteSpace: 'nowrap' }}>{roleLabel}</div>
+        </div>
+        <Icon name="chevron_d" size={14} color={DS.faint} />
+      </button>
+
+      {open && (
+        <div style={{
+          position: 'absolute', right: 0, top: '100%', marginTop: 8, width: 216, zIndex: 60,
+          background: DS.bg, border: `1px solid ${DS.border}`, borderRadius: 12,
+          boxShadow: DS.cardShadowHi, padding: 6,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 8px 10px', borderBottom: `1px solid ${DS.border}`, marginBottom: 4 }}>
+            <Avatar name={name} size={34} color={color} />
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</div>
+              <div style={{ fontSize: 11.5, color: DS.muted }}>{roleLabel}</div>
+            </div>
+          </div>
+          {menuItem('settings', 'Settings', () => onNavigate(role, 'settings'))}
+          {menuItem('logout', 'Log out', () => window.__navigate && window.__navigate('landing'), true)}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const TopBar = ({ view, page, comms, onNavigate, collapsed, onToggleSidebar, identityName, accountOwner }) => {
   const crumbs = buildCrumbs(view, page);
   const term = readTermIndicator();
   const termRange = term.start && term.end
@@ -237,23 +329,96 @@ const TopBar = ({ view, page, comms, onNavigate, collapsed, onToggleSidebar }) =
         ))}
       </nav>
 
+      {/* Active-centre chip (§1/§8) — the centre every centre-scoped screen is
+          bound to, read from the single centreProfile record. The app accent
+          follows this centre (window.__setAccent on switch), so switching is
+          visibly obvious. Staff views only. */}
+      {(view === 'admin' || view === 'teacher') && window.centreMetrics && (() => {
+        const c = window.centreMetrics.getActiveCentre();
+        return (
+          <div title={`Active centre — ${c.name}`} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '3px 11px 3px 4px', border: `1px solid ${DS.border}`, borderRadius: 999, marginRight: 4 }}>
+            <div style={{ width: 20, height: 20, borderRadius: 6, background: DS.accent, color: '#fff', fontSize: 9.5, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center', letterSpacing: '-0.3px' }}>{(c.logo || c.name || 'C').slice(0, 2).toUpperCase()}</div>
+            <span style={{ fontSize: 12, fontWeight: 600, color: DS.sub, whiteSpace: 'nowrap', maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.name}</span>
+          </div>
+        );
+      })()}
+
       {/* Term indicator — the term running today (auto-resolved from the centre's
           term schedule); status colours the dot, date range shows on hover. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }} title={periodTitle}>
         <div style={{ width: 6, height: 6, borderRadius: '50%', background: termDot }} />
         <span style={{ fontSize: 12, color: '#6B7280' }}>{term.name}</span>
       </div>
-      {/* Live notification bell — aggregates unread announcements + messages */}
-      {comms && window.NotificationBell
-        ? <NotificationBell comms={comms} onNavigate={onNavigate} />
-        : (
-          <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6B7280', padding: '4px', display: 'flex' }}>
-            <Icon name="bell" size={16} />
-          </button>
-        )}
+
+      {/* Right-hand action cluster: Settings · Notifications · Account. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 4 }}>
+        {/* Settings — relocated from the sidebar; sits beside notifications. */}
+        <button onClick={() => onNavigate(view, 'settings')} title="Settings"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6B7280', padding: 5, borderRadius: 7, display: 'flex' }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = DS.surface; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = 'none'; }}>
+          <Icon name="settings" size={17} />
+        </button>
+
+        {/* Live notification bell — aggregates unread announcements + messages */}
+        {comms && window.NotificationBell
+          ? <NotificationBell comms={comms} onNavigate={onNavigate} />
+          : (
+            <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6B7280', padding: '4px', display: 'flex' }}>
+              <Icon name="bell" size={16} />
+            </button>
+          )}
+
+        <div style={{ width: 1, height: 22, background: DS.border, margin: '0 4px' }} />
+
+        {/* Account chip + menu (moved out of the sidebar's bottom dock). */}
+        {(() => {
+          const cfg = window.NAV_CONFIG[view] || {};
+          const userName = identityName || (view === 'superadmin' ? 'Marcus Hale' : view === 'admin' ? 'Lisa Chen' : view === 'teacher' ? 'Sarah Clarke' : 'Oliver Chen');
+          // The account owner's real capability is "Account Owner", not "Centre
+          // Admin" (§3); a plain centre admin keeps the centre-admin label.
+          const roleLabel = (view === 'admin' && accountOwner) ? 'Account Owner' : cfg.label;
+          return <HeaderUserMenu role={view} name={userName} roleLabel={roleLabel} color={cfg.color} onNavigate={onNavigate} />;
+        })()}
+      </div>
     </div>
   );
 };
+
+// ── ACCOUNT-tier page wrappers (§3) ──────────────────────────────────────────
+// Plans & Billing and Storage are account-wide concerns, moved out of Settings
+// into their own owner-only routes. They REUSE the existing components
+// (window.BillingTab / window.StorageAdminPanel) inside a padded page shell —
+// nothing is forked.
+const AccountPageShell = ({ title, subtitle, children }) => (
+  <div style={{ padding: 32 }}>
+    <div style={{ maxWidth: 1240, margin: '0 auto' }}>
+      {/* Account-tier band so the owner always knows an action here is account-wide,
+          not scoped to one centre (§8). */}
+      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 10, padding: '3px 10px', borderRadius: 999, background: DS.accentLight, color: DS.accent, fontSize: 11, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+        <Icon name="grid" size={12} /> Account-wide
+      </div>
+      <PageHeader title={title} subtitle={subtitle} />
+      {children}
+    </div>
+  </div>
+);
+const AccountLocked = () => (
+  <AccountPageShell title="Account area" subtitle="This section is managed by the account owner.">
+    <EmptyState icon="lock" title="Owner-only area"
+      message="Centres, plans, billing and storage are managed by the account owner. Ask your account owner if you need a change here." />
+  </AccountPageShell>
+);
+const AccountBillingPage = () => (
+  <AccountPageShell title="Plans & Billing" subtitle="Your subscription, pooled seats & storage, and billing details — account-wide.">
+    {window.BillingTab ? <window.BillingTab /> : null}
+  </AccountPageShell>
+);
+const AccountStoragePage = () => (
+  <AccountPageShell title="Storage" subtitle="Pooled cloud storage across every centre in your account.">
+    {window.StorageAdminPanel ? <window.StorageAdminPanel /> : null}
+  </AccountPageShell>
+);
 
 const App = () => {
   const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
@@ -307,6 +472,14 @@ const App = () => {
   // Subscribe so the sidebar storage meter re-derives live when files are deleted
   // or an add-on block / plan changes (usage is computed, never stored).
   const stg = window.useStorageStore ? window.useStorageStore() : null;
+
+  // Account ownership (§3) — drives the ACCOUNT-tier nav + the topbar role label.
+  // Derived, never stored on a person (permissions.isAccountOwner over the
+  // subscription's ownerUserId). Only the owner sees Centres / Plans / Storage.
+  const accountOwner = React.useMemo(() =>
+    (view === 'admin' && window.isAccountOwner && window.ONB_SESSION)
+      ? window.isAccountOwner(window.ONB_SESSION, sub) : false,
+    [view, sub && sub.ownerUserId]);
   const centreNav = React.useMemo(() => {
     if (!sub || (view !== 'admin' && view !== 'teacher') || !window.ONB_SESSION) return null;
     // The Centres page (subscription store) is the single source of truth for the
@@ -368,6 +541,10 @@ const App = () => {
         window.__centresIntent = { setup: (window.__getCentre ? window.__getCentre() : null) };
         setView('admin'); setPage('centres');
       }
+      // Plans & Billing and Storage moved out of Settings into their own ACCOUNT-tier
+      // routes (§3); rewrite the old settings deep links so existing CTAs still land.
+      else if (role === 'admin' && pg === 'settings:billing') { setView('admin'); setPage('plans'); }
+      else if (role === 'admin' && pg === 'settings:storage') { setView('admin'); setPage('storage'); }
       else { setView(role); setPage(normalizePage(role, pg)); }
     };
     // Open the public account-claim page for a mock invite token / claim code.
@@ -398,7 +575,11 @@ const App = () => {
     }
     if (view === 'admin') {
       if (parent === 'dashboard') return <AdminDashboard />;
-      if (parent === 'centres')   return <CentresPage />;
+      // ── ACCOUNT tier (§3) — owner-only. Nav hides these for non-owners; this is
+      //    the defence-in-depth route guard for a direct navigation / deep link.
+      if (parent === 'centres')   return accountOwner ? <CentresPage />       : <AccountLocked />;
+      if (parent === 'plans')     return accountOwner ? <AccountBillingPage /> : <AccountLocked />;
+      if (parent === 'storage')   return accountOwner ? <AccountStoragePage /> : <AccountLocked />;
       if (parent === 'reports')   return <AdminReportsConfig section={section} />;
       // Onboarding flows (Onboarding.jsx) — full-page admin routes reached via adminNav.
       // (The "Set up centre" checklist is now the Centres page's right-hand drawer;
@@ -451,6 +632,7 @@ const App = () => {
             onNav={handleNav}
             onRoleSwitch={(role) => { setView(role); setPage('dashboard'); }}
             badges={comms ? { comms: comms.unread.total } : null}
+            accountOwner={accountOwner}
             collapsed={sidebarCollapsed}
             centre={centreNav ? centreNav.centre : null}
             centres={centreNav ? centreNav.centres : null}
@@ -464,7 +646,9 @@ const App = () => {
               const quota = window.stgQuotaForAccount({ accountId: acctId, planId: sub.planId });
               return { usedGb: +(used / GB).toFixed(1), totalGb: Math.round(quota / GB) };
             })() : null}
-            identityName={centreNav ? window.ONB_SESSION.name : null}
+            identityName={view === 'teacher'
+              ? (window.teacherMetrics ? window.teacherMetrics.getPrincipal().name : 'Sarah Clarke')
+              : (centreNav ? window.ONB_SESSION.name : null)}
             onSwitchCentre={(id) => {
               window.__setCentre && window.__setCentre(id);
               // Follow the centre's branding accent (null → platform default).
@@ -474,11 +658,19 @@ const App = () => {
             onAddCentre={() => { window.__centresIntent = { add: true }; window.__navigate('admin', 'centres'); }}
           />
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: DS.canvas }}>
+            {/* Persistent banner while a platform owner previews a tenant view
+                (Superadmin impersonation). Visible across every view, with an
+                Exit that writes the exit audit entry. */}
+            {window.SAImpersonationBanner && <window.SAImpersonationBanner />}
             {/* The header is sticky *inside* the scroll area so page content
                 scrolls beneath it — that's what makes the glass blur visible. */}
             <div style={{ flex: 1, overflow: 'auto', position: 'relative' }}>
               <TopBar view={view} page={page}
                 comms={comms} onNavigate={(role, pg) => window.__navigate(role, pg)}
+                identityName={view === 'teacher'
+              ? (window.teacherMetrics ? window.teacherMetrics.getPrincipal().name : 'Sarah Clarke')
+              : (centreNav ? window.ONB_SESSION.name : null)}
+                accountOwner={accountOwner}
                 collapsed={sidebarCollapsed} onToggleSidebar={() => setSidebarCollapsed(c => !c)} />
               {renderContent()}
             </div>
@@ -515,6 +707,8 @@ const App = () => {
             ['superadmin',  'settings',     'SuperAdmin — Settings'],
             ['admin',    'dashboard',  'Admin — Dashboard'],
             ['admin',    'centres',    'Admin — Centres'],
+            ['admin',    'plans',      'Admin — Plans & Billing'],
+            ['admin',    'storage',    'Admin — Storage'],
             ['admin',    'setup',      'Admin — Set up centre'],
             ['admin',    'people',     'Admin — People & invites'],
             ['admin',    'invite_teachers',    'Admin — Invite teachers'],

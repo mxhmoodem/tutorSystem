@@ -3,7 +3,7 @@
 // ══════════════════════════════════════════════════════════════
 //
 //  Extends the existing admin flows additively. Accounts live in the shared
-//  admin store (admin_store_v3, see AdminPages.jsx) as a nested optional
+//  admin store (admin_store_v4, see AdminPages.jsx) as a nested optional
 //  `account` object on teacher/student records — never a renamed/removed field.
 //  A tiny per-centre onboarding store (tutoros.onboarding.v2::<centreId>) holds
 //  the plan/seat caps, the auto-saved CSV import draft, the setup-checklist
@@ -370,7 +370,7 @@ const CopyField = ({ label, value, mono }) => {
   );
 };
 
-const SeatMeter = ({ label, used, total, icon, accent = DS.accent }) => {
+const SeatMeter = ({ label, used, total, icon, accent = DS.accent, hint }) => {
   const pct = total ? Math.min(100, Math.round((used / total) * 100)) : 0;
   const remaining = Math.max(0, total - used);
   const near = pct >= 90;
@@ -387,13 +387,26 @@ const SeatMeter = ({ label, used, total, icon, accent = DS.accent }) => {
         <div style={{ width: pct + '%', height: '100%', background: near ? DS.danger : accent, transition: 'width 0.3s' }} />
       </div>
       <div style={{ fontSize: 11.5, color: near ? DS.danger : DS.muted }}>{remaining} seat{remaining === 1 ? '' : 's'} remaining</div>
+      {hint && <div style={{ fontSize: 10.5, color: DS.faint, marginTop: 2 }}>{hint}</div>}
     </div>
   );
 };
 
+// Pooled seat entitlement (§5). Seats are an ACCOUNT-level pool (like storage),
+// summed across every centre in the account and read from the plan catalogue —
+// NOT a per-centre allowance. The single source is centreMetrics.getSeatUsage;
+// this wrapper adds a plan-literal fallback for load-order safety. Returns
+// { students: { used, cap }, teachers: { used, cap } }.
+const pooledSeats = (onb) => {
+  const su = window.centreMetrics && window.centreMetrics.getSeatUsage();
+  if (su) return su;
+  const p = (onb && onb.plan) || {};
+  return { students: { used: 0, cap: p.studentSeats || 0 }, teachers: { used: 0, cap: p.teacherSeats || 0 } };
+};
+
 const AccountStatusBadge = ({ status }) => {
   const m = ACCT_META[status] || ACCT_META.pending;
-  return <Badge variant={m.variant}>{m.label}</Badge>;
+  return <StatusPill tone={m.variant}>{m.label}</StatusPill>;
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -538,8 +551,10 @@ const InviteTeachersPage = () => {
   const [touched, setTouched] = React.useState(false);
   const [sent, setSent] = React.useState(null); // [{ name, email, link, token, existing }]
 
-  const teacherSeats = onb.plan.teacherSeats;
-  const used = store.teachers.length;
+  // Pooled teacher seats — account-level, summed across all centres (§5).
+  const seat = pooledSeats(onb).teachers;
+  const teacherSeats = seat.cap;
+  const used = seat.used;
   const remaining = Math.max(0, teacherSeats - used);
 
   const existingEmail = email => {
@@ -628,7 +643,7 @@ const InviteTeachersPage = () => {
       <FlowHeader title="Invite teachers" subtitle="Each teacher gets a link to set up their own account." onBack={() => adminNav('setup')} />
 
       <div style={{ display: 'flex', gap: 16, marginBottom: 22 }}>
-        <SeatMeter label="Teacher seats" used={used} total={teacherSeats} icon="user" accent="#0891B2" />
+        <SeatMeter label="Teacher seats" used={used} total={teacherSeats} icon="user" accent="#0891B2" hint="Pooled across all centres" />
         <div style={{ flex: 2, minWidth: 0, background: DS.infoBg, border: '1px solid #BAE6FD', borderRadius: 10, padding: '16px 18px', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
           <Icon name="alert" size={16} color={DS.info} />
           <div style={{ fontSize: 12.5, color: DS.sub, lineHeight: 1.5 }}>
@@ -691,11 +706,10 @@ const InviteTeachersPage = () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 const RowStatusPill = ({ status }) => (
   <span style={{
-    display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, fontWeight: 600,
-    padding: '2px 8px', borderRadius: 20,
+    display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 600,
+    padding: '2px 9px', borderRadius: 6,
     background: status === 'ready' ? DS.successBg : DS.warningBg,
     color: status === 'ready' ? DS.success : DS.warning,
-    border: `1px solid ${status === 'ready' ? DS.successBorder : DS.warningBorder}`,
   }}>
     <Icon name={status === 'ready' ? 'check' : 'alert'} size={11} />
     {status === 'ready' ? 'Ready' : 'Needs attention'}
@@ -721,8 +735,10 @@ const BulkImportPage = () => {
   const readyRows = rows.filter(r => r.status === 'ready');
   const under13 = rows.filter(r => r.underThirteen).length;
 
-  const studentSeats = onb.plan.studentSeats;
-  const usedSeats = store.students.length;
+  // Pooled student seats — account-level, summed across all centres (§5).
+  const seat = pooledSeats(onb).students;
+  const studentSeats = seat.cap;
+  const usedSeats = seat.used;
   const remaining = Math.max(0, studentSeats - usedSeats);
   const overSeats = readyRows.length > remaining;
 
@@ -898,7 +914,9 @@ const AddSingleStudentPage = () => {
     return { username: u, email: synthEmail(u), under13: isUnderThirteen({ dob: form.dob, year: form.year }) };
   }, [form.firstName, form.lastName, form.dob, form.year, taken]);
 
-  const remaining = Math.max(0, onb.plan.studentSeats - store.students.length);
+  // Pooled student seats — account-level remaining across all centres (§5).
+  const _seat = pooledSeats(onb).students;
+  const remaining = Math.max(0, _seat.cap - _seat.used);
   const errs = {
     firstName: !form.firstName.trim() ? 'Required' : '',
     lastName: !form.lastName.trim() ? 'Required' : '',
@@ -1226,8 +1244,11 @@ const PeopleInvitesPage = () => {
 
   const flash = msg => { setToast(msg); setTimeout(() => setToast(''), 1800); };
 
-  const teacherSeats = onb.plan.teacherSeats, studentSeats = onb.plan.studentSeats;
-  const teachersUsed = store.teachers.length, studentsUsed = store.students.length;
+  // Pooled seats — account-level totals summed across all centres (§5), not the
+  // current centre's local usage.
+  const seat = pooledSeats(onb);
+  const teacherSeats = seat.teachers.cap, studentSeats = seat.students.cap;
+  const teachersUsed = seat.teachers.used, studentsUsed = seat.students.used;
   const outstanding = [...store.teachers, ...store.students].filter(p => acctStatus(p) === 'invited').length;
   const notSetUp = [...store.teachers, ...store.students].filter(p => acctStatus(p) !== 'active').length;
 
@@ -1260,8 +1281,8 @@ const PeopleInvitesPage = () => {
 
       {/* Summary */}
       <div style={{ display: 'flex', gap: 16, marginBottom: 22, flexWrap: 'wrap' }}>
-        <SeatMeter label="Teacher seats" used={teachersUsed} total={teacherSeats} icon="user" accent="#0891B2" />
-        <SeatMeter label="Student seats" used={studentsUsed} total={studentSeats} icon="users" accent={DS.accent} />
+        <SeatMeter label="Teacher seats" used={teachersUsed} total={teacherSeats} icon="user" accent="#0891B2" hint="Pooled across all centres" />
+        <SeatMeter label="Student seats" used={studentsUsed} total={studentSeats} icon="users" accent={DS.accent} hint="Pooled across all centres" />
         <KPICard label="Outstanding invites" value={outstanding} sub="link sent, not done" icon="send" iconBg={DS.infoBg} accent={DS.info} />
         <KPICard label="Not yet set up" value={notSetUp} sub="awaiting credential" icon="alert" iconBg={DS.warningBg} accent={DS.warning} />
       </div>
@@ -1313,7 +1334,6 @@ const PeopleInvitesPage = () => {
                     )}
                     <td style={{ padding: '11px 16px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <Avatar name={named || rec.email || '?'} size={32} color={rec.color} />
                         <div style={{ minWidth: 0 }}>
                           <div style={{ fontSize: 13.5, fontWeight: 600, color: DS.text }}>{named || <span style={{ color: DS.faint, fontStyle: 'italic' }}>{rec.email}</span>}</div>
                           <div style={{ fontSize: 11.5, color: DS.faint }}>{role === 'teacher' ? (Array.isArray(rec.subjects) ? rec.subjects.join(', ') : rec.subject) || 'Teacher' : rec.year}</div>
@@ -1377,9 +1397,9 @@ const SetupShell = ({ icon = 'graduation', accent = DS.accent, title, subtitle, 
     <div style={{ width: '100%', maxWidth: 460 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, marginBottom: 22 }}>
         <div style={{ width: 30, height: 30, borderRadius: 7, background: DS.accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <span style={{ color: '#fff', fontWeight: 800, fontSize: 14 }}>T</span>
+          <span style={{ color: '#fff', fontWeight: 800, fontSize: 14 }}>K</span>
         </div>
-        <span style={{ fontSize: 16, fontWeight: 700, color: DS.text, letterSpacing: '-0.3px' }}>TutorOS</span>
+        <span style={{ fontSize: 16, fontWeight: 700, color: DS.text, letterSpacing: '-0.3px' }}>Klayo</span>
       </div>
       <div style={{ background: DS.card, border: `1px solid ${DS.cardBorder}`, boxShadow: DS.cardShadowHi, borderRadius: 16, overflow: 'hidden' }}>
         <div style={{ padding: '24px 26px 18px', borderBottom: `1px solid ${DS.border}`, background: `linear-gradient(180deg, ${accent}0C, transparent)` }}>
@@ -1397,7 +1417,7 @@ const SetupShell = ({ icon = 'graduation', accent = DS.accent, title, subtitle, 
         <div style={{ padding: '22px 26px' }}>{children}</div>
         {footer && <div style={{ padding: '16px 26px', borderTop: `1px solid ${DS.border}`, background: DS.surface }}>{footer}</div>}
       </div>
-      <div style={{ textAlign: 'center', marginTop: 16, fontSize: 11.5, color: DS.faint }}>Secured by TutorOS · UK DPA 2018 compliant</div>
+      <div style={{ textAlign: 'center', marginTop: 16, fontSize: 11.5, color: DS.faint }}>Secured by Klayo · UK DPA 2018 compliant</div>
     </div>
   </div>
 );
@@ -1587,7 +1607,7 @@ const ClaimPage = ({ identifier, onExit }) => {
   if (!teacher && !student) {
     return (
       <SetupShell icon="alert" accent={DS.danger} title="Link not found" subtitle="This claim link is invalid or has been revoked."
-        footer={<Btn variant="secondary" style={{ width: '100%', justifyContent: 'center' }} onClick={onExit}>Back to TutorOS</Btn>}>
+        footer={<Btn variant="secondary" style={{ width: '100%', justifyContent: 'center' }} onClick={onExit}>Back to Klayo</Btn>}>
         <div style={{ fontSize: 13.5, color: DS.sub, lineHeight: 1.6 }}>Ask your centre admin to resend your invite, or check you opened the most recent link.</div>
       </SetupShell>
     );

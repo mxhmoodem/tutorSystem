@@ -19,13 +19,50 @@ const openTeacherClass = (cls) => {
 };
 
 const TeacherClassesPage = () => {
+  // Derive the class list from the ONE metrics layer (F2) so the count here
+  // reconciles with the Dashboard and Analytics (was 5 from the teacherClasses
+  // mock vs 4 canonical). Each canonical class is enriched with the mock's
+  // display-only fields (score/attendance/hwPending/colour) by matching on group.
+  const TM = window.teacherMetrics;
+  const metrics = TM ? TM.getMetrics() : null;
+  const list = React.useMemo(() => {
+    if (!TM) return teacherClasses;
+    return TM.getMyClasses().map(c => {
+      const e = teacherClasses.find(t => t.group === c.group) || {};
+      return {
+        id: c.id, name: c.name, group: c.group, room: c.room, students: c.students,
+        color: e.color || subjectColor(c.name),
+        nextSession: e.nextSession || `${c.day} ${startTimeOf(c.time)}`,
+        avgScore: e.avgScore != null ? e.avgScore : 0,
+        attendance: e.attendance != null ? e.attendance : 0,
+        hwPending: e.hwPending != null ? e.hwPending : 0,
+      };
+    });
+  }, [TM]);
+  const totalEnrolments = metrics ? metrics.enrolments : list.reduce((s, c) => s + c.students, 0);
+
+  const [reqMsg, setReqMsg] = React.useState('');
+  // (D6) Teachers can't self-schedule — the admin owns the timetable. "Schedule
+  // Class" becomes a REQUEST to the admin (recorded to the audit trail).
+  const requestClass = () => {
+    if (window.klayoAudit) window.klayoAudit('request_class', 'timetable', { by: 'teacher' });
+    setReqMsg('Request sent to your centre admin — they own the timetable and will set the day, time and room.');
+    setTimeout(() => setReqMsg(''), 6000);
+  };
+
   return (
     <div style={{ padding:'32px' }}>
       <PageHeader
         title="My Classes"
-        subtitle={`${teacherClasses.length} active classes · ${teacherClasses.reduce((s,c)=>s+c.students,0)} students total`}
-        actions={[<Btn key="a" variant="primary" icon="plus" small>Schedule Class</Btn>]}
+        subtitle={`${list.length} active class${list.length===1?'':'es'} · ${totalEnrolments} enrolments`}
+        actions={[<Btn key="a" variant="secondary" icon="send" small onClick={requestClass}>Request a class</Btn>]}
       />
+
+      {reqMsg && (
+        <div style={{ display:'flex', alignItems:'center', gap:9, padding:'11px 16px', marginBottom:16, background:DS.accentLight, border:`1px solid ${DS.cardBorder}`, borderRadius:10, fontSize:13, color:DS.text }}>
+          <Icon name="check" size={15} color={DS.accent} /> {reqMsg}
+        </div>
+      )}
 
       <Card>
         <div style={{ overflow:'auto' }}>
@@ -42,7 +79,7 @@ const TeacherClassesPage = () => {
               </tr>
             </thead>
             <tbody>
-              {teacherClasses.map(cls => {
+              {list.map(cls => {
                 const scoreColor = cls.avgScore > 80 ? DS.success : DS.warning;
                 const attColor   = cls.attendance > 90 ? DS.success : DS.warning;
                 return (
@@ -73,7 +110,7 @@ const TeacherClassesPage = () => {
                     <td style={{ padding:'12px 16px', textAlign:'center', fontSize:13, fontWeight:600, color:attColor }}>{cls.attendance}%</td>
                     <td style={{ padding:'12px 16px', textAlign:'center' }}>
                       {cls.hwPending > 0
-                        ? <Badge variant="warning">{cls.hwPending} to mark</Badge>
+                        ? <StatusPill tone="warning">{cls.hwPending} to mark</StatusPill>
                         : <span style={{ fontSize:12, color:DS.faint }}>—</span>}
                     </td>
                     <td style={{ padding:'12px 16px', textAlign:'right', whiteSpace:'nowrap' }} onClick={e => e.stopPropagation()}>
@@ -713,7 +750,14 @@ const MyAttendanceCard = () => {
   const todayVal = store.attendance[`${me.id}|${today}`] || null;
 
   return (
-    <Card title="My Attendance" actions={<span style={{ fontSize:12, color:DS.muted }}>Check yourself in for today</span>} style={{ marginBottom:24 }}>
+    // (D2) This is BUILDING PRESENCE ("I'm on site today"), NOT session delivery.
+    // Teacher session attendance is derived solely from confirming a register
+    // below — this widget no longer competes as the source of "teacher attended".
+    <Card title="My presence today" actions={<span style={{ fontSize:12, color:DS.muted }}>On-site check-in — not session delivery</span>} style={{ marginBottom:24 }}>
+      <div style={{ display:'flex', gap:10, alignItems:'flex-start', padding:'10px 20px', background:DS.surface, borderBottom:`1px solid ${DS.border}`, fontSize:12, color:DS.sub, lineHeight:1.5 }}>
+        <Icon name="info" size={15} color={DS.muted} />
+        <span>Marks that you're <strong style={{ color:DS.text }}>in the building</strong> today. It does <strong style={{ color:DS.text }}>not</strong> record that you delivered a lesson — that's captured when you <strong style={{ color:DS.text }}>confirm a register</strong>.</span>
+      </div>
       <div style={{ padding:'16px 20px', display:'flex', alignItems:'center', gap:16, borderBottom:`1px solid ${DS.border}` }}>
         <Avatar name={me.name} size={40} color={me.color} />
         <div style={{ flex:1 }}>
@@ -2336,6 +2380,9 @@ const TeacherTrackingPage = () => {
       return v == null ? '' : v;
     })]);
     const csv = [header, ...rows].map(r => r.map(escape).join(',')).join('\n');
+    // Export of children's data → audit entry (AADC data-minimisation: tracker
+    // columns only, no contact/DOB/address).
+    if (window.klayoAudit) window.klayoAudit('export_csv', `tracker:${active.name}`, { rows: rows.length, scope: 'teacher' });
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -2579,6 +2626,12 @@ const TeacherTrackingPage = () => {
 const TeacherStudentsPage = () => {
   const store = useAdminStore();
   const me = store.teachers.find(t => t.name === 'Sarah Clarke') || store.teachers[0];
+  // ONE at-risk rule (F2/D5): the same shared selector the Dashboard's "needing
+  // attention" uses, so the counts match exactly. Falls back to the stored flag
+  // only if the metrics layer hasn't loaded.
+  const TM = window.teacherMetrics;
+  const atRisk = s => TM ? TM.isAtRisk(s) : s.status === 'at-risk';
+  const atRiskReason = s => TM ? TM.atRiskReason(s) : (s.status === 'at-risk' ? 'Flagged by staff' : null);
 
   const [search, setSearch]     = React.useState('');
   const [status, setStatus]     = React.useState('all');
@@ -2603,13 +2656,35 @@ const TeacherStudentsPage = () => {
     const q = search.toLowerCase();
     const matchSearch = studentName(s).toLowerCase().includes(q) ||
       (s.subjects || []).some(sub => sub.toLowerCase().includes(q));
-    const matchStatus = status === 'all' || status === s.status;
+    const risk = atRisk(s);
+    const matchStatus = status === 'all' ? true
+      : status === 'at-risk' ? risk
+      : status === 'active'  ? !risk
+      : status === s.status;
     const matchClass  = classId === 'all' || (s.classIds || []).includes(classId);
     return matchSearch && matchStatus && matchClass;
   });
 
   // Keep the open drawer pointed at the live record (it may update underneath).
   const sel = selected && myStudents.find(s => s.id === selected.id);
+
+  // Export of children's data → write an audit entry (server-enforced audit table
+  // later). AADC data-minimisation: default columns are the non-sensitive academic
+  // fields only — no guardian contact, DOB or address in the default export.
+  const exportCsv = () => {
+    const cols = ['Name', 'Year', 'Attendance %', 'HW %', 'Avg Score', 'Status'];
+    const lines = [cols.join(',')].concat(filtered.map(s => [
+      studentName(s), s.year, s.attendance, s.hw, s.score, atRisk(s) ? 'At risk' : 'Active',
+    ].join(',')));
+    if (window.klayoAudit) window.klayoAudit('export_csv', 'my-students', { count: filtered.length, scope: 'teacher' });
+    try {
+      const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'my-students.csv'; a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {}
+  };
 
   const classChip = c => (
     <span key={c.id} title={`${c.group} · ${c.day} ${c.time}`} style={{ display:'inline-flex', alignItems:'center', gap:5, fontSize:11, padding:'2px 7px', background:subjectColor(c.name)+'14', color:subjectColor(c.name), borderRadius:5, fontWeight:600 }}>
@@ -2633,8 +2708,8 @@ const TeacherStudentsPage = () => {
     <div style={{ padding:'32px' }}>
       <PageHeader
         title="My Students"
-        subtitle={`${myStudents.length} across your ${myClasses.length} class${myClasses.length===1?'':'es'} · ${myStudents.filter(s=>s.status==='at-risk').length} at risk`}
-        actions={[<Btn key="export" variant="secondary" icon="download" small>Export CSV</Btn>]}
+        subtitle={`${myStudents.length} across your ${myClasses.length} class${myClasses.length===1?'':'es'} · ${myStudents.filter(atRisk).length} at risk`}
+        actions={[<Btn key="export" variant="secondary" icon="download" small onClick={exportCsv}>Export CSV</Btn>]}
       />
 
       {/* Filters — search · status · which of my classes */}
@@ -2642,8 +2717,8 @@ const TeacherStudentsPage = () => {
         <SearchInput value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name or subject…" />
         <Segmented value={status} onChange={setStatus} options={[
           { id:'all', label:'All', count:myStudents.length },
-          { id:'active', label:'Active', count:myStudents.filter(s=>s.status==='active').length },
-          { id:'at-risk', label:'At risk', count:myStudents.filter(s=>s.status==='at-risk').length },
+          { id:'active', label:'Active', count:myStudents.filter(s=>!atRisk(s)).length },
+          { id:'at-risk', label:'At risk', count:myStudents.filter(atRisk).length },
         ]} />
         <Select value={classId} onChange={e => setClassId(e.target.value)} style={{ maxWidth:220 }}>
           <option value="all">All my classes</option>
@@ -2654,21 +2729,18 @@ const TeacherStudentsPage = () => {
       <div style={{ display:'grid', gridTemplateColumns: sel ? '1fr 360px' : '1fr', gap:20 }}>
         <Card>
           <Table
-            cols={['Student','Year','My Classes','Attendance','HW %','Avg Score','Status','']}
+            cols={['Student','Year','My Classes','Attendance','HW %','Avg Score','Status',{ label:'', align:'right' }]}
             rows={filtered.map(s => [
-              <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-                <Avatar name={studentName(s)} size={30} />
-                <div>
-                  <div style={{ fontSize:13, fontWeight:500, color:DS.text }}>{studentName(s)}</div>
-                  <div style={{ fontSize:11, color:DS.faint }}>Last seen {s.lastSeen || '—'}</div>
-                </div>
+              <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
+                <span onClick={() => setSelected(sel && sel.id === s.id ? null : s)} style={{ fontSize:13, fontWeight:600, color:DS.text, cursor:'pointer' }}>{studentName(s)}</span>
+                <span style={{ fontSize:11.5, color:DS.faint }}>Last seen {s.lastSeen || '—'}</span>
               </div>,
               <span style={{ fontSize:13, color:DS.muted }}>{s.year}</span>,
               <div style={{ display:'flex', flexWrap:'wrap', gap:4 }}>{classesOf(s).map(classChip)}</div>,
               <span style={{ fontSize:13, fontWeight:600, color: s.attendance < 80 ? DS.danger : s.attendance < 90 ? DS.warning : DS.success }}>{s.attendance}%</span>,
               <span style={{ fontSize:13, fontWeight:600, color: s.hw < 50 ? DS.danger : s.hw < 70 ? DS.warning : DS.success }}>{s.hw}%</span>,
               <ScorePill score={s.score} />,
-              <Badge variant={s.status === 'at-risk' ? 'danger' : 'success'}>{s.status === 'at-risk' ? 'At risk' : 'Active'}</Badge>,
+              <StatusPill status={atRisk(s) ? 'At risk' : 'Active'} />,
               <Btn variant="secondary" small onClick={() => setSelected(sel && sel.id === s.id ? null : s)}>View</Btn>,
             ])}
           />
@@ -2683,7 +2755,7 @@ const TeacherStudentsPage = () => {
                 <Avatar name={studentName(sel)} size={44} />
                 <div>
                   <div style={{ fontSize:15, fontWeight:700, color:DS.text }}>{studentName(sel)}</div>
-                  <div style={{ fontSize:13, color:DS.muted }}>{sel.year} · {sel.status === 'at-risk' ? '⚠ At risk' : 'Active'}</div>
+                  <div style={{ fontSize:13, color:DS.muted }}>{sel.year} · {atRisk(sel) ? `⚠ At risk — ${atRiskReason(sel)}` : 'Active'}</div>
                 </div>
               </div>
 

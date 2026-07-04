@@ -205,7 +205,7 @@ const TeacherDashboard = () => {
   const hwHasDueToday = hwDueToday.total > 0;
 
   // ── Action items (4 tiles) ─────────────────────────────────────────
-  const toMarkCount    = homeworkItems.reduce((n, h) => n + (h.toMark || 0), 0);
+  const toMarkCount    = window.teacherMetrics ? window.teacherMetrics.getToMark() : homeworkItems.reduce((n, h) => n + (h.toMark || 0), 0);
   const attendanceToDo = Object.values(attendance).filter(v => !v).length;
   const aiFeedbackToReview = reportDrafts.length;   // closest wired proxy: draft reports awaiting review
   const unreadMessages = 0;   // TODO: comms unread isn't passed to this page; wire when available
@@ -223,33 +223,45 @@ const TeacherDashboard = () => {
     { icon: 'bell',    label: 'Send announcement', onClick: () => go('comms') },
   ];
 
-  // ── KPIs (4) ───────────────────────────────────────────────────────
-  const myStudents = studentProgress.length;
-  const hwTotals = homeworkItems.reduce(
-    (acc, h) => ({ submitted: acc.submitted + h.submitted, total: acc.total + h.total }),
-    { submitted: 0, total: 0 }
-  );
-  const hwCompletion = hwTotals.total ? Math.round((hwTotals.submitted / hwTotals.total) * 100) : 0;
-  const activeAssignments = homeworkItems.filter(h => h.status === 'open' || h.toMark > 0).length;
-  const dueThisWeek = homeworkItems.length;   // every listed assignment is in the current window
+  // ── KPIs (4) — read from the ONE teacher metrics layer (F2) ────────
+  // Every count (students, HW completion, avg attendance, to-mark) comes from
+  // window.teacherMetrics so the Dashboard reconciles with My Classes, My
+  // Students and Analytics — no screen recomputes its own headcount. Terms:
+  // "My students" = distinct HEADS (a student in 3 classes counts once).
+  const TM = window.teacherMetrics;
+  const tmMetrics = TM ? TM.getMetrics() : null;
+  const myStudents = tmMetrics ? tmMetrics.distinctStudents : studentProgress.length;
+  const hwCompletion = tmMetrics ? tmMetrics.hwCompletion : (() => {
+    const t = homeworkItems.reduce((a, h) => ({ s: a.s + h.submitted, t: a.t + h.total }), { s: 0, t: 0 });
+    return t.t ? Math.round(t.s / t.t * 100) : 0;
+  })();
+  const activeAssignments = tmMetrics ? tmMetrics.activeClasses : homeworkItems.filter(h => h.status === 'open' || h.toMark > 0).length;
   const kpis = [
-    { label: 'My students',        value: String(myStudents), sub: 'across my classes', icon: 'users', iconBg: DS.accentLight, accent: DS.accent },
-    { label: 'HW completion',      value: `${hwCompletion}%`,  trend: '-4% vs last wk',  trendDir: 'down', icon: 'clip', iconBg: DS.warningBg, accent: DS.warning },
-    { label: 'Avg attendance',     value: '—',                 sub: 'awaiting register',  icon: 'check', iconBg: DS.successBg, accent: DS.success }, // TODO: wire avg attendance
-    { label: 'Active assignments', value: String(activeAssignments), sub: `${dueThisWeek} due this week`, icon: 'calendar', iconBg: DS.infoBg, accent: DS.info },
+    { label: 'My students',        value: String(myStudents), sub: `across ${tmMetrics ? tmMetrics.activeClasses : ''} classes`.trim(), icon: 'users', iconBg: DS.accentLight, accent: DS.accent },
+    { label: 'HW completion',      value: `${hwCompletion}%`,  sub: 'this term', icon: 'clip', iconBg: DS.warningBg, accent: DS.warning },
+    { label: 'Avg attendance',     value: tmMetrics ? `${tmMetrics.avgAttendance}%` : '—', sub: tmMetrics ? 'across your students' : 'awaiting register', icon: 'check', iconBg: DS.successBg, accent: DS.success },
+    { label: 'Active classes',     value: String(tmMetrics ? tmMetrics.activeClasses : activeAssignments), sub: `${tmMetrics ? tmMetrics.enrolments : ''} enrolments`.trim(), icon: 'calendar', iconBg: DS.infoBg, accent: DS.info },
   ];
 
   // ── Students needing attention — reason chip via thresholds ────────
   // Score drop is computable from the score series. Completion/absence
   // per-student data isn't in studentProgress, so we only flag what we can
   // honestly derive (a real score drop ≥ SCORE_DROP) without inventing data.
-  const needsAttention = studentProgress.map(s => {
-    const n = s.scores.length;
-    const drop = n >= 2 ? s.scores[n - 2] - s.scores[n - 1] : 0;
-    if (s.trend === 'down' && drop >= SCORE_DROP) return { ...s, reason: 'score drop', tone: 'danger' };
-    if (s.trend === 'down') return { ...s, reason: 'declining', tone: 'warning' };
-    return null;
-  }).filter(Boolean);
+  // Same rule, same count as My Students (F2/D5): sourced from the shared at-risk
+  // selector, so "needing attention" here == "at risk" there. Predicted grade
+  // renders on the canonical scale (F3) from the student's raw score + year.
+  const needsAttention = (TM ? TM.getAtRiskStudents() : []).map(s => {
+    const reason = TM.atRiskReason(s) || 'at risk';
+    const tone = /Attendance|Homework/.test(reason) ? 'danger' : 'warning';
+    const predicted = window.klayoGrades ? window.klayoGrades.pctToGrade(s.score, { year: s.year }) : '—';
+    return {
+      name: `${s.firstName} ${s.lastName}`,
+      predicted,
+      reason: reason.toLowerCase(),
+      tone,
+      scores: [typeof s.score === 'number' ? s.score : 0],
+    };
+  });
 
   // ── Recent submissions — no per-submission source yet ──────────────
   const recentSubmissions = [];   // TODO: wire recent homework submissions

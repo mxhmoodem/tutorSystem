@@ -348,6 +348,10 @@ const CentreRow = ({ centre, isActive, isLast, onOpen, onSwitch }) => {
   const archived = centre.status === 'archived';
   const done = setupDone(centre);
   const ready = done === SETUP_STEPS.length;
+  // Per-centre split of the pooled seats (§5) — this centre's own usage.
+  const cm = window.centreMetrics;
+  const seatStudents = cm ? cm.getStudentsForCentre(centre.id).length : 0;
+  const seatTeachers = cm ? cm.getTeachersForCentre(centre.id).length : 0;
   return (
     <div
       onClick={() => onOpen(centre.id)}
@@ -369,6 +373,8 @@ const CentreRow = ({ centre, isActive, isLast, onOpen, onSwitch }) => {
           <span>{centre.city || 'No city set'}</span>
           <span style={{ color: DS.faint }}>·</span>
           <Mono size={12}>{centre.code}</Mono>
+          <span style={{ color: DS.faint }}>·</span>
+          <span>{seatStudents} student{seatStudents === 1 ? '' : 's'} · {seatTeachers} staff</span>
         </div>
       </div>
       {/* Setup status */}
@@ -434,7 +440,11 @@ const CentresPage = () => {
   const onCreated = (c) => { switchTo(c.id); setDrawer({ mode: 'edit', id: c.id }); };
 
   const drawerCentre = drawer && drawer.mode === 'edit' ? centres.find(c => c.id === drawer.id) : null;
-  const totalCapacity = plan.maxCentres >= 99 ? 'Unlimited' : (plan.maxCentres * plan.studentSeats).toLocaleString();
+  // Seats + storage are ACCOUNT-level pools (§5) — summed across every centre and
+  // read from the plan catalogue, NOT a per-centre allowance. Mirrors the Storage
+  // "pooled overview + per-centre split" model.
+  const seat = window.centreMetrics ? window.centreMetrics.getSeatUsage() : null;
+  const storagePool = window.centreMetrics ? window.centreMetrics.getStoragePool() : null;
 
   return (
     <div style={{ padding: 32, maxWidth: 980, margin: '0 auto' }}>
@@ -469,9 +479,9 @@ const CentresPage = () => {
               <div style={{ width: `${Math.min(100, Math.round((used / plan.maxCentres) * 100))}%`, height: '100%', borderRadius: 99, background: overCap ? DS.danger : DS.accent, transition: 'width 0.2s' }} />
             </div>
           </div>
-          <PlanStat label="Student seats" value={plan.studentSeats.toLocaleString()} sub="per centre" />
-          <PlanStat label="Teacher seats" value={plan.teacherSeats} sub="per centre" />
-          <PlanStat label="Total capacity" value={totalCapacity} sub="students" />
+          <PlanStat label="Student seats" value={seat ? `${seat.students.used} / ${seat.students.cap.toLocaleString()}` : plan.studentSeats.toLocaleString()} sub="pooled across centres" />
+          <PlanStat label="Teacher seats" value={seat ? `${seat.teachers.used} / ${seat.teachers.cap}` : plan.teacherSeats} sub="pooled across centres" />
+          <PlanStat label="Cloud storage" value={storagePool ? `${storagePool.usedGb} / ${storagePool.totalGb} GB` : `${plan.storageGb} GB`} sub="pooled across centres" />
         </div>
       </Card>
 

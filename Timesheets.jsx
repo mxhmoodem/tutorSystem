@@ -817,52 +817,47 @@ const AdminTimesheetsPage = () => {
     <div style={{ padding: '32px' }}>
       <PageHeader title="Staff Timesheets" subtitle="Review and approve your teachers' working hours — open a teacher to see their sessions" />
 
-      {/* Submission policy — admin-set, centre-wide. Teachers' page defaults to this. */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 18px', background: DS.surface, border: `1px solid ${DS.cardBorder}`, borderRadius: 10, marginBottom: 18, flexWrap: 'wrap' }}>
-        <div style={{ width: 34, height: 34, borderRadius: 8, background: DS.accentLight, color: DS.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-          <Icon name="calendar" size={17} />
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 20, alignItems: 'start' }}>
+        {/* Main table — per-teacher summary; click a teacher to open their sessions.
+            Bulk approve across all teachers lives in the card header. */}
+        <Card title="By teacher" subtitle={tsRangeLabel(range)}
+          actions={submittedIds.length > 0 ? (
+            <Btn variant="primary" icon="check" small onClick={() => store.approveMany(submittedIds)}>Approve all {submittedIds.length} submitted</Btn>
+          ) : null}>
+          {teacherRows.length ? teacherRows.map((r, i) => (
+            <TeacherSummaryRow key={r.id} row={r} color={(adminStore.teachers.find(t => t.id === r.id) || {}).color}
+              isLast={i === teacherRows.length - 1} onOpen={() => adminNav('timesheet_detail', r.id)} />
+          )) : (
+            <EmptyState icon="clock" title="No hours logged in this period"
+              message="Try a different period — teaching time is captured when teachers take the register." />
+          )}
+        </Card>
+
+        {/* Right rail — submission policy, period + this-period stats */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {/* Submission policy — admin-set, centre-wide. Teachers' page defaults to this. */}
+          <Card title="Submission frequency" subtitle="How often teachers are asked to submit their timesheet for approval." icon="calendar" accent={DS.accent}>
+            <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <Select value={store.config.submissionFrequency} onChange={e => store.setConfig({ submissionFrequency: e.target.value })}>
+                {TS_FREQUENCIES.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
+              </Select>
+              <TsPeriodControl period={period} onChange={changePeriod} />
+              <span style={{ fontSize: 12.5, color: DS.muted }}>{tsRangeLabel(range)}</span>
+            </div>
+          </Card>
+
+          {/* This period — hours, approvals, est. pay, awaiting, teacher count */}
+          <Card title="This period" subtitle={tsRangeLabel(range)}>
+            <TsSummaryRows rows={[
+              { label: 'Total hours',       value: tsFmtDuration(overall),     sub: tsRangeLabel(range),   icon: 'clock' },
+              { label: 'Approved hours',    value: tsFmtDuration(approvedMin), sub: 'signed off',          icon: 'check' },
+              { label: 'Est. eligible pay', value: tsMoney(eligiblePay),       sub: 'derived from rates',  icon: 'invoice', accent: true },
+              { label: 'Awaiting approval', value: submittedIds.length,        sub: 'submitted entries',   icon: 'send' },
+              { label: 'Teachers',          value: teacherRows.length,         sub: 'in this period',      icon: 'users' },
+            ]} />
+          </Card>
         </div>
-        <div style={{ flex: 1, minWidth: 200 }}>
-          <div style={{ fontSize: 13.5, fontWeight: 600, color: DS.text }}>Submission frequency</div>
-          <div style={{ fontSize: 12, color: DS.muted, marginTop: 1 }}>How often teachers are asked to submit their timesheet for approval.</div>
-        </div>
-        <Select value={store.config.submissionFrequency} onChange={e => store.setConfig({ submissionFrequency: e.target.value })} style={{ width: 170 }}>
-          {TS_FREQUENCIES.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
-        </Select>
       </div>
-
-      {/* Period */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 18, flexWrap: 'wrap' }}>
-        <TsPeriodControl period={period} onChange={changePeriod} />
-        <span style={{ fontSize: 12.5, color: DS.muted }}>{tsRangeLabel(range)}</span>
-      </div>
-
-      {/* Totals */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 16, marginBottom: 20 }}>
-        <KPICard label="Total hours" value={tsFmtDuration(overall)} sub={tsRangeLabel(range)} icon="clock" />
-        <KPICard label="Approved hours" value={tsFmtDuration(approvedMin)} sub="signed off" icon="check" />
-        <KPICard label="Est. eligible pay" value={tsMoney(eligiblePay)} sub="derived from rates" icon="invoice" />
-        <KPICard label="Awaiting approval" value={submittedIds.length} sub="submitted entries" icon="send" />
-        <KPICard label="Teachers" value={teacherRows.length} sub="in this period" icon="users" />
-      </div>
-
-      {/* Bulk approve across all teachers */}
-      {submittedIds.length > 0 && (
-        <div style={{ marginBottom: 16 }}>
-          <Btn variant="primary" icon="check" small onClick={() => store.approveMany(submittedIds)}>Approve all {submittedIds.length} submitted</Btn>
-        </div>
-      )}
-
-      {/* Per-teacher summary — click a teacher to open their sessions */}
-      <Card title="By teacher" subtitle={tsRangeLabel(range)}>
-        {teacherRows.length ? teacherRows.map((r, i) => (
-          <TeacherSummaryRow key={r.id} row={r} color={(adminStore.teachers.find(t => t.id === r.id) || {}).color}
-            isLast={i === teacherRows.length - 1} onOpen={() => adminNav('timesheet_detail', r.id)} />
-        )) : (
-          <EmptyState icon="clock" title="No hours logged in this period"
-            message="Try a different period — teaching time is captured when teachers take the register." />
-        )}
-      </Card>
     </div>
   );
 };
@@ -1098,7 +1093,7 @@ const TimesheetPrintDoc = ({ data }) => (
               <div style={{ fontSize: 14, marginTop: 2 }}>{g.name}</div>
             </div>
             <div style={{ textAlign: 'right', fontSize: 12, color: '#444' }}>
-              <div style={{ fontWeight: 700, color: '#111' }}>TutorOS · Bright Minds</div>
+              <div style={{ fontWeight: 700, color: '#111' }}>Klayo · {(window.centreMetrics && window.centreMetrics.getActiveCentre().name) || 'Bright Minds'}</div>
               <div>{data.periodLabel}</div>
               <div>Generated {tsDateLong(tsTodayISO())}</div>
             </div>

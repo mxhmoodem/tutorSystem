@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  TutorOS — Plans & override codes (platform-wide)
+//  Klayo — Plans & override codes (platform-wide)
 // ══════════════════════════════════════════════════════════════
 //
 //  Single source of truth for the subscription PLAN CATALOGUE and the
@@ -17,7 +17,8 @@
 //  Non-IIFE global module like Centres.jsx; every top-level id is prefixed
 //  Plan / plan / PLAN_ to avoid colliding with other globally-scoped scripts.
 
-const PLAN_ACCENT = '#7C3AED';   // matches SuperAdmin's SA_ACCENT (defined later)
+// Superadmin plan/code modals tint through the live brand-accent token
+// (DS.accent) — no raw accent hex.
 
 // ─── Tiny local helpers (avoid load-order deps on Onboarding.jsx's RAND/onbTodayIso) ──
 const planRand = (n = 4, chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789') =>
@@ -195,7 +196,7 @@ const PlanEditorModal = ({ open, plan, onClose, onSave }) => {
   };
 
   return (
-    <Modal open={open} onClose={onClose} icon="invoice" iconColor={PLAN_ACCENT} width={580}
+    <Modal open={open} onClose={onClose} icon="invoice" iconColor={DS.accent} width={580}
       title={plan ? `Edit ${plan.name} plan` : 'New plan'}
       subtitle="Set the price and what this plan allows. Applies platform-wide."
       footer={<>
@@ -256,7 +257,7 @@ const PlanCodeModal = ({ open, code, plans = [], onClose, onSave }) => {
   const save = () => { onSave({ ...d }); onClose && onClose(); };
 
   return (
-    <Modal open={open} onClose={onClose} icon="zap" iconColor={PLAN_ACCENT} width={560}
+    <Modal open={open} onClose={onClose} icon="zap" iconColor={DS.accent} width={560}
       title={editing ? `Edit code ${code.code}` : 'New override code'}
       subtitle="Give a centre a discounted or free price for a fixed window."
       footer={<>
@@ -299,10 +300,10 @@ const PlanCodeModal = ({ open, code, plans = [], onClose, onSave }) => {
       {preview && (
         <div style={{
           marginTop: 4, padding: '10px 14px', borderRadius: 8,
-          background: PLAN_ACCENT + '0F', border: `1px solid ${PLAN_ACCENT}33`,
+          background: DS.accent + '0F', border: `1px solid ${DS.accent}33`,
           fontSize: 13, color: DS.text, display: 'flex', alignItems: 'center', gap: 8,
         }}>
-          <Icon name="zap" size={14} color={PLAN_ACCENT} />
+          <Icon name="zap" size={14} color={DS.accent} />
           <span>Redeeming this code gives a centre: <b>{preview}</b>.</span>
         </div>
       )}

@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  TutorOS — Plans & override-codes seed data
+//  Klayo — Plans & override-codes seed data
 //  Loaded AFTER mocks/onboarding.mock.jsx (so `PLANS` exists) and
 //  consumed by Plans.jsx (the live catalogue + codes stores).
 // ══════════════════════════════════════════════════════════════
@@ -23,6 +23,10 @@ const PLAN_CATALOG_SEED = [
     features: ['Lesson Planner', 'AI Feedback', '50GB storage', 'Priority support'] },
   { id: 'scale',   name: 'Scale',   price: 410, maxCentres: 20, studentSeats: 600, teacherSeats: 40, storageGb: 200, order: 2, archived: false,
     features: ['All Growth features', 'Custom branding', '200GB storage', 'Dedicated CSM'] },
+  // Retired tier. Archived plans keep their LAST REAL config (price/seats/storage)
+  // so the console shows what it actually was, never £0 / 0 students / 0 teachers.
+  { id: 'enterprise', name: 'Enterprise', price: 900, maxCentres: 50, studentSeats: 2000, teacherSeats: 120, storageGb: 500, order: 3, archived: true,
+    features: ['All Scale features', 'SSO / SAML', 'Custom SLA', 'Dedicated infrastructure'] },
 ];
 
 // Override codes. `kind`:

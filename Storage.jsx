@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  TutorOS — Storage usage & quota (derive-don't-store)
+//  Klayo — Storage usage & quota (derive-don't-store)
 // ══════════════════════════════════════════════════════════════
 //
 //  Adds an ACCOUNT layer above the centre (one paying account owns 1–20
@@ -27,7 +27,9 @@
 const STG_GB          = window.STORAGE_GB || (1024 * 1024 * 1024);
 const STG_BLOCK_GB    = window.STORAGE_ADDON_BLOCK_GB || 100;
 const STG_BLOCK_PRICE = window.STORAGE_ADDON_BLOCK_PRICE || 5;
-const STG_UNIT_COST   = window.STORAGE_UNIT_COST_USD_GB || 0.015;
+// Product currency is £. R2's list rate is quoted in USD (~$0.015/GB); we show
+// an illustrative GBP-equivalent so cost display matches the rest of the product.
+const STG_UNIT_COST   = window.STORAGE_UNIT_COST_GBP_GB || 0.012;
 const STG_SELF_ACCT   = window.STORAGE_SELF_ACCOUNT_ID || 'acc_brightminds';
 
 // Category model. lock: true = retention-locked (never deletable here);
@@ -147,7 +149,7 @@ const stgEffectiveQuotaForCentre = (centreId, account) => {
   return pool;
 };
 
-const stgCostEstimate = bytes => (Math.max(0, bytes || 0) / STG_GB) * STG_UNIT_COST;   // USD / month
+const stgCostEstimate = bytes => (Math.max(0, bytes || 0) / STG_GB) * STG_UNIT_COST;   // £ / month (illustrative)
 
 // Central upload guard. Respects storage mode: pooled enforces at the account
 // pool, per-centre at the centre's split cap. Returns a rich result the UI can act
@@ -181,7 +183,7 @@ function stgFmtBytes(b) {
   return Math.round(b) + ' B';
 }
 const stgFmtGb  = b => (Math.max(0, b || 0) / STG_GB);
-const stgFmtUsd = n => '$' + (n || 0).toFixed(2);
+const stgFmtGbp = n => '£' + (n || 0).toFixed(2);
 const stgPct    = (used, total) => (total > 0 ? Math.min(100, (used / total) * 100) : 0);
 
 // ─── Store hook ────────────────────────────────────────────────────────────────────
@@ -383,7 +385,7 @@ const StorageAdminPanel = () => {
                 <span style={{ fontSize: 26, fontWeight: 800, color: over ? DS.danger : DS.text, letterSpacing: '-0.5px' }}>{stgFmtBytes(used)}</span>
                 <span style={{ fontSize: 14, color: DS.muted }}> of {stgFmtBytes(quota)} used</span>
               </div>
-              <span style={{ fontSize: 12.5, color: DS.muted }}>Illustrative cost ≈ {stgFmtUsd(stgCostEstimate(used))}/mo</span>
+              <span style={{ fontSize: 12.5, color: DS.muted }}>Illustrative cost ≈ {stgFmtGbp(stgCostEstimate(used))}/mo</span>
             </div>
             <StgStackBar segments={centreSegs} total={quota} />
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px', marginTop: 12 }}>
@@ -434,7 +436,7 @@ const StorageAdminPanel = () => {
                 </div>
                 <span style={{ fontSize: 12, color: DS.muted, width: 38, textAlign: 'right' }}>{Math.round(stgPct(u, denom))}%</span>
               </div>,
-              <span style={{ fontSize: 12.5, color: DS.muted }}>{stgFmtUsd(stgCostEstimate(u))}/mo</span>,
+              <span style={{ fontSize: 12.5, color: DS.muted }}>{stgFmtGbp(stgCostEstimate(u))}/mo</span>,
             ];
           })}
         />
@@ -452,7 +454,7 @@ const StorageAdminPanel = () => {
             <div style={{ border: `1px solid ${DS.border}`, borderRadius: 10, padding: 16 }}>
               <div style={{ fontSize: 13.5, fontWeight: 700, color: DS.text, marginBottom: 4 }}>Upgrade your plan</div>
               <div style={{ fontSize: 12.5, color: DS.muted, marginBottom: 12 }}>A bigger plan raises your whole account quota. Manage in Plans & Billing.</div>
-              <Btn small variant="primary" icon="chevron_r" onClick={() => window.__navigate && window.__navigate('admin', 'settings:billing')}>Change plan</Btn>
+              <Btn small variant="primary" icon="chevron_r" onClick={() => window.__navigate && window.__navigate('admin', 'plans')}>Change plan</Btn>
             </div>
             <div style={{ border: `1px solid ${DS.border}`, borderRadius: 10, padding: 16 }}>
               <div style={{ fontSize: 13.5, fontWeight: 700, color: DS.text, marginBottom: 4 }}>Add a storage block</div>
@@ -577,7 +579,7 @@ const StorageOwnerPanel = () => {
       <StgSection title="Platform storage" subtitle="Derived live from all stored file records — no running total is kept" icon="chart">
         <div style={{ display: 'flex', gap: 30, flexWrap: 'wrap' }}>
           <StgStat label="Total stored" value={stgFmtBytes(total)} sub="across all accounts" />
-          <StgStat label="Illustrative cost" value={stgFmtUsd(stgCostEstimate(total)) + '/mo'} sub={`@ $${STG_UNIT_COST}/GB · illustrative`} />
+          <StgStat label="Illustrative cost" value={stgFmtGbp(stgCostEstimate(total)) + '/mo'} sub={`@ £${STG_UNIT_COST}/GB · illustrative`} />
           <StgStat label="Accounts" value={accounts.length} sub="paying accounts" />
           <StgStat label="Centres" value={centreCount} sub="across all accounts" />
         </div>
@@ -592,7 +594,7 @@ const StorageOwnerPanel = () => {
           <span style={{ fontSize: 12.5, color: DS.sub }}>These fields are saved to local storage for the prototype only — no bucket is contacted and no credentials leave the browser.</span>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0 18px' }}>
-          <Field label="Bucket name"><Input value={r2.bucketName || ''} onChange={e => store.setR2({ bucketName: e.target.value })} placeholder="tutoros-prod-eu" /></Field>
+          <Field label="Bucket name"><Input value={r2.bucketName || ''} onChange={e => store.setR2({ bucketName: e.target.value })} placeholder="klayo-prod-eu" /></Field>
           <Field label="Region"><Input value={r2.region || ''} onChange={e => store.setR2({ region: e.target.value })} placeholder="auto" /></Field>
           <Field label="Jurisdiction">
             <Select value={r2.jurisdiction || 'EU'} onChange={e => store.setR2({ jurisdiction: e.target.value })}>
@@ -664,7 +666,7 @@ const StorageOwnerPanel = () => {
               <span style={{ fontSize: 12, color: DS.muted, width: 34, textAlign: 'right' }}>{Math.round(r.pctOfPool)}%</span>
             </div>,
             r.topCat ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: DS.sub }}><Icon name={stgCat(r.topCat.category).icon} size={13} color={stgCat(r.topCat.category).color()} />{stgCat(r.topCat.category).label}</span> : <span style={{ color: DS.faint }}>—</span>,
-            <span style={{ fontSize: 12.5, color: DS.muted }}>{stgFmtUsd(stgCostEstimate(r.used))}</span>,
+            <span style={{ fontSize: 12.5, color: DS.muted }}>{stgFmtGbp(stgCostEstimate(r.used))}</span>,
           ])}
         />
       </StgSection>
@@ -679,7 +681,7 @@ Object.assign(window, {
   stgUsageByCentre, stgUsageByAccount, stgUsageByCategory, stgPlatformTotal,
   stgQuotaForAccount, stgEffectiveQuotaForCentre, stgCostEstimate, stgCanUpload,
   stgAccounts, stgAccountById, stgAccountForCentre, stgAccountMode, stgAddonBlocks,
-  stgFmtBytes, stgFmtGb, stgFmtUsd,
+  stgFmtBytes, stgFmtGb, stgFmtGbp,
   STG_CATEGORIES, STG_SELF_ACCT, STG_BLOCK_GB,
   // panels (consumed by Settings.jsx tab registry)
   StorageOwnerPanel, StorageAdminPanel,

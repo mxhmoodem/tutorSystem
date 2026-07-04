@@ -1,18 +1,21 @@
 // ══════════════════════════════════════════════════════════════
-//  TutorOS — Student Dashboard (5 pages)
+//  Klayo — Student Dashboard (Overview · Progress · Sessions)
 // ══════════════════════════════════════════════════════════════
 
-// Mock data (studentSelf, studentHomework, studentSessions)
-// lives in mocks/studentDashboard.mock.jsx, loaded before this file in index.html.
-// Reports come from the shared reports store (Reports.jsx, window.StudentReports).
+// Identity, enrolments (subjects/teachers/predicted grades), rollup metrics, the
+// grade model and the active term all come from the student SoT
+// (studentData.jsx → window.klayoStudent), loaded before this file. Homework lives
+// in Homework.jsx (StudentHomework); reports come from the shared reports store
+// (Reports.jsx, window.StudentReports). The studentHomework mock still seeds the
+// Overview "due soon" list via klayoStudent.metrics.homeworkSummary().
 
 // ─── Overview page ─────────────────────────────────────────────────────────────
 // Subject themes — pastel cards with abstract shapes
 const subjectThemes = {
-  'Mathematics':   { tint:'#FDE6D3', deep:'#A6531B', text:'#79300E', shape:'#FA9B62', shapeShadow:'#F4B58F', symbol:'square', glyph:'∫' },
-  'Further Maths': { tint:'#E5DDFA', deep:'#6B5BA8', text:'#332083', shape:'#8D75E9', shapeShadow:'#B6A6F5', symbol:'diamond', glyph:'Σ' },
-  'Physics':       { tint:'#DCEFFC', deep:'#4B7EA8', text:'#124979', shape:'#5BA6EA', shapeShadow:'#86BFEC', symbol:'circle', glyph:'⚛' },
-  'Chemistry':     { tint:'#FCE7D6', deep:'#9A5B22', text:'#7A3E12', shape:'#F0A45C', shapeShadow:'#F6C394', symbol:'diamond', glyph:'⚗' },
+  'Mathematics':   { tint:'#FEEEE0', tint2:'#F8C9A4', deep:'#A6531B', text:'#79300E', shape:'#FA9B62', shapeShadow:'#F4B58F', symbol:'square', glyph:'∫' },
+  'Further Maths': { tint:'#EFE9FC', tint2:'#C9BAF5', deep:'#6B5BA8', text:'#332083', shape:'#8D75E9', shapeShadow:'#B6A6F5', symbol:'diamond', glyph:'Σ' },
+  'Physics':       { tint:'#E7F4FD', tint2:'#B4DBF6', deep:'#4B7EA8', text:'#124979', shape:'#5BA6EA', shapeShadow:'#86BFEC', symbol:'circle', glyph:'⚛' },
+  'Chemistry':     { tint:'#FDEFE0', tint2:'#F8CFA2', deep:'#9A5B22', text:'#7A3E12', shape:'#F0A45C', shapeShadow:'#F6C394', symbol:'diamond', glyph:'⚗' },
 };
 
 const SubjectShape = ({ theme }) => {
@@ -54,14 +57,31 @@ const SubjectShape = ({ theme }) => {
 };
 
 const StudentOverview = ({ onNav }) => {
-  const pendingHw   = studentHomework.filter(h => h.status === 'pending');
-  const urgentCount = pendingHw.filter(h => h.urgent).length;
-  const avgScore    = Math.round(studentSelf.subjects.reduce((s,sub) => s + sub.scores[sub.scores.length-1], 0) / studentSelf.subjects.length);
+  // §1–§7: identity, subjects, grades, numbers and term all come from the one
+  // student SoT — nothing on this screen is re-hardcoded.
+  const K  = window.klayoStudent;
+  const cs = K.currentStudent;
+  const enrolments  = K.getEnrolments();
+  const hwSummary   = K.metrics.homeworkSummary();
+  const pendingHw   = hwSummary.pending;
+  const urgentCount = hwSummary.urgentCount;
+  const avgScore    = K.metrics.termAverage();            // term avg, all subjects
+  const termTrend   = K.metrics.termTrendDelta();          // computed, not decorative
+  const attendance  = K.metrics.attendanceOverall();       // one figure, all subjects
+  const perWeek     = K.metrics.sessionsPerWeek();
+  const nextSession = K.sessions.upcoming[0];
   const reportsStore = useReportsStore();
   const latestReports = reportsStore.reportsArr
-    .filter(r => r.studentId === 's_oliver' && r.status === 'published')
+    .filter(r => r.studentId === cs.id && r.status === 'published')
     .sort((a,b) => (b.datePublished||'').localeCompare(a.datePublished||''))
     .slice(0,3);
+
+  // Single-row subjects carousel — scroll horizontally when subjects overflow
+  const subjectsRef = React.useRef(null);
+  const scrollSubjects = (dir) => {
+    const el = subjectsRef.current;
+    if (el) el.scrollBy({ left: dir * 336, behavior: 'smooth' });
+  };
 
   const heroStat = (label, value, sub) => (
     <div style={{
@@ -94,16 +114,21 @@ const StudentOverview = ({ onNav }) => {
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:32 }}>
           <div style={{ maxWidth:560 }}>
             <div style={{ fontSize:11, fontWeight:700, color:'rgba(255,255,255,0.78)', letterSpacing:'1.5px', marginBottom:14 }}>
-              YEAR 12 · SPRING TERM · WEEK 8
+              {cs.yearGroup.toUpperCase()} · {K.activeTerm.banner.toUpperCase()}
             </div>
             <h1 style={{ fontSize:38, fontWeight:800, color:'#fff', margin:'0 0 10px', letterSpacing:'-1px', lineHeight:1.05 }}>
-              Good morning, Oliver
+              Good morning, {cs.displayName}
             </h1>
             <div style={{ fontSize:15, color:'rgba(255,255,255,0.88)', lineHeight:1.5, marginBottom:22 }}>
-              You're <strong style={{ color:'#fff' }}>on track</strong> across all three subjects this term. {pendingHw.length} pieces of homework due, {urgentCount} urgent.
+              You're <strong style={{ color:'#fff' }}>on track</strong> across your {enrolments.length} subjects this term. {pendingHw.length} piece{pendingHw.length === 1 ? '' : 's'} of homework due, {urgentCount} urgent.
             </div>
             <div style={{ display:'flex', gap:10 }}>
-              <button onClick={() => onNav('homework')} style={{
+              {/* §9: targets the most-urgent in-progress assignment (overdue → due
+                  today → soonest). Overview no longer owns "Download report" —
+                  the Reports section is the single owner of report download. */}
+              <button onClick={() => onNav('homework')}
+                title={K.getContinueHomework() ? `Continue: ${K.getContinueHomework().title}` : 'Go to homework'}
+                style={{
                 padding:'10px 18px', borderRadius:10, border:'none',
                 background:'#fff', color:'#5B3FD9', fontSize:13, fontWeight:600,
                 cursor:'pointer', display:'inline-flex', alignItems:'center', gap:7,
@@ -111,22 +136,15 @@ const StudentOverview = ({ onNav }) => {
                 <Icon name="clip" size={14} color="#5B3FD9" />
                 Continue homework
               </button>
-              <button style={{
-                padding:'10px 18px', borderRadius:10, border:'1px solid rgba(255,255,255,0.35)',
-                background:'transparent', color:'#fff', fontSize:13, fontWeight:500,
-                cursor:'pointer',
-              }}>
-                Download report
-              </button>
             </div>
           </div>
 
           {/* Stat tiles 2x2 */}
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
-            {heroStat('Average score', `${avgScore}%`, '+3% this term')}
-            {heroStat('Attendance', '96.3%', '+0.8% vs last')}
+            {heroStat('Average score', `${avgScore}%`, `${termTrend >= 0 ? '+' : ''}${termTrend}% vs last · all subjects`)}
+            {heroStat('Attendance', `${attendance}%`, 'All subjects, this term')}
             {heroStat('Homework due', pendingHw.length, urgentCount ? `${urgentCount} urgent` : 'None urgent')}
-            {heroStat('Sessions / wk', '4', 'Next Mon 09:00')}
+            {heroStat('Sessions / wk', perWeek, nextSession ? `Next ${nextSession.date} ${nextSession.time.split('–')[0]}` : '—')}
           </div>
         </div>
       </div>
@@ -137,37 +155,54 @@ const StudentOverview = ({ onNav }) => {
           <h2 style={{ fontSize:20, fontWeight:800, color:DS.text, margin:'0 0 4px', letterSpacing:'-0.4px' }}>My subjects</h2>
           <div style={{ fontSize:13, color:DS.muted }}>Latest scores and predicted grades</div>
         </div>
-        <button onClick={() => onNav('progress')} style={{
-          background:'none', border:'none', color:DS.muted, fontSize:13, cursor:'pointer',
-        }}>View all progress →</button>
+        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+          <button onClick={() => scrollSubjects(-1)} aria-label="Previous subjects" style={{
+            width:32, height:32, borderRadius:8, border:`1px solid ${DS.cardBorder}`,
+            background:DS.bg, color:DS.muted, cursor:'pointer', display:'inline-flex',
+            alignItems:'center', justifyContent:'center', fontSize:16, lineHeight:1,
+          }}>‹</button>
+          <button onClick={() => scrollSubjects(1)} aria-label="Next subjects" style={{
+            width:32, height:32, borderRadius:8, border:`1px solid ${DS.cardBorder}`,
+            background:DS.bg, color:DS.muted, cursor:'pointer', display:'inline-flex',
+            alignItems:'center', justifyContent:'center', fontSize:16, lineHeight:1,
+          }}>›</button>
+          <button onClick={() => onNav('progress')} style={{
+            background:'none', border:'none', color:DS.muted, fontSize:13, cursor:'pointer',
+          }}>View all →</button>
+        </div>
       </div>
 
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:16, marginBottom:28 }}>
-        {studentSelf.subjects.map(s => {
-          const theme = subjectThemes[s.name] || subjectThemes['Mathematics'];
+      <div ref={subjectsRef} style={{
+        display:'flex', gap:16, marginBottom:28, overflowX:'auto', paddingBottom:4,
+        scrollSnapType:'x mandatory', scrollbarWidth:'none', msOverflowStyle:'none',
+      }}>
+        {enrolments.map(s => {
+          const theme = subjectThemes[s.subject] || subjectThemes['Mathematics'];
           const latest = s.scores[s.scores.length-1];
           return (
-            <div key={s.name} style={{
-              position:'relative', overflow:'hidden',
-              background: theme.tint, borderRadius:18,
+            <div key={s.subject} style={{
+              position:'relative', overflow:'hidden', flex:'1 0 280px', scrollSnapAlign:'start',
+              background: `linear-gradient(150deg, ${theme.tint} 0%, ${theme.tint2} 100%)`, borderRadius:18,
               padding:'22px 24px 24px', minHeight:220,
               display:'flex', flexDirection:'column', justifyContent:'space-between',
             }}>
               <SubjectShape theme={theme} />
               <div style={{ position:'relative', zIndex:1 }}>
                 <div style={{ fontSize:11, fontWeight:700, color:theme.deep, letterSpacing:'1px', opacity:0.7 }}>SUBJECT</div>
-                <div style={{ fontSize:24, fontWeight:800, color:theme.text, marginTop:4, letterSpacing:'-0.5px' }}>{s.name}</div>
+                <div style={{ fontSize:24, fontWeight:800, color:theme.text, marginTop:4, letterSpacing:'-0.5px' }}>{s.subject}</div>
               </div>
               <div style={{ position:'relative', zIndex:1, display:'flex', justifyContent:'space-between', alignItems:'flex-end' }}>
                 <div>
                   <div style={{ fontSize:42, fontWeight:800, color:theme.text, letterSpacing:'-1.5px', lineHeight:1 }}>{latest}%</div>
                   <div style={{ fontSize:12, color:theme.deep, marginTop:4, opacity:0.75 }}>Latest score · {s.scores.length} assessments</div>
                 </div>
-                <div style={{
+                {/* Predicted grade is teacher-set + read-only, rendered through the
+                    canonical grade model (§3) for this enrolment's qualification. */}
+                <div title="Predicted grade — set by your teacher" style={{
                   background:'rgba(255,255,255,0.55)', borderRadius:10,
                   padding:'8px 10px', textAlign:'center', minWidth:54,
                 }}>
-                  <div style={{ fontSize:18, fontWeight:800, color:theme.text, lineHeight:1 }}>{s.predicted}</div>
+                  <div style={{ fontSize:18, fontWeight:800, color:theme.text, lineHeight:1 }}><K.GradeChip value={s.predictedGrade} qualification={s.qualification} color={theme.text} variant="bare" title="Predicted grade — set by your teacher" /></div>
                   <div style={{ fontSize:9, fontWeight:700, color:theme.deep, letterSpacing:'1px', marginTop:3, opacity:0.8 }}>PREDICTED</div>
                 </div>
               </div>
@@ -185,8 +220,13 @@ const StudentOverview = ({ onNav }) => {
             <button onClick={() => onNav('homework')} style={{ background:'none', border:'none', color:DS.muted, fontSize:12, cursor:'pointer' }}>See all</button>
           </div>
           {pendingHw.slice(0,3).map((hw, i, arr) => {
-            const subj = studentSelf.subjects.find(x => x.name === hw.subject);
-            const color = subj ? subj.color : DS.accent;
+            const enr   = K.getEnrolment(hw.subject);
+            const color = enr ? enr.subjectColor : DS.accent;
+            // §9: ONE correct due-state per item (no more "Today" + "Overdue"
+            // together). §6: teacher resolves from the enrolment, not the row.
+            const state = K.dueState(hw);
+            const badgeVariant = state === 'overdue' ? 'danger' : state === 'due-today' ? 'warning' : 'default';
+            const alarm = state === 'overdue' || state === 'due-today';
             return (
               <div key={hw.id} style={{
                 padding:'14px 18px',
@@ -198,13 +238,13 @@ const StudentOverview = ({ onNav }) => {
                   <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:2 }}>
                     <span style={{ fontSize:13, fontWeight:600, color:DS.text }}>{hw.title}</span>
                   </div>
-                  <div style={{ fontSize:11, color:DS.muted, marginBottom:4 }}>{hw.subject} · {hw.teacher}</div>
-                  <div style={{ fontSize:11, fontWeight: hw.urgent ? 600 : 400, color: hw.urgent ? DS.danger : DS.muted }}>
+                  <div style={{ fontSize:11, color:DS.muted, marginBottom:4 }}>{hw.subject} · {K.resolveTeacher(hw.subject)}</div>
+                  <div style={{ fontSize:11, fontWeight: alarm ? 600 : 400, color: alarm ? DS.danger : DS.muted }}>
                     Due {hw.due.replace(', 11:59 PM','').replace('Today','today').replace(/PM/, 'pm')}
                   </div>
                 </div>
                 <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:6 }}>
-                  {hw.urgent ? <Badge variant="warning">Today</Badge> : <Badge variant="default">Overdue</Badge>}
+                  <Badge variant={badgeVariant}>{K.dueLabel(hw)}</Badge>
                   <Btn variant="primary" small onClick={() => onNav('homework')}>Start</Btn>
                 </div>
               </div>
@@ -218,9 +258,9 @@ const StudentOverview = ({ onNav }) => {
             <div style={{ fontSize:15, fontWeight:700, color:DS.text }}>Upcoming sessions</div>
             <button onClick={() => onNav('sessions')} style={{ background:'none', border:'none', color:DS.muted, fontSize:12, cursor:'pointer' }}>See all</button>
           </div>
-          {studentSessions.slice(0,3).map((s, i) => {
-            const subj = studentSelf.subjects.find(x => x.name === s.subject);
-            const color = subj ? subj.color : DS.accent;
+          {K.sessions.upcoming.slice(0,3).map((s, i) => {
+            const enr = K.getEnrolment(s.subject);
+            const color = enr ? enr.subjectColor : DS.accent;
             const m = s.date.match(/(\d+)\s+(\w+)/);
             const day = m ? m[1] : '';
             const mon = m ? m[2].toUpperCase() : '';
@@ -285,123 +325,23 @@ const StudentOverview = ({ onNav }) => {
   );
 };
 
-// ─── Homework page ──────────────────────────────────────────────────────────────
-const StudentHomeworkPage = () => {
-  const [tab, setTab] = React.useState('pending');
-  const [submitting, setSubmitting] = React.useState(null);
-  const [submitText, setSubmitText] = React.useState('');
-  const [submitted, setSubmitted] = React.useState([]);
-
-  const filtered = studentHomework.filter(hw =>
-    tab === 'pending'   ? hw.status === 'pending' && !submitted.includes(hw.id) :
-    tab === 'submitted' ? hw.status === 'submitted' || submitted.includes(hw.id) :
-    hw.status === 'marked'
-  );
-
-  return (
-    <div style={{ padding:'32px' }}>
-      <PageHeader title="My Homework" subtitle="Track, submit, and review your assignments" actions={[
-        <Badge key="p" variant="warning">{studentHomework.filter(h=>h.status==='pending' && !submitted.includes(h.id)).length} pending</Badge>
-      ]} />
-
-      <div style={{ display:'flex', borderBottom:`1px solid ${DS.border}`, marginBottom:20 }}>
-        {[['pending','Pending'],['submitted','Submitted'],['marked','Marked']].map(([id,label]) => (
-          <button key={id} onClick={() => setTab(id)} style={{
-            padding:'10px 18px', border:'none', background:'none', cursor:'pointer',
-            fontSize:14, fontWeight: tab===id ? 600 : 400,
-            color: tab===id ? DS.accent : DS.muted,
-            borderBottom:`2px solid ${tab===id ? DS.accent : 'transparent'}`,
-            marginBottom:-1,
-          }}>
-            {label}
-          </button>
-        ))}
-      </div>
-
-      <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
-        {filtered.length === 0 && (
-          <div style={{ textAlign:'center', padding:'48px', color:DS.faint, fontSize:14 }}>
-            Nothing here yet.
-          </div>
-        )}
-        {filtered.map(hw => (
-          <div key={hw.id} style={{
-            background:DS.bg, border:`1px solid ${hw.urgent ? DS.dangerBorder : DS.border}`,
-            borderRadius:10, overflow:'hidden',
-          }}>
-            <div style={{ padding:'20px' }}>
-              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:8 }}>
-                <div>
-                  <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:4 }}>
-                    <span style={{ fontSize:15, fontWeight:600, color:DS.text }}>{hw.title}</span>
-                    {hw.urgent && <Badge variant="danger">Due today</Badge>}
-                    {hw.status === 'marked' && <ScorePill score={hw.score} />}
-                  </div>
-                  <div style={{ fontSize:13, color:DS.muted }}>{hw.subject} · {hw.teacher} · Due {hw.due}</div>
-                </div>
-                <div>
-                  {(hw.status === 'pending' && !submitted.includes(hw.id)) && (
-                    <Btn variant="primary" onClick={() => setSubmitting(hw.id)}>Submit Work</Btn>
-                  )}
-                  {(hw.status === 'submitted' || submitted.includes(hw.id)) && (
-                    <Badge variant="info">Submitted</Badge>
-                  )}
-                </div>
-              </div>
-
-              {hw.desc && (
-                <div style={{ fontSize:13, color:DS.sub, lineHeight:1.6, padding:'10px 14px', background:DS.surface, borderRadius:7, marginTop:8 }}>
-                  {hw.desc}
-                </div>
-              )}
-
-              {(hw.status === 'marked' || hw.feedback) && hw.feedback && (
-                <div style={{ marginTop:12, padding:'10px 14px', background:DS.accentLight, borderRadius:7, border:`1px solid ${DS.accentBorder}` }}>
-                  <div style={{ fontSize:11, fontWeight:600, color:DS.accent, marginBottom:4 }}>TEACHER FEEDBACK</div>
-                  <div style={{ fontSize:13, color:DS.sub, lineHeight:1.6 }}>{hw.feedback}</div>
-                </div>
-              )}
-            </div>
-
-            {submitting === hw.id && (
-              <div style={{ padding:'0 20px 20px' }}>
-                <Divider margin="0 0 16px" />
-                <div style={{ fontSize:13, fontWeight:600, color:DS.sub, marginBottom:8 }}>Your answer</div>
-                <textarea
-                  rows={4}
-                  value={submitText}
-                  onChange={e => setSubmitText(e.target.value)}
-                  placeholder="Type your answer or paste your working here…"
-                  style={{
-                    width:'100%', padding:'10px 12px', borderRadius:7,
-                    border:`1px solid ${DS.border}`, fontSize:13, color:DS.text,
-                    outline:'none', resize:'vertical', boxSizing:'border-box',
-                    fontFamily:'inherit',
-                  }}
-                />
-                <div style={{ display:'flex', gap:8, marginTop:10 }}>
-                  <Btn variant="primary" icon="upload" onClick={() => {
-                    setSubmitted(p => [...p, hw.id]);
-                    setSubmitting(null);
-                    setSubmitText('');
-                  }}>Submit</Btn>
-                  <Btn variant="secondary" onClick={() => setSubmitting(null)}>Cancel</Btn>
-                </div>
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-};
+// NOTE: the student Homework surface (Assignments · Submitted · Results, the full
+// attempt/submission/marking loop) lives in Homework.jsx as `StudentHomework` and
+// is what the router renders. The earlier local `StudentHomeworkPage` here was a
+// dead, never-routed duplicate (plain textarea submit) and has been removed.
 
 // ─── Progress page ──────────────────────────────────────────────────────────────
 const StudentProgressPage = () => {
+  // §2/§4: subjects, scores, per-subject class averages, predicted grades and
+  // attendance all come from the enrolment SoT + studentMetrics. Attendance here
+  // is the SAME record the Overview all-subjects figure derives from (§4), just
+  // scoped to this subject and labelled as such.
+  const K = window.klayoStudent;
+  const enrolments = K.getEnrolments();
   const [activeSub, setActiveSub] = React.useState(0);
-  const sub = studentSelf.subjects[activeSub];
-  const classAvg = [65,66,67,68,69,70,71,72];
-  const scoreLabels = ['4 Mar','11 Mar','18 Mar','25 Mar','1 Apr','8 Apr','15 Apr','22 Apr'];
+  const sub = enrolments[activeSub];
+  const classAvg = sub.classAvg;
+  const scoreLabels = K.activeTerm.assessmentLabels;
 
   return (
     <div style={{ padding:'32px' }}>
@@ -409,23 +349,23 @@ const StudentProgressPage = () => {
 
       {/* Subject tabs */}
       <div style={{ display:'flex', gap:12, marginBottom:24 }}>
-        {studentSelf.subjects.map((s, i) => (
-          <button key={s.name} onClick={() => setActiveSub(i)} style={{
-            padding:'8px 20px', borderRadius:20, border:`1px solid ${activeSub===i ? s.color : DS.border}`,
-            background: activeSub===i ? s.color + '18' : DS.bg,
-            color: activeSub===i ? s.color : DS.muted,
+        {enrolments.map((s, i) => (
+          <button key={s.subject} onClick={() => setActiveSub(i)} style={{
+            padding:'8px 20px', borderRadius:20, border:`1px solid ${activeSub===i ? s.subjectColor : DS.border}`,
+            background: activeSub===i ? s.subjectColor + '18' : DS.bg,
+            color: activeSub===i ? s.subjectColor : DS.muted,
             fontSize:14, fontWeight: activeSub===i ? 600 : 400, cursor:'pointer',
-          }}>{s.name}</button>
+          }}>{s.subject}</button>
         ))}
       </div>
 
       <div style={{ display:'grid', gridTemplateColumns:'1fr 280px', gap:20 }}>
         <div>
           {/* Score trend chart */}
-          <Card title={`Score Trend — ${sub.name}`} style={{ marginBottom:20 }} actions={[
+          <Card title={`Score Trend — ${sub.subject}`} style={{ marginBottom:20 }} actions={[
             <div key="leg" style={{ display:'flex', gap:12 }}>
               <div style={{ display:'flex', alignItems:'center', gap:5 }}>
-                <div style={{ width:16, height:2, background:sub.color, borderRadius:2 }} />
+                <div style={{ width:16, height:2, background:sub.subjectColor, borderRadius:2 }} />
                 <span style={{ fontSize:11, color:DS.muted }}>Your score</span>
               </div>
               <div style={{ display:'flex', alignItems:'center', gap:5 }}>
@@ -438,8 +378,8 @@ const StudentProgressPage = () => {
               <LineChart
                 labels={scoreLabels}
                 series={[
-                  { label:'Your score', data:sub.scores, color:sub.color },
-                  { label:'Class avg',  data:classAvg,    color:DS.borderDark },
+                  { label:'Your score', data:sub.scores,  color:sub.subjectColor },
+                  { label:'Class avg',  data:classAvg,     color:DS.borderDark },
                 ]}
                 height={220}
               />
@@ -471,46 +411,53 @@ const StudentProgressPage = () => {
         {/* Right sidebar */}
         <div style={{ display:'flex', flexDirection:'column', gap:20 }}>
           {/* Summary card */}
+          {(() => {
+            const attendance = K.metrics.attendanceForSubject(sub.subject);
+            const vsClass    = K.metrics.subjectVsClass(sub.subject);
+            const subjectAvg = K.metrics.subjectAverage(sub.subject);
+            return (
           <div style={{
             background:DS.bg, border:`1px solid ${DS.border}`,
             borderRadius:10, padding:'24px',
-            borderTop:`3px solid ${sub.color}`,
+            borderTop:`3px solid ${sub.subjectColor}`,
           }}>
-            <div style={{ fontSize:13, color:DS.muted, marginBottom:12 }}>{sub.name} summary</div>
+            <div style={{ fontSize:13, color:DS.muted, marginBottom:12 }}>{sub.subject} summary</div>
             <div style={{ fontSize:40, fontWeight:800, color:DS.text, letterSpacing:'-1px', lineHeight:1 }}>
               {sub.scores[sub.scores.length-1]}%
             </div>
-            <div style={{ fontSize:12, color:DS.muted, marginTop:4 }}>Latest score</div>
+            <div style={{ fontSize:12, color:DS.muted, marginTop:4 }}>Latest score · {subjectAvg}% avg this term</div>
             <Divider />
             <div style={{ display:'flex', justifyContent:'space-between', marginBottom:8 }}>
               <span style={{ fontSize:13, color:DS.muted }}>Predicted grade</span>
-              <span style={{ fontSize:16, fontWeight:700, color:sub.color }}>{sub.predicted}</span>
+              <span style={{ fontSize:16 }}><K.GradeChip value={sub.predictedGrade} qualification={sub.qualification} color={sub.subjectColor} variant="bare" /></span>
             </div>
             <div style={{ display:'flex', justifyContent:'space-between', marginBottom:8 }}>
-              <span style={{ fontSize:13, color:DS.muted }}>Attendance</span>
-              <span style={{ fontSize:13, fontWeight:600, color: sub.attendance > 95 ? DS.success : DS.warning }}>{sub.attendance}%</span>
+              <span style={{ fontSize:13, color:DS.muted }}>Attendance <span style={{ color:DS.faint }}>· this subject</span></span>
+              <span style={{ fontSize:13, fontWeight:600, color: attendance > 95 ? DS.success : DS.warning }}>{attendance}%</span>
             </div>
             <div style={{ display:'flex', justifyContent:'space-between' }}>
-              <span style={{ fontSize:13, color:DS.muted }}>Above class avg</span>
-              <span style={{ fontSize:13, fontWeight:600, color:DS.success }}>
-                +{sub.scores[sub.scores.length-1] - classAvg[classAvg.length-1]}%
+              <span style={{ fontSize:13, color:DS.muted }}>{vsClass >= 0 ? 'Above' : 'Below'} class avg</span>
+              <span style={{ fontSize:13, fontWeight:600, color: vsClass >= 0 ? DS.success : DS.danger }}>
+                {vsClass >= 0 ? '+' : ''}{vsClass}%
               </span>
             </div>
           </div>
+            );
+          })()}
 
           {/* All subjects summary */}
           <Card title="All Subjects">
             <div style={{ padding:'8px 0' }}>
-              {studentSelf.subjects.map((s, i) => (
-                <div key={s.name} style={{
+              {enrolments.map((s, i) => (
+                <div key={s.subject} style={{
                   display:'flex', alignItems:'center', gap:12, padding:'10px 16px',
-                  borderBottom: i < studentSelf.subjects.length-1 ? `1px solid ${DS.border}` : 'none',
-                  cursor:'pointer', background: activeSub===i ? s.color+'0A' : 'transparent',
+                  borderBottom: i < enrolments.length-1 ? `1px solid ${DS.border}` : 'none',
+                  cursor:'pointer', background: activeSub===i ? s.subjectColor+'0A' : 'transparent',
                 }} onClick={() => setActiveSub(i)}>
-                  <div style={{ width:3, height:36, borderRadius:2, background:s.color, flexShrink:0 }} />
+                  <div style={{ width:3, height:36, borderRadius:2, background:s.subjectColor, flexShrink:0 }} />
                   <div style={{ flex:1 }}>
-                    <div style={{ fontSize:13, fontWeight:500, color:DS.text }}>{s.name}</div>
-                    <div style={{ fontSize:11, color:DS.muted }}>Predicted {s.predicted}</div>
+                    <div style={{ fontSize:13, fontWeight:500, color:DS.text }}>{s.subject}</div>
+                    <div style={{ fontSize:11, color:DS.muted }}>Predicted <K.GradeChip value={s.predictedGrade} qualification={s.qualification} color={s.subjectColor} variant="bare" /></div>
                   </div>
                   <ScorePill score={s.scores[s.scores.length-1]} />
                 </div>
@@ -525,22 +472,13 @@ const StudentProgressPage = () => {
 
 // ─── Sessions page ──────────────────────────────────────────────────────────────
 const StudentSessionsPage = () => {
-  const upcoming = [
-    { subject:'Mathematics',   teacher:'Mr Davies', date:'Mon 21 Apr', time:'09:00–10:00', room:'Room 3A', day:21 },
-    { subject:'Further Maths', teacher:'Mr Davies', date:'Tue 22 Apr', time:'10:15–11:15', room:'Room 3A', day:22 },
-    { subject:'Physics',       teacher:'Dr Patel',  date:'Wed 23 Apr', time:'13:00–14:00', room:'Lab 2',   day:23 },
-    { subject:'Mathematics',   teacher:'Mr Davies', date:'Thu 24 Apr', time:'09:00–10:00', room:'Room 3A', day:24 },
-  ];
-
-  const history = [
-    { subject:'Further Maths', teacher:'Mr Davies', date:'Mon 14 Apr', time:'10:15–11:15', status:'attended', day:14 },
-    { subject:'Physics',       teacher:'Dr Patel',  date:'Wed 16 Apr', time:'13:00–14:00', status:'attended', day:16 },
-    { subject:'Mathematics',   teacher:'Mr Davies', date:'Thu 17 Apr', time:'09:00–10:00', status:'attended', day:17 },
-    { subject:'Further Maths', teacher:'Mr Davies', date:'Tue 8 Apr',  time:'10:15–11:15', status:'missed',   day:8 },
-  ];
-
-  // Calendar: April 2026 (1 Apr 2026 = Wednesday, so col 2; 30 days)
-  const [month, setMonth] = React.useState({ name:'April 2026', firstDow:2, days:30 });
+  const K = window.klayoStudent;
+  // §2/§6: sessions, teachers and rooms all come from the enrolment SoT — no
+  // invented "Mr Davies" / "Dr Patel". §7: the calendar month is the single
+  // active-term value. Read-only — students can't self-book (correct).
+  const { upcoming, history } = K.sessions;
+  const cal = K.activeTerm.calendar;
+  const [month] = React.useState({ name: cal.name, firstDow: cal.firstDow, days: cal.days });
 
   const sessionsByDay = {};
   [...upcoming, ...history].forEach(s => {
@@ -553,17 +491,42 @@ const StudentSessionsPage = () => {
   for (let i = 0; i < month.firstDow; i++) cells.push(null);
   for (let d = 1; d <= month.days; d++) cells.push(d);
   while (cells.length % 7 !== 0) cells.push(null);
-  const today = 23; // demo "today"
+  const today = cal.today; // demo "today" (single source: active term)
 
   const subjColor = (name) => {
-    const subj = studentSelf.subjects.find(x => x.name === name);
-    return subj ? subj.color : DS.accent;
+    const enr = K.getEnrolment(name);
+    return enr ? enr.subjectColor : DS.accent;
+  };
+
+  // Export-to-Calendar (ICS): build a minimal VCALENDAR from the upcoming sessions
+  // and trigger a client-side download. No backend — an in-memory blob only.
+  const exportICS = () => {
+    const pad = (n) => String(n).padStart(2, '0');
+    const dt = (day, hhmm) => `202604${pad(day)}T${hhmm.replace(':', '')}00`;
+    const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Klayo//Student Sessions//EN'];
+    upcoming.forEach((s, i) => {
+      const [start, end] = s.time.split('–');
+      lines.push('BEGIN:VEVENT',
+        `UID:klayo-session-${s.day}-${i}@klayo`,
+        `DTSTART:${dt(s.day, start)}`,
+        `DTEND:${dt(s.day, end)}`,
+        `SUMMARY:${s.subject} — ${s.teacher}`,
+        `LOCATION:${s.room || ''}`,
+        'END:VEVENT');
+    });
+    lines.push('END:VCALENDAR');
+    const blob = new Blob([lines.join('\r\n')], { type: 'text/calendar' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'klayo-sessions.ics';
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
   };
 
   return (
     <div style={{ padding:'32px' }}>
       <PageHeader title="My Sessions" subtitle="Your upcoming and past tutoring sessions" actions={[
-        <Btn key="cal" variant="secondary" icon="download" small>Export to Calendar</Btn>
+        <Btn key="cal" variant="secondary" icon="download" small onClick={exportICS}>Export to Calendar</Btn>
       ]} />
 
       {/* Calendar */}
@@ -579,10 +542,10 @@ const StudentSessionsPage = () => {
           <div style={{ display:'flex', alignItems:'center', gap:6 }}>
             {/* Legend */}
             <div style={{ display:'flex', alignItems:'center', gap:14, marginRight:14 }}>
-              {studentSelf.subjects.map(s => (
-                <div key={s.name} style={{ display:'flex', alignItems:'center', gap:5 }}>
-                  <span style={{ width:8, height:8, borderRadius:'50%', background:s.color }} />
-                  <span style={{ fontSize:11, color:DS.muted }}>{s.name}</span>
+              {K.getEnrolments().map(s => (
+                <div key={s.subject} style={{ display:'flex', alignItems:'center', gap:5 }}>
+                  <span style={{ width:8, height:8, borderRadius:'50%', background:s.subjectColor }} />
+                  <span style={{ fontSize:11, color:DS.muted }}>{s.subject}</span>
                 </div>
               ))}
             </div>

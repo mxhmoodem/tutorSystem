@@ -69,6 +69,20 @@ const SEED_CLASSES = [
   { id:'c31', name:'A-Level Chemistry',    group:'Year 13 – Group A', teacher:'David Park',    day:'Friday',    time:'13:00–14:30', room:'Room 7', students:5,  capacity:8,  status:'active', tags:['A-Level','Exam Year'] },
   { id:'c32', name:'GCSE Spanish',         group:'Year 11 – Group B', teacher:'Claire Dubois', day:'Friday',    time:'14:00–15:30', room:'Room 8', students:8,  capacity:12, status:'active', tags:['GCSE','Exam Year'] },
   { id:'c33', name:'GCSE Business',        group:'Year 10 – Group A', teacher:'Rebecca Stone', day:'Friday',    time:'15:00–16:30', room:'Room 9', students:7,  capacity:12, status:'active', tags:['GCSE'] },
+
+  // ── Additional Sarah Clarke (Maths) sessions across the week — fill out her
+  //    timetable beyond Fridays so the teacher Timetable + admin Schedule both
+  //    show a full teaching week. These derive straight into her My Classes/
+  //    Dashboard via teacherMetrics (class-assignment JOIN). ──
+  { id:'c34', name:'GCSE Mathematics',     group:'Year 10 – Group C', teacher:'Sarah Clarke',  day:'Monday',    time:'09:00–10:30', room:'Room 3', students:7,  capacity:12, status:'active', tags:['GCSE'] },
+  { id:'c35', name:'A-Level Mathematics',  group:'Year 13 – Group A', teacher:'Sarah Clarke',  day:'Wednesday', time:'13:00–14:30', room:'Room 5', students:5,  capacity:8,  status:'active', tags:['A-Level','Exam Year'] },
+  { id:'c36', name:'GCSE Mathematics',     group:'Year 11 – Group C', teacher:'Sarah Clarke',  day:'Tuesday',   time:'11:00–12:30', room:'Room 3', students:6,  capacity:12, status:'active', tags:['GCSE','Exam Year'] },
+  { id:'c37', name:'A-Level Further Maths', group:'Year 12 – Group A', teacher:'Sarah Clarke', day:'Thursday',  time:'09:00–10:30', room:'Room 5', students:4,  capacity:8,  status:'active', tags:['A-Level'] },
+
+  // ── A few more classes for other teachers to enrich the weekly grid ──
+  { id:'c38', name:'GCSE Chemistry',       group:'Year 10 – Group C', teacher:'David Park',    day:'Wednesday', time:'09:00–10:30', room:'Room 7', students:8,  capacity:12, status:'active', tags:['GCSE'] },
+  { id:'c39', name:'GCSE English Lit.',    group:'Year 9 – Group A',  teacher:'Marcus Webb',   day:'Thursday',  time:'13:00–14:30', room:'Room 2', students:9,  capacity:12, status:'active', tags:['GCSE'] },
+  { id:'c40', name:'A-Level Biology',      group:'Year 13 – Group A', teacher:'James Okafor',  day:'Tuesday',   time:'13:00–14:30', room:'Lab 3', students:6,  capacity:10, status:'active', tags:['A-Level','Exam Year'] },
 ];
 
 // Students now persist in the shared store too (alongside teachers + classes) so
@@ -89,6 +103,23 @@ const SEED_STUDENTS = [
   { id:'s13', firstName:'Priya',   lastName:'Nair',      year:'Yr 10', dob:'2009-06-23', email:'priya.n@email.com',   phone:'07700 901013', address:'27 Laurel St, Leeds',    subjects:['Computer Science','Mathematics'], classIds:['c1','c10'], guardianName:'Vijay Nair', guardianRelation:'Father', guardianEmail:'v.nair@email.com', guardianPhone:'07700 911013', notes:'', attendance:90, hw:79, score:75, status:'active', teacher:'Sarah Clarke / Daniel Mehta', lastSeen:'Today' },
   { id:'s14', firstName:'Thomas',  lastName:'Hughes',    year:'Yr 13', dob:'2006-10-30', email:'thomas.h@email.com',  phone:'07700 901014', address:'3 Fir Close, Leeds',     subjects:['Physics','Further Maths'], classIds:['c13'], guardianName:'Linda Hughes', guardianRelation:'Mother', guardianEmail:'l.hughes@email.com', guardianPhone:'07700 911014', notes:'', attendance:96, hw:92, score:88, status:'active', teacher:'David Park', lastSeen:'Yesterday' },
   { id:'s15', firstName:'Aisha',   lastName:'Rahman',    year:'Yr 11', dob:'2008-09-15', email:'aisha.r@email.com',   phone:'07700 901015', address:'52 Chestnut Rd, Leeds',  subjects:['Geography','Science'], classIds:['c6','c12'], guardianName:'Yusuf Rahman', guardianRelation:'Father', guardianEmail:'y.rahman@email.com', guardianPhone:'07700 911015', notes:'', attendance:97, hw:88, score:82, status:'active', teacher:'Priya Nair / Aisha Begum', lastSeen:'Today' },
+
+  // ── New cohort (round 2) — mostly Sarah Clarke's maths classes so they flow
+  //    straight into the teacher Dashboard / My Students / Timetable via the
+  //    class-assignment JOIN. s18–s20 reconcile names that previously only
+  //    existed in the teacher-side mocks (Freya/Maya/Daniel) into the store. ──
+  { id:'s18', firstName:'Freya',   lastName:'Lindqvist', year:'Yr 13', dob:'2006-04-09', email:'freya.l@email.com',   phone:'07700 901018', address:'5 Juniper Rise, Leeds',  subjects:['Mathematics','Further Maths'], classIds:['c35','c37'], guardianName:'Erik Lindqvist', guardianRelation:'Father', guardianEmail:'e.lindqvist@email.com', guardianPhone:'07700 911018', notes:'', attendance:95, hw:90, score:86, status:'active', teacher:'Sarah Clarke', lastSeen:'Today' },
+  { id:'s19', firstName:'Maya',    lastName:'Choudhury', year:'Yr 11', dob:'2008-07-21', email:'maya.c@email.com',    phone:'07700 901019', address:'71 Bramble Way, Leeds',  subjects:['Mathematics','Science'], classIds:['c2','c6'], guardianName:'Ravi Choudhury', guardianRelation:'Father', guardianEmail:'r.choudhury@email.com', guardianPhone:'07700 911019', notes:'', attendance:89, hw:71, score:70, status:'active', teacher:'Sarah Clarke / Priya Nair', lastSeen:'Yesterday' },
+  { id:'s20', firstName:'Daniel',  lastName:'Owusu',     year:'Yr 12', dob:'2007-11-02', email:'daniel.o@email.com',  phone:'07700 901020', address:'23 Foxglove Ct, Leeds',  subjects:['Mathematics','Economics'], classIds:['c3','c17'], guardianName:'Abena Owusu', guardianRelation:'Mother', guardianEmail:'a.owusu@email.com', guardianPhone:'07700 911020', notes:'', attendance:84, hw:66, score:64, status:'at-risk', teacher:'Sarah Clarke / Rebecca Stone', lastSeen:'19 Apr' },
+  { id:'s21', firstName:'Ryan',    lastName:'Mitchell',  year:'Yr 10', dob:'2009-03-30', email:'ryan.m@email.com',    phone:'07700 901021', address:'9 Tanner St, Leeds',     subjects:['Mathematics','Computer Science'], classIds:['c34','c10'], guardianName:'Karen Mitchell', guardianRelation:'Mother', guardianEmail:'k.mitchell@email.com', guardianPhone:'07700 911021', notes:'', attendance:92, hw:80, score:74, status:'active', teacher:'Sarah Clarke / Daniel Mehta', lastSeen:'Today' },
+  { id:'s22', firstName:'Grace',   lastName:'Adeyemi',   year:'Yr 10', dob:'2009-05-14', email:'grace.a@email.com',   phone:'07700 901022', address:'44 Kestrel Dr, Leeds',   subjects:['Mathematics'], classIds:['c34','c1'], guardianName:'Femi Adeyemi', guardianRelation:'Father', guardianEmail:'f.adeyemi@email.com', guardianPhone:'07700 911022', notes:'', attendance:96, hw:88, score:83, status:'active', teacher:'Sarah Clarke', lastSeen:'Today' },
+  { id:'s23', firstName:'Oscar',   lastName:'Whitfield', year:'Yr 11', dob:'2008-08-27', email:'oscar.w@email.com',   phone:'07700 901023', address:'2 Marsh Lane, Leeds',    subjects:['Mathematics','Physics'], classIds:['c36','c20'], guardianName:'Helen Whitfield', guardianRelation:'Mother', guardianEmail:'h.whitfield@email.com', guardianPhone:'07700 911023', notes:'', attendance:78, hw:52, score:59, status:'at-risk', teacher:'Sarah Clarke / David Park', lastSeen:'12 Apr' },
+  { id:'s24', firstName:'Yasmin',  lastName:'Karimi',    year:'Yr 11', dob:'2008-02-05', email:'yasmin.k@email.com',  phone:'07700 901024', address:'88 Poppy Fields, Leeds', subjects:['Mathematics','Chemistry'], classIds:['c36'], guardianName:'Reza Karimi', guardianRelation:'Father', guardianEmail:'r.karimi@email.com', guardianPhone:'07700 911024', notes:'', attendance:94, hw:85, score:80, status:'active', teacher:'Sarah Clarke', lastSeen:'Yesterday' },
+  { id:'s25', firstName:'Toby',    lastName:'Grant',     year:'Yr 13', dob:'2006-09-18', email:'toby.g@email.com',    phone:'07700 901025', address:'17 Sorrel Close, Leeds', subjects:['Mathematics'], classIds:['c35'], guardianName:'Susan Grant', guardianRelation:'Mother', guardianEmail:'s.grant@email.com', guardianPhone:'07700 911025', notes:'', attendance:91, hw:83, score:81, status:'active', teacher:'Sarah Clarke', lastSeen:'Today' },
+  { id:'s26', firstName:'Ananya',  lastName:'Iyer',      year:'Yr 12', dob:'2007-06-11', email:'ananya.i@email.com',  phone:'07700 901026', address:'31 Cypress Ave, Leeds',  subjects:['Mathematics','Further Maths','Physics'], classIds:['c3','c37','c20'], guardianName:'Deepak Iyer', guardianRelation:'Father', guardianEmail:'d.iyer@email.com', guardianPhone:'07700 911026', notes:'', attendance:98, hw:94, score:90, status:'active', teacher:'Sarah Clarke / David Park', lastSeen:'Today' },
+  { id:'s27', firstName:'Marcus',  lastName:'Lowe',      year:'Yr 10', dob:'2009-10-08', email:'marcus.l@email.com',  phone:'07700 901027', address:'6 Alder Grove, Leeds',   subjects:['Chemistry','Biology'], classIds:['c38'], guardianName:'Janet Lowe', guardianRelation:'Mother', guardianEmail:'j.lowe@email.com', guardianPhone:'07700 911027', notes:'', attendance:90, hw:77, score:72, status:'active', teacher:'David Park', lastSeen:'Yesterday' },
+  { id:'s28', firstName:'Sofia',   lastName:'Ricci',     year:'Yr 9',  dob:'2010-12-03', email:'sofia.r@email.com',   phone:'07700 901028', address:'50 Vine St, Leeds',      subjects:['French'], classIds:['c15'], guardianName:'Paolo Ricci', guardianRelation:'Father', guardianEmail:'p.ricci@email.com', guardianPhone:'07700 911028', notes:'', attendance:93, hw:84, score:78, status:'active', teacher:'Claire Dubois', lastSeen:'Today' },
+  { id:'s29', firstName:'Elena',   lastName:'Popov',     year:'Yr 12', dob:'2007-01-27', email:'elena.p@email.com',   phone:'07700 901029', address:'12 Hawthorn Rd, Leeds',  subjects:['Biology','Chemistry'], classIds:['c16'], guardianName:'Nikolai Popov', guardianRelation:'Father', guardianEmail:'n.popov@email.com', guardianPhone:'07700 911029', notes:'', attendance:96, hw:89, score:85, status:'active', teacher:'James Okafor', lastSeen:'Today' },
 
   // ── Provisioned (signed up at the centre) but not yet claimed — and not yet in
   //    any class. Shows the §3 "account ≠ enrolment" path in the People tracker. ──
@@ -159,3 +190,13 @@ const allStudents = [
   { name:'Thomas Hughes',    year:'Yr 13', subjects:['Physics','Further Maths'],  attendance:96, hw:92, score:88, status:'active',   teacher:'Mr. Park',               lastSeen:'Yesterday' },
   { name:'Aisha Rahman',     year:'Yr 11', subjects:['Geography','Science'],      attendance:97, hw:88, score:82, status:'active',   teacher:'Ms. Nair / Ms. Begum',   lastSeen:'Today'     },
 ];
+
+// Expose the seeds on window so the centre-metrics selector layer (centreMetrics.jsx)
+// can read the roster before the admin store has been persisted on a fresh load.
+// Babel-standalone top-level `const`s are lexical globals (accessible by bare name to
+// AdminPages.jsx) but NOT window properties, so window.SEED_* would otherwise be
+// undefined. Additive — existing bare-name readers are unaffected.
+Object.assign(window, {
+  SEED_TEACHERS, SEED_CLASSES, SEED_STUDENTS, SEED_SUBJECTS,
+  SEED_YEAR_GROUPS, SEED_LEVELS, SEED_EXAM_BOARDS, allStudents,
+});

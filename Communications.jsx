@@ -143,13 +143,19 @@ function threadParties(t) {
   const us = (t.participants || []).map(userById).filter(Boolean);
   return { staff: us.filter(isStaff), students: us.filter(u => u.role === 'student') };
 }
-// A thread is safeguarding-monitored when it puts a student in contact with staff.
+// A thread is safeguarding-monitored when it puts a student (a minor) in contact
+// with staff. `monitored`/`channelType:'monitored'` is the explicit channel-type
+// flag stamped at creation (immutable, DSL-readable, attachment-restricted) — the
+// server-enforced invariant, honoured here first so it can't be dropped.
 function isMonitoredThread(t) {
   if (!t) return false;
+  if (t.monitored || t.channelType === 'monitored') return true;
   if (t.type === 'channel') return true;
   const { staff, students } = threadParties(t);
   return staff.length > 0 && students.length > 0;
 }
+// True when a thread contains a minor → attachments are restricted to text (D10).
+function threadHasMinor(t) { return !!t && threadParties(t).students.length > 0; }
 
 // ─── Client-side flagging ──────────────────────────────────────────────────────────
 const PHONE_RE  = /(?:\+?\d[\d\s().-]{8,}\d)/;
@@ -298,6 +304,20 @@ const threadVisible = (t, ctx) => {
   return (t.participants || []).includes(ctx.userId);
 };
 
+// A 1:1 student↔staff DM is DATA the active safety preset governs (§6): when 1:1
+// student↔staff messaging is off (Locked-down preset → dmEnabled=false), those
+// threads must not appear at all — the preset gates the DATA, not merely the
+// composer. Gating this dynamically also "repairs" the seed (the Sarah↔Oliver
+// 1:1) without deleting it: the thread simply reappears if the preset re-allows.
+const dmIsStudentStaff = (t) => {
+  if (!t || t.type !== 'dm' || (t.participants || []).length !== 2) return false;
+  const us = usersArr();
+  const roles = t.participants.map(pid => { const u = us.find(x => x.id === pid); return u ? u.role : null; });
+  return roles.includes('student') && roles.some(r => r === 'teacher' || r === 'admin');
+};
+const threadAllowedByPreset = (t, config) =>
+  !(!(config && config.dmEnabled) && dmIsStudentStaff(t));
+
 // ─── Unread maths ──────────────────────────────────────────────────────────────────
 const isExpired = (a) => a.expiresAt && a.expiresAt < COMMS_TODAY;
 const annUnread = (a, ctx) => !a.reads[ctx.userId];
@@ -309,8 +329,9 @@ function commsUnreadCount(store, ctx) {
   if (!store || !ctx || !ctx.user) return { announcements: 0, messages: 0, total: 0 };
   const ann = Object.values(store.announcements)
     .filter(a => !isExpired(a) && announcementVisible(a, ctx) && a.authorId !== ctx.userId && annUnread(a, ctx)).length;
+  const cfg = commsConfig(store, ctx.centreId);
   const msg = Object.values(store.threads)
-    .filter(t => threadVisible(t, ctx))
+    .filter(t => threadVisible(t, ctx) && threadAllowedByPreset(t, cfg))
     .reduce((s, t) => s + threadUnreadCount(store, t, ctx), 0);
   return { announcements: ann, messages: msg, total: ann + msg };
 }
@@ -328,8 +349,10 @@ function useComms(ctx) {
   const announcements = Object.values(store.announcements)
     .filter(a => announcementVisible(a, ctx))
     .sort((x, y) => (y.pinned - x.pinned) || (y.createdAt > x.createdAt ? 1 : -1));
+  const cfg = commsConfig(store, ctx.centreId);
   const threads = Object.values(store.threads)
-    .filter(t => threadVisible(t, ctx))
+    // Preset gates the data (§6): student↔staff 1:1 DMs vanish when 1:1 is off.
+    .filter(t => threadVisible(t, ctx) && threadAllowedByPreset(t, cfg))
     .sort((x, y) => (y.lastMessageAt > x.lastMessageAt ? 1 : -1));
   const messagesFor = (threadId) => Object.values(store.messages)
     .filter(m => m.threadId === threadId)
@@ -379,6 +402,29 @@ function useComms(ctx) {
       if (!ids.length) return;
       mutate('messages', m => { ids.forEach(id => { m[id] = { ...m[id], readBy: { ...(m[id].readBy || {}), [ctx.userId]: stamp() } }; }); return m; });
     },
+    // Mark EVERY unread announcement + message the user can see as read, in a
+    // single persist. Looping the per-item mutators would clobber each other
+    // (they all close over the same `store` snapshot), so this batches them.
+    markAllRead() {
+      const now = stamp();
+      const nextAnn = { ...store.announcements };
+      let touched = false;
+      announcements.forEach(a => {
+        if (a.authorId !== ctx.userId && !a.reads[ctx.userId] && !isExpired(a)) {
+          nextAnn[a.id] = { ...a, reads: { ...a.reads, [ctx.userId]: now } };
+          touched = true;
+        }
+      });
+      const nextMsg = { ...store.messages };
+      Object.values(store.messages).forEach(m => {
+        const t = store.threads[m.threadId];
+        if (t && threadVisible(t, ctx) && m.senderId !== ctx.userId && !(m.readBy || {})[ctx.userId]) {
+          nextMsg[m.id] = { ...m, readBy: { ...(m.readBy || {}), [ctx.userId]: now } };
+          touched = true;
+        }
+      });
+      if (touched) persist({ ...store, announcements: nextAnn, messages: nextMsg });
+    },
     sendMessage(threadId, body) {
       const text = (body || '').trim();
       if (!text) return;
@@ -390,15 +436,28 @@ function useComms(ctx) {
         threads:  { ...store.threads, [threadId]: { ...store.threads[threadId], lastMessageAt: msg.createdAt } } };
       persist(next);
     },
-    // Find an existing DM between self + other, or create one. Returns threadId.
+    // Find an existing DM between self + other, or create one. Returns threadId
+    // (or null when the safety preset forbids it).
     openOrCreateDm(otherId) {
+      // Preset gates creation too (§6): no new 1:1 student↔staff DM when 1:1
+      // student↔staff messaging is off.
+      const other = usersArr().find(u => u.id === otherId);
+      const crossesStudentStaff = other && (
+        (other.role === 'student' && (ctx.role === 'teacher' || ctx.role === 'admin')) ||
+        ((other.role === 'teacher' || other.role === 'admin') && ctx.role === 'student'));
+      if (crossesStudentStaff && !cfg.dmEnabled) return null;
       const existing = Object.values(store.threads).find(t =>
         t.type === 'dm' && t.participants.length === 2 &&
         t.participants.includes(ctx.userId) && t.participants.includes(otherId));
       if (existing) return existing.id;
       const id = newId('th');
+      // SAFEGUARDING INVARIANT (server-enforced later): a thread with a minor can
+      // never be a PRIVATE 1:1. Any new student↔staff thread is stamped as a
+      // monitored channel-type (monitored + DSL-readable + attachment-restricted +
+      // immutable), so the composer cannot produce an unmonitored teacher↔student DM.
       const t = { id, centreId: ctx.centreId, type: 'dm', participants: [ctx.userId, otherId],
-        classId: null, subject: null, createdBy: ctx.userId, createdAt: stamp(), lastMessageAt: stamp() };
+        classId: null, subject: null, createdBy: ctx.userId, createdAt: stamp(), lastMessageAt: stamp(),
+        monitored: crossesStudentStaff || undefined, channelType: crossesStudentStaff ? 'monitored' : undefined };
       mutate('threads', m => { m[id] = t; return m; });
       return id;
     },
@@ -567,7 +626,12 @@ const AnnouncementCard = ({ a, comms, onNavigate }) => {
           )}
 
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-            {!isAuthor && a.authorId && (
+            {/* §8: a student-initiated thread is always a monitored institutional
+                record. Only offer "Message <sender>" when the student is actually
+                permitted to contact that sender (canMessage) — otherwise hide it,
+                so it can never open an unpermitted/unmonitored channel. */}
+            {!isAuthor && a.authorId && ctx.role !== 'superadmin'
+              && (ctx.role !== 'student' || canMessage(ctx.user, userById(a.authorId))) && (
               <Btn small variant="ghost" icon="mail" onClick={() => onNavigate && onNavigate(ctx.role, 'comms:messages')}>
                 Message {(a.authorName || '').split(' ')[0]}
               </Btn>
@@ -700,7 +764,12 @@ const RailCard = ({ children, accent }) => (
 const AnnouncementCompose = ({ comms, onPublished }) => {
   const { ctx } = comms;
   const user = ctx.user;
-  const cards = AUDIENCE_CARDS.filter(c => c.mode === 'platform' ? user.role === 'superadmin' : canAnnounce(user, c.scope));
+  // Owner console targets at the PLATFORM level only — All centres / specific
+  // centres / by role across the platform. By class / year group / subject are
+  // centre-admin concerns and must never leak into the owner's audience picker.
+  const cards = user.role === 'superadmin'
+    ? AUDIENCE_CARDS.filter(c => c.mode === 'platform' || c.mode === 'role')
+    : AUDIENCE_CARDS.filter(c => c.mode === 'platform' ? false : canAnnounce(user, c.scope));
 
   const [mode, setMode] = React.useState((cards[0] || {}).mode || 'centre');
   const [title, setTitle] = React.useState('');
@@ -718,7 +787,9 @@ const AnnouncementCompose = ({ comms, onPublished }) => {
   const [pinned, setPinned] = React.useState(false);
 
   const card = cards.find(c => c.mode === mode) || cards[0];
-  const scope = card.scope;
+  // For the owner, "By role" is platform-wide (there's no owning centre), so a
+  // centre-scoped card resolves to a platform scope across all centres.
+  const scope = (user.role === 'superadmin' && card.scope === 'centre') ? 'platform' : card.scope;
 
   const myClasses = React.useMemo(() => {
     const all = seedClasses();
@@ -783,7 +854,7 @@ const AnnouncementCompose = ({ comms, onPublished }) => {
         </Field>
         <Field label="Message" required>
           <Textarea value={body} onChange={e => setBody(e.target.value)} style={{ minHeight: 130 }}
-            placeholder="Write your announcement. This is one-way — recipients can't reply in-thread, but they can start a monitored message to you if they need to respond." />
+            placeholder="Write your announcement. This is one-way — recipients can't reply in-thread, but they can raise a monitored request through their centre if they need to respond." />
         </Field>
 
         <Section label="Who receives this">
@@ -1098,8 +1169,9 @@ const ThreadView = ({ t, comms }) => {
           <div style={{ fontSize: 12.5, color: DS.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{subtitle}</div>
         </div>
         {isGroup && <AvatarStack participants={t.participants} ctx={ctx} />}
-        <RoundIconBtn icon="video" title="Start video call" />
-        <RoundIconBtn icon="phone" title="Start voice call" />
+        {/* §8: no video/voice call affordances — calls are ephemeral and
+            unrecordable, which breaks the immutable-record safeguarding invariant
+            for any thread that can include a minor. */}
         <RoundIconBtn icon="dots" title="More" />
       </div>
 
@@ -1147,9 +1219,20 @@ const ThreadView = ({ t, comms }) => {
             <input value={draft} onChange={e => setDraft(e.target.value)} placeholder="Type a message"
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
               style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: 14, color: DS.text }} />
-            <button style={iconBtn} title="Attach image"><Icon name="image" size={18} color={DS.faint} /></button>
-            <button style={iconBtn} title="Share location"><Icon name="pin" size={18} color={DS.faint} /></button>
-            <button style={iconBtn} title="Voice note"><Icon name="mic" size={18} color={DS.faint} /></button>
+            {/* SAFEGUARDING (D10): threads with a minor are text-only — location
+                sharing and voice notes are removed and image attach is disabled. */}
+            {threadHasMinor(t) ? (
+              <span title="Text only — attachments are restricted in safeguarding-monitored conversations."
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '0 8px', fontSize: 11, color: DS.faint, whiteSpace: 'nowrap' }}>
+                <Icon name="lock" size={13} color={DS.faint} /> Text only
+              </span>
+            ) : (
+              <>
+                <button style={iconBtn} title="Attach image"><Icon name="image" size={18} color={DS.faint} /></button>
+                <button style={iconBtn} title="Share location"><Icon name="pin" size={18} color={DS.faint} /></button>
+                <button style={iconBtn} title="Voice note"><Icon name="mic" size={18} color={DS.faint} /></button>
+              </>
+            )}
             <button onClick={send} title="Send" style={{ width: 40, height: 40, borderRadius: 12, border: 'none', background: DS.accent, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, opacity: draft.trim() ? 1 : 0.55 }}>
               <Icon name="send" size={18} color="#fff" />
             </button>
@@ -1240,7 +1323,12 @@ const NewMessageModal = ({ open, onClose, comms, onOpenThread }) => {
     if (id) { onClose(); onOpenThread(id); }
   };
 
-  const modeTabs = [{ id: 'direct', label: 'Direct' }, { id: 'group', label: 'Group' }];
+  // §8: a student can only start a monitored 1:1 with staff (canMessage already
+  // forbids student↔student). Group chats are teacher/admin-created only, so the
+  // Group tab is hidden for students — they can never author a group.
+  const modeTabs = ctx.role === 'student'
+    ? [{ id: 'direct', label: 'Direct' }]
+    : [{ id: 'direct', label: 'Direct' }, { id: 'group', label: 'Group' }];
   const srcTabs  = [{ id: 'class', label: 'Class' }, { id: 'subject', label: 'Subject' }, { id: 'people', label: 'People' }];
 
   return (
@@ -1684,6 +1772,8 @@ const CommunicationsPage = ({ role, section, comms }) => {
   // `inbox` kept as an alias for older links → Messages.
   let sec = section || 'announcements';
   if (sec === 'inbox') sec = 'messages';
+  // Owner console has no Messages surface — fold any stale link back to Announcements.
+  if (sec === 'messages' && role === 'superadmin') sec = 'announcements';
   if (sec === 'safeguarding' && role !== 'admin') sec = 'announcements';
   if (sec === 'settings' && role !== 'admin') sec = 'announcements';
   const isSuper = role === 'superadmin';
@@ -1719,78 +1809,263 @@ const CommunicationsPage = ({ role, section, comms }) => {
 // ══════════════════════════════════════════════════════════════════════════════════
 //  NOTIFICATION BELL (topbar)
 // ══════════════════════════════════════════════════════════════════════════════════
+// Activity notifications live outside comms (e.g. homework submissions to mark),
+// which have no read model of their own. We track "cleared" ones in localStorage,
+// keyed by user + a signature that embeds the current count — so when the count
+// changes (new submissions land) the notification naturally re-appears.
+const NOTIF_DISMISS_KEY = 'tutoros.notifs.dismissed.v1';
+const loadDismissed = (userId) => {
+  try { return (JSON.parse(localStorage.getItem(NOTIF_DISMISS_KEY)) || {})[userId] || {}; }
+  catch (e) { return {}; }
+};
+const saveDismissed = (userId, map) => {
+  let all = {};
+  try { all = JSON.parse(localStorage.getItem(NOTIF_DISMISS_KEY)) || {}; } catch (e) { all = {}; }
+  all[userId] = map;
+  try { localStorage.setItem(NOTIF_DISMISS_KEY, JSON.stringify(all)); } catch (e) {}
+};
+
+const activityMatchesCtx = (it, ctx) => {
+  if (!it || !ctx || !ctx.user) return false;
+  if (it.userIds && !it.userIds.includes(ctx.userId)) return false;
+  if (it.roles && !it.roles.includes(ctx.role)) return false;
+  if (it.centreIds && !it.centreIds.includes(ctx.user.centreId)) return false;
+  return true;
+};
+
+const activityToneMeta = (tone) => ({
+  success: { bg: DS.successBg, color: DS.success },
+  warning: { bg: DS.warningBg, color: DS.warning },
+  danger:  { bg: DS.dangerBg,  color: DS.danger },
+  info:    { bg: DS.accentLight, color: DS.accent },
+}[tone] || { bg: DS.surface, color: DS.muted });
+
+// Cross-module activity feed (homework submissions / marked feedback). Guarded so
+// load order can never break the bell. Each item carries a stable `sig` used for
+// dismissal, and its own `go` target.
+function activityItems(ctx) {
+  const out = [];
+  const seeded = (typeof COMMS_ACTIVITY_NOTIFICATIONS !== 'undefined' ? COMMS_ACTIVITY_NOTIFICATIONS : [])
+    .filter(it => activityMatchesCtx(it, ctx));
+
+  seeded.forEach(it => out.push({
+    kind: it.kind || 'activity',
+    id: it.id,
+    sig: it.sig || `${ctx.userId}:${it.id}`,
+    icon: it.icon || 'bell',
+    page: it.page || 'dashboard',
+    title: it.title,
+    sub: it.sub,
+    time: it.time || null,
+    tone: it.tone || 'info',
+  }));
+
+  const badges = (typeof window !== 'undefined' && window.getHomeworkBadges) ? window.getHomeworkBadges() : null;
+  if (badges && ctx.role === 'teacher' && badges.teacherToMark > 0) {
+    const n = badges.teacherToMark;
+    out.push({ kind: 'hw', id: 'hw-mark', sig: 'hw-mark:' + n, icon: 'clip', page: 'homework', tone: 'success',
+      title: `${n} submission${n === 1 ? '' : 's'} awaiting marking`, sub: 'Homework · needs your review' });
+  }
+  if (badges && ctx.role === 'student' && badges.studentUnreadFeedback > 0) {
+    const n = badges.studentUnreadFeedback;
+    out.push({ kind: 'hw', id: 'hw-feedback', sig: 'hw-feedback:' + n, icon: 'star', page: 'homework', tone: 'success',
+      title: `${n} assignment${n === 1 ? '' : 's'} marked`, sub: 'Homework · feedback ready' });
+  }
+  return out.sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0));
+}
+
+// Small circular icon chip used per notification row.
+const NotifChip = ({ icon, bg, color }) => (
+  <div style={{ width: 34, height: 34, borderRadius: 9, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: bg, color }}>
+    <Icon name={icon} size={16} />
+  </div>
+);
+
 const NotificationBell = ({ comms, onNavigate }) => {
   const { ctx } = comms;
   const [open, setOpen] = React.useState(false);
-  const ref = React.useRef(null);
+  const [dismissed, setDismissed] = React.useState(() => (ctx.user ? loadDismissed(ctx.userId) : {}));
   const unread = comms.unread;
 
   React.useEffect(() => {
+    if (ctx.user) setDismissed(loadDismissed(ctx.userId));
+  }, [ctx.userId]);
+
+  // Close on Escape while the drawer is open.
+  React.useEffect(() => {
     if (!open) return;
-    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
-    document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
   }, [open]);
 
   if (!ctx.user) return null;
 
-  // Recent items: unread announcements + threads with unread, newest first.
-  const recentAnn = comms.announcements
-    .filter(a => a.authorId !== ctx.userId && !a.reads[ctx.userId] && !isExpired(a))
-    .slice(0, 4)
-    .map(a => ({ kind: 'ann', id: a.id, title: a.title, sub: `${a.authorName} · ${relTime(a.createdAt)}`, priority: a.priority }));
-  const recentMsg = comms.threads
+  // ── Build the feed ────────────────────────────────────────────────────────
+  const msgItems = comms.threads
     .map(t => ({ t, n: comms.threadUnread(t) }))
     .filter(x => x.n > 0)
-    .slice(0, 4)
-    .map(({ t, n }) => ({ kind: 'msg', id: t.id, title: threadTitle(t, ctx), sub: `${n} new message${n === 1 ? '' : 's'}` }));
-  const items = [...recentMsg, ...recentAnn];
+    .map(({ t, n }) => ({
+      kind: 'msg', id: t.id, icon: 'mail', page: 'comms:messages',
+      title: threadTitle(t, ctx), sub: `${n} new message${n === 1 ? '' : 's'}`, time: t.lastMessageAt,
+      chipBg: DS.accentLight, chipColor: DS.accent,
+      clear: () => comms.markThreadRead(t.id),
+    }));
 
-  const go = (sec) => { setOpen(false); onNavigate && onNavigate(ctx.role, 'comms:' + sec); };
+  const annItems = comms.announcements
+    .filter(a => a.authorId !== ctx.userId && !a.reads[ctx.userId] && !isExpired(a))
+    .map(a => {
+      const pm = PRIORITY_META[a.priority] || PRIORITY_META.normal;
+      return {
+        kind: 'ann', id: a.id, icon: 'megaphone', page: 'comms:announcements',
+        title: a.title, sub: `${a.authorName} · ${relTime(a.createdAt)}`, time: a.createdAt,
+        chipBg: pm.bg(), chipColor: pm.color(),
+        clear: () => comms.markRead(a.id),
+      };
+    });
+
+  const actItems = activityItems(ctx)
+    .filter(it => !dismissed[it.sig])
+    .map(it => {
+      const tm = activityToneMeta(it.tone);
+      return {
+        kind: it.kind || 'activity', id: it.id, icon: it.icon, page: it.page,
+        title: it.title, sub: it.sub, time: it.time || null,
+        chipBg: tm.bg, chipColor: tm.color,
+        clear: () => {
+          const next = { ...dismissed, [it.sig]: true };
+          setDismissed(next); saveDismissed(ctx.userId, next);
+        },
+      };
+    });
+
+  const total = unread.total + actItems.length;
+
+  const go = (page) => { setOpen(false); onNavigate && onNavigate(ctx.role, page); };
+  const clearAll = () => {
+    comms.markAllRead();
+    const next = { ...dismissed };
+    activityItems(ctx).forEach(it => { next[it.sig] = true; });
+    setDismissed(next); saveDismissed(ctx.userId, next);
+  };
+
+  // Grouped sections, in priority order. Only non-empty groups render.
+  const sections = [
+    { key: 'msg', label: 'Messages', items: msgItems },
+    { key: 'ann', label: 'Announcements', items: annItems },
+    { key: 'hw', label: 'Activity', items: actItems },
+  ].filter(s => s.items.length > 0);
+
+  const Row = ({ it }) => (
+    <div
+      onClick={() => go(it.page)}
+      style={{
+        display: 'flex', gap: 11, alignItems: 'flex-start', padding: '11px 8px 11px 14px',
+        cursor: 'pointer', borderRadius: 10, position: 'relative',
+      }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = DS.surface; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+    >
+      <NotifChip icon={it.icon} bg={it.chipBg} color={it.chipColor} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: DS.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.title}</div>
+        <div style={{ fontSize: 11.5, color: DS.muted, marginTop: 2 }}>{it.sub}</div>
+      </div>
+      <button
+        title="Clear"
+        onClick={(e) => { e.stopPropagation(); it.clear(); }}
+        style={{ flexShrink: 0, background: 'none', border: 'none', cursor: 'pointer', color: DS.faint, padding: 4, borderRadius: 6, display: 'flex', lineHeight: 0 }}
+        onMouseEnter={(e) => { e.currentTarget.style.color = DS.text; e.currentTarget.style.background = DS.border; }}
+        onMouseLeave={(e) => { e.currentTarget.style.color = DS.faint; e.currentTarget.style.background = 'none'; }}
+      >
+        <Icon name="x" size={14} />
+      </button>
+    </div>
+  );
 
   return (
-    <div ref={ref} style={{ position: 'relative' }}>
-      <button onClick={() => setOpen(o => !o)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6B7280', padding: 4, display: 'flex', position: 'relative' }}>
+    <React.Fragment>
+      {/* Bell trigger (stays in the top bar) */}
+      <button onClick={() => setOpen(o => !o)} title="Notifications" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6B7280', padding: 4, display: 'flex', position: 'relative' }}>
         <Icon name="bell" size={16} />
-        {unread.total > 0 && (
+        {total > 0 && (
           <span style={{ position: 'absolute', top: -2, right: -2, minWidth: 15, height: 15, padding: '0 3px', borderRadius: 8, background: DS.danger, color: '#fff', fontSize: 9.5, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1.5px solid #fff' }}>
-            {unread.total > 9 ? '9+' : unread.total}
+            {total > 9 ? '9+' : total}
           </span>
         )}
       </button>
 
-      {open && (
-        <div style={{ position: 'absolute', top: 30, right: 0, width: 320, background: DS.bg, border: `1px solid ${DS.cardBorder}`, borderRadius: 12, boxShadow: '0 16px 48px rgba(17,24,39,0.18)', zIndex: 1100, overflow: 'hidden' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 14px', borderBottom: `1px solid ${DS.border}` }}>
-            <span style={{ fontSize: 13.5, fontWeight: 700, color: DS.text }}>Notifications</span>
-            {unread.total > 0 && <Badge variant="danger">{unread.total} new</Badge>}
-          </div>
-          <div style={{ maxHeight: 340, overflow: 'auto' }}>
-            {items.length === 0
-              ? <div style={{ padding: '28px 16px', textAlign: 'center', fontSize: 13, color: DS.muted }}>You're all caught up 🎉</div>
-              : items.map(it => (
-                  <button key={it.kind + it.id} onClick={() => go(it.kind === 'ann' ? 'announcements' : 'messages')} style={{
-                    display: 'flex', gap: 10, alignItems: 'flex-start', width: '100%', textAlign: 'left',
-                    padding: '11px 14px', border: 'none', borderBottom: `1px solid ${DS.border}`, background: 'transparent', cursor: 'pointer',
-                  }}>
-                    <div style={{ width: 30, height: 30, borderRadius: 8, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      background: it.kind === 'ann' ? (PRIORITY_META[it.priority] || PRIORITY_META.normal).bg() : DS.accentLight,
-                      color: it.kind === 'ann' ? (PRIORITY_META[it.priority] || PRIORITY_META.normal).color() : DS.accent }}>
-                      <Icon name={it.kind === 'ann' ? 'message' : 'mail'} size={15} />
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: DS.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.title}</div>
-                      <div style={{ fontSize: 11.5, color: DS.muted, marginTop: 1 }}>{it.sub}</div>
-                    </div>
-                  </button>
-                ))}
-          </div>
-          <button onClick={() => go('messages')} style={{ width: '100%', padding: '11px', border: 'none', borderTop: `1px solid ${DS.border}`, background: DS.surface, color: DS.accent, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
-            View all
+      {/* Backdrop + drawer are portalled to <body>: the top bar sets a
+          backdrop-filter, which would otherwise make these fixed elements
+          resolve against the 52px header instead of the viewport. */}
+      {ReactDOM.createPortal(
+        <React.Fragment>
+      {/* Dimmed backdrop — click to dismiss. Always mounted so the drawer can
+          transition both in and out; pointer events are gated on `open`. */}
+      <div
+        onClick={() => setOpen(false)}
+        style={{
+          position: 'fixed', inset: 0, zIndex: 1200, background: 'rgba(17,24,39,0.28)',
+          opacity: open ? 1 : 0, pointerEvents: open ? 'auto' : 'none',
+          transition: 'opacity 0.25s ease', backdropFilter: 'blur(1px)',
+        }}
+      />
+
+      {/* Slide-out drawer, anchored to the right edge, full viewport height. */}
+      <div
+        role="dialog"
+        aria-label="Notifications"
+        style={{
+          position: 'fixed', top: 0, right: 0, bottom: 0, width: 380, maxWidth: '90vw', zIndex: 1201,
+          background: DS.bg, borderLeft: `1px solid ${DS.cardBorder}`, boxShadow: '-12px 0 40px rgba(17,24,39,0.18)',
+          display: 'flex', flexDirection: 'column',
+          transform: open ? 'translateX(0)' : 'translateX(100%)',
+          transition: 'transform 0.3s cubic-bezier(0.32, 0.72, 0, 1)',
+          pointerEvents: open ? 'auto' : 'none',
+        }}
+      >
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '16px 16px 14px', borderBottom: `1px solid ${DS.border}`, flexShrink: 0 }}>
+          <span style={{ fontSize: 16, fontWeight: 700, color: DS.text }}>Notifications</span>
+          {total > 0 && <Badge variant="danger">{total} new</Badge>}
+          <div style={{ flex: 1 }} />
+          {total > 0 && (
+            <button onClick={clearAll} style={{ background: 'none', border: 'none', cursor: 'pointer', color: DS.accent, fontSize: 12.5, fontWeight: 600, padding: '4px 6px', borderRadius: 6 }}>
+              Clear all
+            </button>
+          )}
+          <button onClick={() => setOpen(false)} title="Close" style={{ background: 'none', border: 'none', cursor: 'pointer', color: DS.muted, padding: 5, borderRadius: 7, display: 'flex', lineHeight: 0 }}>
+            <Icon name="x" size={17} />
           </button>
         </div>
+
+        {/* Body */}
+        <div style={{ flex: 1, overflow: 'auto', padding: '6px 8px 16px' }}>
+          {sections.length === 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 10, padding: 24, textAlign: 'center' }}>
+              <div style={{ width: 52, height: 52, borderRadius: '50%', background: DS.surface, display: 'flex', alignItems: 'center', justifyContent: 'center', color: DS.faint }}>
+                <Icon name="check" size={24} />
+              </div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: DS.text }}>You're all caught up</div>
+              <div style={{ fontSize: 12.5, color: DS.muted, maxWidth: 240 }}>New messages, announcements and activity will show up here.</div>
+            </div>
+          ) : (
+            sections.map(sec => (
+              <div key={sec.key} style={{ marginTop: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 14px 6px' }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: DS.muted }}>{sec.label}</span>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: DS.faint }}>{sec.items.length}</span>
+                </div>
+                {sec.items.map(it => <Row key={it.kind + it.id} it={it} />)}
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+        </React.Fragment>,
+        document.body
       )}
-    </div>
+    </React.Fragment>
   );
 };
 
