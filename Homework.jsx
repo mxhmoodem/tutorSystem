@@ -3914,11 +3914,77 @@ const reviewStatus = (asn, sid) => {
   return { key: 'submitted', label: late ? 'Late' : 'Submitted', tone: late ? 'danger' : 'info', fg: late ? C.danger : C.accent };
 };
 
+// Auto-mark verdict for a single question (auto types only): correct / incorrect / partial.
+const autoVerdict = (q, sub) => {
+  if (!isAuto(q.type)) return null;
+  const m = sub?.marks?.[q.id];
+  if (typeof m !== 'number') return null;
+  if (m >= (q.points || 0)) return 'correct';
+  if (m <= 0) return 'incorrect';
+  return 'partial';
+};
+
+// Shared marking controls — student's answer + (auto) correct answer + marks + feedback.
+// Reused when marking by student (iterating questions) and by question (iterating students).
+const AnswerMarkControls = ({ q, sub, sid, onSetMark, onSetFb }) => {
+  const a = sub.answers?.[q.id];
+  const m = sub.marks?.[q.id];
+  const fb = sub.feedback?.[q.id] || '';
+  const isAutoQ = isAuto(q.type);
+  return (
+    <>
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ fontSize: 11, fontWeight: 600, color: C.muted, textTransform:'uppercase', letterSpacing:'.05em', marginBottom: 6 }}>
+          Student answer
+        </div>
+        <QuestionAnswerDisplay question={q} answer={a} />
+        {isAutoQ && correctAnswerText(q) != null && (
+          <div style={{ marginTop: 6, fontSize: 12, color: C.muted, fontFamily: q.type === 'math' ? F.mono : F.body }}>
+            Correct: <strong style={{ color: C.success }}>{correctAnswerText(q)}</strong>
+            {q.type === 'numeric' && q.tolerance ? ` (±${q.tolerance})` : ''}
+          </div>
+        )}
+      </div>
+      <div style={{ display:'flex', alignItems:'flex-start', gap: 12 }}>
+        <div style={{ width: 120 }}>
+          <Label>Marks</Label>
+          {isAutoQ ? (
+            <div style={{
+              padding: '9px 12px', borderRadius: 8,
+              background: C.surface, border: `1px solid ${C.border}`,
+              fontFamily: F.mono, fontSize: 14, fontWeight: 600, color: C.text,
+            }}>
+              {typeof m === 'number' ? m : '—'} / {q.points}
+            </div>
+          ) : (
+            <Input type="number" value={m ?? ''} onChange={(v) => onSetMark(sid, q.id, v)}
+              placeholder="0" suffix={`/ ${q.points}`} />
+          )}
+        </div>
+        <div style={{ flex: 1 }}>
+          <Label>Feedback {!isAutoQ && <span style={{ color: C.faint, fontWeight: 400 }}>(visible to student)</span>}</Label>
+          <Input multiline rows={2} value={fb} onChange={(v) => onSetFb(sid, q.id, v)}
+            placeholder={isAutoQ ? 'Optional comment…' : 'Tell the student what they did well, and what to improve.'} />
+        </div>
+      </div>
+    </>
+  );
+};
+
 const TeacherReview = ({ assignment, users, onClose, onUpdateSubmission }) => {
   const toast = useToast();
   const allStudents = assignment.studentIds;
+  const total = totalPoints(assignment);
+  const [mode, setMode] = React.useState('student'); // 'student' | 'question'
   const [query, setQuery] = React.useState('');
   const [statusF, setStatusF] = React.useState('all');
+
+  const orderedSubmitted = allStudents.filter(sid => assignment.submissions[sid]);
+
+  // Student-mode selection (default to the first student who actually submitted).
+  const [activeSid, setActiveSid] = React.useState(orderedSubmitted[0] || allStudents[0]);
+  // Question-mode selection.
+  const [activeQid, setActiveQid] = React.useState(assignment.questions[0] && assignment.questions[0].id);
 
   const visible = allStudents.filter(sid => {
     const name = (users[sid]?.name || '').toLowerCase();
@@ -3927,31 +3993,31 @@ const TeacherReview = ({ assignment, users, onClose, onUpdateSubmission }) => {
     return reviewStatus(assignment, sid).key === statusF;
   });
 
-  // Default to the first student who actually has a submission.
-  const firstSubmitted = allStudents.find(sid => assignment.submissions[sid]) || allStudents[0];
-  const [activeSid, setActiveSid] = React.useState(firstSubmitted);
   const sub = activeSid ? assignment.submissions[activeSid] : null;
   const student = activeSid ? users[activeSid] : null;
-  const total = totalPoints(assignment);
   const score = sub ? submissionScore(assignment, sub) : 0;
   const scorePct = total ? Math.round(score / total * 100) : 0;
 
-  const orderedSubmitted = allStudents.filter(sid => assignment.submissions[sid]);
   const idxInSubmitted = orderedSubmitted.indexOf(activeSid);
   const gotoNext = () => {
     const n = orderedSubmitted[idxInSubmitted + 1];
     if (n) setActiveSid(n);
   };
 
-  const setMark = (qid, mark) => {
-    if (!sub) return;
+  // Generic mark / feedback setters keyed by student — used by both modes.
+  const setMark = (sid, qid, mark) => {
+    const s = assignment.submissions[sid];
+    if (!s) return;
     const max = assignment.questions.find(q => q.id === qid)?.points || 0;
     let m = parseFloat(mark);
     if (Number.isNaN(m)) m = null;
     else m = Math.max(0, Math.min(max, m));
-    onUpdateSubmission(activeSid, { ...sub, marks: { ...sub.marks, [qid]: m } });
+    onUpdateSubmission(sid, { ...s, marks: { ...s.marks, [qid]: m } });
   };
-  const setFb = (qid, text) => sub && onUpdateSubmission(activeSid, { ...sub, feedback: { ...sub.feedback, [qid]: text } });
+  const setFb = (sid, qid, text) => {
+    const s = assignment.submissions[sid];
+    if (s) onUpdateSubmission(sid, { ...s, feedback: { ...s.feedback, [qid]: text } });
+  };
   const setOverall = (text) => sub && onUpdateSubmission(activeSid, { ...sub, overallFeedback: text });
 
   const saveDraft = () => {
@@ -3971,6 +4037,25 @@ const TeacherReview = ({ assignment, users, onClose, onUpdateSubmission }) => {
     if (idxInSubmitted < orderedSubmitted.length - 1) setTimeout(gotoNext, 200);
   };
 
+  // Question-mode: how many submitted students have this question marked.
+  const qMarkedCount = (qid) => orderedSubmitted.filter(sid => typeof assignment.submissions[sid]?.marks?.[qid] === 'number').length;
+  // Question-mode bulk return: every submission that is now fully marked but not yet returned.
+  const readyToReturn = orderedSubmitted.filter(sid => {
+    const s = assignment.submissions[sid];
+    return s && !isGraded(s) && fullyMarked(assignment, s);
+  });
+  const returnAllGraded = () => {
+    if (readyToReturn.length === 0) { toast('No submissions ready to return', 'warn'); return; }
+    readyToReturn.forEach(sid => {
+      const s = assignment.submissions[sid];
+      onUpdateSubmission(sid, { ...s, status: 'returned', markedAt: new Date().toISOString() });
+    });
+    toast(`Returned ${readyToReturn.length} submission${readyToReturn.length > 1 ? 's' : ''}`, 'success');
+  };
+
+  const activeQ = assignment.questions.find(q => q.id === activeQid) || assignment.questions[0];
+  const activeQIdx = activeQ ? assignment.questions.findIndex(q => q.id === activeQ.id) : -1;
+
   if (allStudents.length === 0) {
     return (
       <div style={{ padding: 32, fontFamily: F.body }}>
@@ -3985,187 +4070,292 @@ const TeacherReview = ({ assignment, users, onClose, onUpdateSubmission }) => {
     );
   }
 
+  const cardShell = {
+    display:'flex', flexDirection:'column', minHeight: 0,
+    border: `1px solid ${C.border}`, borderRadius: 14, overflow:'hidden',
+    background: C.bg, boxShadow: C.shadow,
+  };
+  const numBadge = (label, on) => (
+    <span style={{
+      width: 28, height: 28, borderRadius: 8, flexShrink: 0,
+      background: on ? C.brand : C.surface, color: on ? '#fff' : C.muted,
+      fontFamily: F.mono, fontSize: 12, fontWeight: 700,
+      display:'flex', alignItems:'center', justifyContent:'center',
+    }}>{label}</span>
+  );
+
   return (
-    <div style={{ display:'flex', flexDirection:'column', height:'100%', fontFamily: F.body }}>
-      {/* Header */}
-      <div style={{
-        padding: '14px 24px', borderBottom: `1px solid ${C.border}`,
-        display:'flex', alignItems:'center', gap: 12, background: C.bg,
-      }}>
+    <div style={{ display:'flex', flexDirection:'column', height:'100%', fontFamily: F.body, boxSizing:'border-box' }}>
+      {/* Top bar: back + title + mark-by toggle */}
+      <div style={{ display:'flex', alignItems:'center', gap: 12, padding: '12px 16px' }}>
         <Btn variant="ghost" small icon={<Ico name="arrowL" size={13} />} onClick={onClose}>Back to list</Btn>
-        <div style={{ flex: 1 }} />
-        <Btn variant="soft" small icon={<Ico name="save" size={13} />} onClick={saveDraft} disabled={!sub}>Save Draft</Btn>
-        <Btn variant="brand" small icon={<Ico name="send" size={13} color="#fff" />} onClick={gradeReturn} disabled={!sub}>Grade &amp; Return</Btn>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontFamily: F.head, fontSize: 15, fontWeight: 700, color: C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+            {assignment.title}
+          </div>
+        </div>
+        <SegTabs
+          tabs={[{ id: 'student', label: 'By student' }, { id: 'question', label: 'By question' }]}
+          active={mode}
+          onChange={setMode}
+        />
       </div>
 
-      <div style={{ display:'flex', flex: 1, overflow: 'hidden' }}>
-        {/* Sidebar */}
-        <div style={{ width: 272, borderRight: `1px solid ${C.border}`, background: C.surface, overflow:'auto', display:'flex', flexDirection:'column' }}>
-          <div style={{ padding: 14, display:'flex', flexDirection:'column', gap: 8, borderBottom: `1px solid ${C.border}` }}>
-            <Input value={query} onChange={setQuery} placeholder="Search students…" prefix={<Ico name="search" size={13} color={C.faint} />} />
-            <select value={statusF} onChange={e => setStatusF(e.target.value)} style={{
-              padding: '8px 12px', borderRadius: 8, border: `1px solid ${C.border}`,
-              background: C.bg, color: C.sub, fontFamily: F.body, fontSize: 12.5, cursor:'pointer',
-            }}>
-              <option value="all">All Students</option>
-              <option value="submitted">Submitted</option>
-              <option value="graded">Graded</option>
-              <option value="in_progress">In Progress</option>
-              <option value="not_started">Not Started</option>
-            </select>
-          </div>
-          {visible.map(sid => {
-            const s = users[sid];
-            const sb = assignment.submissions[sid];
-            const on = sid === activeSid;
-            const st = reviewStatus(assignment, sid);
-            const pct = sb && total ? Math.round(submissionScore(assignment, sb) / total * 100) : null;
-            return (
-              <button key={sid} onClick={() => setActiveSid(sid)} style={{
-                width: '100%', padding: '12px 14px', border: 'none',
-                borderBottom: `1px solid ${C.border}`,
-                background: on ? C.bg : 'transparent',
-                cursor:'pointer', textAlign:'left', transition: T,
-                display:'flex', alignItems:'center', gap: 10,
-                borderLeft: on ? `3px solid ${C.brand}` : '3px solid transparent',
-              }}>
-                <Avatar name={s?.name || sid} size={34} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap: 6 }}>
-                    <span style={{ fontFamily: F.body, fontSize: 13, fontWeight: 600, color: C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{s?.name || sid}</span>
-                    {pct != null && <span style={{ fontFamily: F.head, fontSize: 12.5, fontWeight: 700, color: C.brand }}>{pct}%</span>}
-                  </div>
-                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap: 6, marginTop: 3 }}>
-                    <span style={{ fontSize: 11, color: C.muted }}>{sb ? fmtDateTime(sb.submittedAt) : '—'}</span>
-                    <Pill tone={st.tone}>{st.label}</Pill>
-                  </div>
-                </div>
-              </button>
-            );
-          })}
-          {visible.length === 0 && (
-            <div style={{ padding: 20, fontSize: 12, color: C.muted, textAlign:'center' }}>No students match.</div>
+      <div style={{ display:'flex', gap: 10, flex: 1, minHeight: 0, padding: '0 16px 16px' }}>
+        {/* ─── LEFT CARD: list ─────────────────────────────── */}
+        <div style={{ ...cardShell, width: 320, flexShrink: 0 }}>
+          {mode === 'student' ? (
+            <>
+              <div style={{ padding: '16px 18px 10px' }}>
+                <span style={{ fontSize: 18, fontWeight: 800, color: C.brand }}>Submissions</span>
+              </div>
+              <div style={{ padding: '0 14px 10px', display:'flex', flexDirection:'column', gap: 8 }}>
+                <Input value={query} onChange={setQuery} placeholder="Search students…" prefix={<Ico name="search" size={13} color={C.faint} />} />
+                <select value={statusF} onChange={e => setStatusF(e.target.value)} style={{
+                  padding: '8px 12px', borderRadius: 8, border: `1px solid ${C.border}`,
+                  background: C.bg, color: C.sub, fontFamily: F.body, fontSize: 12.5, cursor:'pointer',
+                }}>
+                  <option value="all">All Students</option>
+                  <option value="submitted">Submitted</option>
+                  <option value="graded">Graded</option>
+                  <option value="in_progress">In Progress</option>
+                  <option value="not_started">Not Started</option>
+                </select>
+              </div>
+              <div style={{ flex: 1, overflow:'auto', paddingBottom: 8 }}>
+                {visible.map(sid => {
+                  const s = users[sid];
+                  const sb = assignment.submissions[sid];
+                  const on = sid === activeSid;
+                  const st = reviewStatus(assignment, sid);
+                  const pct = sb && total ? Math.round(submissionScore(assignment, sb) / total * 100) : null;
+                  return (
+                    <button key={sid} onClick={() => setActiveSid(sid)} style={{
+                      width: '100%', padding: '11px 16px', border: 'none',
+                      background: on ? C.brandSoft : 'transparent',
+                      cursor:'pointer', textAlign:'left', transition: T,
+                      display:'flex', alignItems:'center', gap: 10,
+                      borderLeft: on ? `3px solid ${C.brand}` : '3px solid transparent',
+                    }}>
+                      <Avatar name={s?.name || sid} size={34} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap: 6 }}>
+                          <span style={{ fontFamily: F.body, fontSize: 13, fontWeight: 600, color: C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{s?.name || sid}</span>
+                          {pct != null && <span style={{ fontFamily: F.head, fontSize: 12.5, fontWeight: 700, color: C.brand }}>{pct}%</span>}
+                        </div>
+                        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap: 6, marginTop: 3 }}>
+                          <span style={{ fontSize: 11, color: C.muted, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{sb ? fmtDateTime(sb.submittedAt) : '—'}</span>
+                          <Pill tone={st.tone}>{st.label}</Pill>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+                {visible.length === 0 && (
+                  <div style={{ padding: 20, fontSize: 12, color: C.muted, textAlign:'center' }}>No students match.</div>
+                )}
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ padding: '16px 18px 10px' }}>
+                <span style={{ fontSize: 18, fontWeight: 800, color: C.brand }}>Questions</span>
+                <div style={{ fontSize: 11.5, color: C.muted, marginTop: 2 }}>{assignment.questions.length} question{assignment.questions.length !== 1 ? 's' : ''} · {orderedSubmitted.length} submitted</div>
+              </div>
+              <div style={{ flex: 1, overflow:'auto', paddingBottom: 8 }}>
+                {assignment.questions.map((q, i) => {
+                  const on = q.id === activeQid;
+                  const isAutoQ = isAuto(q.type);
+                  const marked = qMarkedCount(q.id);
+                  const denom = orderedSubmitted.length;
+                  const allMarked = denom > 0 && marked >= denom;
+                  return (
+                    <button key={q.id} onClick={() => setActiveQid(q.id)} style={{
+                      width: '100%', padding: '12px 16px', border: 'none',
+                      background: on ? C.brandSoft : 'transparent',
+                      cursor:'pointer', textAlign:'left', transition: T,
+                      display:'flex', alignItems:'flex-start', gap: 10,
+                      borderLeft: on ? `3px solid ${C.brand}` : '3px solid transparent',
+                    }}>
+                      {numBadge(i + 1, on)}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display:'flex', alignItems:'center', gap: 6, marginBottom: 4 }}>
+                          <Pill tone={isAutoQ ? 'brand' : 'amber'}>{qtypeMeta(q.type).label}</Pill>
+                          <span style={{ fontFamily: F.mono, fontSize: 11, color: C.muted }}>{q.points} pt</span>
+                        </div>
+                        <div style={{
+                          fontSize: 12.5, color: C.sub, lineHeight: 1.4, overflow:'hidden',
+                          display:'-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient:'vertical',
+                        }}>
+                          <PromptText text={q.prompt} style={{ fontFamily: F.body, fontSize: 12.5, color: C.sub }} />
+                        </div>
+                        <div style={{ display:'flex', alignItems:'center', gap: 6, marginTop: 7 }}>
+                          {isAutoQ ? (
+                            <span style={{ fontSize: 11, color: C.faint }}>Auto-marked</span>
+                          ) : (
+                            <>
+                              <div style={{ flex: 1, maxWidth: 90, height: 5, borderRadius: 999, background: C.surface2, overflow:'hidden' }}>
+                                <div style={{ width: `${denom ? (marked / denom) * 100 : 0}%`, height: '100%', background: allMarked ? C.success : C.brand, transition: T }} />
+                              </div>
+                              <span style={{ fontSize: 11, fontWeight: 600, color: allMarked ? C.success : C.muted }}>{marked}/{denom}</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </>
           )}
         </div>
 
-        {/* Main panel */}
-        <div style={{ flex: 1, overflow:'auto', padding: '24px 32px' }}>
-          {!sub ? (
-            <Card style={{ padding: 50, textAlign:'center' }}>
-              <Avatar name={student?.name || ''} size={48} />
-              <div style={{ fontFamily: F.head, fontSize: 17, fontWeight: 700, margin: '14px 0 4px' }}>{student?.name}</div>
-              <div style={{ fontSize: 13, color: C.muted }}>
-                {reviewStatus(assignment, activeSid).label} — nothing to mark yet.
+        {/* ─── RIGHT CARD: marking surface ─────────────────── */}
+        <div style={{ ...cardShell, flex: 1, minWidth: 0 }}>
+          {mode === 'student' ? (
+            !sub ? (
+              <div style={{ flex: 1, display:'flex', alignItems:'center', justifyContent:'center', padding: 40 }}>
+                <div style={{ textAlign:'center' }}>
+                  <Avatar name={student?.name || ''} size={48} />
+                  <div style={{ fontFamily: F.head, fontSize: 17, fontWeight: 700, margin: '14px 0 4px' }}>{student?.name}</div>
+                  <div style={{ fontSize: 13, color: C.muted }}>
+                    {reviewStatus(assignment, activeSid).label} — nothing to mark yet.
+                  </div>
+                </div>
               </div>
-            </Card>
-          ) : (
-          <>
-          {/* Student header */}
-          <div style={{ display:'flex', alignItems:'center', gap: 14, marginBottom: 20 }}>
-            <Avatar name={student.name} size={44} />
-            <div style={{ flex: 1 }}>
-              <div style={{ display:'flex', alignItems:'center', gap: 8 }}>
-                <span style={{ fontFamily: F.head, fontSize: 18, fontWeight: 700 }}>{student.name}</span>
-                <Pill tone={reviewStatus(assignment, activeSid).tone}>{reviewStatus(assignment, activeSid).label}</Pill>
-              </div>
-              <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
-                Submitted {fmtDateTime(sub.submittedAt)}{sub.timeSpentMins ? ` · ${sub.timeSpentMins}m spent` : ''}
-              </div>
-            </div>
-            <div style={{ textAlign:'right' }}>
-              <div style={{ fontFamily: F.head, fontSize: 24, fontWeight: 800, color: C.brand }}>{scorePct}%</div>
-              <div style={{ fontFamily: F.body, fontSize: 12, color: C.muted }}>{score}/{total} marks</div>
-            </div>
-          </div>
-
-          {/* Questions */}
-          <div style={{ display:'flex', flexDirection:'column', gap: 16 }}>
-            {assignment.questions.map((q, i) => {
-              const a = sub.answers?.[q.id];
-              const m = sub.marks?.[q.id];
-              const fb = sub.feedback?.[q.id] || '';
-              const isAutoQ = isAuto(q.type);
-              const correct = isAutoQ && typeof m === 'number' && m === q.points;
-              const wrong   = isAutoQ && typeof m === 'number' && m === 0;
-              const pillTone = isAutoQ ? 'brand' : 'amber';
-              return (
-                <Card key={q.id} style={{ padding: 18 }}>
-                  <div style={{ display:'flex', alignItems:'flex-start', gap: 10, marginBottom: 12 }}>
-                    <span style={{
-                      width: 28, height: 28, borderRadius: 8, background: C.surface,
-                      fontFamily: F.mono, fontSize: 12, fontWeight: 700, color: C.muted,
-                      display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0,
-                    }}>{i + 1}</span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display:'flex', gap: 6, alignItems:'center', marginBottom: 6 }}>
-                        <Pill tone={pillTone}>{qtypeMeta(q.type).label}</Pill>
-                        <span style={{ fontFamily: F.mono, fontSize: 11, color: C.muted }}>{q.points} pt</span>
-                        {isAutoQ && (correct
-                          ? <Pill tone="success" icon={<Ico name="check" size={10} />}>Correct</Pill>
-                          : wrong
-                            ? <Pill tone="danger" icon={<Ico name="x" size={10} />}>Incorrect</Pill>
-                            : null)}
-                      </div>
-                      <PromptText text={q.prompt} style={{ fontFamily: F.body, fontSize: 14, color: C.text, lineHeight: 1.5 }} />
+            ) : (
+              <>
+                {/* Student header bar */}
+                <div style={{ display:'flex', alignItems:'center', gap: 12, padding: '14px 20px', borderBottom: `1px solid ${C.border}` }}>
+                  <Avatar name={student.name} size={40} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display:'flex', alignItems:'center', gap: 8 }}>
+                      <span style={{ fontFamily: F.head, fontSize: 16, fontWeight: 700 }}>{student.name}</span>
+                      <Pill tone={reviewStatus(assignment, activeSid).tone}>{reviewStatus(assignment, activeSid).label}</Pill>
+                    </div>
+                    <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
+                      Submitted {fmtDateTime(sub.submittedAt)}{sub.timeSpentMins ? ` · ${sub.timeSpentMins}m spent` : ''}
                     </div>
                   </div>
+                  <div style={{ textAlign:'right', marginRight: 6 }}>
+                    <div style={{ fontFamily: F.head, fontSize: 20, fontWeight: 800, color: C.brand }}>{scorePct}%</div>
+                    <div style={{ fontFamily: F.body, fontSize: 11, color: C.muted }}>{score}/{total} marks</div>
+                  </div>
+                  <Btn variant="soft" small icon={<Ico name="save" size={13} />} onClick={saveDraft}>Save Draft</Btn>
+                  <Btn variant="brand" small icon={<Ico name="send" size={13} color="#fff" />} onClick={gradeReturn}>Grade &amp; Return</Btn>
+                </div>
 
-                  <div style={{ marginLeft: 38, paddingLeft: 14, borderLeft: `2px solid ${C.surface2}` }}>
-                    <div style={{ marginBottom: 12 }}>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: C.muted, textTransform:'uppercase', letterSpacing:'.05em', marginBottom: 6 }}>
-                        Student answer
-                      </div>
-                      <QuestionAnswerDisplay question={q} answer={a} />
-                      {isAutoQ && correctAnswerText(q) != null && (
-                        <div style={{ marginTop: 6, fontSize: 12, color: C.muted, fontFamily: q.type === 'math' ? F.mono : F.body }}>
-                          Correct: <strong style={{ color: C.success }}>{correctAnswerText(q)}</strong>
-                          {q.type === 'numeric' && q.tolerance ? ` (±${q.tolerance})` : ''}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Marking */}
-                    <div style={{ display:'flex', alignItems:'flex-start', gap: 12 }}>
-                      <div style={{ width: 120 }}>
-                        <Label>Marks</Label>
-                        {isAutoQ ? (
-                          <div style={{
-                            padding: '9px 12px', borderRadius: 8,
-                            background: C.surface, border: `1px solid ${C.border}`,
-                            fontFamily: F.mono, fontSize: 14, fontWeight: 600, color: C.text,
-                          }}>
-                            {typeof m === 'number' ? m : '—'} / {q.points}
+                {/* Questions for this student */}
+                <div style={{ flex: 1, overflow:'auto', padding: '20px 24px', background: C.surface }}>
+                  <div style={{ display:'flex', flexDirection:'column', gap: 14 }}>
+                    {assignment.questions.map((q, i) => {
+                      const verdict = autoVerdict(q, sub);
+                      return (
+                        <Card key={q.id} style={{ padding: 18 }}>
+                          <div style={{ display:'flex', alignItems:'flex-start', gap: 10, marginBottom: 12 }}>
+                            {numBadge(i + 1, false)}
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ display:'flex', gap: 6, alignItems:'center', marginBottom: 6 }}>
+                                <Pill tone={isAuto(q.type) ? 'brand' : 'amber'}>{qtypeMeta(q.type).label}</Pill>
+                                <span style={{ fontFamily: F.mono, fontSize: 11, color: C.muted }}>{q.points} pt</span>
+                                {verdict === 'correct' && <Pill tone="success" icon={<Ico name="check" size={10} />}>Correct</Pill>}
+                                {verdict === 'incorrect' && <Pill tone="danger" icon={<Ico name="x" size={10} />}>Incorrect</Pill>}
+                              </div>
+                              <PromptText text={q.prompt} style={{ fontFamily: F.body, fontSize: 14, color: C.text, lineHeight: 1.5 }} />
+                            </div>
                           </div>
-                        ) : (
-                          <Input type="number" value={m ?? ''} onChange={(v) => setMark(q.id, v)}
-                            placeholder="0" suffix={`/ ${q.points}`} />
-                        )}
-                      </div>
-                      <div style={{ flex: 1 }}>
-                        <Label>Feedback {!isAutoQ && <span style={{ color: C.faint, fontWeight: 400 }}>(visible to student)</span>}</Label>
-                        <Input multiline rows={2} value={fb} onChange={(v) => setFb(q.id, v)}
-                          placeholder={isAutoQ ? 'Optional comment…' : 'Tell the student what they did well, and what to improve.'} />
-                      </div>
-                    </div>
+                          <div style={{ marginLeft: 38, paddingLeft: 14, borderLeft: `2px solid ${C.surface2}` }}>
+                            <AnswerMarkControls q={q} sub={sub} sid={activeSid} onSetMark={setMark} onSetFb={setFb} />
+                          </div>
+                        </Card>
+                      );
+                    })}
                   </div>
-                </Card>
-              );
-            })}
-          </div>
 
-          {/* Per-student overall feedback */}
-          <Card style={{ padding: 18, marginTop: 16, background: '#F5F3FF', borderColor: '#DDD6FE' }}>
-            <div style={{ display:'flex', alignItems:'center', gap: 8, marginBottom: 4 }}>
-              <Ico name="chat" size={14} color="#7C3AED" />
-              <span style={{ fontFamily: F.head, fontSize: 14, fontWeight: 700, color: C.text }}>Feedback for {student.name}</span>
-            </div>
-            <div style={{ fontFamily: F.body, fontSize: 12, color: C.muted, marginBottom: 10 }}>
-              Overall comment returned to the student with their marks.
-            </div>
-            <Input multiline rows={3} value={sub.overallFeedback || ''} onChange={setOverall}
-              placeholder="Summarise how the student did and what to focus on next…" />
-          </Card>
-          </>
+                  {/* Per-student overall feedback */}
+                  <Card style={{ padding: 18, marginTop: 14, background: '#F5F3FF', borderColor: '#DDD6FE' }}>
+                    <div style={{ display:'flex', alignItems:'center', gap: 8, marginBottom: 4 }}>
+                      <Ico name="chat" size={14} color="#7C3AED" />
+                      <span style={{ fontFamily: F.head, fontSize: 14, fontWeight: 700, color: C.text }}>Feedback for {student.name}</span>
+                    </div>
+                    <div style={{ fontFamily: F.body, fontSize: 12, color: C.muted, marginBottom: 10 }}>
+                      Overall comment returned to the student with their marks.
+                    </div>
+                    <Input multiline rows={3} value={sub.overallFeedback || ''} onChange={setOverall}
+                      placeholder="Summarise how the student did and what to focus on next…" />
+                  </Card>
+                </div>
+              </>
+            )
+          ) : (
+            /* ── Mark by question ── */
+            !activeQ ? (
+              <div style={{ flex: 1, display:'flex', alignItems:'center', justifyContent:'center', padding: 40, color: C.muted, fontSize: 13 }}>
+                This assignment has no questions.
+              </div>
+            ) : (
+              <>
+                {/* Question header bar */}
+                <div style={{ display:'flex', alignItems:'center', gap: 12, padding: '14px 20px', borderBottom: `1px solid ${C.border}` }}>
+                  {numBadge(activeQIdx + 1, true)}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display:'flex', alignItems:'center', gap: 8 }}>
+                      <span style={{ fontFamily: F.head, fontSize: 16, fontWeight: 700 }}>Question {activeQIdx + 1}</span>
+                      <Pill tone={isAuto(activeQ.type) ? 'brand' : 'amber'}>{qtypeMeta(activeQ.type).label}</Pill>
+                      <span style={{ fontFamily: F.mono, fontSize: 11, color: C.muted }}>{activeQ.points} pt</span>
+                    </div>
+                    <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{qMarkedCount(activeQ.id)} of {orderedSubmitted.length} marked</div>
+                  </div>
+                  {!isAuto(activeQ.type) && (
+                    <Btn variant="brand" small icon={<Ico name="send" size={13} color="#fff" />} onClick={returnAllGraded} disabled={readyToReturn.length === 0}>
+                      Return graded{readyToReturn.length ? ` (${readyToReturn.length})` : ''}
+                    </Btn>
+                  )}
+                </div>
+
+                {/* The question itself */}
+                <div style={{ padding: '16px 24px', borderBottom: `1px solid ${C.border}`, background: C.surface }}>
+                  <PromptText text={activeQ.prompt} style={{ fontFamily: F.body, fontSize: 15, color: C.text, lineHeight: 1.55 }} />
+                  {isAuto(activeQ.type) && correctAnswerText(activeQ) != null && (
+                    <div style={{ marginTop: 8, fontSize: 12.5, color: C.muted, fontFamily: activeQ.type === 'math' ? F.mono : F.body }}>
+                      Correct answer: <strong style={{ color: C.success }}>{correctAnswerText(activeQ)}</strong>
+                      {activeQ.type === 'numeric' && activeQ.tolerance ? ` (±${activeQ.tolerance})` : ''}
+                    </div>
+                  )}
+                </div>
+
+                {/* Every student's answer to this question */}
+                <div style={{ flex: 1, overflow:'auto', padding: '16px 24px', background: C.surface }}>
+                  {orderedSubmitted.length === 0 ? (
+                    <div style={{ padding: 40, textAlign:'center', color: C.muted, fontSize: 13 }}>No submissions to mark yet.</div>
+                  ) : (
+                    <div style={{ display:'flex', flexDirection:'column', gap: 14 }}>
+                      {orderedSubmitted.map(sid => {
+                        const s = users[sid];
+                        const ssub = assignment.submissions[sid];
+                        const verdict = autoVerdict(activeQ, ssub);
+                        const isMarked = typeof ssub.marks?.[activeQ.id] === 'number';
+                        return (
+                          <Card key={sid} style={{ padding: 18 }}>
+                            <div style={{ display:'flex', alignItems:'center', gap: 10, marginBottom: 12 }}>
+                              <Avatar name={s?.name || sid} size={34} />
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontFamily: F.body, fontSize: 14, fontWeight: 600, color: C.text }}>{s?.name || sid}</div>
+                                <div style={{ fontSize: 11, color: C.muted }}>Submitted {fmtDateTime(ssub.submittedAt)}</div>
+                              </div>
+                              {verdict === 'correct' && <Pill tone="success" icon={<Ico name="check" size={10} />}>Correct</Pill>}
+                              {verdict === 'incorrect' && <Pill tone="danger" icon={<Ico name="x" size={10} />}>Incorrect</Pill>}
+                              {!isAuto(activeQ.type) && <Pill tone={isMarked ? 'success' : 'default'}>{isMarked ? 'Marked' : 'Unmarked'}</Pill>}
+                            </div>
+                            <AnswerMarkControls q={activeQ} sub={ssub} sid={sid} onSetMark={setMark} onSetFb={setFb} />
+                          </Card>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </>
+            )
           )}
         </div>
       </div>
