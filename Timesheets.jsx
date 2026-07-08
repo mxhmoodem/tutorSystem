@@ -12,7 +12,7 @@
 //    { id, centreId, teacherId, sessionId, type, date, durationMinutes,
 //      status, note, approvedBy, approvedAt }
 //
-//  Persisted to localStorage `tutoros.timesheets.v2`, seeded from
+//  Persisted to localStorage `tutoros.timesheets.v3`, seeded from
 //  SEED_TIME_ENTRIES. Like the admin store, each page/component calls
 //  useTimesheetStore() independently — state syncs through localStorage, so a
 //  change on one surface reflects on another after remount (fine for the demo;
@@ -24,7 +24,7 @@
 //  into a plain document layout.
 // ══════════════════════════════════════════════════════════════
 
-const TIMESHEET_KEY    = 'tutoros.timesheets.v2';   // v2: reseed for the wider staff set + pay fields
+const TIMESHEET_KEY    = 'tutoros.timesheets.v3';   // v3: reseed relative-to-today so the current period always has data
 const TIMESHEET_CENTRE = 'centre-001';                  // single demo centre
 const TIMESHEET_ADMIN  = { id: 'a1', name: 'Lisa Chen' }; // current admin (matches sidebar identity)
 
@@ -54,8 +54,10 @@ const TS_TEACHER_EDITABLE = new Set(['draft', 'rejected']);
 const tsIsApprovedLike = (e) => e.status === 'approved' || e.status === 'exported';
 
 // Submission policy — how often the centre asks teachers to submit. Admin-set
-// (AdminTimesheetsPage), read by the teacher page to default its period + show a
-// policy banner. Each maps onto a TsPeriodControl mode.
+// (AdminTimesheetsPage policy strip), read by the teacher page + both admin surfaces.
+// `mode` is the cadence UNIT the period navigator (TsPeriodNav) steps through; `noun`
+// labels it ("This week / Last fortnight / …"). This is the ONLY period control — there
+// is no per-user week/fortnight/month filter.
 const TS_FREQUENCIES = [
   { id: 'week',      label: 'Weekly',      mode: 'week',      noun: 'week'      },
   { id: 'fortnight', label: 'Fortnightly', mode: 'fortnight', noun: 'fortnight' },
@@ -169,6 +171,7 @@ const tsAddDays = (iso, n) => { const d = tsParseUTC(iso); d.setUTCDate(d.getUTC
 const tsWeekStart = (iso) => { const d = tsParseUTC(iso); const off = (d.getUTCDay() + 6) % 7; d.setUTCDate(d.getUTCDate() - off); return d.toISOString().slice(0, 10); }; // Monday
 const tsMonthStart = (iso) => iso.slice(0, 8) + '01';
 const tsMonthEnd = (iso) => { const d = tsParseUTC(iso); d.setUTCMonth(d.getUTCMonth() + 1, 0); return d.toISOString().slice(0, 10); };
+const tsAddMonths = (iso, n) => { const d = tsParseUTC(iso); d.setUTCMonth(d.getUTCMonth() + n, 1); return d.toISOString().slice(0, 10); };
 
 const tsFmtDuration = (min) => {
   const m = Math.max(0, Math.round(min || 0));
@@ -206,19 +209,34 @@ const tsSessionRef = (sessionId) => {
   return classId || sessionId;
 };
 
-const tsDefaultPeriod = () => { const s = tsWeekStart(tsTodayISO()); return { mode: 'week', from: s, to: tsAddDays(s, 6) }; };
-const tsRangeOf = (period) => {
+// A period is EITHER a cadence-relative window (integer offset from the current
+// period — 0 = current, -1 = previous…) OR a custom date range. The cadence UNIT
+// is the centre's submission frequency — staff move through periods of that unit,
+// they never pick week/fortnight/month themselves (that is the admin's policy).
+const tsDefaultPeriod = () => ({ custom: false, offset: 0 });
+
+// Window for a cadence unit (week / fortnight / month) at an offset from now.
+const tsUnitRange = (unit, offset = 0) => {
   const t = tsTodayISO();
-  if (period.mode === 'week')      { const s = tsWeekStart(t); return { from: s, to: tsAddDays(s, 6) }; }
-  // Fortnight = last week + this week (14 days ending this Sunday).
-  if (period.mode === 'fortnight') { const s = tsAddDays(tsWeekStart(t), -7); return { from: s, to: tsAddDays(s, 13) }; }
-  if (period.mode === 'month')     return { from: tsMonthStart(t), to: tsMonthEnd(t) };
-  return { from: period.from, to: period.to };
+  // Fortnight = a rolling 14-day window aligned to weeks (last week + this week at offset 0).
+  if (unit === 'fortnight') { const s = tsAddDays(tsAddDays(tsWeekStart(t), -7), offset * 14); return { from: s, to: tsAddDays(s, 13) }; }
+  if (unit === 'month')     { const m = tsAddMonths(tsMonthStart(t), offset); return { from: m, to: tsMonthEnd(m) }; }
+  const s = tsAddDays(tsWeekStart(t), offset * 7); return { from: s, to: tsAddDays(s, 6) };   // week (Monday-based)
 };
+// Resolve a period against the centre's submission frequency → { from, to }.
+const tsRangeFor = (freq, period) => period.custom
+  ? { from: period.from, to: period.to }
+  : tsUnitRange((freq || TS_FREQ.week).mode, period.offset || 0);
+
 const tsInRange = (iso, range) => iso >= range.from && iso <= range.to;
 const tsRangeLabel = (range) => `${tsDateShort(range.from)} – ${tsDateShort(range.to)} ${range.to.slice(0, 4)}`;
-// Build a period object for a submission-frequency policy (week / fortnight / month).
-const tsPeriodForFreq = (freq) => { const mode = (TS_FREQ[freq] || TS_FREQ.week).mode; const r = tsRangeOf({ mode }); return { mode, from: r.from, to: r.to }; };
+// Relative label for a cadence offset ("This week", "Last fortnight", "3 months ago").
+const tsRelLabel = (freq, offset) => {
+  const noun = (freq || TS_FREQ.week).noun;
+  if (offset === 0) return `This ${noun}`;
+  if (offset === -1) return `Last ${noun}`;
+  return `${-offset} ${noun}s ago`;
+};
 
 // The admin's selected period, remembered across the overview ⇄ per-teacher detail
 // navigation (each page mounts fresh, so a module variable keeps them in sync).
@@ -460,25 +478,48 @@ const TsTypeBreakdown = ({ entries }) => {
   );
 };
 
-// Period control — This week / This month / Custom (with two date inputs).
-const TsPeriodControl = ({ period, onChange }) => (
-  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-    <Segmented
-      value={period.mode}
-      onChange={(mode) => onChange({ ...period, mode })}
-      options={[{ id: 'week', label: 'Week' }, { id: 'fortnight', label: 'Fortnight' }, { id: 'month', label: 'Month' }, { id: 'custom', label: 'Custom' }]}
-    />
-    {period.mode === 'custom' && (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <input type="date" value={period.from} max={period.to} onChange={e => onChange({ ...period, from: e.target.value })}
-          style={{ padding: '7px 10px', borderRadius: 7, border: `1px solid ${DS.border}`, fontSize: 13, outline: 'none', fontFamily: 'inherit' }} />
-        <span style={{ color: DS.faint, fontSize: 13 }}>→</span>
-        <input type="date" value={period.to} min={period.from} onChange={e => onChange({ ...period, to: e.target.value })}
-          style={{ padding: '7px 10px', borderRadius: 7, border: `1px solid ${DS.border}`, fontSize: 13, outline: 'none', fontFamily: 'inherit' }} />
-      </div>
-    )}
-  </div>
-);
+// Period navigator — locked to the centre's submission cadence. Staff step between
+// consecutive periods of that unit (‹ prev / next ›, never into the future) or switch
+// to a custom date range. There is deliberately NO week/fortnight/month choice here:
+// the cadence is the admin's policy, not a per-user filter.
+const TsPeriodNav = ({ freq, period, onChange }) => {
+  const f = freq || TS_FREQ.week;
+  const range = tsRangeFor(f, period);
+  const offset = period.offset || 0;
+  const custom = !!period.custom;
+  const go = (d) => onChange({ custom: false, offset: Math.min(0, offset + d) });
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+      {!custom ? (
+        <div style={{ display: 'flex', alignItems: 'stretch', border: `1px solid ${DS.border}`, borderRadius: 9, background: DS.bg, overflow: 'hidden' }}>
+          <button onClick={() => go(-1)} title={`Previous ${f.noun}`} style={tsNavArrow}>
+            <span style={{ display: 'flex', transform: 'rotate(180deg)' }}><Icon name="chevron_r" size={15} color={DS.muted} /></span>
+          </button>
+          <div style={{ minWidth: 160, textAlign: 'center', padding: '5px 12px', borderLeft: `1px solid ${DS.border}`, borderRight: `1px solid ${DS.border}` }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: DS.text, lineHeight: 1.25 }}>{tsRelLabel(f, offset)}</div>
+            <div style={{ fontSize: 11, color: DS.muted, fontVariantNumeric: 'tabular-nums' }}>{tsRangeLabel(range)}</div>
+          </div>
+          <button onClick={() => go(1)} disabled={offset >= 0} title={`Next ${f.noun}`}
+            style={{ ...tsNavArrow, opacity: offset >= 0 ? 0.3 : 1, cursor: offset >= 0 ? 'default' : 'pointer' }}>
+            <Icon name="chevron_r" size={15} color={DS.muted} />
+          </button>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <input type="date" value={period.from} max={period.to} onChange={e => onChange({ ...period, from: e.target.value })} style={tsDateInput} />
+          <span style={{ color: DS.faint, fontSize: 13 }}>→</span>
+          <input type="date" value={period.to} min={period.from} onChange={e => onChange({ ...period, to: e.target.value })} style={tsDateInput} />
+        </div>
+      )}
+      {custom
+        ? <Btn variant="secondary" small icon="calendar" onClick={() => onChange({ custom: false, offset: 0 })}>This {f.noun}</Btn>
+        : <button onClick={() => onChange({ custom: true, from: range.from, to: range.to })} style={tsCustomLink}>Custom range</button>}
+    </div>
+  );
+};
+const tsNavArrow = { display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, background: 'none', border: 'none', cursor: 'pointer', padding: 0 };
+const tsDateInput = { padding: '7px 10px', borderRadius: 7, border: `1px solid ${DS.border}`, fontSize: 13, outline: 'none', fontFamily: 'inherit' };
+const tsCustomLink = { background: 'none', border: 'none', padding: '6px 4px', color: DS.accent, fontSize: 12.5, fontWeight: 600, cursor: 'pointer' };
 
 // ════════════════════════════════════════════════════════════════════════════
 //  CAPTURE — inline on the register flow (rendered inside TeacherAttendancePage)
@@ -649,12 +690,12 @@ const TeacherTimesheetPage = () => {
   const me = adminStore.teachers.find(t => t.name === 'Sarah Clarke') || adminStore.teachers[0];
   const store = useTimesheetStore();
   const freq = TS_FREQ[store.config.submissionFrequency] || TS_FREQ.week;
-  // Default the period to the centre's submission policy (weekly / fortnightly / monthly).
-  const [period, setPeriod] = React.useState(() => tsPeriodForFreq(store.config.submissionFrequency));
+  // Period always tracks the centre's submission cadence — current period by default.
+  const [period, setPeriod] = React.useState(tsDefaultPeriod);
   const [adding, setAdding] = React.useState(false);
 
   const resolve = tsMakeResolve(adminStore, store.config);
-  const range = tsRangeOf(period);
+  const range = tsRangeFor(freq, period);
   const mine = store.entries.filter(e => me && e.teacherId === me.id);
   const inPeriod = mine.filter(e => tsInRange(e.date, range)).sort((a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : 0);
   const { total, byType } = tsRollup(inPeriod);
@@ -685,12 +726,12 @@ const TeacherTimesheetPage = () => {
         <div style={{ flex: 1, fontSize: 13, color: DS.sub, lineHeight: 1.5 }}>
           Your centre asks teachers to submit their timesheet <strong style={{ color: DS.text }}>{freq.label.toLowerCase()}</strong>. Submitting sends every draft entry in the selected period for approval.
         </div>
-        <Btn variant="secondary" small onClick={() => setPeriod(tsPeriodForFreq(freq.id))}>This {freq.noun}</Btn>
+        <Btn variant="secondary" small onClick={() => setPeriod(tsDefaultPeriod())}>This {freq.noun}</Btn>
       </div>
 
-      {/* Period + summary */}
+      {/* Period navigator — one submission period at a time, or a custom range */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 18, flexWrap: 'wrap' }}>
-        <TsPeriodControl period={period} onChange={setPeriod} />
+        <TsPeriodNav freq={freq} period={period} onChange={setPeriod} />
         <span style={{ fontSize: 12.5, color: DS.muted }}>{tsRangeLabel(range)}</span>
       </div>
 
@@ -800,11 +841,14 @@ const tsTeacherRollup = (entries) => {
 const AdminTimesheetsPage = () => {
   const adminStore = useAdminStore();
   const store = useTimesheetStore();
+  const freq = TS_FREQ[store.config.submissionFrequency] || TS_FREQ.week;
   const [period, setPeriod] = React.useState(tsAdminPeriod);
   const changePeriod = (p) => { tsSetAdminPeriod(p); setPeriod(p); };
+  // Changing the cadence resets the view to the current period of the new unit.
+  const setFrequency = (id) => { store.setConfig({ submissionFrequency: id }); changePeriod(tsDefaultPeriod()); };
 
   const resolve = tsMakeResolve(adminStore, store.config);
-  const range = tsRangeOf(period);
+  const range = tsRangeFor(freq, period);
   const inPeriod = store.entries.filter(e => tsInRange(e.date, range));
   const teacherRows = tsTeacherRollup(inPeriod);
 
@@ -817,13 +861,32 @@ const AdminTimesheetsPage = () => {
     <div style={{ padding: '32px' }}>
       <PageHeader title="Staff Timesheets" subtitle="Review and approve your teachers' working hours — open a teacher to see their sessions" />
 
+      {/* Submission policy — admin-set, centre-wide. Sets the cadence teachers submit
+          on and the unit everyone reviews by (their page tracks the same setting). */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 18px', background: DS.accentLight, border: `1px solid ${DS.accentBorder}`, borderRadius: 10, marginBottom: 18, flexWrap: 'wrap' }}>
+        <Icon name="calendar" size={18} color={DS.accent} />
+        <div style={{ flex: 1, minWidth: 220, fontSize: 13, color: DS.sub, lineHeight: 1.5 }}>
+          Staff submit their timesheets <strong style={{ color: DS.text }}>{freq.label.toLowerCase()}</strong>. This sets the period teachers see and submit — and the unit you review by below.
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 12.5, color: DS.muted, fontWeight: 500 }}>Submission frequency</span>
+          <Select value={store.config.submissionFrequency} onChange={e => setFrequency(e.target.value)} style={{ width: 150 }}>
+            {TS_FREQUENCIES.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
+          </Select>
+        </div>
+      </div>
+
+      {/* Period navigator — review one submission period at a time (or a custom range) */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 18, flexWrap: 'wrap' }}>
+        <TsPeriodNav freq={freq} period={period} onChange={changePeriod} />
+        {submittedIds.length > 0 && (
+          <Btn variant="primary" icon="check" small onClick={() => store.approveMany(submittedIds)}>Approve all {submittedIds.length} submitted</Btn>
+        )}
+      </div>
+
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 20, alignItems: 'start' }}>
-        {/* Main table — per-teacher summary; click a teacher to open their sessions.
-            Bulk approve across all teachers lives in the card header. */}
-        <Card title="By teacher" subtitle={tsRangeLabel(range)}
-          actions={submittedIds.length > 0 ? (
-            <Btn variant="primary" icon="check" small onClick={() => store.approveMany(submittedIds)}>Approve all {submittedIds.length} submitted</Btn>
-          ) : null}>
+        {/* Main table — per-teacher summary; click a teacher to open their sessions. */}
+        <Card title="By teacher" subtitle={tsRangeLabel(range)}>
           {teacherRows.length ? teacherRows.map((r, i) => (
             <TeacherSummaryRow key={r.id} row={r} color={(adminStore.teachers.find(t => t.id === r.id) || {}).color}
               isLast={i === teacherRows.length - 1} onOpen={() => adminNav('timesheet_detail', r.id)} />
@@ -833,19 +896,8 @@ const AdminTimesheetsPage = () => {
           )}
         </Card>
 
-        {/* Right rail — submission policy, period + this-period stats */}
+        {/* Right rail — this-period stats */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {/* Submission policy — admin-set, centre-wide. Teachers' page defaults to this. */}
-          <Card title="Submission frequency" subtitle="How often teachers are asked to submit their timesheet for approval." icon="calendar" accent={DS.accent}>
-            <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <Select value={store.config.submissionFrequency} onChange={e => store.setConfig({ submissionFrequency: e.target.value })}>
-                {TS_FREQUENCIES.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
-              </Select>
-              <TsPeriodControl period={period} onChange={changePeriod} />
-              <span style={{ fontSize: 12.5, color: DS.muted }}>{tsRangeLabel(range)}</span>
-            </div>
-          </Card>
-
           {/* This period — hours, approvals, est. pay, awaiting, teacher count */}
           <Card title="This period" subtitle={tsRangeLabel(range)}>
             <TsSummaryRows rows={[
@@ -925,13 +977,14 @@ const AdminTimesheetDetailPage = () => {
   const adminStore = useAdminStore();
   const store = useTimesheetStore();
   const teacherId = adminParam();
+  const freq = TS_FREQ[store.config.submissionFrequency] || TS_FREQ.week;
   const [period, setPeriod] = React.useState(tsAdminPeriod);
   const changePeriod = (p) => { tsSetAdminPeriod(p); setPeriod(p); };
   const [status, setStatus] = React.useState('all');
   const [markExp, setMarkExp] = React.useState(false);
   const [printData, setPrintData] = React.useState(null);
 
-  const range = tsRangeOf(period);
+  const range = tsRangeFor(freq, period);
   const teacher = adminStore.teachers.find(t => t.id === teacherId);
   const name = tsTeacherName(teacherId);
 
@@ -1006,9 +1059,9 @@ const AdminTimesheetDetailPage = () => {
         </div>
       </div>
 
-      {/* Period + status filter */}
+      {/* Period navigator + status filter */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 18, flexWrap: 'wrap' }}>
-        <TsPeriodControl period={period} onChange={changePeriod} />
+        <TsPeriodNav freq={freq} period={period} onChange={changePeriod} />
         <Select value={status} onChange={e => setStatus(e.target.value)} style={{ width: 150 }}>
           <option value="all">All statuses</option>
           {Object.keys(TS_STATUS_META).map(s => <option key={s} value={s}>{TS_STATUS_META[s].label}</option>)}
