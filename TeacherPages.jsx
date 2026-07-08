@@ -127,11 +127,14 @@ const TeacherClassesPage = () => {
   );
 };
 
-// ─── Class Detail (teacher, read-only) ──────────────────────────────────────────
-// Opened from the class list. Presents a single class the way a teacher needs it:
-// headline stats, schedule, roster and the homework set for the group. Enrolment
-// and the timetable are owned by the admin (see schedule-timetable architecture),
-// so this is a view — the register is taken from the Timetable / Attendance pages.
+// ─── Class Detail (teacher) — Google-Classroom-style tabbed workspace ────────────
+// Opened from the My Classes list. A single class presented as a full workspace:
+// a customisable hero banner, then a tab bar (Stream · Students · Homework · Lesson
+// planner · Attendance · Progress · Analytics · Settings). Enrolment and the
+// timetable stay owned by the admin (see schedule-timetable architecture) — the
+// register is still taken from the Attendance page (via "Take register"), and the
+// Settings tab surfaces a "Request a change" to the admin rather than direct edits.
+// Announcements + banner theme persist per class in localStorage (frontend-only).
 
 // Deterministic per-student trend so sparklines don't jitter on re-render.
 const teacherClassTrend = (name, avg) => {
@@ -143,11 +146,702 @@ const teacherClassTrend = (name, avg) => {
   });
 };
 
+// Banner theme presets for the "Customise" popover. 'default' derives from the
+// class's subject colour; the rest are two-stop gradients.
+const CLASS_BANNER_THEMES = [
+  { id:'default', name:'Subject' },
+  { id:'indigo',  name:'Indigo',  from:'#4F46E5', to:'#7C3AED' },
+  { id:'teal',    name:'Teal',    from:'#0D9488', to:'#0891B2' },
+  { id:'ocean',   name:'Ocean',   from:'#0284C7', to:'#4F46E5' },
+  { id:'forest',  name:'Forest',  from:'#15803D', to:'#0D9488' },
+  { id:'sunset',  name:'Sunset',  from:'#EA580C', to:'#DB2777' },
+  { id:'plum',    name:'Plum',    from:'#7C3AED', to:'#DB2777' },
+  { id:'slate',   name:'Slate',   from:'#334155', to:'#475569' },
+];
+
+// Per-class localStorage (banner theme + announcement stream). Prototype only.
+const classLS = {
+  getBanner: (id) => { try { return localStorage.getItem(`klayo.classBanner.${id}`) || 'default'; } catch (e) { return 'default'; } },
+  setBanner: (id, v) => { try { localStorage.setItem(`klayo.classBanner.${id}`, v); } catch (e) {} },
+  getStream: (id) => { try { return JSON.parse(localStorage.getItem(`klayo.classStream.${id}`) || 'null'); } catch (e) { return null; } },
+  setStream: (id, arr) => { try { localStorage.setItem(`klayo.classStream.${id}`, JSON.stringify(arr)); } catch (e) {} },
+};
+
+// Resolve a {from,to} gradient for a banner theme id (falls back to class colour).
+const classBannerGradient = (themeId, color) => {
+  const t = CLASS_BANNER_THEMES.find(x => x.id === themeId);
+  if (t && t.from) return { from: t.from, to: t.to };
+  return { from: color, to: shadeColor(color, -24) };
+};
+
+// Deterministic, Google-Classroom-style short join code for a class.
+const classJoinCode = (id, group) => {
+  const s = `${id}|${group}`;
+  let h = 0; for (let i = 0; i < s.length; i++) h = (h * 131 + s.charCodeAt(i)) >>> 0;
+  return h.toString(36).replace(/[^a-z0-9]/g, '').padEnd(7, '0').slice(0, 7);
+};
+
+// Compact "9 Jul, 21:16" timestamp for stream posts (accepts a ms epoch).
+const fmtStreamTime = (ts) => {
+  const d = new Date(ts);
+  const mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const hh = String(d.getHours()).padStart(2, '0'), mm = String(d.getMinutes()).padStart(2, '0');
+  return `${d.getDate()} ${mo[d.getMonth()]}, ${hh}:${mm}`;
+};
+
+// Deterministic class-average trend (8 assessments) around the class avg score.
+const classTrendSeries = (seed, avg) => {
+  let h = 0; for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) & 0x7fff;
+  return Array.from({ length: 8 }, (_, i) => {
+    const w = ((h >> (i % 11)) % 9) - 4;
+    return Math.max(40, Math.min(98, Math.round((avg || 70) - 6 + i * 1.3 + w)));
+  });
+};
+
+// Grade-band distribution across N students, weighted by the class average.
+const classGradeDist = (n, avg, color) => {
+  const p = avg >= 85 ? [0.4,0.35,0.2,0.05] : avg >= 75 ? [0.25,0.4,0.25,0.1] : avg >= 65 ? [0.15,0.35,0.35,0.15] : [0.08,0.27,0.4,0.25];
+  const raw = p.map(x => Math.round(x * n));
+  const sum = raw.reduce((s, v) => s + v, 0);
+  raw[1] += (n - sum);
+  if (raw[1] < 0) { raw[2] = Math.max(0, raw[2] + raw[1]); raw[1] = 0; }
+  return [
+    { g:'A* / A', n:Math.max(0, raw[0]), c:DS.success },
+    { g:'B',      n:Math.max(0, raw[1]), c:color || DS.accent },
+    { g:'C',      n:Math.max(0, raw[2]), c:DS.warning },
+    { g:'D / U',  n:Math.max(0, raw[3]), c:DS.danger },
+  ];
+};
+
+// Deterministic recent-attendance log scaled by the class attendance rate.
+const classRecentSessions = (seed, n, attPct) => {
+  const dates = ['22 Apr','18 Apr','15 Apr','11 Apr','8 Apr','4 Apr'];
+  let h = 0; for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+  const missRate = Math.max(0, (100 - (attPct || 90)) / 100);
+  return dates.map((d, i) => {
+    const absent = Math.round(((h >> (i * 3)) % 3) * missRate * 1.4);
+    const late = ((h >> (i * 3 + 2)) % 2);
+    const present = Math.max(0, n - absent - late);
+    return { date:d, present, absent, late };
+  });
+};
+
+const CLASS_TABS = [
+  { id:'stream',     label:'Stream',         icon:'megaphone' },
+  { id:'students',   label:'Students',       icon:'users' },
+  { id:'homework',   label:'Homework',       icon:'clip' },
+  { id:'planner',    label:'Lesson planner', icon:'book' },
+  { id:'attendance', label:'Attendance',     icon:'check' },
+  { id:'progress',   label:'Progress',       icon:'trending_up' },
+  { id:'analytics',  label:'Analytics',      icon:'chart' },
+  { id:'settings',   label:'Settings',       icon:'settings' },
+];
+
+const ClassTabBar = ({ active, onChange, color }) => (
+  <div style={{ display:'flex', gap:2, borderBottom:`1px solid ${DS.border}`, overflowX:'auto', marginBottom:24 }}>
+    {CLASS_TABS.map(t => {
+      const on = active === t.id;
+      return (
+        <button key={t.id} onClick={() => onChange(t.id)} style={{
+          display:'inline-flex', alignItems:'center', gap:7, padding:'11px 14px',
+          border:'none', background:'transparent', cursor:'pointer', whiteSpace:'nowrap',
+          borderBottom:`2px solid ${on ? color : 'transparent'}`, marginBottom:-1,
+          color: on ? DS.text : DS.muted, fontSize:13.5, fontWeight: on ? 600 : 500,
+          transition:'color 0.12s',
+        }}>
+          <Icon name={t.icon} size={15} color={on ? color : DS.faint} />
+          {t.label}
+        </button>
+      );
+    })}
+  </div>
+);
+
+// Small KPI tile used across the Homework / Attendance / Analytics tabs.
+const ClassStat = ({ label, value, sub, color, icon }) => (
+  <div style={{ flex:1, minWidth:0, padding:'16px 18px' }}>
+    <div style={{ display:'flex', alignItems:'center', gap:7, marginBottom:8 }}>
+      {icon && <Icon name={icon} size={13} color={DS.faint} />}
+      <span style={{ fontSize:11, fontWeight:600, color:DS.faint, letterSpacing:'0.06em', textTransform:'uppercase' }}>{label}</span>
+    </div>
+    <div style={{ fontSize:24, fontWeight:800, color:color || DS.text, letterSpacing:'-0.5px', lineHeight:1 }}>{value}</div>
+    {sub && <div style={{ fontSize:12, color:DS.muted, marginTop:5 }}>{sub}</div>}
+  </div>
+);
+
+const ClassToggle = ({ on, onChange }) => (
+  <button onClick={() => onChange(!on)} style={{
+    width:38, height:22, borderRadius:11, border:'none', cursor:'pointer', padding:0, flexShrink:0,
+    background: on ? DS.accent : DS.borderDark, position:'relative', transition:'background 0.15s',
+  }}>
+    <span style={{ position:'absolute', top:2, left: on ? 18 : 2, width:18, height:18, borderRadius:'50%', background:'#fff', transition:'left 0.15s', boxShadow:'0 1px 2px rgba(0,0,0,0.2)' }} />
+  </button>
+);
+
+// "Customise" popover in the banner — swatch grid of banner themes.
+const ClassBannerCustomiser = ({ value, onChange, color }) => {
+  const [open, setOpen] = React.useState(false);
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
+  return (
+    <div ref={ref} style={{ position:'relative' }}>
+      <button onClick={() => setOpen(o => !o)} style={{
+        display:'inline-flex', alignItems:'center', gap:7, padding:'7px 13px', borderRadius:8,
+        background:'rgba(255,255,255,0.92)', border:'none', cursor:'pointer',
+        fontSize:13, fontWeight:600, color:DS.sub, boxShadow:'0 1px 3px rgba(0,0,0,0.18)',
+      }}>
+        <Icon name="edit" size={14} color={DS.sub} /> Customise
+      </button>
+      {open && (
+        <div style={{ position:'absolute', top:'calc(100% + 8px)', right:0, zIndex:40, width:236,
+          background:DS.bg, border:`1px solid ${DS.border}`, borderRadius:12, boxShadow:DS.cardShadowHi, padding:14 }}>
+          <div style={{ fontSize:12, fontWeight:700, color:DS.text, marginBottom:10 }}>Banner theme</div>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:8 }}>
+            {CLASS_BANNER_THEMES.map(t => {
+              const g = classBannerGradient(t.id, color);
+              const active = value === t.id;
+              return (
+                <button key={t.id} title={t.name} onClick={() => onChange(t.id)} style={{
+                  height:40, borderRadius:8, cursor:'pointer',
+                  background:`linear-gradient(120deg, ${g.from}, ${g.to})`,
+                  border: active ? `2px solid ${DS.text}` : '2px solid transparent',
+                  boxShadow: active ? '0 0 0 2px #fff inset' : 'none',
+                }} />
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ── Stream tab — announcement feed + class code / upcoming / about rail ──────────
+const ClassStreamTab = ({ cls, color, subject, level, stream, onPost, onDelete, classHw, principalName, code }) => {
+  const [copied, setCopied] = React.useState(false);
+  const [composing, setComposing] = React.useState(false);
+  const [draft, setDraft] = React.useState('');
+  const copyCode = () => { try { navigator.clipboard.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch (e) {} };
+  const post = () => { const t = draft.trim(); if (!t) return; onPost(t); setDraft(''); setComposing(false); };
+  const openHw = classHw.filter(h => h.status !== 'complete');
+
+  return (
+    <div style={{ display:'grid', gridTemplateColumns:'280px 1fr', gap:20, alignItems:'start' }}>
+      {/* Left rail */}
+      <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+        <Card>
+          <div style={{ padding:'16px 18px' }}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+              <span style={{ fontSize:13, fontWeight:600, color:DS.text }}>Class code</span>
+              <button onClick={copyCode} title="Copy code" style={{ background:'none', border:'none', cursor:'pointer', color:copied ? DS.success : DS.faint, display:'flex' }}>
+                <Icon name={copied ? 'check' : 'copy'} size={15} />
+              </button>
+            </div>
+            <div style={{ fontFamily:"'JetBrains Mono', monospace", fontSize:22, fontWeight:600, color, letterSpacing:'1px' }}>{code}</div>
+            <div style={{ fontSize:11.5, color:DS.muted, marginTop:8, lineHeight:1.45 }}>Students join with this code from their dashboard.</div>
+          </div>
+        </Card>
+
+        <Card title="Upcoming">
+          <div style={{ padding:'4px 18px 14px' }}>
+            {openHw.length ? openHw.slice(0, 3).map(h => (
+              <div key={h.id} style={{ padding:'9px 0', borderBottom:`1px solid ${DS.border}` }}>
+                <div style={{ fontSize:12.5, fontWeight:600, color:DS.text }}>{h.title}</div>
+                <div style={{ fontSize:11.5, color:DS.muted, marginTop:1 }}>Due {h.due}</div>
+              </div>
+            )) : (
+              <div style={{ fontSize:12.5, color:DS.muted, padding:'8px 0' }}>No work due in soon 🎉</div>
+            )}
+          </div>
+        </Card>
+
+        <Card title="About">
+          <div style={{ padding:'10px 18px 14px' }}>
+            {[
+              ['Subject', subject],
+              level && ['Level', level],
+              ['Room', cls.room],
+              ['Schedule', `${cls.day} · ${cls.time}`],
+              ['Teacher', 'You'],
+            ].filter(Boolean).map(([l, v]) => (
+              <div key={l} style={{ display:'flex', justifyContent:'space-between', gap:12, padding:'7px 0', fontSize:12.5 }}>
+                <span style={{ color:DS.muted }}>{l}</span>
+                <span style={{ color:DS.text, fontWeight:500, textAlign:'right' }}>{v}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+
+      {/* Feed */}
+      <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+        <Card>
+          {!composing ? (
+            <button onClick={() => setComposing(true)} style={{
+              display:'flex', alignItems:'center', gap:12, width:'100%', padding:'16px 18px',
+              background:'none', border:'none', cursor:'pointer', textAlign:'left',
+            }}>
+              <Avatar name={principalName} size={36} color={color} />
+              <span style={{ fontSize:13.5, color:DS.muted }}>Announce something to your class…</span>
+            </button>
+          ) : (
+            <div style={{ padding:'16px 18px' }}>
+              <div style={{ display:'flex', gap:12 }}>
+                <Avatar name={principalName} size={36} color={color} />
+                <textarea autoFocus value={draft} onChange={e => setDraft(e.target.value)} placeholder="Share an update, reminder or resource…"
+                  style={{ flex:1, minHeight:88, resize:'vertical', padding:'10px 12px', borderRadius:8, border:`1px solid ${DS.border}`, fontSize:13.5, outline:'none', lineHeight:1.5, boxSizing:'border-box' }} />
+              </div>
+              <div style={{ display:'flex', justifyContent:'flex-end', gap:8, marginTop:12 }}>
+                <Btn variant="ghost" small onClick={() => { setComposing(false); setDraft(''); }}>Cancel</Btn>
+                <Btn variant="primary" small icon="send" onClick={post} disabled={!draft.trim()}>Post</Btn>
+              </div>
+            </div>
+          )}
+        </Card>
+
+        {stream.length ? stream.map(p => (
+          <Card key={p.id}>
+            <div style={{ padding:'16px 18px' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:11 }}>
+                <Avatar name={p.author} size={38} color={color} />
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:13.5, fontWeight:600, color:DS.text }}>{p.author}</div>
+                  <div style={{ fontSize:11.5, color:DS.faint }}>{fmtStreamTime(p.at)}</div>
+                </div>
+                {p.id !== 'seed' && (
+                  <button onClick={() => onDelete(p.id)} title="Delete" style={{ background:'none', border:'none', cursor:'pointer', color:DS.faint, display:'flex' }}>
+                    <Icon name="trash" size={14} />
+                  </button>
+                )}
+              </div>
+              <div style={{ fontSize:13.5, color:DS.sub, marginTop:12, lineHeight:1.55, whiteSpace:'pre-wrap' }}>{p.text}</div>
+              <div style={{ display:'flex', alignItems:'center', gap:7, marginTop:14, paddingTop:12, borderTop:`1px solid ${DS.border}`, color:DS.faint }}>
+                <Icon name="message" size={14} /><span style={{ fontSize:12.5 }}>Add class comment</span>
+              </div>
+            </div>
+          </Card>
+        )) : (
+          <Card><div style={{ padding:'40px 20px' }}><EmptyState icon="megaphone" title="No announcements yet" message="Share your first update with the class." /></div></Card>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ── Students tab ────────────────────────────────────────────────────────────────
+const ClassStudentsTab = ({ cls, color, goProfile }) => {
+  const [q, setQ] = React.useState('');
+  const list = cls.studentList.filter(n => n.toLowerCase().includes(q.toLowerCase()));
+  return (
+    <div>
+      <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:16, flexWrap:'wrap' }}>
+        <div style={{ position:'relative', flex:1, minWidth:220, maxWidth:320 }}>
+          <span style={{ position:'absolute', left:11, top:'50%', transform:'translateY(-50%)', display:'flex' }}><Icon name="search" size={15} color={DS.faint} /></span>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search students…"
+            style={{ width:'100%', padding:'8px 12px 8px 34px', borderRadius:8, border:`1px solid ${DS.border}`, fontSize:13, outline:'none', boxSizing:'border-box' }} />
+        </div>
+        <div style={{ flex:1 }} />
+        <Btn variant="secondary" icon="message" small onClick={() => window.__navigate && window.__navigate('teacher', 'comms')}>Message class</Btn>
+        <Btn variant="secondary" icon="users" small onClick={() => window.__navigate && window.__navigate('teacher', 'students')}>All students</Btn>
+      </div>
+      <Card title={`${cls.studentList.length} student${cls.studentList.length === 1 ? '' : 's'}`}>
+        <div>
+          {list.map((name) => (
+            <div key={name} style={{ display:'flex', alignItems:'center', gap:12, padding:'11px 18px', borderTop:`1px solid ${DS.border}` }}>
+              <Avatar name={name} size={34} color={color} />
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:13, fontWeight:600, color:DS.text }}>{name}</div>
+                <div style={{ fontSize:11.5, color:DS.faint }}>{cls.group}</div>
+              </div>
+              <Sparkline data={teacherClassTrend(name, cls.avgScore)} color={color} width={72} height={26} />
+              <Btn variant="ghost" icon="eye" small onClick={() => goProfile(name)}>Profile</Btn>
+            </div>
+          ))}
+          {!list.length && <div style={{ padding:'28px', textAlign:'center', fontSize:13, color:DS.muted }}>No students match “{q}”.</div>}
+        </div>
+      </Card>
+    </div>
+  );
+};
+
+// ── Homework tab ────────────────────────────────────────────────────────────────
+const ClassHomeworkTab = ({ cls, color, classHw }) => {
+  const hwStatusVariant = { open:'default', marking:'warning', complete:'success' };
+  const active = classHw.filter(h => h.status !== 'complete').length;
+  const toMark = classHw.filter(h => h.status === 'marking').length;
+  const sub = classHw.reduce((s, h) => s + h.submitted, 0), tot = classHw.reduce((s, h) => s + h.total, 0);
+  const rate = tot ? Math.round(sub / tot * 100) : 0;
+  const goHw = () => window.__navigate && window.__navigate('teacher', 'homework');
+  return (
+    <div>
+      <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:16 }}>
+        <Btn variant="primary" icon="plus" small onClick={goHw}>Set homework</Btn>
+      </div>
+      <div style={{ display:'flex', gap:14, marginBottom:20, flexWrap:'wrap' }}>
+        <Card style={{ flex:1, minWidth:150 }}><ClassStat label="Assignments" value={classHw.length} icon="clip" /></Card>
+        <Card style={{ flex:1, minWidth:150 }}><ClassStat label="Active" value={active} color={active ? DS.success : DS.text} icon="folder_open" /></Card>
+        <Card style={{ flex:1, minWidth:150 }}><ClassStat label="To mark" value={toMark} color={toMark ? DS.warning : DS.text} icon="edit" /></Card>
+        <Card style={{ flex:1, minWidth:150 }}><ClassStat label="Submission rate" value={rate + '%'} color={color} icon="check" /></Card>
+      </div>
+      {classHw.length ? (
+        <Card title="Assignments">
+          <div>
+            {classHw.map(h => (
+              <div key={h.id} style={{ display:'flex', alignItems:'center', gap:14, padding:'13px 18px', borderTop:`1px solid ${DS.border}` }}>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:13, fontWeight:600, color:DS.text }}>{h.title}</div>
+                  <div style={{ fontSize:11.5, color:DS.muted, marginTop:2 }}>Set {h.set} · Due {h.due} · {h.submitted}/{h.total} submitted</div>
+                </div>
+                {h.avgScore != null && <ScorePill score={h.avgScore} />}
+                <Badge variant={hwStatusVariant[h.status] || 'default'}>{h.status === 'marking' ? 'To mark' : h.status === 'complete' ? 'Complete' : 'Open'}</Badge>
+              </div>
+            ))}
+          </div>
+        </Card>
+      ) : (
+        <Card><div style={{ padding:'40px 20px' }}><EmptyState icon="clip" title="No homework set" message="Set the first assignment for this class." action={<Btn variant="primary" icon="plus" onClick={goHw}>Set homework</Btn>} /></div></Card>
+      )}
+    </div>
+  );
+};
+
+// ── Lesson planner tab ──────────────────────────────────────────────────────────
+const ClassPlannerTab = ({ cls, color }) => {
+  const plans = Object.values(window.__lessonPlans || {})
+    .filter(p => p.group === cls.group)
+    .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const openPlan = (date, mode) => window.__openLessonPlanner && window.__openLessonPlanner(cls.group, date, mode);
+  const fmtDate = (iso) => { const [y, m, d] = (iso || '').split('-').map(Number); const mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return d ? { day:d, mon:mo[m - 1], year:y } : { day:iso, mon:'', year:'' }; };
+  return (
+    <div>
+      <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:16 }}>
+        <Btn variant="primary" icon="plus" small onClick={() => openPlan(todayISO, 'edit')}>New lesson plan</Btn>
+      </div>
+      {plans.length ? (
+        <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+          {plans.map(p => {
+            const dt = fmtDate(p.date);
+            return (
+              <Card key={p.date}>
+                <div style={{ padding:'16px 18px', display:'flex', alignItems:'flex-start', gap:16 }}>
+                  <div style={{ width:52, textAlign:'center', flexShrink:0 }}>
+                    <div style={{ fontSize:11, color:DS.muted, textTransform:'uppercase', fontWeight:600 }}>{dt.mon}</div>
+                    <div style={{ fontSize:22, fontWeight:800, color, lineHeight:1 }}>{dt.day}</div>
+                  </div>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:14, fontWeight:600, color:DS.text }}>{p.plan.title}</div>
+                    <div style={{ fontSize:12, color:DS.muted, marginTop:2 }}>{p.plan.topic} · {p.plan.duration} min</div>
+                    {p.plan.objectives && <div style={{ fontSize:12.5, color:DS.sub, marginTop:8, lineHeight:1.5, display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical', overflow:'hidden' }}>{p.plan.objectives.replace(/•/g, '').replace(/\n/g, ' ').trim()}</div>}
+                    <div style={{ display:'flex', alignItems:'center', gap:12, marginTop:10 }}>
+                      {p.plan.resources && p.plan.resources.length > 0 && <span style={{ display:'inline-flex', alignItems:'center', gap:5, fontSize:11.5, color:DS.muted }}><Icon name="file" size={13} color={DS.faint} />{p.plan.resources.length} resource{p.plan.resources.length === 1 ? '' : 's'}</span>}
+                      <span style={{ fontSize:11.5, color:DS.faint }}>Saved {p.savedAt}</span>
+                    </div>
+                  </div>
+                  <Btn variant="secondary" icon="eye" small onClick={() => openPlan(p.date, 'view')}>Open</Btn>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      ) : (
+        <Card><div style={{ padding:'40px 20px' }}><EmptyState icon="book" title="No lesson plans yet" message="Plan your first lesson for this class." action={<Btn variant="primary" icon="plus" onClick={() => openPlan(todayISO, 'edit')}>New lesson plan</Btn>} /></div></Card>
+      )}
+    </div>
+  );
+};
+
+// ── Attendance tab ──────────────────────────────────────────────────────────────
+const ClassAttendanceTab = ({ cls, color }) => {
+  const attColor = cls.attendance >= 90 ? DS.success : cls.attendance >= 80 ? DS.warning : DS.danger;
+  const sessions = classRecentSessions(cls.id + cls.group, cls.students, cls.attendance);
+  const takeRegister = () => { window.__registerGroup = cls.group; window.__navigate && window.__navigate('teacher', 'attendance'); };
+  return (
+    <div>
+      <div style={{ display:'flex', gap:14, marginBottom:20, flexWrap:'wrap' }}>
+        <Card style={{ flex:1, minWidth:150 }}><ClassStat label="Attendance rate" value={cls.attendance + '%'} color={attColor} icon="check" /></Card>
+        <Card style={{ flex:1, minWidth:150 }}><ClassStat label="Enrolled" value={cls.students} icon="users" /></Card>
+        <Card style={{ flex:1, minWidth:150 }}><ClassStat label="Sessions logged" value={sessions.length} icon="calendar" /></Card>
+        <Card style={{ flex:1, minWidth:150, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}>
+          <Btn variant="primary" icon="check" onClick={takeRegister}>Take register</Btn>
+        </Card>
+      </div>
+      <Card title="Recent sessions">
+        <div style={{ overflowX:'auto' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+            <thead>
+              <tr style={{ borderBottom:`1px solid ${DS.border}`, background:DS.surface }}>
+                {['Date','Present','Late','Absent','Rate'].map((h, i) => (
+                  <th key={i} style={{ padding:'9px 18px', textAlign:i === 0 ? 'left' : 'center', fontSize:11, fontWeight:600, color:DS.muted, textTransform:'uppercase', letterSpacing:'0.06em', whiteSpace:'nowrap' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {sessions.map((s, i) => {
+                const rate = Math.round(s.present / (s.present + s.late + s.absent || 1) * 100);
+                return (
+                  <tr key={i} style={{ borderBottom:`1px solid ${DS.border}` }}>
+                    <td style={{ padding:'11px 18px', color:DS.text, fontWeight:500, whiteSpace:'nowrap' }}>{s.date}</td>
+                    <td style={{ padding:'11px 18px', textAlign:'center', color:DS.success, fontWeight:600 }}>{s.present}</td>
+                    <td style={{ padding:'11px 18px', textAlign:'center', color:s.late ? DS.warning : DS.faint, fontWeight:600 }}>{s.late}</td>
+                    <td style={{ padding:'11px 18px', textAlign:'center', color:s.absent ? DS.danger : DS.faint, fontWeight:600 }}>{s.absent}</td>
+                    <td style={{ padding:'11px 18px', textAlign:'center' }}><span style={{ fontWeight:600, color: rate >= 90 ? DS.success : rate >= 80 ? DS.warning : DS.danger }}>{rate}%</span></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
+  );
+};
+
+// ── Progress tab ────────────────────────────────────────────────────────────────
+const ClassProgressTab = ({ cls, color }) => {
+  const labels = ['4 Mar','11 Mar','18 Mar','25 Mar','1 Apr','8 Apr','15 Apr','22 Apr'];
+  const trend = classTrendSeries(cls.id + cls.group, cls.avgScore);
+  const dist = classGradeDist(cls.students, cls.avgScore, color);
+  return (
+    <div style={{ display:'grid', gridTemplateColumns:'1fr 320px', gap:20, alignItems:'start' }}>
+      <div style={{ display:'flex', flexDirection:'column', gap:20 }}>
+        <Card title="Class score trend" actions={<Badge variant="default">Last 8 assessments</Badge>}>
+          <div style={{ padding:'16px 20px 8px' }}>
+            <LineChart labels={labels} series={[{ label:'Class avg', data:trend, color }]} height={210} area />
+          </div>
+        </Card>
+        <Card title="Student breakdown">
+          <div>
+            {cls.studentList.map((name, i) => {
+              const base = trend[trend.length - 1];
+              const offset = (i % 5) - 2;
+              const score = Math.max(42, Math.min(99, Math.round(base + offset * 5)));
+              const up = offset >= 0;
+              return (
+                <div key={name} style={{ display:'flex', alignItems:'center', gap:12, padding:'10px 18px', borderTop:`1px solid ${DS.border}` }}>
+                  <Avatar name={name} size={32} color={color} />
+                  <div style={{ flex:1, minWidth:0, fontSize:13, fontWeight:500, color:DS.text }}>{name}</div>
+                  <Sparkline data={teacherClassTrend(name, cls.avgScore)} color={up ? DS.success : DS.danger} width={70} height={24} />
+                  <ScorePill score={score} />
+                  <Icon name={up ? 'trending_up' : 'trending_dn'} size={14} color={up ? DS.success : DS.danger} />
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      </div>
+      <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+        <Card title="Summary">
+          <div style={{ padding:'14px 18px' }}>
+            {[
+              ['Students', cls.students],
+              ['Avg score', cls.avgScore + '%'],
+              ['Attendance', cls.attendance + '%'],
+              ['Next session', cls.nextSession],
+            ].map(([l, v]) => (
+              <div key={l} style={{ display:'flex', justifyContent:'space-between', padding:'8px 0', borderBottom:`1px solid ${DS.border}`, fontSize:13 }}>
+                <span style={{ color:DS.muted }}>{l}</span><span style={{ color:DS.text, fontWeight:500 }}>{v}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+        <Card title="Grade distribution">
+          <div style={{ padding:'16px 18px' }}>
+            {dist.map(d => (
+              <div key={d.g} style={{ marginBottom:12 }}>
+                <div style={{ display:'flex', justifyContent:'space-between', marginBottom:5 }}>
+                  <span style={{ fontSize:12.5, color:DS.sub }}>{d.g}</span>
+                  <span style={{ fontSize:12.5, fontWeight:600, color:d.c }}>{d.n}</span>
+                </div>
+                <div style={{ height:6, background:DS.surface, borderRadius:3, overflow:'hidden' }}>
+                  <div style={{ width:`${cls.students ? (d.n / cls.students) * 100 : 0}%`, height:'100%', background:d.c, borderRadius:3 }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+};
+
+// ── Analytics tab ───────────────────────────────────────────────────────────────
+const ClassAnalyticsTab = ({ cls, color, classHw }) => {
+  const labels = ['4 Mar','11 Mar','18 Mar','25 Mar','1 Apr','8 Apr','15 Apr','22 Apr'];
+  const trend = classTrendSeries(cls.id + cls.group, cls.avgScore);
+  const dist = classGradeDist(cls.students, cls.avgScore, color);
+  const hwLabels = classHw.map(h => h.title.split(':')[0].slice(0, 12));
+  const hwRates = classHw.map(h => h.total ? Math.round(h.submitted / h.total * 100) : 0);
+  const sub = classHw.reduce((s, h) => s + h.submitted, 0), tot = classHw.reduce((s, h) => s + h.total, 0);
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:20 }}>
+      <div style={{ display:'flex', gap:14, flexWrap:'wrap' }}>
+        <Card style={{ flex:1, minWidth:150 }}><ClassStat label="Avg score" value={cls.avgScore + '%'} color={cls.avgScore >= 80 ? DS.success : DS.warning} icon="chart" /></Card>
+        <Card style={{ flex:1, minWidth:150 }}><ClassStat label="Attendance" value={cls.attendance + '%'} color={cls.attendance >= 90 ? DS.success : DS.warning} icon="check" /></Card>
+        <Card style={{ flex:1, minWidth:150 }}><ClassStat label="HW completion" value={(tot ? Math.round(sub / tot * 100) : 0) + '%'} color={color} icon="clip" /></Card>
+        <Card style={{ flex:1, minWidth:150 }}><ClassStat label="Enrolment" value={cls.students} icon="users" /></Card>
+      </div>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:20 }}>
+        <Card title="Attainment trend">
+          <div style={{ padding:'16px 20px 8px' }}>
+            <LineChart labels={labels} series={[{ label:'Class avg', data:trend, color }]} height={200} area />
+          </div>
+        </Card>
+        <Card title="Homework submission by task">
+          <div style={{ padding:'16px 20px 8px' }}>
+            {hwLabels.length ? <BarChart labels={hwLabels} data={hwRates} color={color} height={200} /> : <div style={{ padding:'40px 0', textAlign:'center', fontSize:13, color:DS.muted }}>No homework data yet.</div>}
+          </div>
+        </Card>
+      </div>
+      <Card title="Grade distribution">
+        <div style={{ padding:'18px 20px', display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:16 }}>
+          {dist.map(d => (
+            <div key={d.g} style={{ textAlign:'center', padding:'14px', border:`1px solid ${DS.border}`, borderRadius:10 }}>
+              <div style={{ fontSize:28, fontWeight:800, color:d.c, lineHeight:1 }}>{d.n}</div>
+              <div style={{ fontSize:12, color:DS.muted, marginTop:6 }}>{d.g}</div>
+            </div>
+          ))}
+        </div>
+      </Card>
+    </div>
+  );
+};
+
+// ── Settings tab ────────────────────────────────────────────────────────────────
+const ClassSettingsTab = ({ cls, color, subject, level, bannerTheme, setBannerTheme }) => {
+  const [notif, setNotif] = React.useState({ submissions:true, attendance:true, messages:false });
+  const [posts, setPosts] = React.useState({ studentsPost:false, studentsComment:true });
+  const [reqMsg, setReqMsg] = React.useState('');
+  const requestChange = () => {
+    if (window.klayoAudit) window.klayoAudit('request_class_change', 'timetable', { by:'teacher', class:cls.group });
+    setReqMsg('Request sent to your centre admin — they own class scheduling and enrolment.');
+    setTimeout(() => setReqMsg(''), 6000);
+  };
+  const row = (label, hint, node) => (
+    <div style={{ display:'flex', alignItems:'center', gap:16, padding:'13px 0', borderBottom:`1px solid ${DS.border}` }}>
+      <div style={{ flex:1, minWidth:0 }}>
+        <div style={{ fontSize:13, fontWeight:500, color:DS.text }}>{label}</div>
+        {hint && <div style={{ fontSize:12, color:DS.muted, marginTop:2 }}>{hint}</div>}
+      </div>
+      {node}
+    </div>
+  );
+  return (
+    <div style={{ maxWidth:720, display:'flex', flexDirection:'column', gap:20 }}>
+      <Card title="Appearance" subtitle="Personalise how this class looks to you">
+        <div style={{ padding:'16px 18px' }}>
+          <div style={{ fontSize:12, fontWeight:600, color:DS.sub, marginBottom:10 }}>Banner theme</div>
+          <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
+            {CLASS_BANNER_THEMES.map(t => {
+              const g = classBannerGradient(t.id, color);
+              const active = bannerTheme === t.id;
+              return (
+                <button key={t.id} onClick={() => setBannerTheme(t.id)} title={t.name} style={{
+                  width:64, height:40, borderRadius:8, cursor:'pointer',
+                  background:`linear-gradient(120deg, ${g.from}, ${g.to})`,
+                  border: active ? `2px solid ${DS.text}` : '2px solid transparent', boxShadow: active ? '0 0 0 2px #fff inset' : 'none',
+                }} />
+              );
+            })}
+          </div>
+        </div>
+      </Card>
+
+      <Card title="Class information">
+        <div style={{ padding:'6px 18px 16px' }}>
+          {[
+            ['Class name', cls.name],
+            ['Subject', subject],
+            level && ['Level', level],
+            ['Year group', cls.group],
+            ['Room', cls.room],
+            ['Schedule', `${cls.day} · ${cls.time}`],
+            ['Enrolment', `${cls.students} student${cls.students === 1 ? '' : 's'}`],
+          ].filter(Boolean).map(([l, v]) => (
+            <div key={l} style={{ display:'flex', justifyContent:'space-between', gap:16, padding:'10px 0', borderBottom:`1px solid ${DS.border}`, fontSize:13 }}>
+              <span style={{ color:DS.muted }}>{l}</span><span style={{ color:DS.text, fontWeight:500, textAlign:'right' }}>{v}</span>
+            </div>
+          ))}
+          <div style={{ display:'flex', alignItems:'center', gap:10, marginTop:14, padding:'11px 14px', background:DS.surface, borderRadius:9 }}>
+            <Icon name="lock" size={15} color={DS.muted} />
+            <span style={{ flex:1, fontSize:12.5, color:DS.muted }}>Class scheduling and enrolment are managed by your centre admin.</span>
+            <Btn variant="secondary" icon="send" small onClick={requestChange}>Request a change</Btn>
+          </div>
+          {reqMsg && <div style={{ display:'flex', alignItems:'center', gap:8, marginTop:10, fontSize:12.5, color:DS.success }}><Icon name="check" size={14} color={DS.success} />{reqMsg}</div>}
+        </div>
+      </Card>
+
+      <Card title="Notifications">
+        <div style={{ padding:'2px 18px 8px' }}>
+          {row('New homework submissions', 'Notify me when a student submits work', <ClassToggle on={notif.submissions} onChange={v => setNotif(p => ({ ...p, submissions:v }))} />)}
+          {row('Low attendance alerts', 'Flag when a student drops below 85%', <ClassToggle on={notif.attendance} onChange={v => setNotif(p => ({ ...p, attendance:v }))} />)}
+          {row('Class messages', 'Notify me about new messages in this class', <ClassToggle on={notif.messages} onChange={v => setNotif(p => ({ ...p, messages:v }))} />)}
+        </div>
+      </Card>
+
+      <Card title="Stream">
+        <div style={{ padding:'2px 18px 8px' }}>
+          {row('Students can post', 'Allow students to create posts in the stream', <ClassToggle on={posts.studentsPost} onChange={v => setPosts(p => ({ ...p, studentsPost:v }))} />)}
+          {row('Students can comment', 'Allow students to comment on announcements', <ClassToggle on={posts.studentsComment} onChange={v => setPosts(p => ({ ...p, studentsComment:v }))} />)}
+        </div>
+      </Card>
+    </div>
+  );
+};
+
 const TeacherClassDetailPage = () => {
   const store = useAdminStore();
   const id  = window.__adminParam;
-  const cls = teacherClasses.find(c => c.id === id);
+  const principalName = window.teacherMetrics ? window.teacherMetrics.getPrincipal().name : 'Sarah Clarke';
+  const [activeTab, setActiveTab] = React.useState('stream');
+  const [bannerTheme, setBannerThemeState] = React.useState(() => classLS.getBanner(id));
+  const [stream, setStream] = React.useState(() => classLS.getStream(id) || []);
   const backToClasses = () => window.__navigate && window.__navigate('teacher', 'classes');
+
+  // Resolve the class from the canonical store — the My Classes list opens this page
+  // with a store id ('c1'…'c37', from TM.getMyClasses()), NOT the teacherClasses mock's
+  // numeric id. Enrich the display-only fields (colour/score/attendance/hwPending/
+  // nextSession) from the mock by matching on group, exactly as the list does (F2), and
+  // derive the roster from real store enrolment (students whose classIds include this
+  // class), falling back to the mock's display list for groups not in the seed roster.
+  const sc = store.classes.find(c => c.id === id);
+  const e  = sc ? (teacherClasses.find(t => t.group === sc.group) || {}) : {};
+  const cls = sc ? {
+    id: sc.id, name: sc.name, group: sc.group, day: sc.day, time: sc.time, room: sc.room,
+    students: sc.students,
+    color: e.color || subjectColor(sc.name),
+    nextSession: e.nextSession || `${sc.day} ${startTimeOf(sc.time)}`,
+    avgScore:   e.avgScore   != null ? e.avgScore   : 0,
+    attendance: e.attendance != null ? e.attendance : 0,
+    hwPending:  e.hwPending  != null ? e.hwPending  : 0,
+    studentList: (() => {
+      const fromStore = store.students
+        .filter(s => Array.isArray(s.classIds) && s.classIds.includes(sc.id))
+        .map(studentName);
+      return fromStore.length ? fromStore : (e.studentList || []);
+    })(),
+  } : null;
+
+  // Re-sync per-class state when the opened class changes (the page stays mounted on
+  // class→class navigation, so useState initialisers alone wouldn't refresh). Seeds a
+  // welcome announcement the first time a class is opened.
+  React.useEffect(() => {
+    const existing = classLS.getStream(id);
+    if (cls && existing == null) {
+      const seed = [{ id:'seed', author:principalName, at:Date.now() - 3600000,
+        text:`Welcome to ${cls.name} 👋\nUse the stream to share updates, reminders and resources with the class.` }];
+      classLS.setStream(id, seed); setStream(seed);
+    } else {
+      setStream(existing || []);
+    }
+    setBannerThemeState(classLS.getBanner(id));
+    setActiveTab('stream');
+  }, [id]);
 
   if (!cls) return (
     <div style={{ padding:'32px' }}>
@@ -157,11 +851,11 @@ const TeacherClassDetailPage = () => {
     </div>
   );
 
-  const color      = cls.color || DS.accent;
-  const scoreColor = cls.avgScore > 80 ? DS.success : DS.warning;
-  const attColor   = cls.attendance > 90 ? DS.success : DS.warning;
-  const level      = /A-?level/i.test(cls.name) ? 'A-Level' : /GCSE/i.test(cls.name) ? 'GCSE' : null;
-  const subject    = cls.name.replace(/^(GCSE|A-?Level)\s+/i, '');
+  const color   = cls.color || DS.accent;
+  const level   = /A-?level/i.test(cls.name) ? 'A-Level' : /GCSE/i.test(cls.name) ? 'GCSE' : null;
+  const subject = cls.name.replace(/^(GCSE|A-?Level)\s+/i, '');
+  const code    = classJoinCode(cls.id, cls.group);
+  const grad    = classBannerGradient(bannerTheme, color);
 
   // Homework set for this group — match homeworkFull rows by year number + group letter
   // ('Year 10 – Group A' ↔ 'Yr 10 Group A').
@@ -180,125 +874,58 @@ const TeacherClassDetailPage = () => {
     if (s) { window.__adminParam = s.id; window.__navigate && window.__navigate('teacher', 'student_profile'); }
   };
 
-  const stat = (label, value, c) => (
-    <div style={{ padding:'16px 24px', borderLeft:`1px solid ${DS.border}` }}>
-      <div style={{ fontSize:12, color:DS.muted }}>{label}</div>
-      <div style={{ fontSize:22, fontWeight:700, color:c || DS.text, marginTop:2 }}>{value}</div>
-    </div>
-  );
-
-  const hwStatusVariant = { open:'default', marking:'warning', complete:'success' };
+  const setBannerTheme = (v) => { setBannerThemeState(v); classLS.setBanner(id, v); };
+  const postAnnouncement = (text) => { const next = [{ id:Date.now(), author:principalName, at:Date.now(), text }, ...stream]; setStream(next); classLS.setStream(id, next); };
+  const deleteAnnouncement = (pid) => { const next = stream.filter(p => p.id !== pid); setStream(next); classLS.setStream(id, next); };
 
   return (
-    <div style={{ padding:'32px', maxWidth:1040, margin:'0 auto' }}>
-      <FlowHeader title={cls.name} subtitle={`${cls.group} · ${cls.day} ${cls.time} · ${cls.room}`} onBack={backToClasses} />
+    <div style={{ padding:'26px 32px', maxWidth:1180, margin:'0 auto' }}>
+      {/* Back link */}
+      <button onClick={backToClasses} style={{ display:'inline-flex', alignItems:'center', gap:6, background:'none', border:'none', cursor:'pointer', color:DS.muted, fontSize:13, fontWeight:500, padding:0, marginBottom:14 }}>
+        <Icon name="chevron_l" size={15} color={DS.muted} /> My Classes
+      </button>
 
-      {/* Hero */}
-      <Card style={{ marginBottom:20 }}>
-        <div style={{ padding:'22px 24px', display:'flex', alignItems:'center', gap:18 }}>
-          <div style={{ width:64, height:64, borderRadius:14, background:color+'18', color, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}><Icon name="book" size={28} /></div>
-          <div style={{ flex:1, minWidth:0 }}>
-            <div style={{ fontSize:20, fontWeight:700, color:DS.text }}>{cls.name}</div>
-            <div style={{ fontSize:13, color:DS.muted, marginTop:2 }}>{cls.group} · {cls.day} {cls.time} · {cls.room}</div>
-            <div style={{ marginTop:8, display:'flex', gap:6, flexWrap:'wrap' }}>
-              <Badge variant="success">Active</Badge>
-              <Badge variant="accent">{subject}</Badge>
-              {level && <Badge variant="default">{level}</Badge>}
+      {/* Banner — outer wrapper is NOT clipped so the Customise popover can overflow;
+          the inner card clips its gradient + decorative rings to the rounded corners. */}
+      <div style={{ position:'relative', marginBottom:20 }}>
+        <div style={{ position:'relative', borderRadius:16, overflow:'hidden',
+          background:`linear-gradient(120deg, ${grad.from}, ${grad.to})`, minHeight:186,
+          display:'flex', flexDirection:'column', justifyContent:'flex-end', padding:'26px 30px', boxShadow:DS.cardShadow }}>
+          {/* Decorative rings */}
+          <svg width="320" height="320" viewBox="0 0 320 320" style={{ position:'absolute', top:-40, right:-20, opacity:0.16, pointerEvents:'none' }}>
+            <circle cx="220" cy="90" r="120" fill="none" stroke="#fff" strokeWidth="18" />
+            <circle cx="270" cy="150" r="70" fill="none" stroke="#fff" strokeWidth="14" />
+            <circle cx="150" cy="60" r="10" fill="#fff" />
+          </svg>
+          {/* Title block */}
+          <div style={{ position:'relative', zIndex:2 }}>
+            <div style={{ display:'flex', gap:7, marginBottom:10, flexWrap:'wrap' }}>
+              {[subject, level, `${cls.students} students`].filter(Boolean).map((t, i) => (
+                <span key={i} style={{ fontSize:11.5, fontWeight:600, color:'#fff', background:'rgba(255,255,255,0.22)', padding:'3px 10px', borderRadius:999 }}>{t}</span>
+              ))}
             </div>
-          </div>
-          <div style={{ display:'flex', gap:8 }}>
-            <Btn variant="secondary" icon="calendar" onClick={() => window.__navigate && window.__navigate('teacher', 'timetable')}>View timetable</Btn>
-            <Btn variant="secondary" icon="message" onClick={() => window.__navigate && window.__navigate('teacher', 'comms')}>Message class</Btn>
+            <div style={{ fontSize:30, fontWeight:800, color:'#fff', letterSpacing:'-0.6px', lineHeight:1.1 }}>{cls.name}</div>
+            <div style={{ fontSize:14, color:'rgba(255,255,255,0.9)', marginTop:6 }}>{cls.group} · {cls.day} {cls.time} · {cls.room}</div>
           </div>
         </div>
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', borderTop:`1px solid ${DS.border}` }}>
-          <div style={{ padding:'16px 24px' }}>
-            <div style={{ fontSize:12, color:DS.muted }}>Students</div>
-            <div style={{ fontSize:22, fontWeight:700, color:DS.text, marginTop:2 }}>{cls.students}</div>
-          </div>
-          {stat('Avg Score', cls.avgScore + '%', scoreColor)}
-          {stat('Attendance', cls.attendance + '%', attColor)}
-          {stat('Homework', cls.hwPending > 0 ? `${cls.hwPending} to mark` : 'Up to date', cls.hwPending > 0 ? DS.warning : DS.success)}
+        {/* Customise — in the non-clipped wrapper so its popover isn't cut off */}
+        <div style={{ position:'absolute', top:18, right:18, zIndex:5 }}>
+          <ClassBannerCustomiser value={bannerTheme} onChange={setBannerTheme} color={color} />
         </div>
-      </Card>
-
-      {/* Details + schedule */}
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 320px', gap:20, alignItems:'start', marginBottom:20 }}>
-        <Card title="Class Details">
-          <div style={{ padding:'20px 24px' }}>
-            {[
-              ['Subject', subject],
-              level && ['Level', level],
-              ['Year group', cls.group],
-              ['Teacher', 'You'],
-              ['Schedule', `${cls.day} · ${cls.time}`],
-              ['Room', cls.room],
-              ['Enrolment', `${cls.students} student${cls.students === 1 ? '' : 's'}`],
-              ['Status', 'Active'],
-            ].filter(Boolean).map(([l, v]) => (
-              <div key={l} style={{ display:'flex', justifyContent:'space-between', padding:'10px 0', borderBottom:`1px solid ${DS.border}`, fontSize:13.5, gap:16 }}>
-                <span style={{ color:DS.muted, flexShrink:0 }}>{l}</span><span style={{ color:DS.text, fontWeight:500, textAlign:'right' }}>{v}</span>
-              </div>
-            ))}
-          </div>
-        </Card>
-        <Card title="Schedule">
-          <div style={{ padding:'18px 20px', display:'flex', flexDirection:'column', gap:14 }}>
-            <div style={{ padding:'14px 16px', borderRadius:10, background:color+'12', border:`1px solid ${color}33` }}>
-              <div style={{ fontSize:10.5, color:DS.muted, textTransform:'uppercase', letterSpacing:0.5, fontWeight:600 }}>Next session</div>
-              <div style={{ fontSize:15, fontWeight:700, color:DS.text, marginTop:3 }}>{cls.nextSession}</div>
-              <div style={{ fontSize:12.5, color:DS.muted, marginTop:2 }}>{cls.room}</div>
-            </div>
-            <div style={{ display:'flex', alignItems:'center', gap:10, fontSize:13, color:DS.sub }}>
-              <Icon name="calendar" size={14} color={DS.faint} />
-              <span>Weekly on <strong style={{ color:DS.text }}>{cls.day}</strong> at <strong style={{ color:DS.text }}>{cls.time}</strong></span>
-            </div>
-            <div style={{ fontSize:12, color:DS.muted, lineHeight:1.5 }}>
-              Your timetable is set by the centre admin. Ask them to make changes to this session.
-            </div>
-          </div>
-        </Card>
       </div>
 
-      {/* Roster */}
-      <Card title={`Students · ${cls.studentList.length}`} style={{ marginBottom:20 }}
-        actions={<Btn variant="secondary" icon="users" small onClick={() => window.__navigate && window.__navigate('teacher', 'students')}>All students</Btn>}>
-        <div>
-          {cls.studentList.map((name) => (
-            <div key={name} style={{
-              display:'flex', alignItems:'center', gap:12, padding:'10px 20px',
-              borderTop:`1px solid ${DS.border}`,
-            }}>
-              <Avatar name={name} size={30} />
-              <span style={{ flex:1, fontSize:13, color:DS.text, fontWeight:500 }}>{name}</span>
-              <Sparkline data={teacherClassTrend(name, cls.avgScore)} color={color} width={64} height={24} />
-              <Btn variant="ghost" icon="eye" small onClick={() => goProfile(name)}>Profile</Btn>
-            </div>
-          ))}
-        </div>
-      </Card>
+      {/* Tabs */}
+      <ClassTabBar active={activeTab} onChange={setActiveTab} color={color} />
 
-      {/* Homework set for this group */}
-      {classHw.length > 0 && (
-        <Card title={`Homework · ${classHw.length}`}
-          actions={<Btn variant="secondary" icon="clip" small onClick={() => window.__navigate && window.__navigate('teacher', 'homework')}>Manage homework</Btn>}>
-          <div>
-            {classHw.map((h) => (
-              <div key={h.id} style={{
-                display:'flex', alignItems:'center', gap:12, padding:'12px 20px',
-                borderTop:`1px solid ${DS.border}`,
-              }}>
-                <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ fontSize:13, fontWeight:600, color:DS.text }}>{h.title}</div>
-                  <div style={{ fontSize:12, color:DS.muted, marginTop:1 }}>Set {h.set} · Due {h.due} · {h.submitted}/{h.total} in</div>
-                </div>
-                {h.avgScore != null && <span style={{ fontSize:13, fontWeight:600, color:h.avgScore >= 70 ? DS.success : DS.warning }}>{h.avgScore}%</span>}
-                <Badge variant={hwStatusVariant[h.status] || 'default'}>{h.status === 'marking' ? 'To mark' : h.status === 'complete' ? 'Complete' : 'Open'}</Badge>
-              </div>
-            ))}
-          </div>
-        </Card>
-      )}
+      {/* Tab content */}
+      {activeTab === 'stream'     && <ClassStreamTab cls={cls} color={color} subject={subject} level={level} stream={stream} onPost={postAnnouncement} onDelete={deleteAnnouncement} classHw={classHw} principalName={principalName} code={code} />}
+      {activeTab === 'students'   && <ClassStudentsTab cls={cls} color={color} goProfile={goProfile} />}
+      {activeTab === 'homework'   && <ClassHomeworkTab cls={cls} color={color} classHw={classHw} />}
+      {activeTab === 'planner'    && <ClassPlannerTab cls={cls} color={color} />}
+      {activeTab === 'attendance' && <ClassAttendanceTab cls={cls} color={color} />}
+      {activeTab === 'progress'   && <ClassProgressTab cls={cls} color={color} />}
+      {activeTab === 'analytics'  && <ClassAnalyticsTab cls={cls} color={color} classHw={classHw} />}
+      {activeTab === 'settings'   && <ClassSettingsTab cls={cls} color={color} subject={subject} level={level} bannerTheme={bannerTheme} setBannerTheme={setBannerTheme} />}
     </div>
   );
 };
