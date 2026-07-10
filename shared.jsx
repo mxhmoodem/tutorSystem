@@ -438,6 +438,7 @@ const NAV_CONFIG = {
         { id: 'classes:subjects', label: 'Subjects', icon: 'book' },
       ] },
       { id: 'schedule',  icon: 'calendar', label: 'Schedule', section: 'Academic' },
+      { id: 'attendance', icon: 'check',   label: 'Attendance', section: 'Academic' },
       { id: 'invoices',  icon: 'invoice',  label: 'Invoices', section: 'Operations' },
       { id: 'reports',   icon: 'chart',    label: 'Reports', section: 'Operations', sub: [
         { id: 'reports:overview', label: 'Overview',    icon: 'dashboard' },

@@ -51,6 +51,7 @@
 <script type="text/babel" src="mocks/invoices.mock.jsx"></script>
 <script type="text/babel" src="mocks/teacherDashboard.mock.jsx"></script>
 <script type="text/babel" src="mocks/teacherPages.mock.jsx"></script>
+<script type="text/babel" src="mocks/attendance.mock.jsx"></script>
 <script type="text/babel" src="mocks/lessonPlanner.mock.jsx"></script>
 <script type="text/babel" src="mocks/studentDashboard.mock.jsx"></script>
 <script type="text/babel" src="mocks/homework.mock.jsx"></script>
@@ -138,7 +139,16 @@
 <script type="text/babel" src="Storage.jsx"></script>
 
 <script type="text/babel" src="TeacherDashboard.jsx"></script>
+<!-- Attendance/register logic layer: deriveSessionState + session materialiser +
+     useAttendanceStore (submit_register/amend_attendance). Reads useAdminStore /
+     useTimesheetStore at call-time, so load order vs those files is not load-bearing;
+     must precede TeacherPages.jsx which renders the screen. -->
+<script type="text/babel" src="attendance.jsx"></script>
 <script type="text/babel" src="TeacherPages.jsx"></script>
+<!-- Centre-wide admin Attendance page. Loads after TeacherPages.jsx so it can reuse
+     the shared register drawer / session row / unlock chooser it exposes on window;
+     dispatched by the AdminPages router as window.AdminAttendancePage. -->
+<script type="text/babel" src="AttendanceAdmin.jsx"></script>
 <script type="text/babel" src="StudentDashboard.jsx"></script>
 <script type="text/babel" src="Homework.jsx"></script>
 

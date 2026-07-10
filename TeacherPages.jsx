@@ -1366,275 +1366,595 @@ const TeacherTimetablePage = () => {
 
 // ─── Teacher Attendance Page ────────────────────────────────────────────────────
 
-// Teacher self check-in. Writes to the shared admin store so the centre admin
-// sees the same attendance record on the Teachers page. Demo teacher = Sarah Clarke.
-const MyAttendanceCard = () => {
-  const store = useAdminStore();
-  const me = store.teachers.find(t => t.name === 'Sarah Clarke') || store.teachers[0];
-  if (!me) return null;
-  const days = recentWeekdays(5);
-  const today = todayISO();
-  const todayVal = store.attendance[`${me.id}|${today}`] || null;
+// Teacher presence is no longer self-reported here. A teacher's "present" state is
+// inferred from confirming a register (delivery capture below), which removes the
+// contradiction of a teacher marking themselves absent while confirming a register.
+// The admin Teachers page still keeps its own presence toggles + sick-day tracking.
+// tone → [fg, bg, border] from the design tokens (never raw accent hex)
+const attTone = (tone) => ({
+  accent:  [DS.accent,  DS.accentLight,  DS.accentBorder],
+  success: [DS.success, DS.successBg,    DS.successBorder],
+  warning: [DS.warning, DS.warningBg,    DS.warningBorder],
+  danger:  [DS.danger,  DS.dangerBg,     DS.dangerBorder],
+  muted:   [DS.muted,   DS.surface,      DS.border],
+}[tone] || [DS.muted, DS.surface, DS.border]);
+
+const attFmtRange = (s) => `${window.attFmtClock(s.starts_at)}–${window.attFmtClock(s.ends_at)}`;
+const attFmtDay   = (iso) => { const d = new Date(iso + 'T00:00:00'); return d.toLocaleDateString('en-GB', { weekday:'short', day:'numeric', month:'short' }); };
+const attShiftIso = (iso, delta) => { const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate() + delta); return window.attIso(d); };
+
+// P/A/L tally for a delivered session (derived — never stored as a rollup)
+const attSummary = (session, roster, att) => {
+  const recs = window.attRecordsFor(session, roster, att) || {};
+  let p = 0, a = 0, l = 0;
+  Object.values(recs).forEach(v => { if (v === 'present') p++; else if (v === 'absent') a++; else if (v === 'late') l++; });
+  return { p, a, l };
+};
+
+// ─── Per-student Present / Absent / Late control (reused in the register panel) ──
+const AttMarkButtons = ({ current, disabled, onPick }) => (
+  <div style={{ display:'flex', gap:6 }}>
+    {['present','absent','late'].map(st => {
+      const active = current === st;
+      const [c, bg, border] = attTone(st === 'present' ? 'success' : st === 'absent' ? 'danger' : 'warning');
+      return (
+        <button key={st} onClick={() => !disabled && onPick(st)} disabled={disabled} style={{
+          padding:'5px 12px', borderRadius:6, fontSize:12, fontWeight:600,
+          cursor: disabled ? 'default' : 'pointer',
+          border:`1px solid ${active ? border : DS.border}`,
+          background: active ? bg : DS.surface,
+          color: active ? c : DS.faint,
+          opacity: disabled && !active ? 0.5 : 1, transition:'all 0.1s',
+        }}>{st.charAt(0).toUpperCase() + st.slice(1)}</button>
+      );
+    })}
+  </div>
+);
+
+// ════════════════════════════════════════════════════════════════════════════
+//  Register panel — opened from an actionable (or recorded) session. Reuses the
+//  existing marking UI + TimesheetCapture; does not rebuild them.
+// ════════════════════════════════════════════════════════════════════════════
+const RegisterPanel = ({ session, roster, att, ts, teachers, me, settings, now, isAdmin, onClose, onChanged }) => {
+  const d = session.derived;
+  const recorded  = d.state === 'recorded';
+  const reopened  = recorded && d.reopened;                     // admin unlock re-opened a locked/recorded register
+  const adminLapsed = isAdmin && d.state === 'lapsed';          // still-locked lapsed, admin acting directly
+  const editable  = reopened || (!recorded && (d.actionable || adminLapsed));
+  const amendable = recorded && d.amendable && !reopened;       // reopened uses the full re-take path instead
+  const unlocked  = !!d.unlocked || !!reopened;                 // an admin grant is currently active
+  const lateFlow  = d.state === 'awaiting' || adminLapsed || reopened; // D3/D5 — reason required
+  const reasonNeeded = lateFlow && settings.require_late_reason;
+
+  const existingRecs = recorded ? window.attRecordsFor(session, roster, att) : null;
+  const [records, setRecords] = React.useState(() =>
+    Object.fromEntries(roster.map(n => [n, existingRecs ? (existingRecs[n] || null) : null])));
+  const [noStudents, setNoStudents] = React.useState(false);
+  const [reason, setReason]   = React.useState(session.submission ? (session.submission.note || '') : '');
+  const [deliveredBy, setDeliveredBy] = React.useState(session.register_submitted_by || (me && me.id));
+  const [confirmed, setConfirmed] = React.useState(false);
+  // slide-in transition for the side drawer
+  const [shown, setShown] = React.useState(false);
+  React.useEffect(() => { const r = requestAnimationFrame(() => setShown(true)); return () => cancelAnimationFrame(r); }, []);
+  React.useEffect(() => { const onKey = (e) => { if (e.key === 'Escape') onClose(); }; window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey); }, [onClose]);
+
+  // timesheet-shaped session so the existing capture pre-fills scheduled hours (D4 —
+  // hours are a separate path from marks; this is the only place hours are written).
+  const tsSession = {
+    sessionId: session.id, classId: session.classId, teacherId: me && me.id,
+    centreId: window.TIMESHEET_CENTRE || 'centre-001', date: session.dateISO,
+    scheduledMinutes: session.scheduledMinutes, label: `${session.group} · ${session.name}`,
+  };
+
+  const setMark = (name, st) => {
+    if (amendable) { att.amend_attendance({ sessionId: session.id, student: name }, st, { by: me && me.id }); setRecords(p => ({ ...p, [name]: st })); onChanged && onChanged(); return; }
+    if (!editable || noStudents) return;
+    setRecords(p => ({ ...p, [name]: st }));
+  };
+  const markAll = (st) => { if (!editable) return; setNoStudents(false); setRecords(Object.fromEntries(roster.map(n => [n, st]))); };
+
+  const allMarked = noStudents || roster.every(n => records[n]);
+  const canConfirm = editable && !confirmed && allMarked && (!reasonNeeded || reason.trim().length > 0);
+
+  const doConfirm = () => {
+    if (!canConfirm) return;
+    const entries = noStudents ? Object.fromEntries(roster.map(n => [n, 'absent'])) : { ...records };
+    att.submit_register(session, entries, { note: reason, deliveredBy, byAdmin: adminLapsed || (reopened && isAdmin), now });
+    setConfirmed(true);                 // flips TimesheetCapture → registered, which logs the hours
+    onChanged && onChanged();
+  };
+  const cancelSession = () => { att.setCancelled(session.id, true); onChanged && onChanged(); onClose(); };
+
+  const counts = { present:0, absent:0, late:0, unmarked:0 };
+  if (noStudents) { /* nobody present */ }
+  else roster.forEach(n => { const v = records[n]; if (v) counts[v]++; else counts.unmarked++; });
+
+  const meta = window.SESSION_STATE_META[d.state] || {};
+  const [toneC, toneBg] = attTone(meta.tone);
+  const Capture = window.TimesheetCapture;
+
+  const footer = confirmed || (recorded && !editable) ? (
+    <Btn variant="secondary" onClick={onClose}>{amendable ? 'Done' : 'Close'}</Btn>
+  ) : (
+    <>
+      {editable && !reopened && <Btn variant="secondary" icon="x" onClick={cancelSession}>Cancel session</Btn>}
+      <Btn variant="primary" icon="check" onClick={doConfirm}
+        style={!canConfirm ? { opacity:0.5, pointerEvents:'none' } : {}}>
+        {reopened ? 'Re-submit register' : lateFlow ? (adminLapsed ? 'Submit (admin)' : 'Submit late register') : 'Confirm register'}
+      </Btn>
+    </>
+  );
 
   return (
-    // (D2) This is BUILDING PRESENCE ("I'm on site today"), NOT session delivery.
-    // Teacher session attendance is derived solely from confirming a register
-    // below — this widget no longer competes as the source of "teacher attended".
-    <Card title="My presence today" actions={<span style={{ fontSize:12, color:DS.muted }}>On-site check-in — not session delivery</span>} style={{ marginBottom:24 }}>
-      <div style={{ display:'flex', gap:10, alignItems:'flex-start', padding:'10px 20px', background:DS.surface, borderBottom:`1px solid ${DS.border}`, fontSize:12, color:DS.sub, lineHeight:1.5 }}>
-        <Icon name="info" size={15} color={DS.muted} />
-        <span>Marks that you're <strong style={{ color:DS.text }}>in the building</strong> today. It does <strong style={{ color:DS.text }}>not</strong> record that you delivered a lesson — that's captured when you <strong style={{ color:DS.text }}>confirm a register</strong>.</span>
-      </div>
-      <div style={{ padding:'16px 20px', display:'flex', alignItems:'center', gap:16, borderBottom:`1px solid ${DS.border}` }}>
-        <Avatar name={me.name} size={40} color={me.color} />
-        <div style={{ flex:1 }}>
-          <div style={{ fontSize:14, fontWeight:600, color:DS.text }}>{me.name}</div>
-          <div style={{ fontSize:12, color:DS.muted }}>{fmtDay(today)}</div>
+    <div onClick={onClose} style={{ position:'fixed', inset:0, zIndex:1000, background:`rgba(16,24,40,${shown ? 0.45 : 0})`, transition:'background 0.22s ease', display:'flex', justifyContent:'flex-end' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width:'min(560px, 100%)', height:'100%', background:DS.bg, boxShadow:'-8px 0 30px rgba(0,0,0,0.18)', display:'flex', flexDirection:'column', transform: shown ? 'translateX(0)' : 'translateX(100%)', transition:'transform 0.22s ease' }}>
+        {/* Header */}
+        <div style={{ display:'flex', alignItems:'flex-start', gap:12, padding:'18px 22px', borderBottom:`1px solid ${DS.border}` }}>
+          <div style={{ width:34, height:34, borderRadius:8, background:DS.accentLight, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}><Icon name="check" size={18} color={DS.accent} /></div>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ fontSize:15, fontWeight:700, color:DS.text, lineHeight:1.3 }}>{session.group} · {session.name}</div>
+            <div style={{ fontSize:12.5, color:DS.muted, marginTop:2 }}>{attFmtDay(session.dateISO)} · {attFmtRange(session)} · {session.room || 'No room'}</div>
+          </div>
+          <button onClick={onClose} title="Close" style={{ background:'none', border:'none', cursor:'pointer', padding:4, color:DS.muted, flexShrink:0 }}><Icon name="x" size={18} color={DS.muted} /></button>
         </div>
-        <AttendanceToggle value={todayVal} onSet={val => store.setAttendance(me.id, today, val)} />
-      </div>
-      <div style={{ display:'flex', gap:8, padding:'12px 20px', flexWrap:'wrap' }}>
-        {days.slice(1).map(d => {
-          const v = store.attendance[`${me.id}|${d}`] || 'present';
-          const m = ({ present:DS.success, late:DS.warning, absent:DS.danger })[v];
+        {/* Body (scrolls) */}
+        <div style={{ flex:1, overflowY:'auto', padding:'16px 22px' }}>
+
+      {/* Confirmation / context banner */}
+      {confirmed ? (
+        <div style={{ display:'flex', alignItems:'center', gap:10, padding:'11px 14px', borderRadius:8, background:DS.successBg, border:`1px solid ${DS.successBorder}`, marginBottom:14 }}>
+          <Icon name="check" size={16} color={DS.success} />
+          <span style={{ fontSize:12.5, fontWeight:600, color:DS.success }}>Register confirmed — hours logged to the timesheet. This record is now locked.</span>
+        </div>
+      ) : unlocked ? (
+        <div style={{ display:'flex', alignItems:'center', gap:10, padding:'11px 14px', borderRadius:8, background:DS.accentLight, border:`1px solid ${DS.accentBorder}`, marginBottom:14 }}>
+          <Icon name="lock" size={15} color={DS.accent} />
+          <span style={{ fontSize:12.5, fontWeight:600, color:DS.accent }}>An admin reopened this register {d.unlockExpiresAt ? `until ${window.attFmtClock(d.unlockExpiresAt)}` : ''} — take or correct it before it re-locks.</span>
+        </div>
+      ) : adminLapsed ? (
+        <div style={{ display:'flex', alignItems:'center', gap:10, padding:'11px 14px', borderRadius:8, background:DS.dangerBg, border:`1px solid ${DS.dangerBorder}`, marginBottom:14 }}>
+          <Icon name="shield" size={16} color={DS.danger} />
+          <span style={{ fontSize:12.5, fontWeight:600, color:DS.danger }}>Admin override — this session lapsed. Submitting is recorded and audited.</span>
+        </div>
+      ) : lateFlow ? (
+        <div style={{ display:'flex', alignItems:'center', gap:10, padding:'11px 14px', borderRadius:8, background:DS.warningBg, border:`1px solid ${DS.warningBorder}`, marginBottom:14 }}>
+          <Icon name="clock" size={16} color={DS.warning} />
+          <span style={{ fontSize:12.5, fontWeight:600, color:DS.warning }}>This register is late — add a brief reason below before you submit.</span>
+        </div>
+      ) : recorded && !amendable ? (
+        <div style={{ display:'flex', alignItems:'center', gap:10, padding:'11px 14px', borderRadius:8, background:DS.surface, border:`1px solid ${DS.border}`, marginBottom:14 }}>
+          <Icon name="lock" size={15} color={DS.muted} />
+          <span style={{ fontSize:12.5, fontWeight:600, color:DS.muted }}>The window to amend marks has closed. Contact an admin to correct this register.</span>
+        </div>
+      ) : recorded && amendable ? (
+        <div style={{ display:'flex', alignItems:'center', gap:10, padding:'11px 14px', borderRadius:8, background:DS.accentLight, border:`1px solid ${DS.accentBorder}`, marginBottom:14 }}>
+          <Icon name="edit" size={15} color={DS.accent} />
+          <span style={{ fontSize:12.5, fontWeight:600, color:DS.accent }}>Recorded — you can still amend individual marks for a short window. Changes are logged.</span>
+        </div>
+      ) : null}
+
+      {/* Late reason (D3) */}
+      {reasonNeeded && !confirmed && (
+        <div style={{ marginBottom:14 }}>
+          <label style={{ display:'block', fontSize:12, fontWeight:600, color:DS.sub, marginBottom:6 }}>Reason for the late register <span style={{ color:DS.danger }}>*</span></label>
+          <Textarea value={reason} onChange={e => setReason(e.target.value)} rows={2}
+            placeholder="e.g. Cover teacher forgot to submit; taken retrospectively from the paper register." />
+        </div>
+      )}
+
+      {/* Mark-all + no-show (editable only) */}
+      {editable && !confirmed && (
+        <div style={{ display:'flex', alignItems:'center', gap:8, padding:'10px 0', borderBottom:`1px solid ${DS.border}`, marginBottom:6 }}>
+          <span style={{ fontSize:12, color:DS.muted, marginRight:4 }}>Mark all:</span>
+          {['present','absent','late'].map(st => {
+            const [c, bg, border] = attTone(st === 'present' ? 'success' : st === 'absent' ? 'danger' : 'warning');
+            return <button key={st} onClick={() => markAll(st)} style={{ padding:'5px 12px', borderRadius:6, fontSize:12, fontWeight:600, cursor:'pointer', border:`1px solid ${border}`, background:bg, color:c }}>{st.charAt(0).toUpperCase()+st.slice(1)}</button>;
+          })}
+          <button onClick={() => setNoStudents(v => !v)} title="Confirm the session ran with nobody present" style={{
+            marginLeft:'auto', padding:'5px 12px', borderRadius:6, fontSize:12, fontWeight:600, cursor:'pointer',
+            border:`1px solid ${noStudents ? DS.accentBorder : DS.border}`, background: noStudents ? DS.accentLight : DS.bg, color: noStudents ? DS.accent : DS.muted,
+          }}>{noStudents ? '✓ ' : ''}No students attended</button>
+        </div>
+      )}
+
+      {/* Student list */}
+      <div style={{ maxHeight:280, overflowY:'auto', opacity: noStudents ? 0.4 : 1, pointerEvents: noStudents ? 'none' : 'auto' }}>
+        {roster.length === 0 && (
+          <div style={{ padding:'18px 0', fontSize:13, color:DS.muted }}>No students are enrolled in this class yet.</div>
+        )}
+        {roster.map((name, i) => {
+          const status = records[name];
+          const disabled = !editable && !amendable;
           return (
-            <div key={d} style={{ display:'flex', alignItems:'center', gap:6, fontSize:12, color:DS.muted }}>
-              <span style={{ width:8, height:8, borderRadius:'50%', background:m }} />{fmtDay(d)}
+            <div key={name} style={{ display:'flex', alignItems:'center', gap:12, padding:'10px 0', borderBottom: i < roster.length-1 ? `1px solid ${DS.border}` : 'none' }}>
+              <Avatar name={name} size={28} />
+              <span style={{ flex:1, fontSize:13, fontWeight:500, color:DS.text }}>{name}</span>
+              <AttMarkButtons current={status} disabled={disabled} onPick={(st) => setMark(name, st)} />
             </div>
           );
         })}
       </div>
+
+      {/* Delivery confirmation — delivered-by + working time ride this register flow (D4) */}
+      {Capture && editable && (
+        <div style={{ marginTop:8, border:`1px solid ${DS.border}`, borderRadius:8, overflow:'hidden' }}>
+          <Capture session={tsSession} registered={confirmed} store={ts}
+            teachers={teachers} deliveredBy={deliveredBy} onDeliveredBy={setDeliveredBy}
+            rosteredTeacherId={me && me.id} cancelled={false} />
+        </div>
+      )}
+
+      {/* Running tally */}
+      <div style={{ display:'flex', gap:14, padding:'12px 0 2px' }}>
+        {noStudents ? (
+          <span style={{ fontSize:12, color:DS.muted, fontWeight:600 }}>No students attended — session still confirmed</span>
+        ) : [['present',DS.success],['absent',DS.danger],['late',DS.warning],['unmarked',DS.faint]].map(([k,c]) => (
+          <span key={k} style={{ fontSize:12, color:c, fontWeight:600 }}>{counts[k]} {k}</span>
+        ))}
+      </div>
+        </div>{/* /body */}
+        {/* Footer */}
+        <div style={{ display:'flex', justifyContent:'flex-end', gap:10, padding:'14px 22px', borderTop:`1px solid ${DS.border}`, background:DS.surface }}>
+          {footer}
+        </div>
+      </div>{/* /panel */}
+    </div>
+  );
+};
+
+// ─── Admin unlock chooser — grant a time-boxed reopen on a lapsed/locked register ─
+const ATT_UNLOCK_PRESETS = [
+  { label: '2 hours',       spec: { hours: 2 } },
+  { label: '4 hours',       spec: { hours: 4 } },
+  { label: 'Rest of today', spec: { untilEod: true } },
+  { label: '24 hours',      spec: { hours: 24 } },
+  { label: '48 hours',      spec: { hours: 48 } },
+];
+const AttUnlockChooser = ({ onGrant, label }) => {
+  const [open, setOpen] = React.useState(false);
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
+  return (
+    <div ref={ref} style={{ position:'relative' }}>
+      <Btn variant="secondary" icon="lock" small onClick={() => setOpen(o => !o)}>{label || 'Unlock'}</Btn>
+      {open && (
+        <div style={{ position:'absolute', right:0, top:'calc(100% + 6px)', zIndex:60, background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:10, boxShadow:DS.cardShadowHi, padding:8, width:186 }}>
+          <div style={{ fontSize:10.5, fontWeight:700, letterSpacing:'0.05em', textTransform:'uppercase', color:DS.faint, padding:'4px 8px 6px' }}>Reopen register for</div>
+          {ATT_UNLOCK_PRESETS.map(p => (
+            <button key={p.label} onClick={() => { onGrant(p.spec); setOpen(false); }}
+              style={{ display:'block', width:'100%', textAlign:'left', padding:'7px 8px', borderRadius:6, border:'none', background:'none', color:DS.text, fontSize:12.5, fontWeight:500, cursor:'pointer' }}
+              onMouseEnter={e => e.currentTarget.style.background = DS.surface} onMouseLeave={e => e.currentTarget.style.background = 'none'}>{p.label}</button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ─── One session row (state renders distinctly) ─────────────────────────────────
+const SessionRow = ({ session, roster, att, isAdmin, onOpen, onReinstate, onGrant, onRevoke, showDate }) => {
+  const d = session.derived;
+  const meta = window.SESSION_STATE_META[d.state] || {};
+  const [toneC, toneBg, toneBorder] = attTone(meta.tone);
+  const color = (typeof subjectColor === 'function' ? subjectColor(session.name) : DS.accent);
+  const cancelled = d.state === 'cancelled';
+  const dim = d.state === 'upcoming' || cancelled;
+
+  // Right-hand action / status by state
+  const right = (() => {
+    switch (d.state) {
+      case 'open_live':
+        return <Btn variant="primary" icon="check" small onClick={() => onOpen(session)}>Take register</Btn>;
+      case 'awaiting':
+        // includes an admin-unlocked lapsed session (derived to 'awaiting'); admin can re-lock early
+        return (
+          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+            {isAdmin && d.unlocked && onRevoke && <button onClick={() => onRevoke(session)} title="Re-lock now" style={{ background:'none', border:'none', color:DS.muted, fontSize:11.5, fontWeight:600, cursor:'pointer', textDecoration:'underline' }}>Re-lock</button>}
+            <Btn variant="primary" icon="clock" small onClick={() => onOpen(session)}>Take register</Btn>
+          </div>
+        );
+      case 'upcoming':
+        return <span style={{ fontSize:12, color:DS.muted, fontWeight:600 }}>Opens {window.attFmtClock(d.opensAt)}</span>;
+      case 'recorded': {
+        const { p, a, l } = attSummary(session, roster, att);
+        return (
+          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+            <span style={{ fontSize:12, color:DS.muted, fontVariantNumeric:'tabular-nums' }}>
+              {p}P{a ? ` · ${a}A` : ''}{l ? ` · ${l}L` : ''}
+            </span>
+            {d.amendable
+              ? <Btn variant="secondary" icon="edit" small onClick={() => onOpen(session)}>{d.reopened ? 'Re-take' : 'Amend'}</Btn>
+              : isAdmin
+                ? <AttUnlockChooser label="Unlock" onGrant={(spec) => onGrant && onGrant(session, spec)} />
+                : <span title="Amendment window closed" style={{ display:'inline-flex', alignItems:'center', gap:4, fontSize:11.5, color:DS.faint }}><Icon name="lock" size={12} color={DS.faint} /> Locked</span>}
+          </div>
+        );
+      }
+      case 'lapsed':
+        return isAdmin
+          ? <AttUnlockChooser label="Unlock register" onGrant={(spec) => onGrant && onGrant(session, spec)} />
+          : <span style={{ display:'inline-flex', alignItems:'center', gap:5, fontSize:12, color:DS.danger, fontWeight:600 }}><Icon name="lock" size={13} color={DS.danger} /> Contact admin</span>;
+      case 'cancelled':
+        return <button onClick={() => onReinstate(session)} style={{ background:'none', border:'none', color:DS.accent, fontSize:12, fontWeight:600, cursor:'pointer' }}>Reinstate</button>;
+      default: return null;
+    }
+  })();
+
+  return (
+    <div style={{ display:'flex', alignItems:'center', gap:14, padding:'13px 18px', borderBottom:`1px solid ${DS.border}`, opacity: dim ? 0.62 : 1 }}>
+      <div style={{ width:64, textAlign:'center' }}>
+        <div style={{ fontSize:13.5, fontWeight:700, color:DS.text, fontVariantNumeric:'tabular-nums', textDecoration: cancelled ? 'line-through' : 'none' }}>{window.attFmtClock(session.starts_at)}</div>
+        <div style={{ fontSize:11, color:DS.faint }}>{window.attFmtClock(session.ends_at)}</div>
+      </div>
+      <div style={{ width:4, alignSelf:'stretch', borderRadius:2, background: cancelled ? DS.border : color }} />
+      <div style={{ flex:1, minWidth:0 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+          <span style={{ fontSize:13.5, fontWeight:600, color:DS.text, textDecoration: cancelled ? 'line-through' : 'none' }}>{session.name.replace(/^(GCSE|A-?Level(?:\s+Further)?)\s+/i, '')}</span>
+          {/* live-now marker only within the real start–end */}
+          {d.liveNow && (
+            <span style={{ display:'inline-flex', alignItems:'center', gap:5, fontSize:10.5, fontWeight:700, letterSpacing:'0.03em', color:DS.accent, background:DS.accentLight, padding:'2px 8px', borderRadius:999, textTransform:'uppercase' }}>
+              <span style={{ width:6, height:6, borderRadius:999, background:DS.accent, display:'inline-block' }} /> Live now
+            </span>
+          )}
+          {/* state chip (human label — no internal terms) */}
+          {(d.unlocked || d.reopened) ? (
+            <span style={{ fontSize:10.5, fontWeight:700, letterSpacing:'0.03em', color:DS.accent, background:DS.accentLight, padding:'2px 8px', borderRadius:999, textTransform:'uppercase' }}>
+              Reopened{d.unlockExpiresAt ? ` · until ${window.attFmtClock(d.unlockExpiresAt)}` : ''}
+            </span>
+          ) : (d.state === 'awaiting' || d.state === 'lapsed' || (d.state === 'open_live' && d.graceEdge)) ? (
+            <span style={{ fontSize:10.5, fontWeight:700, letterSpacing:'0.03em', color:toneC, background:toneBg, padding:'2px 8px', borderRadius:999, textTransform:'uppercase' }}>
+              {d.state === 'awaiting' ? 'Late — reason required' : d.state === 'lapsed' ? 'Missed' : 'Open'}
+            </span>
+          ) : null}
+          {cancelled && <span style={{ fontSize:10.5, fontWeight:700, letterSpacing:'0.03em', color:DS.muted, background:DS.surface, padding:'2px 8px', borderRadius:999, textTransform:'uppercase' }}>Cancelled</span>}
+        </div>
+        <div style={{ fontSize:12, color:DS.muted, marginTop:2 }}>
+          {showDate ? `${attFmtDay(session.dateISO)} · ` : ''}{session.group} · {session.room || 'No room'} · {roster.length} student{roster.length === 1 ? '' : 's'}
+        </div>
+      </div>
+      {right}
+    </div>
+  );
+};
+
+// ─── Dev-only clock nudge (D7) — never shipped to product UI ─────────────────────
+const AttDevNudge = ({ onChange }) => {
+  const H = 3600000, DAY = 86400000;
+  const now = window.getNow();
+  const offset = window.attNowOffset();
+  const set = (delta) => { window.attSetNowOffset(offset + delta); onChange(); };
+  const reset = () => { window.attSetNowOffset(0); onChange(); };
+  const btn = { padding:'4px 9px', borderRadius:6, border:`1px dashed ${DS.borderDark}`, background:DS.bg, color:DS.sub, fontSize:11.5, fontWeight:600, cursor:'pointer' };
+  return (
+    <div style={{ display:'flex', alignItems:'center', gap:8, padding:'8px 12px', marginBottom:16, borderRadius:8, background:'#FFFDF5', border:`1px dashed ${DS.warningBorder}`, flexWrap:'wrap' }}>
+      <span style={{ fontSize:11, fontWeight:700, letterSpacing:'0.05em', textTransform:'uppercase', color:DS.warning }}>Demo clock</span>
+      <span style={{ fontSize:12, color:DS.sub }}>Now: <strong style={{ color:DS.text }}>{new Date(now).toLocaleString('en-GB', { weekday:'short', day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' })}</strong></span>
+      <div style={{ display:'flex', gap:6, marginLeft:'auto' }}>
+        <button style={btn} onClick={() => set(-DAY)}>−1 day</button>
+        <button style={btn} onClick={() => set(-H)}>−1 hr</button>
+        <button style={{ ...btn, borderStyle:'solid', color:DS.accent, borderColor:DS.accentBorder }} onClick={reset}>Reset</button>
+        <button style={btn} onClick={() => set(H)}>+1 hr</button>
+        <button style={btn} onClick={() => set(DAY)}>+1 day</button>
+      </div>
+    </div>
+  );
+};
+
+// ─── Admin stub: centre-wide "sessions missing a register" (D6) ──────────────────
+const AttAdminMissing = ({ sessions, rosterOf, att, now, onOpen, onGrant, onRevoke, onBackToTeacher }) => {
+  const missing = sessions
+    .filter(s => s.derived.state === 'awaiting' || s.derived.state === 'lapsed')
+    .sort((a, b) => a.starts_at - b.starts_at);
+  return (
+    <Card title="Sessions missing a register" subtitle="Quick oversight of your own cohort. For every teacher across the centre, use the admin Attendance page."
+      actions={<Btn variant="secondary" small onClick={onBackToTeacher}>Back to my register</Btn>}>
+      {missing.length === 0 ? (
+        <div style={{ padding:'8px 4px' }}>
+          <EmptyState icon="check" title="Nothing outstanding" message="Every session in range has a register or is within its window." />
+        </div>
+      ) : (
+        <div>
+          {missing.map(s => (
+            <SessionRow key={s.id} session={s} roster={rosterOf(s)} att={att} isAdmin={true} showDate
+              onOpen={onOpen} onReinstate={() => {}} onGrant={onGrant} onRevoke={onRevoke} />
+          ))}
+        </div>
+      )}
     </Card>
   );
 };
 
+// Share the register drawer + session row + unlock chooser with the centre-wide
+// admin Attendance page (AttendanceAdmin.jsx, loaded after this file).
+Object.assign(window, {
+  AttRegisterDrawer: RegisterPanel, AttSessionRow: SessionRow, AttUnlockChooser, AttDevNudge,
+  attTone, attFmtDay, attFmtRange, attSummary,
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+//  Teacher Attendance — a time-scoped view over SESSIONS (not class groups).
+//  Teacher presence is inferred from confirming a register (delivery capture),
+//  not self-reported. See attendance.jsx for the derive-don't-store core.
+// ════════════════════════════════════════════════════════════════════════════
 const TeacherAttendancePage = () => {
-  // If we arrived via "Take register" on the timetable, open that class.
-  const [selectedClass, setSelectedClass] = React.useState(() => {
-    const g = window.__registerGroup;
-    const i = g ? teacherAllClasses.findIndex(c => c.group === g) : -1;
-    return i >= 0 ? i : 0;
-  });
-  React.useEffect(() => { window.__registerGroup = null; }, []);
-  const cls = teacherAllClasses[selectedClass];
-  const [records, setRecords] = React.useState(() =>
-    Object.fromEntries(cls.students.map(n => [n, null]))
-  );
-  const [saved, setSaved] = React.useState(false);
-  const [selectedDate, setSelectedDate] = React.useState(() => window.tsTodayISO ? window.tsTodayISO() : new Date().toISOString().slice(0, 10));
+  const store = useAdminStore();
+  const att   = window.useAttendanceStore();
+  const ts    = window.useTimesheetStore ? window.useTimesheetStore() : null;
+  const settings = window.REGISTER_SETTINGS;
+  const [, force] = React.useState(0);
+  const rerender = () => force(x => x + 1);
 
-  // Resolve the scheduled session behind this register so working-time capture can
-  // pre-fill its duration from the centre timetable (store.classes is the source of
-  // truth — see schedule-timetable architecture). teacherAllClasses groups match
-  // Sarah's store classes c1–c4; a no-match (e.g. Yr13) falls back to 90 min.
-  const adminStore = useAdminStore();
-  const tsStore = window.useTimesheetStore ? window.useTimesheetStore() : null;
-  const me = adminStore.teachers.find(t => t.name === 'Sarah Clarke') || adminStore.teachers[0];
-  const matchedClass = adminStore.classes.find(c => me && c.teacher === me.name && c.group === cls.group);
-  const scheduledMinutes = window.tsSessionMinutes ? window.tsSessionMinutes(matchedClass && matchedClass.time) : 90;
-  const classId = matchedClass ? matchedClass.id : `tc${selectedClass}`;
-  // The adult who delivered this session — defaults to the rostered teacher; choosing
-  // someone else records it as cover. Active teachers only.
-  const activeTeachers = adminStore.teachers.filter(t => t.status === 'active');
-  const rosteredTeacherId = me && me.id;
-  const [deliveredBy, setDeliveredBy] = React.useState(rosteredTeacherId);
-  const [noStudents, setNoStudents] = React.useState(false);
-  const session = {
-    sessionId: `${classId}|${selectedDate}`, classId, teacherId: me && me.id,
-    centreId: window.TIMESHEET_CENTRE || 'centre-001', date: selectedDate,
-    scheduledMinutes, label: `${cls.group} · ${cls.subject}`,
-  };
-  // A cancelled session shows greyed and produces no timesheet line.
-  const cancelled = !!(tsStore && (tsStore.cancelled || []).includes(session.sessionId));
-  // Which session's register has been confirmed (drives delivery capture + lock).
-  const [registeredSession, setRegisteredSession] = React.useState(null);
-  const registered = registeredSession === session.sessionId;
-  const existingEntry = tsStore ? tsStore.entries.find(e => e.sessionId === session.sessionId) : null;
-  const locked = registered && existingEntry && !['draft', 'rejected'].includes(existingEntry.status);
-  const Capture = window.TimesheetCapture;
+  const now = window.getNow();
+  const me = store.teachers.find(t => t.name === 'Sarah Clarke') || store.teachers[0];
+  const activeTeachers = store.teachers.filter(t => t.status === 'active');
+  const myClasses = store.classes.filter(c => me && c.teacher === me.name && c.status !== 'paused');
 
-  React.useEffect(() => {
-    setRecords(Object.fromEntries(cls.students.map(n => [n, null])));
-    setSaved(false);
-    setRegisteredSession(null);
-    setNoStudents(false);
-    setDeliveredBy(rosteredTeacherId);
-  }, [selectedClass]);
+  // Materialise this teacher's dated sessions across the window, overlaying persisted
+  // submissions + cancellations. Every derived state comes from here.
+  const sessions = window.materialiseSessions(myClasses, settings, now, att);
+  const rosterOf = React.useCallback((s) => window.attRosterFor(s.classId, s.group, store), [store]);
 
-  const mark = (name, status) => { if (locked || noStudents) return; setRecords(p => ({...p, [name]:status})); setSaved(false); };
-  const markAll = (status) => { if (locked) return; setNoStudents(false); setRecords(Object.fromEntries(cls.students.map(n => [n, status]))); setSaved(false); };
-  // Confirming the register is the single delivery-confirmation action: it records
-  // that the session ran, who delivered it, and (via the per-student marks) who
-  // attended. It also captures the teaching/cover TimeEntry (see Timesheets.jsx).
-  const handleSave = () => { setSaved(true); setRegisteredSession(session.sessionId); setTimeout(() => setSaved(false), 2500); };
-  const cancelSession = () => { if (tsStore) tsStore.setCancelled(session.sessionId, true); setRegisteredSession(null); };
-  const reinstate = () => { if (tsStore) tsStore.setCancelled(session.sessionId, false); };
+  const [selectedDate, setSelectedDate] = React.useState(() => window.attIso(new Date(now)));
+  const [viewRole, setViewRole] = React.useState('teacher');   // teacher | admin (D6 stub)
+  const [focusClassId, setFocusClassId] = React.useState(() => (myClasses[0] && myClasses[0].id) || null);
+  const [panelSession, setPanelSession] = React.useState(null);
 
-  const counts = { present:0, absent:0, late:0, unmarked:0 };
-  if (noStudents) { counts.absent = 0; counts.unmarked = 0; }
-  else Object.values(records).forEach(v => { if (v) counts[v]++; else counts.unmarked++; });
+  const todayIso = window.attIso(new Date(now));
+  const daySessions = sessions.filter(s => s.dateISO === selectedDate).sort((a, b) => a.starts_at - b.starts_at);
 
-  // Past attendance log (mock)
-  const pastLog = [
-    { date:'22 Apr', present:7, absent:1, late:0 },
-    { date:'18 Apr', present:8, absent:0, late:0 },
-    { date:'15 Apr', present:6, absent:1, late:1 },
-    { date:'11 Apr', present:7, absent:1, late:0 },
-    { date:'8 Apr',  present:5, absent:2, late:1 },
-  ];
+  // "Needs register" — awaiting (backfillable) + lapsed (locked), oldest first. The
+  // teacher-forgot / safeguarding surface. Independent of the selected day.
+  const needs = sessions.filter(s => s.derived.state === 'awaiting' || s.derived.state === 'lapsed')
+    .sort((a, b) => a.starts_at - b.starts_at);
+
+  // Side panels — derived for the focused class (cancelled excluded from denominators).
+  const focusSessions = sessions.filter(s => s.classId === focusClassId);
+  const focusRate = window.attendanceRate(focusSessions, rosterOf, att);
+  const overallRate = window.attendanceRate(sessions, rosterOf, att);
+  const recent = window.recentSessions(focusSessions, rosterOf, att, 6);
+  const focusClass = myClasses.find(c => c.id === focusClassId);
+
+  const openPanel = (s) => setPanelSession(s);
+  const reinstate = (s) => { att.setCancelled(s.id, false); rerender(); };
+  const grantUnlock = (s, spec) => { att.grant_unlock(s.id, spec, { by: me && me.id }); rerender(); };
+  const revokeUnlock = (s) => { att.revoke_unlock(s.id, { by: me && me.id }); rerender(); };
+
+  const allRecordedToday = daySessions.length > 0 && daySessions.every(s => s.derived.state === 'recorded' || s.derived.state === 'cancelled');
 
   return (
     <div style={{ padding:'32px' }}>
-      <PageHeader title="Attendance" subtitle="Mark and review attendance for your classes" actions={[
-        <Btn key="exp" variant="secondary" icon="download" small>Export Register</Btn>
-      ]} />
+      <PageHeader title="Attendance"
+        subtitle="Take and review the register for each of your sessions"
+        actions={[
+          <Btn key="role" variant="secondary" small icon={viewRole === 'admin' ? 'teacher' : 'shield'}
+            onClick={() => setViewRole(v => v === 'admin' ? 'teacher' : 'admin')}>
+            {viewRole === 'admin' ? 'Teacher view' : 'Admin oversight'}
+          </Btn>,
+          <Btn key="exp" variant="secondary" icon="download" small>Export Register</Btn>,
+        ]} />
 
-      {/* Teacher's own attendance — self check-in, shared with admin */}
-      <MyAttendanceCard />
+      {/* Dev-only clock nudge so lifecycle states are demonstrable (D7) */}
+      <AttDevNudge onChange={rerender} />
 
-      {/* Class selector */}
-      <div style={{ display:'flex', gap:10, marginBottom:24, flexWrap:'wrap' }}>
-        {teacherAllClasses.map((c,i) => (
-          <button key={i} onClick={() => setSelectedClass(i)} style={{
-            padding:'8px 16px', borderRadius:20, border:`1px solid ${selectedClass===i ? DS.accentBorder : DS.border}`,
-            background: selectedClass===i ? DS.accentLight : DS.bg,
-            color: selectedClass===i ? DS.accent : DS.muted,
-            fontSize:13, fontWeight: selectedClass===i ? 600 : 400, cursor:'pointer',
-          }}>{c.group}</button>
-        ))}
-      </div>
-
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 280px', gap:20 }}>
-        {/* Mark attendance */}
-        <Card title={`${cls.group} — ${cls.subject}`} actions={[
-          <div key="date" style={{ display:'flex', alignItems:'center', gap:8 }}>
-            <input type="date" value={selectedDate} onChange={e => setSelectedDate(e.target.value)}
-              style={{ padding:'5px 10px', borderRadius:6, border:`1px solid ${DS.border}`, fontSize:13, outline:'none' }} />
-          </div>
-        ]}>
-          {/* Status banner — confirmed (locked) or cancelled */}
-          {(locked || cancelled) && (
-            <div style={{ display:'flex', alignItems:'center', gap:10, padding:'11px 16px', borderBottom:`1px solid ${DS.border}`,
-              background: cancelled ? DS.dangerBg : DS.successBg }}>
-              <Icon name={cancelled ? 'x' : 'check'} size={16} color={cancelled ? DS.danger : DS.success} />
-              <span style={{ fontSize:12.5, fontWeight:600, color: cancelled ? DS.danger : DS.success }}>
-                {cancelled ? 'Session cancelled — no timesheet line was produced.' : 'Delivery confirmed — this register is locked.'}
-              </span>
-              {cancelled && <button onClick={reinstate} style={{ marginLeft:'auto', background:'none', border:'none', color:DS.accent, fontSize:12, fontWeight:600, cursor:'pointer' }}>Reinstate session</button>}
-            </div>
-          )}
-
-          {/* Bulk actions + the "no students attended" path (settable directly) */}
-          <div style={{ display:'flex', alignItems:'center', gap:8, padding:'12px 16px', borderBottom:`1px solid ${DS.border}`, background:DS.surface, opacity: (locked||cancelled) ? 0.5 : 1, pointerEvents: (locked||cancelled) ? 'none' : 'auto' }}>
-            <span style={{ fontSize:12, color:DS.muted, alignSelf:'center', marginRight:4 }}>Mark all:</span>
-            {['present','absent','late'].map(st => (
-              <button key={st} onClick={() => markAll(st)} style={{
-                padding:'5px 12px', borderRadius:6, fontSize:12, fontWeight:600, cursor:'pointer',
-                border:`1px solid ${st==='present' ? DS.successBorder : st==='absent' ? DS.dangerBorder : DS.warningBorder}`,
-                background: st==='present' ? DS.successBg : st==='absent' ? DS.dangerBg : DS.warningBg,
-                color: st==='present' ? DS.success : st==='absent' ? DS.danger : DS.warning,
-              }}>{st.charAt(0).toUpperCase() + st.slice(1)}</button>
-            ))}
-            <button onClick={() => setNoStudents(v => !v)} title="Confirm the session ran with nobody present (e.g. a 1:1 no-show)" style={{
-              marginLeft:'auto', padding:'5px 12px', borderRadius:6, fontSize:12, fontWeight:600, cursor:'pointer',
-              border:`1px solid ${noStudents ? DS.accentBorder : DS.border}`,
-              background: noStudents ? DS.accentLight : DS.bg, color: noStudents ? DS.accent : DS.muted,
-            }}>{noStudents ? '✓ ' : ''}No students attended</button>
-          </div>
-
-          <div style={{ opacity: noStudents ? 0.4 : 1, pointerEvents: (noStudents||locked||cancelled) ? 'none' : 'auto' }}>
-            {cls.students.map((name, i) => {
-              const status = records[name];
-              return (
-                <div key={name} style={{
-                  display:'flex', alignItems:'center', gap:12, padding:'11px 16px',
-                  borderBottom: i < cls.students.length-1 ? `1px solid ${DS.border}` : 'none',
-                }}>
-                  <Avatar name={name} size={30} />
-                  <span style={{ flex:1, fontSize:13, fontWeight:500, color:DS.text }}>{name}</span>
-                  <div style={{ display:'flex', gap:6 }}>
-                    {['present','absent','late'].map(st => {
-                      const active = status === st;
-                      const colors = { present:[DS.success, DS.successBg, DS.successBorder], absent:[DS.danger, DS.dangerBg, DS.dangerBorder], late:[DS.warning, DS.warningBg, DS.warningBorder] };
-                      const [c, bg, border] = colors[st];
-                      return (
-                        <button key={st} onClick={() => mark(name, st)} style={{
-                          padding:'5px 12px', borderRadius:6, fontSize:12, fontWeight:600, cursor:'pointer',
-                          border:`1px solid ${active ? border : DS.border}`,
-                          background: active ? bg : DS.surface,
-                          color: active ? c : DS.faint,
-                          transition:'all 0.1s',
-                        }}>
-                          {st === 'present' ? 'Present' : st === 'absent' ? 'Absent' : 'Late'}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Delivery confirmation — delivered-by + working time ride this register flow */}
-          {Capture && !cancelled && (
-            <Capture session={session} registered={registered} store={tsStore}
-              teachers={activeTeachers} deliveredBy={deliveredBy} onDeliveredBy={setDeliveredBy}
-              rosteredTeacherId={rosteredTeacherId} cancelled={cancelled} />
-          )}
-
-          <div style={{ padding:'14px 16px', borderTop:`1px solid ${DS.border}`, background:DS.surface, display:'flex', alignItems:'center', gap:12 }}>
-            <div style={{ display:'flex', gap:14, flex:1 }}>
-              {noStudents ? (
-                <span style={{ fontSize:12, color:DS.muted, fontWeight:600 }}>No students attended — session still confirmed</span>
-              ) : [['present',DS.success],['absent',DS.danger],['late',DS.warning],['unmarked',DS.faint]].map(([k,c])=>(
-                <span key={k} style={{ fontSize:12, color:c, fontWeight:600 }}>{counts[k]} {k}</span>
-              ))}
-            </div>
-            {!cancelled && !locked && (
-              <Btn variant="secondary" icon="x" small onClick={cancelSession}>Cancel session</Btn>
-            )}
-            <Btn variant={saved ? 'secondary' : 'primary'} icon={saved ? 'check' : 'clip'} onClick={handleSave}
-              style={(locked || cancelled) ? { opacity:0.5, pointerEvents:'none' } : {}}>
-              {cancelled ? 'Cancelled' : locked ? 'Confirmed' : saved ? 'Saved!' : 'Confirm register'}
-            </Btn>
-          </div>
-        </Card>
-
-        {/* Past log + stats */}
-        <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
-          <Card title="Attendance Rate">
-            <div style={{ padding:'20px' }}>
-              <div style={{ fontSize:40, fontWeight:800, color:DS.success, letterSpacing:'-1px', lineHeight:1 }}>94%</div>
-              <div style={{ fontSize:12, color:DS.muted, marginTop:4, marginBottom:16 }}>This term · {cls.group}</div>
-              <div style={{ height:6, background:DS.surface, borderRadius:3, overflow:'hidden', marginBottom:12 }}>
-                <div style={{ width:'94%', height:'100%', background:DS.success, borderRadius:3 }} />
+      {viewRole === 'admin' ? (
+        <AttAdminMissing sessions={sessions} rosterOf={rosterOf} att={att} now={now}
+          onOpen={openPanel} onGrant={grantUnlock} onRevoke={revokeUnlock} onBackToTeacher={() => setViewRole('teacher')} />
+      ) : (
+        <>
+          {/* Needs register (pinned, only when non-empty) */}
+          {needs.length > 0 && (
+            <div style={{ marginBottom:22, border:`1px solid ${DS.warningBorder}`, borderRadius:12, overflow:'hidden', background:DS.bg, boxShadow:DS.cardShadow }}>
+              <div style={{ display:'flex', alignItems:'center', gap:10, padding:'12px 18px', background:DS.warningBg, borderBottom:`1px solid ${DS.warningBorder}` }}>
+                <Icon name="clock" size={17} color={DS.warning} />
+                <span style={{ fontSize:14, fontWeight:700, color:DS.warning }}>Needs register</span>
+                <span style={{ fontSize:12, color:DS.warning }}>{needs.length} session{needs.length === 1 ? '' : 's'} — a missing register is a safeguarding gap, not a formality.</span>
               </div>
-              {[['Target', '95%'],['Class avg','91%'],['Centre avg','93%']].map(([l,v])=>(
-                <div key={l} style={{ display:'flex', justifyContent:'space-between', fontSize:13, padding:'6px 0', borderBottom:`1px solid ${DS.border}` }}>
-                  <span style={{ color:DS.muted }}>{l}</span>
-                  <span style={{ fontWeight:500, color:DS.text }}>{v}</span>
-                </div>
-              ))}
+              <div>
+                {needs.map(s => (
+                  <SessionRow key={s.id} session={s} roster={rosterOf(s)} att={att} isAdmin={false} showDate
+                    onOpen={openPanel} onReinstate={reinstate} />
+                ))}
+              </div>
             </div>
-          </Card>
+          )}
 
-          <Card title="Recent Sessions">
-            <div style={{ padding:'8px 0' }}>
-              {pastLog.map((row,i) => (
-                <div key={i} style={{ display:'flex', alignItems:'center', gap:10, padding:'9px 16px', borderBottom: i<pastLog.length-1 ? `1px solid ${DS.border}` : 'none' }}>
-                  <span style={{ fontSize:12, color:DS.muted, width:44, flexShrink:0 }}>{row.date}</span>
-                  <div style={{ flex:1, display:'flex', gap:6 }}>
-                    <span style={{ fontSize:12, color:DS.success, fontWeight:600 }}>{row.present}P</span>
-                    {row.absent > 0 && <span style={{ fontSize:12, color:DS.danger, fontWeight:600 }}>{row.absent}A</span>}
-                    {row.late > 0 && <span style={{ fontSize:12, color:DS.warning, fontWeight:600 }}>{row.late}L</span>}
-                  </div>
-                  <span style={{ fontSize:11, color:DS.faint }}>{Math.round((row.present/(row.present+row.absent+row.late))*100)}%</span>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 300px', gap:20, alignItems:'start' }}>
+            {/* Today (or selected day) */}
+            <Card
+              title={selectedDate === todayIso ? 'Today' : attFmtDay(selectedDate)}
+              subtitle={new Date(selectedDate + 'T00:00:00').toLocaleDateString('en-GB', { weekday:'long', day:'numeric', month:'long' })}
+              actions={
+                <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                  <button onClick={() => setSelectedDate(d => attShiftIso(d, -1))} title="Previous day" style={{ display:'inline-flex', padding:6, borderRadius:6, border:`1px solid ${DS.border}`, background:DS.bg, cursor:'pointer' }}><Icon name="chevron_l" size={15} color={DS.muted} /></button>
+                  <input type="date" value={selectedDate} onChange={e => setSelectedDate(e.target.value)}
+                    style={{ padding:'5px 9px', borderRadius:6, border:`1px solid ${DS.border}`, fontSize:12.5, outline:'none', color:DS.text }} />
+                  <button onClick={() => setSelectedDate(d => attShiftIso(d, 1))} title="Next day" style={{ display:'inline-flex', padding:6, borderRadius:6, border:`1px solid ${DS.border}`, background:DS.bg, cursor:'pointer' }}><Icon name="chevron_r" size={15} color={DS.muted} /></button>
+                  {selectedDate !== todayIso && <button onClick={() => setSelectedDate(todayIso)} style={{ padding:'6px 10px', borderRadius:6, border:`1px solid ${DS.accentBorder}`, background:DS.accentLight, color:DS.accent, fontSize:12, fontWeight:600, cursor:'pointer' }}>Today</button>}
                 </div>
-              ))}
+              }>
+              {daySessions.length === 0 ? (
+                <div style={{ padding:'10px 4px' }}>
+                  <EmptyState icon="calendar" title="No sessions scheduled" message={selectedDate === todayIso ? 'You have no classes today. Use the date arrows to review another day.' : 'No classes on this day.'} />
+                </div>
+              ) : allRecordedToday ? (
+                <>
+                  <div style={{ display:'flex', alignItems:'center', gap:10, padding:'12px 18px', background:DS.successBg, borderBottom:`1px solid ${DS.successBorder}` }}>
+                    <Icon name="check" size={16} color={DS.success} />
+                    <span style={{ fontSize:12.5, fontWeight:600, color:DS.success }}>All registers done for this day.</span>
+                  </div>
+                  {daySessions.map(s => <SessionRow key={s.id} session={s} roster={rosterOf(s)} att={att} isAdmin={false} onOpen={openPanel} onReinstate={reinstate} />)}
+                </>
+              ) : (
+                daySessions.map(s => <SessionRow key={s.id} session={s} roster={rosterOf(s)} att={att} isAdmin={false} onOpen={openPanel} onReinstate={reinstate} />)
+              )}
+            </Card>
+
+            {/* Side panels — all derived */}
+            <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+              <Card title="Attendance rate" actions={
+                <Select value={focusClassId || ''} onChange={e => setFocusClassId(e.target.value)} style={{ width:150, fontSize:12 }}>
+                  {myClasses.map(c => <option key={c.id} value={c.id}>{c.group.replace(/\s*–\s*/, ' ')}</option>)}
+                </Select>
+              }>
+                <div style={{ padding:'18px 20px' }}>
+                  <div style={{ fontSize:40, fontWeight:800, color: focusRate.pct == null ? DS.faint : DS.success, letterSpacing:'-1px', lineHeight:1 }}>
+                    {focusRate.pct == null ? '—' : `${focusRate.pct}%`}
+                  </div>
+                  <div style={{ fontSize:12, color:DS.muted, marginTop:4, marginBottom:16 }}>
+                    This term · {focusClass ? focusClass.group : ''}
+                  </div>
+                  <div style={{ height:6, background:DS.surface, borderRadius:3, overflow:'hidden', marginBottom:12 }}>
+                    <div style={{ width:`${focusRate.pct || 0}%`, height:'100%', background:DS.success, borderRadius:3 }} />
+                  </div>
+                  {[
+                    ['Target', '95%'],
+                    ['Across your classes', overallRate.pct == null ? '—' : `${overallRate.pct}%`],
+                    ['Delivered', `${focusRate.deliveredSessions} session${focusRate.deliveredSessions === 1 ? '' : 's'}`],
+                  ].map(([l,v]) => (
+                    <div key={l} style={{ display:'flex', justifyContent:'space-between', fontSize:13, padding:'6px 0', borderBottom:`1px solid ${DS.border}` }}>
+                      <span style={{ color:DS.muted }}>{l}</span>
+                      <span style={{ fontWeight:500, color:DS.text, fontVariantNumeric:'tabular-nums' }}>{v}</span>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+
+              <Card title="Recent sessions">
+                {recent.length === 0 ? (
+                  <div style={{ padding:'8px 4px' }}><EmptyState icon="calendar" title="No delivered sessions yet" message="Confirmed registers will appear here." /></div>
+                ) : (
+                  <div style={{ padding:'8px 0' }}>
+                    {recent.map((row, i) => (
+                      <div key={row.session.id} style={{ display:'flex', alignItems:'center', gap:10, padding:'9px 18px', borderBottom: i < recent.length-1 ? `1px solid ${DS.border}` : 'none' }}>
+                        <span style={{ fontSize:12, color:DS.muted, width:52, flexShrink:0 }}>{attFmtDay(row.session.dateISO).replace(/^\w+ /, '')}</span>
+                        <div style={{ flex:1, display:'flex', gap:6 }}>
+                          <span style={{ fontSize:12, color:DS.success, fontWeight:600 }}>{row.present}P</span>
+                          {row.absent > 0 && <span style={{ fontSize:12, color:DS.danger, fontWeight:600 }}>{row.absent}A</span>}
+                          {row.late > 0 && <span style={{ fontSize:12, color:DS.warning, fontWeight:600 }}>{row.late}L</span>}
+                        </div>
+                        <span style={{ fontSize:11, color:DS.faint, fontVariantNumeric:'tabular-nums' }}>{row.pct == null ? '—' : `${row.pct}%`}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Card>
             </div>
-          </Card>
-        </div>
-      </div>
+          </div>
+        </>
+      )}
+
+      {panelSession && (
+        <RegisterPanel key={panelSession.id} session={panelSession} roster={rosterOf(panelSession)}
+          att={att} ts={ts} teachers={activeTeachers} me={me} settings={settings} now={now}
+          isAdmin={viewRole === 'admin'}
+          onClose={() => { setPanelSession(null); rerender(); }}
+          onChanged={rerender} />
+      )}
     </div>
   );
 };

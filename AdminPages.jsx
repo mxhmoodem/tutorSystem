@@ -3114,6 +3114,8 @@ const AdminPages = ({ page, section }) => {
   if (page === 'teacher_profile') return <TeacherProfilePage />;
   if (page === 'invoices')        return <AdminInvoicesPage />;
   if (page === 'schedule')        return <AdminSchedulePage />;
+  // Centre-wide Attendance (AttendanceAdmin.jsx, loaded after this file; exposes AdminAttendancePage on window).
+  if (page === 'attendance')      return window.AdminAttendancePage ? <window.AdminAttendancePage /> : null;
   // Staff › Timesheets (Timesheets.jsx, loaded after this file; exposes AdminTimesheetsPage on window).
   if (page === 'timesheets')      return window.AdminTimesheetsPage ? <window.AdminTimesheetsPage section={section} /> : null;
   // Per-teacher drill-in from the timesheets overview (teacher id stashed on adminParam).
