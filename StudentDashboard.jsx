@@ -1,13 +1,13 @@
 // ══════════════════════════════════════════════════════════════
-//  Klayo — Student Dashboard (Overview · Progress · Sessions)
+//  Klasio — Student Dashboard (Overview · Progress · Sessions)
 // ══════════════════════════════════════════════════════════════
 
 // Identity, enrolments (subjects/teachers/predicted grades), rollup metrics, the
 // grade model and the active term all come from the student SoT
-// (studentData.jsx → window.klayoStudent), loaded before this file. Homework lives
+// (studentData.jsx → window.klasioStudent), loaded before this file. Homework lives
 // in Homework.jsx (StudentHomework); reports come from the shared reports store
 // (Reports.jsx, window.StudentReports). The studentHomework mock still seeds the
-// Overview "due soon" list via klayoStudent.metrics.homeworkSummary().
+// Overview "due soon" list via klasioStudent.metrics.homeworkSummary().
 
 // ─── Overview page ─────────────────────────────────────────────────────────────
 // Subject themes — pastel cards with abstract shapes
@@ -59,7 +59,7 @@ const SubjectShape = ({ theme }) => {
 const StudentOverview = ({ onNav }) => {
   // §1–§7: identity, subjects, grades, numbers and term all come from the one
   // student SoT — nothing on this screen is re-hardcoded.
-  const K  = window.klayoStudent;
+  const K  = window.klasioStudent;
   const cs = K.currentStudent;
   const enrolments  = K.getEnrolments();
   const hwSummary   = K.metrics.homeworkSummary();
@@ -336,7 +336,7 @@ const StudentProgressPage = () => {
   // attendance all come from the enrolment SoT + studentMetrics. Attendance here
   // is the SAME record the Overview all-subjects figure derives from (§4), just
   // scoped to this subject and labelled as such.
-  const K = window.klayoStudent;
+  const K = window.klasioStudent;
   const enrolments = K.getEnrolments();
   const [activeSub, setActiveSub] = React.useState(0);
   const sub = enrolments[activeSub];
@@ -472,7 +472,7 @@ const StudentProgressPage = () => {
 
 // ─── Sessions page ──────────────────────────────────────────────────────────────
 const StudentSessionsPage = () => {
-  const K = window.klayoStudent;
+  const K = window.klasioStudent;
   // §2/§6: sessions, teachers and rooms all come from the enrolment SoT — no
   // invented "Mr Davies" / "Dr Patel". §7: the calendar month is the single
   // active-term value. Read-only — students can't self-book (correct).
@@ -503,11 +503,11 @@ const StudentSessionsPage = () => {
   const exportICS = () => {
     const pad = (n) => String(n).padStart(2, '0');
     const dt = (day, hhmm) => `202604${pad(day)}T${hhmm.replace(':', '')}00`;
-    const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Klayo//Student Sessions//EN'];
+    const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Klasio//Student Sessions//EN'];
     upcoming.forEach((s, i) => {
       const [start, end] = s.time.split('–');
       lines.push('BEGIN:VEVENT',
-        `UID:klayo-session-${s.day}-${i}@klayo`,
+        `UID:klasio-session-${s.day}-${i}@klasio`,
         `DTSTART:${dt(s.day, start)}`,
         `DTEND:${dt(s.day, end)}`,
         `SUMMARY:${s.subject} — ${s.teacher}`,
@@ -518,7 +518,7 @@ const StudentSessionsPage = () => {
     const blob = new Blob([lines.join('\r\n')], { type: 'text/calendar' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = 'klayo-sessions.ics';
+    a.href = url; a.download = 'klasio-sessions.ics';
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
   };

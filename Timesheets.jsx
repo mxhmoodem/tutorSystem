@@ -1146,7 +1146,7 @@ const TimesheetPrintDoc = ({ data }) => (
               <div style={{ fontSize: 14, marginTop: 2 }}>{g.name}</div>
             </div>
             <div style={{ textAlign: 'right', fontSize: 12, color: '#444' }}>
-              <div style={{ fontWeight: 700, color: '#111' }}>Klayo · {(window.centreMetrics && window.centreMetrics.getActiveCentre().name) || 'Bright Minds'}</div>
+              <div style={{ fontWeight: 700, color: '#111' }}>Klasio · {(window.centreMetrics && window.centreMetrics.getActiveCentre().name) || 'Bright Minds'}</div>
               <div>{data.periodLabel}</div>
               <div>Generated {tsDateLong(tsTodayISO())}</div>
             </div>

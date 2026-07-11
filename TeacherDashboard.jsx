@@ -253,7 +253,7 @@ const TeacherDashboard = () => {
   const needsAttention = (TM ? TM.getAtRiskStudents() : []).map(s => {
     const reason = TM.atRiskReason(s) || 'at risk';
     const tone = /Attendance|Homework/.test(reason) ? 'danger' : 'warning';
-    const predicted = window.klayoGrades ? window.klayoGrades.pctToGrade(s.score, { year: s.year }) : '—';
+    const predicted = window.klasioGrades ? window.klasioGrades.pctToGrade(s.score, { year: s.year }) : '—';
     return {
       name: `${s.firstName} ${s.lastName}`,
       predicted,

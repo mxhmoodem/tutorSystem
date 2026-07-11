@@ -2831,11 +2831,11 @@ const HomeworkAnalytics = ({ assignments, users = {}, classes = [] }) => {
 
   // ── Grade distribution (canonical scale · F3) ──
   // Raw scores are bucketed onto the ONE grade model (GCSE 9–1 / A-Level A*–E /
-  // KS3 descriptors) via window.klayoGrades — never a bespoke A–F map. The scale
+  // KS3 descriptors) via window.klasioGrades — never a bespoke A–F map. The scale
   // follows the active class filter's year; with "All classes" selected we default
   // to GCSE (the teacher's most common level). pctToGrade is explicitly INDICATIVE
   // (documented boundaries), not an official result — percentages stay raw scores.
-  const KG = window.klayoGrades;
+  const KG = window.klasioGrades;
   const gradeScaleOpts = classF !== 'All' ? { year: classF } : { level: 'GCSE' };
   const gradeBuckets = KG ? KG.emptyDistribution(gradeScaleOpts)
     : { 'A':0, 'B':0, 'C':0, 'D':0, 'E':0, 'U':0 };
@@ -3144,7 +3144,7 @@ const TeacherBuilder = ({ assignment, students, folders = [], classes = [], defa
     savingRef.current = true;
     // On publish, assigned students would be notified via Comms (follow-up: write a
     // class-channel message to a.studentIds); logged to the audit trail meanwhile.
-    if (status === 'active' && window.klayoAudit) window.klayoAudit('publish_homework', a.id || a.title, { assigned: (a.studentIds || []).length });
+    if (status === 'active' && window.klasioAudit) window.klasioAudit('publish_homework', a.id || a.title, { assigned: (a.studentIds || []).length });
     onSave({ ...a, status });
     setTimeout(() => { savingRef.current = false; }, 800);
   };
@@ -4708,7 +4708,7 @@ const HwHome = ({ store, me, section, setSection, assignments, onOpen, onOpenSub
   // §9: the subject filter populates from the student's ENROLLED subjects only
   // (intersected with subjects that actually have open assignments), never an
   // arbitrary set invented from the assignment rows.
-  const enrolled = window.klayoStudent ? window.klayoStudent.getSubjects() : null;
+  const enrolled = window.klasioStudent ? window.klasioStudent.getSubjects() : null;
   const subjects = enrolled
     ? enrolled.filter(s => open.some(x => x.a.subject === s))
     : Array.from(new Set(open.map(x => x.a.subject)));

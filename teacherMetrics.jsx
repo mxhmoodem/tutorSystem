@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  Klayo — Teacher-metrics selector layer (single source of truth · F2)
+//  Klasio — Teacher-metrics selector layer (single source of truth · F2)
 //
 //  The teacher-tier sibling of centreMetrics.jsx. Every teacher screen reads its
 //  counts from here — no screen recomputes its own students/classes/at-risk. The
@@ -15,8 +15,8 @@
 //  this join. termId is threaded so prior-term data resolves read-only later.
 //
 //  Frontend-only; reads localStorage non-reactively per call (same discipline as
-//  centreMetrics). Reuses centreMetrics' audit write-path (window.klayoAudit) and
-//  the canonical grade model (window.klayoGrades). Loads after those + the mocks,
+//  centreMetrics). Reuses centreMetrics' audit write-path (window.klasioAudit) and
+//  the canonical grade model (window.klasioGrades). Loads after those + the mocks,
 //  before the page modules; exposed as window.teacherMetrics.
 // ══════════════════════════════════════════════════════════════
 (() => {

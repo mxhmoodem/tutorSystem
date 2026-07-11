@@ -283,7 +283,7 @@ const AdminStudentsPage = () => {
   const exportCsv = () => {
     const header = ['name', 'year', 'attendance', 'hw', 'score', 'status'];
     const rows = filtered.map(s => [studentName(s), s.year, s.attendance, s.hw, s.score, cm.isAtRisk(s) ? 'at-risk' : 'on-track']);
-    (window.klayoAudit || (() => {}))('export_csv', `students (${rows.length} records)`);
+    (window.klasioAudit || (() => {}))('export_csv', `students (${rows.length} records)`);
     try {
       const csv = [header, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
       const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));

@@ -65,7 +65,7 @@ const COMMS_ANNOUNCEMENTS = [
     authorId: 'u_marcus', authorName: 'Marcus Hale', authorRole: 'superadmin',
     audience: { centreIds: 'all', roles: 'all', classIds: [] },
     title: 'Scheduled maintenance — Sunday 02:00–04:00 BST',
-    body: 'Klayo will be briefly unavailable during a platform upgrade this Sunday. No action needed — homework and reports already submitted are safe.',
+    body: 'Klasio will be briefly unavailable during a platform upgrade this Sunday. No action needed — homework and reports already submitted are safe.',
     priority: 'important', pinned: true, requiresAck: false,
     createdAt: _ago(2 * DAY), expiresAt: null,
     reads: { u_lisa: _ago(2 * DAY - 30), u_daniel: _ago(2 * DAY - 90) }, acks: {},
@@ -86,7 +86,7 @@ const COMMS_ANNOUNCEMENTS = [
     id: 'an_bm_fees',
     scope: 'centre', centreId: 'bm', classId: null,
     authorId: 'u_lisa', authorName: 'Lisa Chen', authorRole: 'admin',
-    // §5: Klayo invoicing is ledger-only (payments are external), and payment/
+    // §5: Klasio invoicing is ledger-only (payments are external), and payment/
     // invoice lines never appear on the student surface — retargeted to staff only
     // and reworded to drop the "view and pay from the portal" capture language.
     audience: { centreIds: ['bm'], roles: ['admin', 'teacher'], classIds: [] },
@@ -276,7 +276,7 @@ const COMMS_MESSAGES = [
     body: "Oh that makes sense. My WhatsApp is 07700 900182 if it's easier to text?", attachments: [],
     createdAt: _ago(2 * DAY - 55), readBy: { u_aiden: _ago(2 * DAY - 55), u_david: _ago(2 * DAY - 58) } },
   { id: 'm_ad_6', threadId: 'th_aiden_david', senderId: 'u_david', senderName: 'David Park', senderRole: 'teacher',
-    body: "Let's keep everything here on Klayo, Aiden — that's our centre policy and it keeps us both safe. Happy to help with anything in this channel any time. 👍", attachments: [],
+    body: "Let's keep everything here on Klasio, Aiden — that's our centre policy and it keeps us both safe. Happy to help with anything in this channel any time. 👍", attachments: [],
     createdAt: _ago(2 * DAY - 60), readBy: { u_david: _ago(2 * DAY - 60), u_aiden: _ago(2 * DAY - 70) } },
   { id: 'm_ad_7', threadId: 'th_aiden_david', senderId: 'u_aiden', senderName: 'Aiden Foster', senderRole: 'student',
     body: 'Understood! Can we go over Q4 next session?', attachments: [],

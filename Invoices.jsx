@@ -377,7 +377,7 @@ const useInvoiceStore = () => {
     });
     // Also mirror money/comms actions into the unified account audit (§6). The
     // ledger keeps its own rich audit; this is the cross-module security trail.
-    window.klayoAudit && window.klayoAudit('invoice_reminder_sent', invoiceId);
+    window.klasioAudit && window.klasioAudit('invoice_reminder_sent', invoiceId);
   };
 
   // Apply reconciliation — only ever called from the import preview's Confirm.

@@ -124,11 +124,11 @@ const Icon = ({ name, size = 16, color = 'currentColor', strokeWidth = 1.5 }) =>
   )
 );
 
-// ─── Klayo brand mark ─────────────────────────────────────────────────────────
+// ─── Klasio brand mark ─────────────────────────────────────────────────────────
 // The product logo glyph: an open ring (a near-complete circle with a small gap
 // at the top), rendered in the live accent so it follows centre branding. Pairs
-// with the "Klayo" wordmark in the sidebar header.
-const KlayoMark = ({ size = 28, color }) => {
+// with the "Klasio" wordmark in the sidebar header.
+const KlasioMark = ({ size = 28, color }) => {
   const c = color || DS.accent;
   const r = 8.4, cx = 12, cy = 12;
   const circ = 2 * Math.PI * r;
@@ -827,7 +827,7 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
       padding: collapsed ? '0 10px' : '0 12px',
       transition: 'width 0.16s ease',
     }}>
-      {/* Header — the Klayo product logo (ring mark + wordmark). Fixed to 52px
+      {/* Header — the Klasio product logo (ring mark + wordmark). Fixed to 52px
           (matching the TopBar height) so its bottom border lines up exactly
           with the content header's, forming one continuous line across the
           sidebar + content header. The centre switcher now lives at the bottom
@@ -839,9 +839,9 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
         marginBottom: 8,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-start', gap: 9, padding: collapsed ? 0 : '0 4px' }}>
-          <KlayoMark size={28} />
+          <KlasioMark size={28} />
           {!collapsed && (
-            <span style={{ fontSize: 19, fontWeight: 800, color: DS.text, letterSpacing: '-0.6px' }}>Klayo</span>
+            <span style={{ fontSize: 19, fontWeight: 800, color: DS.text, letterSpacing: '-0.6px' }}>Klasio</span>
           )}
         </div>
       </div>

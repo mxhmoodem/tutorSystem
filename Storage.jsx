@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  Klayo — Storage usage & quota (derive-don't-store)
+//  Klasio — Storage usage & quota (derive-don't-store)
 // ══════════════════════════════════════════════════════════════
 //
 //  Adds an ACCOUNT layer above the centre (one paying account owns 1–20
@@ -594,7 +594,7 @@ const StorageOwnerPanel = () => {
           <span style={{ fontSize: 12.5, color: DS.sub }}>These fields are saved to local storage for the prototype only — no bucket is contacted and no credentials leave the browser.</span>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0 18px' }}>
-          <Field label="Bucket name"><Input value={r2.bucketName || ''} onChange={e => store.setR2({ bucketName: e.target.value })} placeholder="klayo-prod-eu" /></Field>
+          <Field label="Bucket name"><Input value={r2.bucketName || ''} onChange={e => store.setR2({ bucketName: e.target.value })} placeholder="klasio-prod-eu" /></Field>
           <Field label="Region"><Input value={r2.region || ''} onChange={e => store.setR2({ region: e.target.value })} placeholder="auto" /></Field>
           <Field label="Jurisdiction">
             <Select value={r2.jurisdiction || 'EU'} onChange={e => store.setR2({ jurisdiction: e.target.value })}>

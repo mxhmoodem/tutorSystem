@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  Mock data — Klayo Platform Owner (Superadmin) console
+//  Mock data — Klasio Platform Owner (Superadmin) console
 //  Loaded as a global script before SuperAdmin.jsx (see index.html).
 // ══════════════════════════════════════════════════════════════
 //
@@ -16,10 +16,10 @@
 
 // ─── BRAND (routes every product string so it can't drift) ───────────────────
 const BRAND = {
-  name:         'Klayo',
-  statusDomain: 'status.klayo.io',
-  billingEmail: 'billing@klayo.io',
-  supportEmail: 'support@klayo.io',
+  name:         'Klasio',
+  statusDomain: 'status.klasio.io',
+  billingEmail: 'billing@klasio.io',
+  supportEmail: 'support@klasio.io',
 };
 
 // ─── Tokenised categorical palette (charts / donuts / bars) ──────────────────

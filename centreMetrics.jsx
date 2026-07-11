@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  Klayo — Centre-metrics selector layer (single source of truth)
+//  Klasio — Centre-metrics selector layer (single source of truth)
 //
 //  Every centre rollup the admin/owner surface shows is DERIVED here from the
 //  seed stores — no screen may hardcode a student / enrolment / seat / at-risk /
@@ -223,7 +223,7 @@ const audit = (action, target, extra) => {
 };
 const readAudit = () => { try { return JSON.parse(localStorage.getItem(AUDIT_KEY) || '[]'); } catch (e) { return []; } };
 // Convenience global so any screen can write one line without importing the module.
-window.klayoAudit = audit;
+window.klasioAudit = audit;
 
 window.centreMetrics = {
   // audit write-path (§6)

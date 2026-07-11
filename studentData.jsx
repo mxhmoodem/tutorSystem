@@ -1,7 +1,7 @@
 // ══════════════════════════════════════════════════════════════════════════════
-//  Klayo — Student single sources of truth (Sections 1–7)
-//  Exposed as window.klayoStudent. Loaded after the mocks + teacherGrades.jsx
-//  (needs window.klayoGrades) and BEFORE StudentDashboard.jsx / Reports.jsx /
+//  Klasio — Student single sources of truth (Sections 1–7)
+//  Exposed as window.klasioStudent. Loaded after the mocks + teacherGrades.jsx
+//  (needs window.klasioGrades) and BEFORE StudentDashboard.jsx / Reports.jsx /
 //  Settings.jsx read it. Every student screen reads identity, enrolments, grades,
 //  rollup metrics, the resolved teacher for a subject, and the active term FROM
 //  HERE — no screen re-hardcodes a name, a subject, a teacher or a number.
@@ -95,15 +95,15 @@ const resolveTeacher = (subject) => {
 
 // ─── §3 Canonical grade model — every grade chip renders through this. The scheme
 //     is a property of the qualification on the enrolment (A-Level → A*–E,
-//     GCSE → 9–1), backed by window.klayoGrades.GRADE_SCALES (per-centre override
+//     GCSE → 9–1), backed by window.klasioGrades.GRADE_SCALES (per-centre override
 //     later). Predicted grades are already teacher-set letters, so a string passes
-//     through; a numeric score is banded via klayoGrades.pctToGrade.
+//     through; a numeric score is banded via klasioGrades.pctToGrade.
 const formatGrade = (value, qualification) => {
   if (typeof value === 'string' && value.trim()) return value.trim();
   if (value == null || value === '' || isNaN(Number(value))) return '—';
   const level = qualification || currentStudent.qualification;
-  if (window.klayoGrades && window.klayoGrades.pctToGrade) {
-    return window.klayoGrades.pctToGrade(Number(value), { level });
+  if (window.klasioGrades && window.klasioGrades.pctToGrade) {
+    return window.klasioGrades.pctToGrade(Number(value), { level });
   }
   return String(value);
 };
@@ -231,7 +231,7 @@ const GradeChip = ({ value, qualification, color, variant = 'pill', title = 'Pre
   );
 };
 
-window.klayoStudent = {
+window.klasioStudent = {
   currentStudent, activeTerm,
   enrolments, getEnrolments, getSubjects, getEnrolment,
   resolveTeacher, formatGrade, metrics,

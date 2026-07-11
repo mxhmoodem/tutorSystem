@@ -14,7 +14,7 @@
 const REPORTS_KEY = 'reports_store_v2';
 // §1: the logged-in student resolves from the one canonical principal (falls back
 // to the seed id if the SoT hasn't loaded).
-const REPORTS_STUDENT_SELF = (window.klayoStudent && window.klayoStudent.currentStudent.id) || 's_oliver';
+const REPORTS_STUDENT_SELF = (window.klasioStudent && window.klasioStudent.currentStudent.id) || 's_oliver';
 const REPORTS_TEACHER_SELF = 'Ms. Sarah Clarke';
 const REPORTS_TODAY = '2026-06-15';
 
@@ -494,7 +494,7 @@ function printReportPDF(reports, branding, opts) {
   // Exporting a child's report → append a local audit entry (maps to a real
   // audit table with RLS later). AADC data-minimisation: only the report itself
   // is rendered — no bulk roster or contact data.
-  if (window.klayoAudit) window.klayoAudit('export_report_pdf', 'reports',
+  if (window.klasioAudit) window.klasioAudit('export_report_pdf', 'reports',
     { count: list.length, students: list.map(r => r && r.studentName).filter(Boolean) });
   const landscape = opts.layout === 'landscape';
   const watermark = branding.watermark
@@ -829,10 +829,10 @@ const ReportEditor = ({ report, store, onBack, onSaved }) => {
                     (F3) for this student's year/subject — never a free-text field.
                     A legacy value outside the scale is preserved as an option. */}
                 <Field label="Predicted grade">
-                  {window.klayoGrades ? (() => {
-                    const grades = window.klayoGrades.gradesFor({ year: r.year, subject: r.subject });
+                  {window.klasioGrades ? (() => {
+                    const grades = window.klasioGrades.gradesFor({ year: r.year, subject: r.subject });
                     const opts = (r.predicted && !grades.includes(r.predicted)) ? [r.predicted, ...grades] : grades;
-                    const scale = window.klayoGrades.scaleFor({ year: r.year, subject: r.subject });
+                    const scale = window.klasioGrades.scaleFor({ year: r.year, subject: r.subject });
                     return (
                       <select value={r.predicted || ''} onChange={e => set({ predicted: e.target.value })}
                         title={scale.label}

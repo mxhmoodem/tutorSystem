@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  Klayo — Platform Owner (Superadmin) console
+//  Klasio — Platform Owner (Superadmin) console
 //  Entity model:  Account (billing tenant) → Centres → Users
 // ══════════════════════════════════════════════════════════════
 //
@@ -331,7 +331,7 @@ const SuperAdminDashboard = () => {
       ['Churned MRR', `£${SAMetrics.churnedMRR()}`, range],
       ['Open incidents', 0, range],
     ];
-    saDownloadCSV('klayo-board-pack.csv', rows);
+    saDownloadCSV('klasio-board-pack.csv', rows);
     saAudit({ action: `Exported board pack (${range})`, type: 'export', target: 'Platform overview' });
     setFlash('Board pack exported (CSV)');
   };
@@ -596,7 +596,7 @@ const SACentresPage = () => {
             // Tenant-scoped, PII-aware export (no student names — counts only).
             const rows = [['Account', 'Owner', 'Plan', 'Centres', 'MRR', 'Status', 'Country']];
             accounts.forEach(a => rows.push([a.name, a.owner, SAMetrics.planName(a.planId), a.centres.length, mrrOf(a), a.status, a.country]));
-            saDownloadCSV('klayo-accounts.csv', rows);
+            saDownloadCSV('klasio-accounts.csv', rows);
             saAudit({ action: `Exported accounts CSV (${accounts.length} accounts)`, type: 'export', target: 'Accounts' });
             setFlash('Accounts exported (CSV)');
           }}>Export CSV</Btn>,
@@ -839,7 +839,7 @@ const SAUsersPage = () => {
   // Directory rows derived from accounts (owners as admin users) + a couple of
   // seeded non-admins. Every count above is the trusted tally, not this list.
   const directory = [
-    { name: 'Marcus Hale', email: `marcus@${'klayo.io'}`, role: 'superadmin', account: '—', status: 'active', lastSeen: 'Now', joined: 'May 2024', mfa: true },
+    { name: 'Marcus Hale', email: `marcus@${'klasio.io'}`, role: 'superadmin', account: '—', status: 'active', lastSeen: 'Now', joined: 'May 2024', mfa: true },
     ...SA_ACCOUNTS.map(a => ({ name: a.owner, email: a.ownerEmail, role: 'admin', account: a.name, status: a.status === 'suspended' ? 'suspended' : a.status === 'past_due' ? 'locked' : 'active', lastSeen: '—', joined: a.createdAt, mfa: a.churnRisk !== 'high' })),
   ];
   const filtered = directory.filter(u => {
@@ -884,7 +884,7 @@ const SAUsersPage = () => {
         title="Users & Accounts"
         subtitle="Across all accounts on the platform"
         actions={[
-          <Btn key="exp" variant="secondary" icon="download" small onClick={() => { const rows = [['Name', 'Role', 'Account', 'Status', 'Joined']]; filtered.forEach(u => rows.push([u.name, u.role, u.account, u.status, u.joined])); saDownloadCSV('klayo-users.csv', rows); saAudit({ action: `Exported users CSV (${filtered.length} rows)`, type: 'export', target: 'Users' }); setFlash('Users exported'); }}>Export</Btn>,
+          <Btn key="exp" variant="secondary" icon="download" small onClick={() => { const rows = [['Name', 'Role', 'Account', 'Status', 'Joined']]; filtered.forEach(u => rows.push([u.name, u.role, u.account, u.status, u.joined])); saDownloadCSV('klasio-users.csv', rows); saAudit({ action: `Exported users CSV (${filtered.length} rows)`, type: 'export', target: 'Users' }); setFlash('Users exported'); }}>Export</Btn>,
           <Btn key="msg" variant="primary" icon="bell" small onClick={() => setBulk(true)}>Bulk Message</Btn>,
         ]}
       />
@@ -1077,7 +1077,7 @@ const SARevenuePage = () => {
         title="Revenue & Subscriptions"
         subtitle="Monetisation across all accounts"
         actions={[
-          <Btn key="exp" variant="secondary" icon="download" small onClick={() => { const rows = [['Plan', 'Accounts', 'MRR']]; dist.forEach(d => rows.push([d.name, d.accounts, d.mrr])); saDownloadCSV('klayo-revenue.csv', rows); setFlash('Revenue exported'); }}>Export</Btn>,
+          <Btn key="exp" variant="secondary" icon="download" small onClick={() => { const rows = [['Plan', 'Accounts', 'MRR']]; dist.forEach(d => rows.push([d.name, d.accounts, d.mrr])); saDownloadCSV('klasio-revenue.csv', rows); setFlash('Revenue exported'); }}>Export</Btn>,
           <Btn key="plan" variant="primary" icon="invoice" small onClick={() => window.__navigate && window.__navigate('superadmin', 'controls')}>Manage Plans</Btn>,
         ]}
       />
@@ -1612,7 +1612,7 @@ const SASecurityPage = () => {
         actions={[<Btn key="exp" variant="secondary" icon="download" small onClick={() => {
           const rows = [['Time', 'Actor', 'Action', 'Type', 'Target', 'IP']];
           audit.forEach(a => rows.push([a.ts, a.actor, a.action, a.type, a.target, a.ip]));
-          saDownloadCSV('klayo-audit-log.csv', rows);
+          saDownloadCSV('klasio-audit-log.csv', rows);
           saAudit({ action: `Exported audit log (${audit.length} rows)`, type: 'export', target: 'Audit log' });   // exporting is itself audited
           setFlash('Audit log exported');
         }}>Export Audit Log</Btn>]}

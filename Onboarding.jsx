@@ -1399,7 +1399,7 @@ const SetupShell = ({ icon = 'graduation', accent = DS.accent, title, subtitle, 
         <div style={{ width: 30, height: 30, borderRadius: 7, background: DS.accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <span style={{ color: '#fff', fontWeight: 800, fontSize: 14 }}>K</span>
         </div>
-        <span style={{ fontSize: 16, fontWeight: 700, color: DS.text, letterSpacing: '-0.3px' }}>Klayo</span>
+        <span style={{ fontSize: 16, fontWeight: 700, color: DS.text, letterSpacing: '-0.3px' }}>Klasio</span>
       </div>
       <div style={{ background: DS.card, border: `1px solid ${DS.cardBorder}`, boxShadow: DS.cardShadowHi, borderRadius: 16, overflow: 'hidden' }}>
         <div style={{ padding: '24px 26px 18px', borderBottom: `1px solid ${DS.border}`, background: `linear-gradient(180deg, ${accent}0C, transparent)` }}>
@@ -1417,7 +1417,7 @@ const SetupShell = ({ icon = 'graduation', accent = DS.accent, title, subtitle, 
         <div style={{ padding: '22px 26px' }}>{children}</div>
         {footer && <div style={{ padding: '16px 26px', borderTop: `1px solid ${DS.border}`, background: DS.surface }}>{footer}</div>}
       </div>
-      <div style={{ textAlign: 'center', marginTop: 16, fontSize: 11.5, color: DS.faint }}>Secured by Klayo · UK DPA 2018 compliant</div>
+      <div style={{ textAlign: 'center', marginTop: 16, fontSize: 11.5, color: DS.faint }}>Secured by Klasio · UK DPA 2018 compliant</div>
     </div>
   </div>
 );
@@ -1607,7 +1607,7 @@ const ClaimPage = ({ identifier, onExit }) => {
   if (!teacher && !student) {
     return (
       <SetupShell icon="alert" accent={DS.danger} title="Link not found" subtitle="This claim link is invalid or has been revoked."
-        footer={<Btn variant="secondary" style={{ width: '100%', justifyContent: 'center' }} onClick={onExit}>Back to Klayo</Btn>}>
+        footer={<Btn variant="secondary" style={{ width: '100%', justifyContent: 'center' }} onClick={onExit}>Back to Klasio</Btn>}>
         <div style={{ fontSize: 13.5, color: DS.sub, lineHeight: 1.6 }}>Ask your centre admin to resend your invite, or check you opened the most recent link.</div>
       </SetupShell>
     );

@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  Klayo — Canonical centre-profile record (single source of truth)
+//  Klasio — Canonical centre-profile record (single source of truth)
 //  Loaded as a global before centreMetrics.jsx (see index.html).
 //
 //  ONE record per centre, keyed by centreId. This is the single source of

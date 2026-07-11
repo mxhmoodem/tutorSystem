@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  Klayo — Plans & override codes (platform-wide)
+//  Klasio — Plans & override codes (platform-wide)
 // ══════════════════════════════════════════════════════════════
 //
 //  Single source of truth for the subscription PLAN CATALOGUE and the

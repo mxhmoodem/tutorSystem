@@ -45,7 +45,7 @@ const TeacherClassesPage = () => {
   // (D6) Teachers can't self-schedule — the admin owns the timetable. "Schedule
   // Class" becomes a REQUEST to the admin (recorded to the audit trail).
   const requestClass = () => {
-    if (window.klayoAudit) window.klayoAudit('request_class', 'timetable', { by: 'teacher' });
+    if (window.klasioAudit) window.klasioAudit('request_class', 'timetable', { by: 'teacher' });
     setReqMsg('Request sent to your centre admin — they own the timetable and will set the day, time and room.');
     setTimeout(() => setReqMsg(''), 6000);
   };
@@ -161,10 +161,10 @@ const CLASS_BANNER_THEMES = [
 
 // Per-class localStorage (banner theme + announcement stream). Prototype only.
 const classLS = {
-  getBanner: (id) => { try { return localStorage.getItem(`klayo.classBanner.${id}`) || 'default'; } catch (e) { return 'default'; } },
-  setBanner: (id, v) => { try { localStorage.setItem(`klayo.classBanner.${id}`, v); } catch (e) {} },
-  getStream: (id) => { try { return JSON.parse(localStorage.getItem(`klayo.classStream.${id}`) || 'null'); } catch (e) { return null; } },
-  setStream: (id, arr) => { try { localStorage.setItem(`klayo.classStream.${id}`, JSON.stringify(arr)); } catch (e) {} },
+  getBanner: (id) => { try { return localStorage.getItem(`klasio.classBanner.${id}`) || 'default'; } catch (e) { return 'default'; } },
+  setBanner: (id, v) => { try { localStorage.setItem(`klasio.classBanner.${id}`, v); } catch (e) {} },
+  getStream: (id) => { try { return JSON.parse(localStorage.getItem(`klasio.classStream.${id}`) || 'null'); } catch (e) { return null; } },
+  setStream: (id, arr) => { try { localStorage.setItem(`klasio.classStream.${id}`, JSON.stringify(arr)); } catch (e) {} },
 };
 
 // Resolve a {from,to} gradient for a banner theme id (falls back to class colour).
@@ -718,7 +718,7 @@ const ClassSettingsTab = ({ cls, color, subject, level, bannerTheme, setBannerTh
   const [posts, setPosts] = React.useState({ studentsPost:false, studentsComment:true });
   const [reqMsg, setReqMsg] = React.useState('');
   const requestChange = () => {
-    if (window.klayoAudit) window.klayoAudit('request_class_change', 'timetable', { by:'teacher', class:cls.group });
+    if (window.klasioAudit) window.klasioAudit('request_class_change', 'timetable', { by:'teacher', class:cls.group });
     setReqMsg('Request sent to your centre admin — they own class scheduling and enrolment.');
     setTimeout(() => setReqMsg(''), 6000);
   };
@@ -3329,7 +3329,7 @@ const TeacherTrackingPage = () => {
     const csv = [header, ...rows].map(r => r.map(escape).join(',')).join('\n');
     // Export of children's data → audit entry (AADC data-minimisation: tracker
     // columns only, no contact/DOB/address).
-    if (window.klayoAudit) window.klayoAudit('export_csv', `tracker:${active.name}`, { rows: rows.length, scope: 'teacher' });
+    if (window.klasioAudit) window.klasioAudit('export_csv', `tracker:${active.name}`, { rows: rows.length, scope: 'teacher' });
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -3623,7 +3623,7 @@ const TeacherStudentsPage = () => {
     const lines = [cols.join(',')].concat(filtered.map(s => [
       studentName(s), s.year, s.attendance, s.hw, s.score, atRisk(s) ? 'At risk' : 'Active',
     ].join(',')));
-    if (window.klayoAudit) window.klayoAudit('export_csv', 'my-students', { count: filtered.length, scope: 'teacher' });
+    if (window.klasioAudit) window.klasioAudit('export_csv', 'my-students', { count: filtered.length, scope: 'teacher' });
     try {
       const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
       const url = URL.createObjectURL(blob);

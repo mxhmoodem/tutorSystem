@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  Klayo — Plans & override-codes seed data
+//  Klasio — Plans & override-codes seed data
 //  Loaded AFTER mocks/onboarding.mock.jsx (so `PLANS` exists) and
 //  consumed by Plans.jsx (the live catalogue + codes stores).
 // ══════════════════════════════════════════════════════════════

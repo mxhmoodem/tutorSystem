@@ -142,8 +142,8 @@ const LandingPage = ({ onEnterApp, onGetStarted, onLogin }) => {
           height: 60, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-            <KlayoMark size={28} />
-            <span style={{ fontSize: 18, fontWeight: 800, letterSpacing: '-0.5px' }}>Klayo</span>
+            <KlasioMark size={28} />
+            <span style={{ fontSize: 18, fontWeight: 800, letterSpacing: '-0.5px' }}>Klasio</span>
           </div>
           <nav style={{ display: 'flex', gap: 4 }}>
             {navLinks.map(l => (
@@ -245,8 +245,8 @@ const LandingPage = ({ onEnterApp, onGetStarted, onLogin }) => {
               padding: '16px 12px', display: 'flex', flexDirection: 'column', gap: 4,
             }}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
-                <KlayoMark size={20} />
-                <span style={{ fontSize: 12, fontWeight: 700 }}>Klayo</span>
+                <KlasioMark size={20} />
+                <span style={{ fontSize: 12, fontWeight: 700 }}>Klasio</span>
               </div>
               {['Dashboard','Students','Classes','Reports'].map((l, i) => (
                 <div key={l} style={{
@@ -437,7 +437,7 @@ const LandingPage = ({ onEnterApp, onGetStarted, onLogin }) => {
             Ready to run your centre smarter?
           </h2>
           <p style={{ fontSize: 16, color: '#9CA3AF', margin: '0 0 36px' }}>
-            Join 200+ tuition centres already on Klayo.
+            Join 200+ tuition centres already on Klasio.
           </p>
           <Btn variant="primary" onClick={startSignup}>Start your free 14-day trial</Btn>
         </div>
@@ -449,8 +449,8 @@ const LandingPage = ({ onEnterApp, onGetStarted, onLogin }) => {
           <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr', gap: 40, marginBottom: 40 }}>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-                <KlayoMark size={24} />
-                <span style={{ color: '#fff', fontWeight: 700 }}>Klayo</span>
+                <KlasioMark size={24} />
+                <span style={{ color: '#fff', fontWeight: 700 }}>Klasio</span>
               </div>
               <p style={{ fontSize: 13, color: '#6B7280', lineHeight: 1.6, maxWidth: 260 }}>
                 The management platform built specifically for tuition centres. Manage everything from one place.
@@ -472,7 +472,7 @@ const LandingPage = ({ onEnterApp, onGetStarted, onLogin }) => {
             ))}
           </div>
           <div style={{ borderTop: '1px solid #1F2937', paddingTop: 24, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: 12, color: '#4B5563' }}>© 2026 Klayo Ltd. All rights reserved.</span>
+            <span style={{ fontSize: 12, color: '#4B5563' }}>© 2026 Klasio Ltd. All rights reserved.</span>
             <span style={{ fontSize: 12, color: '#4B5563' }}>Made with care in London</span>
           </div>
         </div>

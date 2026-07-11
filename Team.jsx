@@ -174,12 +174,12 @@ const AdminTeamPage = () => {
     const res = canGrantRole({ account, target, role, by: me });
     if (!res.ok) return flashMsg('err', res.reason);
     onb.grantRole(target.email, centreId, role, me.email);
-    window.klayoAudit && window.klayoAudit('role_grant', `${target.email} → ${role}`, { centreId });
+    window.klasioAudit && window.klasioAudit('role_grant', `${target.email} → ${role}`, { centreId });
     flashMsg('ok', `${target.name} is now ${role === 'admin' ? 'an Admin' : 'a Teacher'} at ${centre.name}.`);
   };
   const reallyRevoke = (target, role) => {
     onb.revokeRole(target.email, centreId, role, me.email);
-    window.klayoAudit && window.klayoAudit('role_revoke', `${target.email} ✕ ${role}`, { centreId });
+    window.klasioAudit && window.klasioAudit('role_revoke', `${target.email} ✕ ${role}`, { centreId });
     flashMsg('ok', `Removed ${ROLE_META[role].label} from ${target.name}.`);
   };
   const doRevoke = (target, role) => {
@@ -198,7 +198,7 @@ const AdminTeamPage = () => {
     if (!isAdmin(target)) return flashMsg('err', 'The new owner must be an Admin — grant Admin first.');
     sub.setOwner(target.email);
     onb.logRoleChange({ action: 'transfer', email: target.email, centreId, by: me.email });
-    window.klayoAudit && window.klayoAudit('ownership_transfer', target.email, { centreId });
+    window.klasioAudit && window.klasioAudit('ownership_transfer', target.email, { centreId });
     setTransferOpen(false);
     flashMsg('ok', `${target.name} is now the account owner. You remain an Admin.`);
   };

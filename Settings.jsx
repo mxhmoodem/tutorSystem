@@ -407,7 +407,7 @@ const AppearanceTab = ({ data, set, role, wide }) => {
     </SettingsSection>
   );
   const themeCard = (
-    <SettingsSection title="Theme" subtitle="Personalise how Klayo looks for you" icon="grid">
+    <SettingsSection title="Theme" subtitle="Personalise how Klasio looks for you" icon="grid">
       <div style={{ display: 'flex', gap: 10, padding: '12px 0', borderBottom: `1px solid ${DS.border}` }}>
         <ThemeOpt id="light" label="☀ Light" />
         <ThemeOpt id="dark" label="🌙 Dark" />
@@ -768,7 +768,7 @@ const CentreTab = ({ data, set, wide }) => {
         <Field label="Invoice due (days)">
           <Input type="number" value={c.invoiceDueDays ?? 14} onChange={e => set('centre', 'invoiceDueDays', +e.target.value)} />
         </Field>
-        <Field label="VAT on parent invoices (%)" hint="Output tax you charge families on tuition — separate from your Klayo subscription VAT (Plans & Billing).">
+        <Field label="VAT on parent invoices (%)" hint="Output tax you charge families on tuition — separate from your Klasio subscription VAT (Plans & Billing).">
           <Input type="number" value={c.taxRate ?? 0} onChange={e => set('centre', 'taxRate', +e.target.value)} />
         </Field>
       </SetGrid>
@@ -897,7 +897,7 @@ const LearningTab = ({ data, set, wide }) => {
     </SettingsSection>
   );
   const accessibility = (
-    <SettingsSection title="Accessibility" subtitle="Make Klayo easier to use" icon="star">
+    <SettingsSection title="Accessibility" subtitle="Make Klasio easier to use" icon="star">
       <Field label="Text size" style={{ padding: '10px 0 0' }}>
         <Select value={l.textSize || 'normal'} onChange={e => set('learning', 'textSize', e.target.value)}>
           <option value="normal">Normal</option>
@@ -1108,7 +1108,7 @@ const BillingTab = () => {
     } catch (e) {}
   };
   const downloadInvoice = h => downloadText(h.label.replace(/[^\w]+/g, '_') + '.txt',
-    `${(window.BRAND && window.BRAND.name) || 'Klayo'} subscription invoice\n${h.label}\nAmount: £${h.amount}\nDate: ${fmtDate(h.date)}\nStatus: ${h.status === 'paid' ? 'Paid' : 'Declined'}\n`);
+    `${(window.BRAND && window.BRAND.name) || 'Klasio'} subscription invoice\n${h.label}\nAmount: £${h.amount}\nDate: ${fmtDate(h.date)}\nStatus: ${h.status === 'paid' ? 'Paid' : 'Declined'}\n`);
   const downloadAll = () => downloadText('tutoros-billing-history.csv',
     'Invoice,Amount,Date,Status\n' + history.map(h => `"${h.label}",£${h.amount},${fmtDate(h.date)},${h.status === 'paid' ? 'Paid' : 'Declined'}`).join('\n'), 'text/csv');
 
@@ -1208,7 +1208,7 @@ const BillingTab = () => {
               </div>
             ) : (
               <div>
-                <div style={{ fontSize: 12.5, color: DS.muted, marginBottom: 12 }}>Have a promo or free-trial code from Klayo? Enter it to update your price.</div>
+                <div style={{ fontSize: 12.5, color: DS.muted, marginBottom: 12 }}>Have a promo or free-trial code from Klasio? Enter it to update your price.</div>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <Input value={codeInput} onChange={e => { setCodeInput(e.target.value.toUpperCase()); setCodeMsg(null); }} placeholder="Enter code" style={{ flex: 1 }} />
                   <Btn variant="primary" small icon="check" onClick={onApply}>Apply</Btn>
@@ -1221,7 +1221,7 @@ const BillingTab = () => {
       </div>
 
       {/* Billing details */}
-      <SettingsSection title="Billing details" subtitle="Shown on your Klayo subscription invoices" icon="book">
+      <SettingsSection title="Billing details" subtitle="Shown on your Klasio subscription invoices" icon="book">
         <SetGrid>
           <Field label="Company / billing name">
             <Input value={b.company || ''} onChange={e => setB('company', e.target.value)} />
@@ -1229,7 +1229,7 @@ const BillingTab = () => {
           <Field label="Billing email">
             <Input type="email" value={b.email || ''} onChange={e => setB('email', e.target.value)} />
           </Field>
-          <Field label="Account VAT number" hint="Your business VAT number for Klayo's subscription invoices — separate from the VAT you charge families (Centre → Invoicing).">
+          <Field label="Account VAT number" hint="Your business VAT number for Klasio's subscription invoices — separate from the VAT you charge families (Centre → Invoicing).">
             <Input value={b.vat || ''} onChange={e => setB('vat', e.target.value)} />
           </Field>
         </SetGrid>

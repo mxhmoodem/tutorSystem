@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  Klayo — Canonical grade model (single source of truth · F3)
+//  Klasio — Canonical grade model (single source of truth · F3)
 //
 //  ONE grade taxonomy for the whole teacher surface. A grade is always resolved
 //  from a (subject, level/year) pair against a centre-level scale config — no
@@ -17,7 +17,7 @@
 //  not an official result.
 //
 //  Frontend-only, config lives in-module (centre-editable later). Loads after the
-//  mocks and before the page modules; exposed as window.klayoGrades.
+//  mocks and before the page modules; exposed as window.klasioGrades.
 // ══════════════════════════════════════════════════════════════
 (() => {
 
@@ -125,7 +125,7 @@ const toneForGrade = (grade, opts) => {
   return TONE_RAMP[Math.min(TONE_RAMP.length - 1, Math.round(t * (TONE_RAMP.length - 1)))];
 };
 
-window.klayoGrades = {
+window.klasioGrades = {
   GRADE_SCALES,
   levelForYear, normaliseLevel,
   scaleFor, scaleById, gradesFor, isValidGrade,
