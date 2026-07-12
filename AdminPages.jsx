@@ -770,6 +770,43 @@ const ChartLegend = ({ items }) => (
   </div>
 );
 
+// ── Shared profile-detail layout primitives ──────────────────────────────────
+// The student, teacher and class detail pages all share one layout: a fixed
+// full-height shell with a hero card up top, a fixed 336px facts aside on the
+// left, and a right pane whose underline tab strip switches scrolling panels.
+const ProfileTabStrip = ({ tabs, active, onChange }) => (
+  <div style={{ flexShrink:0, display:'flex', gap:2, borderBottom:`1px solid ${DS.border}`, overflowX:'auto' }}>
+    {tabs.map(t => {
+      const on = active === t.id;
+      return (
+        <button key={t.id} onClick={() => onChange(t.id)} style={{
+          display:'inline-flex', alignItems:'center', gap:7, padding:'11px 14px',
+          border:'none', background:'none', cursor:'pointer', whiteSpace:'nowrap',
+          fontSize:13, fontWeight:on?600:500, color:on?DS.accent:DS.muted,
+          borderBottom:`2px solid ${on?DS.accent:'transparent'}`, marginBottom:-1,
+        }}>
+          <Icon name={t.icon} size={15} color={on?DS.accent:DS.faint} />{t.label}
+        </button>
+      );
+    })}
+  </div>
+);
+
+// Compact label/value rows for the left aside cards.
+const profileFacts = list => list.filter(Boolean).map(([l,v]) => (
+  <div key={l} style={{ display:'flex', justifyContent:'space-between', padding:'8px 0', borderBottom:`1px solid ${DS.border}`, fontSize:13, gap:12 }}>
+    <span style={{ color:DS.muted, flexShrink:0 }}>{l}</span>
+    <span style={{ color:DS.text, fontWeight:500, textAlign:'right', minWidth:0, wordBreak:'break-word' }}>{v}</span>
+  </div>
+));
+
+const profileKpiTile = (label, value, color) => (
+  <div key={label} style={{ padding:'12px 14px', background:DS.surface, border:`1px solid ${DS.border}`, borderRadius:10 }}>
+    <div style={{ fontSize:21, fontWeight:700, color:color||DS.text, lineHeight:1.1 }}>{value}</div>
+    <div style={{ fontSize:11.5, color:DS.muted, marginTop:3 }}>{label}</div>
+  </div>
+);
+
 // The full read-only analytics dashboard (shown when the profile is not being edited).
 const StudentAnalyticsView = ({ student, enrolledClasses, role = 'admin' }) => {
   const store = useAdminStore();
@@ -819,13 +856,8 @@ const StudentAnalyticsView = ({ student, enrolledClasses, role = 'admin' }) => {
   };
   const revoke = () => { store.updateStudent(student.id, { account: { ...account, status:'invited' } }); setRevokeOpen(false); };
 
-  // Compact label/value rows for the left cards.
-  const facts = list => list.filter(Boolean).map(([l,v]) => (
-    <div key={l} style={{ display:'flex', justifyContent:'space-between', padding:'8px 0', borderBottom:`1px solid ${DS.border}`, fontSize:13, gap:12 }}>
-      <span style={{ color:DS.muted, flexShrink:0 }}>{l}</span>
-      <span style={{ color:DS.text, fontWeight:500, textAlign:'right', minWidth:0, wordBreak:'break-word' }}>{v}</span>
-    </div>
-  ));
+  // Aside fact rows + KPI tiles come from the shared profile-layout primitives.
+  const facts = profileFacts, kpiTile = profileKpiTile;
   // Account rows with an optional copy button.
   const acctRow = (label, value, copyVal) => (
     <div key={label} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:12, padding:'9px 0', borderBottom:`1px solid ${DS.border}`, fontSize:13 }}>
@@ -836,13 +868,6 @@ const StudentAnalyticsView = ({ student, enrolledClasses, role = 'admin' }) => {
       </span>
     </div>
   );
-  const kpiTile = (label, value, color) => (
-    <div key={label} style={{ padding:'12px 14px', background:DS.surface, border:`1px solid ${DS.border}`, borderRadius:10 }}>
-      <div style={{ fontSize:21, fontWeight:700, color:color||DS.text, lineHeight:1.1 }}>{value}</div>
-      <div style={{ fontSize:11.5, color:DS.muted, marginTop:3 }}>{label}</div>
-    </div>
-  );
-
   const TABS = [
     { id:'attainment', label:'Attainment',         icon:'chart' },
     { id:'attendance', label:'Attendance',         icon:'calendar' },
@@ -1150,21 +1175,7 @@ const StudentAnalyticsView = ({ student, enrolledClasses, role = 'admin' }) => {
   // ── RIGHT: tab strip + the active tab, scrolling on its own ──
   const main = (
     <main style={{ flex:1, minWidth:0, display:'flex', flexDirection:'column', overflow:'hidden' }}>
-      <div style={{ flexShrink:0, display:'flex', gap:2, borderBottom:`1px solid ${DS.border}`, overflowX:'auto' }}>
-        {TABS.filter(t => !(isTeacher && (t.id === 'fees' || t.id === 'account'))).map(t => {
-          const active = tab===t.id;
-          return (
-            <button key={t.id} onClick={() => setTab(t.id)} style={{
-              display:'inline-flex', alignItems:'center', gap:7, padding:'11px 14px',
-              border:'none', background:'none', cursor:'pointer', whiteSpace:'nowrap',
-              fontSize:13, fontWeight:active?600:500, color:active?DS.accent:DS.muted,
-              borderBottom:`2px solid ${active?DS.accent:'transparent'}`, marginBottom:-1,
-            }}>
-              <Icon name={t.icon} size={15} color={active?DS.accent:DS.faint} />{t.label}
-            </button>
-          );
-        })}
-      </div>
+      <ProfileTabStrip tabs={TABS.filter(t => !(isTeacher && (t.id === 'fees' || t.id === 'account')))} active={tab} onChange={setTab} />
       <div style={{ flex:1, overflow:'auto', paddingTop:16, paddingRight:2, paddingBottom:24 }}>
         {panel}
       </div>
@@ -2248,12 +2259,26 @@ const TeacherCoverModal = ({ open, onClose, store, teacher, classes = [], prefil
   );
 };
 
+// Sections of the admin class detail — the same underline tab strip as the
+// student and teacher profiles, so all three detail pages share one layout.
+const CLASS_DETAIL_TABS = [
+  { id:'overview',   label:'Overview',   icon:'chart' },
+  { id:'students',   label:'Students',   icon:'users' },
+  { id:'homework',   label:'Homework',   icon:'clip' },
+  { id:'attendance', label:'Attendance', icon:'calendar' },
+];
+
 const ClassDetailPage = () => {
   const store = useAdminStore();
   const id = adminParam();
   const cls = store.classes.find(c => c.id === id);
   const [modalOpen, setModalOpen] = React.useState(false);
   const [coverOpen, setCoverOpen] = React.useState(false);
+  const [tab, setTab] = React.useState('overview');
+
+  // Re-sync per-class state when the opened class changes (the page stays mounted
+  // on class→class navigation, so useState initialisers alone wouldn't refresh).
+  React.useEffect(() => { setTab('overview'); }, [id]);
 
   if (!cls) return (
     <div style={{ padding:'32px' }}>
@@ -2291,22 +2316,18 @@ const ClassDetailPage = () => {
   const attTrend   = weeks.map(() => 78 + Math.round(rnd() * 20));
   const scoreTrend = weeks.map((_, i) => Math.max(40, Math.min(98, avgScore - 10 + i * 2 + Math.round((rnd() - 0.5) * 8))));
 
-  const stat = (label, value, c) => (
-    <div style={{ padding:'16px 24px', borderLeft:`1px solid ${DS.border}` }}>
-      <div style={{ fontSize:12, color:DS.muted }}>{label}</div>
-      <div style={{ fontSize:22, fontWeight:700, color:c || DS.text, marginTop:2 }}>{value}</div>
-    </div>
-  );
-
   const handleSave = data => store.updateClass(cls.id, data);
+  const gridCols = { display:'grid', gridTemplateColumns:'minmax(0,1fr) minmax(0,1fr)', gap:18, alignItems:'start' };
+  const span2 = { gridColumn:'1 / -1' };
 
-  return (
-    <div style={{ padding:'32px', maxWidth:1040, margin:'0 auto' }}>
-      <FlowHeader title={cls.name} subtitle={`${cls.group} · ${cls.teacher}`} onBack={() => adminNav('classes')} />
+  // ── Header — back + hero card (mirrors the student/teacher profiles) ──
+  const header = (
+    <>
+      <FlowHeader title={cls.name} subtitle={`${cls.group} · ${cls.day} ${cls.time} · ${cls.teacher}`} onBack={() => adminNav('classes')} />
 
       {/* Cover banner — only while the substitute window is live */}
       {onCover && (
-        <div style={{ display:'flex', gap:12, alignItems:'center', padding:'12px 16px', marginBottom:20, background:DS.warningBg, border:`1px solid ${DS.warningBorder}`, borderRadius:10 }}>
+        <div style={{ display:'flex', gap:12, alignItems:'center', padding:'12px 16px', marginBottom:16, background:DS.warningBg, border:`1px solid ${DS.warningBorder}`, borderRadius:10 }}>
           <Icon name="teacher" size={18} color={DS.warning} />
           <div style={{ fontSize:13, color:DS.sub, lineHeight:1.5, flex:1 }}>
             <strong style={{ color:DS.text }}>{cls.teacher} is away</strong> — <strong style={{ color:DS.text }}>{onCover.teacher}</strong> is covering this class until {fmtDay(onCover.to)}{onCover.reason ? ` (${onCover.reason})` : ''}.
@@ -2315,103 +2336,126 @@ const ClassDetailPage = () => {
         </div>
       )}
 
-      {/* Hero */}
-      <Card style={{ marginBottom:20 }}>
+      <Card style={{ marginBottom:16 }}>
         <div style={{ padding:'22px 24px', display:'flex', alignItems:'center', gap:18 }}>
-          <div style={{ width:64, height:64, borderRadius:14, background:color+'18', color, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}><Icon name="book" size={28} /></div>
+          <div style={{ width:64, height:64, borderRadius:16, background:color+'18', color, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}><Icon name="book" size={28} /></div>
           <div style={{ flex:1, minWidth:0 }}>
             <div style={{ fontSize:20, fontWeight:700, color:DS.text }}>{cls.name}</div>
-            <div style={{ fontSize:13, color:DS.muted, marginTop:2 }}>{cls.group} · {cls.day} {cls.time} · {cls.room || 'No room'}</div>
-            <div style={{ marginTop:8, display:'flex', gap:6, flexWrap:'wrap' }}>
+            <div style={{ fontSize:13, color:DS.muted, marginTop:2 }}>{cls.group} · {cls.day} {cls.time} · {cls.room || 'No room'} · {cls.teacher}</div>
+            <div style={{ marginTop:8, display:'flex', gap:6, flexWrap:'wrap', alignItems:'center' }}>
               <Badge variant={cls.status === 'paused' ? 'default' : 'success'}>{cls.status === 'paused' ? 'Paused' : 'Active'}</Badge>
-              {subject && <Badge variant="accent">{subject.name}</Badge>}
-              {level && <Badge variant="default">{level.name}</Badge>}
-              {examBoard && <Badge variant="default">{examBoard.name}</Badge>}
+              {[subject && subject.name, level && level.name, examBoard && examBoard.name, `${cls.students} students`].filter(Boolean).map(t => (
+                <span key={t} style={{ fontSize:11.5, padding:'3px 9px', background:DS.surface, border:`1px solid ${DS.border}`, borderRadius:14, color:DS.sub }}>{t}</span>
+              ))}
             </div>
           </div>
           <div style={{ display:'flex', gap:8 }}>
-            <Btn variant="secondary" icon="message">Message Class</Btn>
+            <Btn variant="secondary" icon="message" onClick={() => window.__navigate && window.__navigate('admin', 'comms')}>Message Class</Btn>
             <Btn variant="primary" icon="edit" onClick={() => setModalOpen(true)}>Edit Class</Btn>
           </div>
         </div>
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', borderTop:`1px solid ${DS.border}` }}>
-          <div style={{ padding:'16px 24px' }}>
-            <div style={{ fontSize:12, color:DS.muted }}>Enrolment</div>
-            <div style={{ fontSize:22, fontWeight:700, color:DS.text, marginTop:2 }}>{cls.students}/{cls.capacity}</div>
-          </div>
-          {stat('Avg Score', avgScore + '%', avgScore < 60 ? DS.danger : DS.success)}
-          {stat('HW Completion', avgHw + '%', avgHw < 50 ? DS.danger : DS.success)}
-          {stat('Attendance', attendance + '%', attendance < 80 ? DS.danger : DS.success)}
+      </Card>
+    </>
+  );
+
+  // ── LEFT (fixed): class facts + teacher, kept to hand while the tabs scroll ──
+  const aside = (
+    <aside style={{ width:336, flexShrink:0, overflow:'auto', display:'flex', flexDirection:'column', gap:16, paddingTop:2, paddingRight:2, paddingBottom:24 }}>
+      <Card title="Class Details" icon="book" accent={color}>
+        <div style={{ padding:'4px 20px 12px' }}>
+          {profileFacts([
+            ['Subject', subject ? subject.name : cls.name.replace(/^(GCSE|A-Level)\s/, '')],
+            ['Year group', yearGroup ? yearGroup.name : cls.group],
+            level && ['Level', level.name],
+            examBoard && ['Exam board', examBoard.name],
+            ['Schedule', `${cls.day} · ${cls.time}`],
+            ['Room', cls.room || '—'],
+            ['Capacity', `${cls.students} / ${cls.capacity} (${fill}% full)`],
+            cls.description && ['Description', cls.description],
+          ])}
         </div>
       </Card>
 
-      {/* Details + teacher */}
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 320px', gap:20, alignItems:'start', marginBottom:20 }}>
-        <Card title="Class Details">
-          <div style={{ padding:'20px 24px' }}>
-            {[
-              ['Subject', subject ? subject.name : cls.name.replace(/^(GCSE|A-Level)\s/, '')],
-              ['Year group', yearGroup ? yearGroup.name : cls.group],
-              level && ['Level', level.name],
-              examBoard && ['Exam board', examBoard.name],
-              ['Teacher', cls.teacher],
-              cover && ['Cover', `${cover.teacher} · ${fmtRange(cover.from, cover.to)}${onCover ? ' (active)' : ' (scheduled)'}`],
-              ['Schedule', `${cls.day} · ${cls.time}`],
-              ['Room', cls.room || '—'],
-              ['Capacity', `${cls.students} / ${cls.capacity} (${fill}% full)`],
-              cls.description && ['Description', cls.description],
-              ['Status', cls.status === 'paused' ? 'Paused' : 'Active'],
-            ].filter(Boolean).map(([l,v]) => (
-              <div key={l} style={{ display:'flex', justifyContent:'space-between', padding:'10px 0', borderBottom:`1px solid ${DS.border}`, fontSize:13.5, gap:16 }}>
-                <span style={{ color:DS.muted, flexShrink:0 }}>{l}</span><span style={{ color:DS.text, fontWeight:500, textAlign:'right' }}>{v}</span>
-              </div>
-            ))}
-          </div>
-        </Card>
-        <Card title="Teacher">
-          <div style={{ padding:'18px 20px' }}>
-            {teacher ? (
-              <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
-                <div style={{ display:'flex', alignItems:'center', gap:12 }}>
-                  <Avatar name={teacher.name} size={44} color={teacher.color} />
-                  <div style={{ minWidth:0 }}>
-                    <div style={{ fontSize:14, fontWeight:700, color:DS.text }}>{teacher.name}</div>
-                    <div style={{ fontSize:12, color:DS.muted, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{teacher.email || '—'}</div>
-                  </div>
+      <Card title="Teacher" icon="user" accent="#DB2777">
+        <div style={{ padding:'14px 20px 16px' }}>
+          {teacher ? (
+            <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+                <Avatar name={teacher.name} size={44} color={teacher.color} />
+                <div style={{ minWidth:0 }}>
+                  <div style={{ fontSize:14, fontWeight:700, color:DS.text }}>{teacher.name}</div>
+                  <div style={{ fontSize:12, color:DS.muted, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{teacher.email || '—'}</div>
                 </div>
-                <Btn variant="secondary" icon="user" onClick={() => adminNav('teacher_profile', teacher.id)}>View Teacher</Btn>
               </div>
-            ) : <div style={{ fontSize:13, color:DS.faint }}>No teacher assigned.</div>}
-
-            {/* Cover / substitute teacher */}
-            <div style={{ marginTop:16, paddingTop:16, borderTop:`1px solid ${DS.border}` }}>
-              {cover ? (
-                <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
-                  <div style={{ display:'flex', alignItems:'center', gap:11 }}>
-                    <Avatar name={cover.teacher} size={38} color={coverTeacher && coverTeacher.color} />
-                    <div style={{ minWidth:0, flex:1 }}>
-                      <div style={{ fontSize:10.5, color:DS.muted, textTransform:'uppercase', letterSpacing:0.5, fontWeight:600 }}>Cover teacher</div>
-                      <div style={{ fontSize:13.5, fontWeight:700, color:DS.text }}>{cover.teacher}</div>
-                      <div style={{ fontSize:12, color:DS.muted }}>{fmtRange(cover.from, cover.to)}</div>
-                    </div>
-                    <Badge variant={onCover ? 'warning' : 'default'}>{onCover ? 'Active' : 'Scheduled'}</Badge>
-                  </div>
-                  {cover.reason && <div style={{ fontSize:12, color:DS.muted }}>{cover.reason}</div>}
-                  <div style={{ display:'flex', gap:8 }}>
-                    <Btn variant="secondary" icon="edit" small onClick={() => setCoverOpen(true)} style={{ flex:1 }}>Edit cover</Btn>
-                    <Btn variant="ghost" icon="x" small onClick={() => store.clearCover(cls.id)}>Remove</Btn>
-                  </div>
-                </div>
-              ) : teacher ? (
-                <Btn variant="secondary" icon="teacher" onClick={() => setCoverOpen(true)} style={{ width:'100%' }}>Assign cover teacher</Btn>
-              ) : null}
+              <Btn variant="secondary" icon="user" onClick={() => adminNav('teacher_profile', teacher.id)}>View Teacher</Btn>
             </div>
-          </div>
-        </Card>
-      </div>
+          ) : <div style={{ fontSize:13, color:DS.faint }}>No teacher assigned.</div>}
 
-      {/* Enrolled students */}
-      <Card title={`Enrolled Students · ${roster.length}`} style={{ marginBottom:20 }} actions={
+          {/* Cover / substitute teacher */}
+          <div style={{ marginTop:16, paddingTop:16, borderTop:`1px solid ${DS.border}` }}>
+            {cover ? (
+              <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+                <div style={{ display:'flex', alignItems:'center', gap:11 }}>
+                  <Avatar name={cover.teacher} size={38} color={coverTeacher && coverTeacher.color} />
+                  <div style={{ minWidth:0, flex:1 }}>
+                    <div style={{ fontSize:10.5, color:DS.muted, textTransform:'uppercase', letterSpacing:0.5, fontWeight:600 }}>Cover teacher</div>
+                    <div style={{ fontSize:13.5, fontWeight:700, color:DS.text }}>{cover.teacher}</div>
+                    <div style={{ fontSize:12, color:DS.muted }}>{fmtRange(cover.from, cover.to)}</div>
+                  </div>
+                  <Badge variant={onCover ? 'warning' : 'default'}>{onCover ? 'Active' : 'Scheduled'}</Badge>
+                </div>
+                {cover.reason && <div style={{ fontSize:12, color:DS.muted }}>{cover.reason}</div>}
+                <div style={{ display:'flex', gap:8 }}>
+                  <Btn variant="secondary" icon="edit" small onClick={() => setCoverOpen(true)} style={{ flex:1 }}>Edit cover</Btn>
+                  <Btn variant="ghost" icon="x" small onClick={() => store.clearCover(cls.id)}>Remove</Btn>
+                </div>
+              </div>
+            ) : teacher ? (
+              <Btn variant="secondary" icon="teacher" onClick={() => setCoverOpen(true)} style={{ width:'100%' }}>Assign cover teacher</Btn>
+            ) : null}
+          </div>
+        </div>
+      </Card>
+    </aside>
+  );
+
+  // ── Tab 1 · Overview — headline stats + score trend + distribution ──
+  const tabOverview = (
+    <div style={gridCols}>
+      <Card title="Class performance" icon="chart" accent={DS.accent} style={span2}>
+        <div style={{ padding:'16px 20px', display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(130px,1fr))', gap:12 }}>
+          {profileKpiTile('Enrolment', `${cls.students}/${cls.capacity}`)}
+          {profileKpiTile('Avg score', avgScore + '%', avgScore < 60 ? DS.danger : DS.success)}
+          {profileKpiTile('HW completion', avgHw + '%', avgHw < 50 ? DS.danger : DS.success)}
+          {profileKpiTile('Attendance', attendance + '%', attendance < 80 ? DS.danger : DS.success)}
+        </div>
+      </Card>
+      <Card title="Average Score Trend" icon="trending_up" accent={DS.info}>
+        <div style={{ padding:'16px 18px' }}>
+          <LineChart labels={weeks} series={[{ label:'Avg score %', data:scoreTrend, color:DS.accent }]} height={196} />
+        </div>
+      </Card>
+      <Card title="Score Distribution" icon="chart" accent={color}>
+        <div style={{ padding:'16px 18px' }}>
+          <BarChart
+            labels={['0–40','40–60','60–80','80–100']}
+            data={[
+              roster.filter(s => s.score < 40).length || (avgScore < 55 ? 2 : 1),
+              roster.filter(s => s.score >= 40 && s.score < 60).length || 2,
+              roster.filter(s => s.score >= 60 && s.score < 80).length || 3,
+              roster.filter(s => s.score >= 80).length || (avgScore > 75 ? 4 : 2),
+            ]}
+            color={color} height={196}
+          />
+        </div>
+      </Card>
+    </div>
+  );
+
+  // ── Tab 2 · Students — enrolled roster ──
+  const tabStudents = (
+    <div style={gridCols}>
+      <Card title={`Enrolled Students · ${roster.length}`} icon="users" accent={DS.accent} style={span2} actions={
         <Btn variant="secondary" icon="users" small onClick={() => adminNav('class_roster', cls.id)}>Manage roster</Btn>
       }>
         {roster.length === 0 ? (
@@ -2432,9 +2476,13 @@ const ClassDetailPage = () => {
           />
         )}
       </Card>
+    </div>
+  );
 
-      {/* Homework */}
-      <Card title="Homework" style={{ marginBottom:20 }} actions={<Btn variant="secondary" icon="plus" small onClick={() => window.__navigate && window.__navigate('admin', 'classes')}>Assign</Btn>}>
+  // ── Tab 3 · Homework ──
+  const tabHomework = (
+    <div style={gridCols}>
+      <Card title="Homework" icon="clip" accent="#0891B2" style={span2} actions={<Btn variant="secondary" icon="plus" small onClick={() => window.__navigate && window.__navigate('admin', 'classes')}>Assign</Btn>}>
         <Table
           cols={['Assignment','Submitted','Avg Score','Set','Status']}
           rows={homework.map(h => [
@@ -2451,41 +2499,36 @@ const ClassDetailPage = () => {
           ])}
         />
       </Card>
+    </div>
+  );
 
-      {/* Progress & analytics */}
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:16, marginBottom:20 }}>
-        <KPICard label="Avg Score"     value={avgScore + '%'}   sub="this term" icon="chart"      iconBg={DS.accentLight} accent={DS.accent} />
-        <KPICard label="HW Completion" value={avgHw + '%'}      sub="submitted" icon="clip"       iconBg={DS.infoBg}      accent={DS.info} />
-        <KPICard label="Attendance"    value={attendance + '%'} sub="average"   icon="graduation" iconBg={DS.successBg}   accent={DS.success} />
-      </div>
-
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:20, marginBottom:20 }}>
-        <Card title="Average Score Trend">
-          <div style={{ padding:'20px 24px' }}>
-            <LineChart labels={weeks} series={[{ label:'Avg score %', data:scoreTrend, color:DS.accent }]} height={220} />
-          </div>
-        </Card>
-        <Card title="Attendance by Week" actions={<span style={{ fontSize:12, color:DS.muted }}>{attendance}% average</span>}>
-          <div style={{ padding:'20px 24px' }}>
-            <BarChart labels={weeks} data={attTrend} color={DS.success} height={220} />
-          </div>
-        </Card>
-      </div>
-
-      <Card title="Score Distribution" style={{ marginBottom:20 }}>
-        <div style={{ padding:'20px 24px' }}>
-          <BarChart
-            labels={['0–40','40–60','60–80','80–100']}
-            data={[
-              roster.filter(s => s.score < 40).length || (avgScore < 55 ? 2 : 1),
-              roster.filter(s => s.score >= 40 && s.score < 60).length || 2,
-              roster.filter(s => s.score >= 60 && s.score < 80).length || 3,
-              roster.filter(s => s.score >= 80).length || (avgScore > 75 ? 4 : 2),
-            ]}
-            color={color} height={180}
-          />
+  // ── Tab 4 · Attendance ──
+  const tabAttendance = (
+    <div style={gridCols}>
+      <Card title="Attendance by Week" icon="calendar" accent={DS.success} style={span2} actions={<span style={{ fontSize:12, color:DS.muted }}>{attendance}% average</span>}>
+        <div style={{ padding:'16px 18px' }}>
+          <BarChart labels={weeks} data={attTrend} color={DS.success} height={220} />
         </div>
       </Card>
+    </div>
+  );
+
+  const tabBody = { overview:tabOverview, students:tabStudents, homework:tabHomework, attendance:tabAttendance };
+
+  // Fixed full-height shell: header stays put, the aside and tab panel scroll
+  // independently — identical chrome to the student profile.
+  return (
+    <div style={{ height:'calc(100vh - 52px)', display:'flex', flexDirection:'column', overflow:'hidden' }}>
+      <div style={{ flexShrink:0, padding:'24px 28px 0' }}>{header}</div>
+      <div style={{ flex:1, display:'flex', gap:18, overflow:'hidden', minHeight:0, padding:'0 28px' }}>
+        {aside}
+        <main style={{ flex:1, minWidth:0, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+          <ProfileTabStrip tabs={CLASS_DETAIL_TABS} active={tab} onChange={setTab} />
+          <div style={{ flex:1, overflow:'auto', paddingTop:16, paddingRight:2, paddingBottom:24 }}>
+            {tabBody[tab]}
+          </div>
+        </main>
+      </div>
 
       <ClassFormModal open={modalOpen} onClose={() => setModalOpen(false)} onSave={handleSave} store={store} teachers={store.teachers} editing={cls} />
       <CoverModal open={coverOpen} onClose={() => setCoverOpen(false)} store={store} awayName={cls.teacher} classes={[cls]}
@@ -2656,12 +2699,23 @@ const AttendanceToggle = ({ value, onSet }) => (
 );
 
 // ─── Teacher profile / details — schedule, attendance, holidays, edit ────────────
+// Same underline tab strip + fixed two-pane shell as the student profile and
+// class detail, so every admin detail page shares one layout.
+const TEACHER_PROFILE_TABS = [
+  { id:'overview',   label:'Overview',   icon:'chart' },
+  { id:'classes',    label:'Classes',    icon:'book' },
+  { id:'attendance', label:'Attendance', icon:'calendar' },
+  { id:'cover',      label:'Cover',      icon:'teacher' },
+  { id:'holidays',   label:'Holidays',   icon:'clock' },
+];
+
 const TeacherProfilePage = () => {
   const store = useAdminStore();
   const id = adminParam();
   const teacher = store.teachers.find(t => t.id === id);
   const [editing, setEditing] = React.useState(false);
   const [form, setForm] = React.useState(null);
+  const [tab, setTab] = React.useState('overview');
   const [holiday, setHoliday] = React.useState({ from:'', to:'', reason:'' });
   const [coverOpen, setCoverOpen] = React.useState(false);
 
@@ -2705,67 +2759,111 @@ const TeacherProfilePage = () => {
   const seedAssign = {};
   coveredClasses.forEach(c => { seedAssign[c.id] = c.cover.teacherId; });
 
-  return (
-    <div style={{ padding:'32px', maxWidth:1040, margin:'0 auto' }}>
-      <FlowHeader title={teacher.name} subtitle={teacherSubjects(teacher).join(' · ') || 'No subjects'} onBack={() => adminNav('teachers')} />
+  const status = STATUS_META[teacher.status] || STATUS_META.active;
+  const gridCols = { display:'grid', gridTemplateColumns:'minmax(0,1fr) minmax(0,1fr)', gap:18, alignItems:'start' };
+  const span2 = { gridColumn:'1 / -1' };
 
-      <Card style={{ marginBottom:20 }}>
+  // ── Header — back + hero card, shared by view and edit modes ──
+  const header = (
+    <>
+      <FlowHeader title={teacher.name} subtitle={teacherSubjects(teacher).join(' · ') || 'No subjects'} onBack={() => adminNav('teachers')} />
+      <Card style={{ marginBottom: editing ? 20 : 16 }}>
         <div style={{ padding:'22px 24px', display:'flex', alignItems:'center', gap:18 }}>
           <Avatar name={teacher.name} size={64} color={teacher.color} />
           <div style={{ flex:1, minWidth:0 }}>
             <div style={{ fontSize:20, fontWeight:700, color:DS.text }}>{teacher.name}</div>
             <div style={{ fontSize:13, color:DS.muted, marginTop:2 }}>{teacher.email} {teacher.phone ? `· ${teacher.phone}` : ''}</div>
-            <div style={{ marginTop:8, display:'flex', gap:6, flexWrap:'wrap' }}>
+            <div style={{ marginTop:8, display:'flex', gap:6, flexWrap:'wrap', alignItems:'center' }}>
+              <Badge variant={status.variant}>{status.label}</Badge>
               {teacherSubjects(teacher).map(s => <span key={s} style={{ fontSize:11.5, padding:'3px 9px', background:DS.surface, border:`1px solid ${DS.border}`, borderRadius:14, color:DS.sub }}>{s}</span>)}
             </div>
           </div>
           <div style={{ display:'flex', gap:8 }}>
             {editing
               ? <><Btn variant="ghost" onClick={cancel}>Cancel</Btn><Btn variant="primary" icon="check" onClick={save}>Save Changes</Btn></>
-              : <><Btn variant="secondary" icon="message">Message</Btn><Btn variant="primary" icon="edit" onClick={() => setEditing(true)}>Edit Details</Btn></>}
+              : <><Btn variant="secondary" icon="message" onClick={() => window.__navigate && window.__navigate('admin', 'comms')}>Message</Btn><Btn variant="primary" icon="edit" onClick={() => setEditing(true)}>Edit Details</Btn></>}
           </div>
         </div>
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', borderTop:`1px solid ${DS.border}` }}>
-          {[['Classes', teacherClasses.length], ['Students', teacher.students || 0], ['Attendance', teacher.attendance + '%'], ['Holidays booked', holidays.length]].map(([l,v], i) => (
-            <div key={l} style={{ padding:'16px 24px', borderLeft: i ? `1px solid ${DS.border}` : 'none' }}>
-              <div style={{ fontSize:12, color:DS.muted }}>{l}</div>
-              <div style={{ fontSize:22, fontWeight:700, color:DS.text, marginTop:2 }}>{v}</div>
-            </div>
-          ))}
+      </Card>
+    </>
+  );
+
+  // ── LEFT (fixed): contact + employment facts, kept to hand while the tabs scroll ──
+  const aside = (
+    <aside style={{ width:336, flexShrink:0, overflow:'auto', display:'flex', flexDirection:'column', gap:16, paddingTop:2, paddingRight:2, paddingBottom:24 }}>
+      <Card title="Contact Details" icon="user" accent={DS.info}>
+        <div style={{ padding:'4px 20px 12px' }}>
+          {profileFacts([
+            ['Email', teacher.email || '—'],
+            ['Phone', teacher.phone || '—'],
+            ['Address', teacher.address || '—'],
+            ['Qualifications', teacher.qualifications || '—'],
+          ])}
+          <div style={{ display:'flex', gap:8, marginTop:12 }}>
+            <Btn variant="secondary" small icon="mail" style={{ flex:1, justifyContent:'center' }}>Email</Btn>
+            <Btn variant="secondary" small icon="phone" style={{ flex:1, justifyContent:'center' }}>Call</Btn>
+          </div>
         </div>
       </Card>
 
-      <Card title="Details" style={{ marginBottom:20 }}>
-        <div style={{ padding:'20px 24px' }}>
-            {editing ? (
-              <div style={{ display:'grid', gridTemplateColumns:'120px 1fr 1fr', gap:'0 18px' }}>
-                <Field label="Title"><Select value={form.title || 'Mr'} onChange={e => set('title', e.target.value)}>{TEACHER_TITLES.map(t => <option key={t}>{t}</option>)}</Select></Field>
-                <Field label="First Name"><Input value={form.firstName || ''} onChange={e => set('firstName', e.target.value)} /></Field>
-                <Field label="Last Name"><Input value={form.lastName || ''} onChange={e => set('lastName', e.target.value)} /></Field>
-                <Field label="Email" style={{ gridColumn:'1 / 3' }}><Input value={form.email || ''} onChange={e => set('email', e.target.value)} icon="mail" /></Field>
-                <Field label="Phone"><Input value={form.phone || ''} onChange={e => set('phone', e.target.value)} icon="phone" /></Field>
-                <Field label="Qualifications" style={{ gridColumn:'1 / -1' }}><Input value={form.qualifications || ''} onChange={e => set('qualifications', e.target.value)} icon="graduation" /></Field>
-                <div style={{ gridColumn:'1 / -1' }}>
-                  <Field label="Subjects">
-                    <div style={{ display:'flex', flexWrap:'wrap', gap:8 }}>
-                      {SUBJECT_OPTIONS.map(sub => { const on = form.subjects.includes(sub); return (
-                        <button key={sub} onClick={() => toggle('subjects', sub)} style={{ padding:'6px 12px', borderRadius:18, cursor:'pointer', fontSize:12.5, border:`1px solid ${on ? DS.accentBorder : DS.border}`, background: on ? DS.accentLight : DS.bg, color: on ? DS.accent : DS.sub }}>{sub}</button>
-                      ); })}
-                    </div>
-                  </Field>
+      <Card title="Employment" icon="invoice" accent="#7C3AED">
+        <div style={{ padding:'4px 20px 12px' }}>
+          {profileFacts([
+            ['Role', teacher.role === 'lead' ? 'Lead Teacher' : teacher.role === 'admin' ? 'Teacher + Admin' : 'Teacher'],
+            ['Contract', teacher.contract || '—'],
+            teacher.startDate && ['Start date', teacher.startDate],
+            teacher.salary && ['Salary / rate', teacher.salary],
+            ['Joined', teacher.joined || '—'],
+          ])}
+        </div>
+      </Card>
+    </aside>
+  );
+
+  // ── Tab 1 · Overview — headline stats + today's register + cover status ──
+  const tabOverview = (
+    <div style={gridCols}>
+      <Card title="At a glance" icon="chart" accent={DS.accent} style={span2}>
+        <div style={{ padding:'16px 20px', display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(130px,1fr))', gap:12 }}>
+          {profileKpiTile('Classes', teacherClasses.length)}
+          {profileKpiTile('Students', teacher.students || 0, DS.info)}
+          {profileKpiTile('Attendance', (teacher.attendance || 0) + '%', (teacher.attendance || 0) < 90 ? DS.warning : DS.success)}
+          {profileKpiTile('Holidays booked', holidays.length)}
+        </div>
+      </Card>
+
+      <Card title="Today's Register" icon="check" accent={DS.success}>
+        <div style={{ padding:'16px 20px', display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, flexWrap:'wrap' }}>
+          <div style={{ fontSize:13, color:DS.sub }}>{fmtDay(todayISO())}</div>
+          <AttendanceToggle value={store.attendance[`${teacher.id}|${todayISO()}`] || null} onSet={val => store.setAttendance(teacher.id, todayISO(), val)} />
+        </div>
+      </Card>
+
+      <Card title="Cover Status" icon="teacher" accent={DS.warning}>
+        <div style={{ padding:'16px 20px' }}>
+          {coveredClasses.length ? (
+            <div style={{ display:'flex', alignItems:'center', gap:11 }}>
+              <div style={{ width:38, height:38, borderRadius:9, background:DS.warningBg, color:DS.warning, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}><Icon name="teacher" size={18} /></div>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:13, fontWeight:600, color:DS.text }}>
+                  {coverNames.length === 1 ? `${coverNames[0]} is covering` : `${coverNames.length} teachers covering ${coveredClasses.length} classes`}
                 </div>
+                <div style={{ fontSize:12, color:DS.muted }}>{windowLabel}</div>
               </div>
-            ) : (
-              [['Name', teacher.name], ['Email', teacher.email], ['Phone', teacher.phone || '—'], ['Address', teacher.address || '—'], ['Qualifications', teacher.qualifications || '—'], ['Role', teacher.role || 'Teacher'], ['Contract', teacher.contract || '—'], ['Joined', teacher.joined]].map(([l,v]) => (
-                <div key={l} style={{ display:'flex', justifyContent:'space-between', padding:'10px 0', borderBottom:`1px solid ${DS.border}`, fontSize:13.5, gap:16 }}>
-                  <span style={{ color:DS.muted }}>{l}</span><span style={{ color:DS.text, fontWeight:500, textAlign:'right' }}>{v}</span>
-                </div>
-              ))
-            )}
+              <Badge variant={liveCover ? 'warning' : 'default'}>{liveCover ? 'Active now' : 'Scheduled'}</Badge>
+            </div>
+          ) : (
+            <div style={{ fontSize:13, color:DS.muted, lineHeight:1.5 }}>No cover arranged — use the Cover tab to assign a stand-in while {teacher.name} is away.</div>
+          )}
         </div>
       </Card>
+    </div>
+  );
 
-      <Card title="Weekly Schedule" style={{ marginBottom:20 }}>
+  // ── Tab 2 · Classes — weekly schedule ──
+  const tabClasses = (
+    <div style={gridCols}>
+      <Card title={`Weekly Schedule · ${teacherClasses.length}`} icon="book" accent="#7C3AED" style={span2}>
         <div style={{ padding:'8px 0' }}>
             {teacherClasses.length ? teacherClasses.map((c, i) => (
               <button key={c.id} onClick={() => adminNav('class_detail', c.id)} style={{ width:'100%', textAlign:'left', background:'none', border:'none', cursor:'pointer', display:'flex', alignItems:'center', gap:14, padding:'14px 24px', borderBottom: i < teacherClasses.length-1 ? `1px solid ${DS.border}` : 'none' }}>
@@ -2776,8 +2874,13 @@ const TeacherProfilePage = () => {
             )) : <EmptyState icon="calendar" title="No classes scheduled" message="Assign this teacher to a class to populate their schedule." />}
         </div>
       </Card>
+    </div>
+  );
 
-      <Card title="Attendance Register" style={{ marginBottom:20 }} actions={<span style={{ fontSize:12, color:DS.muted }}>{present}/{days.length} present (last {days.length} days)</span>}>
+  // ── Tab 3 · Attendance register ──
+  const tabAttendance = (
+    <div style={gridCols}>
+      <Card title="Attendance Register" icon="calendar" accent={DS.success} style={span2} actions={<span style={{ fontSize:12, color:DS.muted }}>{present}/{days.length} present (last {days.length} days)</span>}>
         <div style={{ padding:'8px 0' }}>
             {days.map((d, i) => {
               const v = store.attendance[`${teacher.id}|${d}`] || (d === todayISO() ? null : 'present');
@@ -2790,8 +2893,13 @@ const TeacherProfilePage = () => {
             })}
         </div>
       </Card>
+    </div>
+  );
 
-      <Card title="Cover while away" style={{ marginBottom:20 }} actions={
+  // ── Tab 4 · Cover while away ──
+  const tabCover = (
+    <div style={gridCols}>
+      <Card title="Cover while away" icon="teacher" accent={DS.warning} style={span2} actions={
         teacherClasses.length
           ? <Btn variant={coveredClasses.length ? 'secondary' : 'primary'} small icon="teacher" onClick={() => setCoverOpen(true)}>{coveredClasses.length ? 'Edit cover' : 'Arrange cover'}</Btn>
           : null
@@ -2837,32 +2945,84 @@ const TeacherProfilePage = () => {
             action={<Btn variant="primary" small icon="teacher" onClick={() => setCoverOpen(true)}>Arrange cover</Btn>} />
         )}
       </Card>
+    </div>
+  );
 
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 320px', gap:20, alignItems:'start' }}>
-          <Card title="Booked Holidays">
-            <div style={{ padding:'8px 0' }}>
-              {holidays.length ? holidays.map((h, i) => (
-                <div key={h.id} style={{ display:'flex', alignItems:'center', gap:12, padding:'14px 24px', borderBottom: i < holidays.length-1 ? `1px solid ${DS.border}` : 'none' }}>
-                  <div style={{ width:36, height:36, borderRadius:9, background:DS.infoBg, color:DS.info, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}><Icon name="calendar" size={17} /></div>
-                  <div style={{ flex:1 }}><div style={{ fontSize:13.5, fontWeight:600, color:DS.text }}>{h.reason || 'Holiday'}</div><div style={{ fontSize:12, color:DS.muted }}>{fmtDay(h.from)} → {fmtDay(h.to)}</div></div>
-                  <button onClick={() => store.removeHoliday(teacher.id, h.id)} style={{ background:'none', border:'none', cursor:'pointer', color:DS.faint, padding:4 }}><Icon name="x" size={16} /></button>
-                </div>
-              )) : <EmptyState icon="calendar" title="No holidays booked" message="Add a holiday to record time off." />}
+  // ── Tab 5 · Holidays ──
+  const tabHolidays = (
+    <div style={gridCols}>
+      <Card title="Booked Holidays" icon="calendar" accent={DS.info}>
+        <div style={{ padding:'8px 0' }}>
+          {holidays.length ? holidays.map((h, i) => (
+            <div key={h.id} style={{ display:'flex', alignItems:'center', gap:12, padding:'14px 24px', borderBottom: i < holidays.length-1 ? `1px solid ${DS.border}` : 'none' }}>
+              <div style={{ width:36, height:36, borderRadius:9, background:DS.infoBg, color:DS.info, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}><Icon name="calendar" size={17} /></div>
+              <div style={{ flex:1 }}><div style={{ fontSize:13.5, fontWeight:600, color:DS.text }}>{h.reason || 'Holiday'}</div><div style={{ fontSize:12, color:DS.muted }}>{fmtDay(h.from)} → {fmtDay(h.to)}</div></div>
+              <button onClick={() => store.removeHoliday(teacher.id, h.id)} style={{ background:'none', border:'none', cursor:'pointer', color:DS.faint, padding:4 }}><Icon name="x" size={16} /></button>
             </div>
-          </Card>
-          <Card title="Book Holiday">
-            <div style={{ padding:'18px 20px' }}>
-              <Field label="From"><Input type="date" value={holiday.from} onChange={e => setHoliday(h => ({ ...h, from: e.target.value }))} icon="calendar" /></Field>
-              <Field label="To"><Input type="date" value={holiday.to} onChange={e => setHoliday(h => ({ ...h, to: e.target.value }))} icon="calendar" /></Field>
-              <Field label="Reason"><Input value={holiday.reason} onChange={e => setHoliday(h => ({ ...h, reason: e.target.value }))} placeholder="e.g. Annual leave" /></Field>
-              <Btn variant="primary" icon="plus" onClick={() => { if (holiday.from && holiday.to) { store.addHoliday(teacher.id, holiday); setHoliday({ from:'', to:'', reason:'' }); } }}>Add Holiday</Btn>
-            </div>
-          </Card>
+          )) : <EmptyState icon="calendar" title="No holidays booked" message="Add a holiday to record time off." />}
         </div>
+      </Card>
+      <Card title="Book Holiday" icon="plus" accent={DS.accent}>
+        <div style={{ padding:'18px 20px' }}>
+          <Field label="From"><Input type="date" value={holiday.from} onChange={e => setHoliday(h => ({ ...h, from: e.target.value }))} icon="calendar" /></Field>
+          <Field label="To"><Input type="date" value={holiday.to} onChange={e => setHoliday(h => ({ ...h, to: e.target.value }))} icon="calendar" /></Field>
+          <Field label="Reason"><Input value={holiday.reason} onChange={e => setHoliday(h => ({ ...h, reason: e.target.value }))} placeholder="e.g. Annual leave" /></Field>
+          <Btn variant="primary" icon="plus" onClick={() => { if (holiday.from && holiday.to) { store.addHoliday(teacher.id, holiday); setHoliday({ from:'', to:'', reason:'' }); } }}>Add Holiday</Btn>
+        </div>
+      </Card>
+    </div>
+  );
 
-      <TeacherCoverModal open={coverOpen} onClose={() => setCoverOpen(false)} store={store} teacher={teacher} classes={teacherClasses}
-        prefillWindow={coverWindow} prefillAssign={seedAssign} editing={coveredClasses.length > 0}
-        onApply={map => store.setCoversForClasses(map)} onClear={() => store.clearCoverForTeacher(teacher.name)} />
+  const tabBody = { overview:tabOverview, classes:tabClasses, attendance:tabAttendance, cover:tabCover, holidays:tabHolidays };
+
+  // View mode = fixed full-height shell: the hero and left aside stay put while
+  // the right-hand tabs scroll on their own (mirrors the student profile).
+  if (!editing) {
+    return (
+      <div style={{ height:'calc(100vh - 52px)', display:'flex', flexDirection:'column', overflow:'hidden' }}>
+        <div style={{ flexShrink:0, padding:'24px 28px 0' }}>{header}</div>
+        <div style={{ flex:1, display:'flex', gap:18, overflow:'hidden', minHeight:0, padding:'0 28px' }}>
+          {aside}
+          <main style={{ flex:1, minWidth:0, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+            <ProfileTabStrip tabs={TEACHER_PROFILE_TABS} active={tab} onChange={setTab} />
+            <div style={{ flex:1, overflow:'auto', paddingTop:16, paddingRight:2, paddingBottom:24 }}>
+              {tabBody[tab]}
+            </div>
+          </main>
+        </div>
+        <TeacherCoverModal open={coverOpen} onClose={() => setCoverOpen(false)} store={store} teacher={teacher} classes={teacherClasses}
+          prefillWindow={coverWindow} prefillAssign={seedAssign} editing={coveredClasses.length > 0}
+          onApply={map => store.setCoversForClasses(map)} onClear={() => store.clearCoverForTeacher(teacher.name)} />
+      </div>
+    );
+  }
+
+  // Edit mode — the focused scrolling form (mirrors the student profile edit mode).
+  return (
+    <div style={{ padding:'32px', maxWidth:1040, margin:'0 auto' }}>
+      {header}
+      <Card title="Details" style={{ marginBottom:20 }}>
+        <div style={{ padding:'20px 24px' }}>
+          <div style={{ display:'grid', gridTemplateColumns:'120px 1fr 1fr', gap:'0 18px' }}>
+            <Field label="Title"><Select value={form.title || 'Mr'} onChange={e => set('title', e.target.value)}>{TEACHER_TITLES.map(t => <option key={t}>{t}</option>)}</Select></Field>
+            <Field label="First Name"><Input value={form.firstName || ''} onChange={e => set('firstName', e.target.value)} /></Field>
+            <Field label="Last Name"><Input value={form.lastName || ''} onChange={e => set('lastName', e.target.value)} /></Field>
+            <Field label="Email" style={{ gridColumn:'1 / 3' }}><Input value={form.email || ''} onChange={e => set('email', e.target.value)} icon="mail" /></Field>
+            <Field label="Phone"><Input value={form.phone || ''} onChange={e => set('phone', e.target.value)} icon="phone" /></Field>
+            <Field label="Address" style={{ gridColumn:'1 / -1' }}><Input value={form.address || ''} onChange={e => set('address', e.target.value)} icon="pin" /></Field>
+            <Field label="Qualifications" style={{ gridColumn:'1 / -1' }}><Input value={form.qualifications || ''} onChange={e => set('qualifications', e.target.value)} icon="graduation" /></Field>
+            <div style={{ gridColumn:'1 / -1' }}>
+              <Field label="Subjects">
+                <div style={{ display:'flex', flexWrap:'wrap', gap:8 }}>
+                  {SUBJECT_OPTIONS.map(sub => { const on = form.subjects.includes(sub); return (
+                    <button key={sub} onClick={() => toggle('subjects', sub)} style={{ padding:'6px 12px', borderRadius:18, cursor:'pointer', fontSize:12.5, border:`1px solid ${on ? DS.accentBorder : DS.border}`, background: on ? DS.accentLight : DS.bg, color: on ? DS.accent : DS.sub }}>{sub}</button>
+                  ); })}
+                </div>
+              </Field>
+            </div>
+          </div>
+        </div>
+      </Card>
     </div>
   );
 };

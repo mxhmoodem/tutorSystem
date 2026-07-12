@@ -237,9 +237,9 @@ const CLASS_TABS = [
   { id:'settings',   label:'Settings',       icon:'settings' },
 ];
 
-const ClassTabBar = ({ active, onChange, color }) => (
+const ClassTabBar = ({ active, onChange, color, tabs = CLASS_TABS }) => (
   <div style={{ display:'flex', gap:2, borderBottom:`1px solid ${DS.border}`, overflowX:'auto', marginBottom:24 }}>
-    {CLASS_TABS.map(t => {
+    {tabs.map(t => {
       const on = active === t.id;
       return (
         <button key={t.id} onClick={() => onChange(t.id)} style={{
@@ -320,6 +320,11 @@ const ClassBannerCustomiser = ({ value, onChange, color }) => {
     </div>
   );
 };
+
+// Share the class banner + tab chrome with the admin class detail (AdminPages.jsx,
+// loaded before this file — it resolves these via window at render time, same as
+// the AdminAttendancePage pattern).
+Object.assign(window, { ClassTabBar, ClassBannerCustomiser, classBannerGradient, classLS });
 
 // ── Stream tab — announcement feed + class code / upcoming / about rail ──────────
 const ClassStreamTab = ({ cls, color, subject, level, stream, onPost, onDelete, classHw, principalName, code }) => {
@@ -2677,30 +2682,106 @@ const LessonPlannerPage = ({ initialGroup, initialDate, initialMode }) => {
 
 // ─── Tracking Page ──────────────────────────────────────────────────────────────
 const TRACKING_STORAGE_KEY = 'tutoros.tracking.v1';
+const TRACKING_RECENTS_KEY = 'tutoros.tracking.recents.v1';
 
+// Column types. `score` = a number out of a max; `checkbox` = yes/no; `select` =
+// custom options (rendered with colour dots); `rating` = 1–5 stars; `text` = a
+// note. `grade` (A*–U) and `date` are kept for backward compatibility with older
+// trackers. The list below is what the column editor offers.
 const COLUMN_TYPES = [
-  { id: 'score',   label: 'Score / %',   icon: 'chart' },
-  { id: 'number',  label: 'Number',      icon: 'chart' },
-  { id: 'grade',   label: 'Grade',       icon: 'star' },
-  { id: 'text',    label: 'Text / Note', icon: 'edit' },
-  { id: 'check',   label: 'Yes / No',    icon: 'check' },
-  { id: 'select',  label: 'Choice',      icon: 'clip' },
-  { id: 'date',    label: 'Date',        icon: 'calendar' },
+  { id: 'score',    label: 'Score',    icon: 'chart',      hint: 'A number out of a maximum' },
+  { id: 'checkbox', label: 'Checkbox', icon: 'check',      hint: 'Yes / no' },
+  { id: 'select',   label: 'Choice',   icon: 'clip',       hint: 'Pick from custom options' },
+  { id: 'rating',   label: 'Rating',   icon: 'star',       hint: '1–5 stars' },
+  { id: 'text',     label: 'Text',     icon: 'edit',       hint: 'A short note' },
+  { id: 'grade',    label: 'Grade',    icon: 'graduation', hint: 'A*–U' },
+  { id: 'date',     label: 'Date',     icon: 'calendar',   hint: 'A calendar date' },
 ];
+const COLUMN_TYPE_LABEL = COLUMN_TYPES.reduce((m, t) => { m[t.id] = t.label; return m; }, {});
 
 const GRADE_OPTIONS = ['A*', 'A', 'B', 'C', 'D', 'E', 'U'];
 
+// Stable palette for select-option colour dots. The dot colour is derived from the
+// option's position at render time — it is never stored on the column.
+const OPTION_DOT_COLORS = ['#4F46E5', '#0891B2', '#16A34A', '#D97706', '#DC2626', '#7C3AED', '#DB2777', '#0284C7'];
+const optionDot = (i) => OPTION_DOT_COLORS[i % OPTION_DOT_COLORS.length];
+
+// Fixed score thresholds (D4): <50% of max = danger, 50–74% = warning, ≥75% =
+// default text colour. Derived at render time — never persisted.
+const scoreTone = (value, max) => {
+  if (typeof value !== 'number' || !max) return DS.text;
+  const pct = (value / max) * 100;
+  if (pct < 50) return DS.danger;
+  if (pct < 75) return DS.warning;
+  return DS.text;
+};
+
+// A light, derived descriptor of what a tracker mostly measures — shown as the
+// "type" badge on the hub. Computed from the columns, never stored.
+const KIND_LABEL = { score: 'Scores', checkbox: 'Checklist', select: 'Log', rating: 'Ratings', text: 'Notes', grade: 'Grades', date: 'Dates' };
+const trackerKind = (t) => {
+  const cols = t.columns || [];
+  if (!cols.length) return 'Empty';
+  const counts = {};
+  cols.forEach(c => {
+    const k = c.type === 'number' ? 'score' : c.type === 'check' ? 'checkbox' : c.type;
+    counts[k] = (counts[k] || 0) + 1;
+  });
+  const kinds = Object.keys(counts);
+  return kinds.length === 1 ? (KIND_LABEL[kinds[0]] || 'Tracker') : 'Mixed';
+};
+
+// Relative "edited N ago" label (namespaced — Communications.jsx owns a global
+// relTime for ISO strings; this one takes an epoch-ms timestamp).
+const trkRelTime = (ts) => {
+  if (!ts) return null;
+  const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (s < 45) return 'just now';
+  const m = Math.floor(s / 60); if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60); if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24); if (d < 7) return `${d}d ago`;
+  const w = Math.floor(d / 7); if (w < 5) return `${w}w ago`;
+  const mo = Math.floor(d / 30); if (mo < 12) return `${mo}mo ago`;
+  return `${Math.floor(d / 365)}y ago`;
+};
+
+// ── Column-type migration (idempotent, in-place, runs on load) ──────────────────
+// D7: legacy `check` columns become `checkbox`; numeric `number` columns that
+// carry a max fold into `score` (so the denominator shows in the header and the
+// threshold colouring applies). Everything else is left untouched, and running it
+// again is a no-op. Cell values are never altered.
+const migrateTracker = (t) => {
+  const columns = (t.columns || []).map(c => {
+    if (c.type === 'check') return { ...c, type: 'checkbox' };
+    if (c.type === 'number' && c.max) return { ...c, type: 'score' };
+    return c;
+  });
+  return { ...t, columns, pinned: !!t.pinned };
+};
 
 const loadTrackers = () => {
-  try {
-    const raw = localStorage.getItem(TRACKING_STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch (e) {}
-  return DEFAULT_TRACKERS;
+  let raw = null;
+  try { raw = localStorage.getItem(TRACKING_STORAGE_KEY); } catch (e) {}
+  let list = null;
+  if (raw) { try { list = JSON.parse(raw); } catch (e) { list = null; } }
+  if (!Array.isArray(list)) list = DEFAULT_TRACKERS;
+  return list.map(migrateTracker);
 };
 
 const saveTrackers = (trackers) => {
   try { localStorage.setItem(TRACKING_STORAGE_KEY, JSON.stringify(trackers)); } catch (e) {}
+};
+
+// Recently-opened tracker ids (most-recent first). UI state, kept out of the
+// tracker records themselves.
+const loadRecents = () => {
+  try { const v = JSON.parse(localStorage.getItem(TRACKING_RECENTS_KEY) || '[]'); return Array.isArray(v) ? v : []; }
+  catch (e) { return []; }
+};
+const pushRecent = (id) => {
+  const next = [id, ...loadRecents().filter(x => x !== id)].slice(0, 8);
+  try { localStorage.setItem(TRACKING_RECENTS_KEY, JSON.stringify(next)); } catch (e) {}
+  return next;
 };
 
 const newId = (prefix) => prefix + '_' + Math.random().toString(36).slice(2, 8);
@@ -2710,11 +2791,13 @@ const getRosterForGroup = (group) => {
   const cls = teacherClasses.find(c => c.group === group);
   return cls ? cls.studentList : [];
 };
+const studentsOf = (t) => t ? [...getRosterForGroup(t.classGroup), ...(t.extraStudents || [])] : [];
+const studentCountOf = (t) => getRosterForGroup(t.classGroup).length + (t.extraStudents || []).length;
 
-// ─── Tracker grouping (for the switcher) ──────────────────────────────────────
-// Teachers can accumulate dozens of trackers, so the switcher lets them group by
-// one of these dimensions. Subject / year group are derived from the tracker's
-// class via teacherClasses, with graceful fallbacks for custom class groups.
+// ─── Tracker grouping ─────────────────────────────────────────────────────────
+// Teachers accumulate dozens of trackers, so both the hub and the detail switcher
+// group them by one of these dimensions. Subject / year group are derived from the
+// tracker's class via teacherClasses, with graceful fallbacks for custom groups.
 const TRACKER_GROUP_BY = [
   { id: 'class',   label: 'Class',      icon: 'users' },
   { id: 'subject', label: 'Subject',    icon: 'book' },
@@ -2743,7 +2826,7 @@ const trackerGroupKey = (tracker, groupBy) =>
 
 // Group + filter trackers into [{ key, items }] sections, sorted by key.
 const groupTrackers = (trackers, groupBy, query) => {
-  const q = query.trim().toLowerCase();
+  const q = (query || '').trim().toLowerCase();
   const match = (t) => !q || [t.name, t.description, t.classGroup]
     .filter(Boolean).join(' ').toLowerCase().includes(q);
   const buckets = new Map();
@@ -2763,802 +2846,958 @@ const groupTrackers = (trackers, groupBy, query) => {
     });
 };
 
-// ─── Tracker Switcher ─────────────────────────────────────────────────────────
-// Replaces the flat row of tracker pills. Designed to stay usable with dozens of
-// trackers: a compact active-tracker bar that expands into a searchable, grouped
-// picker (group by class / subject / year group). Collapses back on selection.
-const TrackerSwitcher = ({ trackers, active, onSelect, onNew }) => {
-  const [open, setOpen] = React.useState(false);
-  const [query, setQuery] = React.useState('');
-  const [groupBy, setGroupBy] = React.useState('class');
-  const [collapsedKeys, setCollapsedKeys] = React.useState({});
-  const searchRef = React.useRef(null);
+// Starter templates offered on the empty hub and in the New-tracker dialog.
+const STARTER_TEMPLATES = [
+  {
+    id: 'homework', name: 'Homework scores', icon: 'chart',
+    description: 'Weekly homework marks per student',
+    columns: [
+      { name: 'HW1', type: 'score', max: 20 },
+      { name: 'HW2', type: 'score', max: 20 },
+      { name: 'On time?', type: 'checkbox' },
+      { name: 'Notes', type: 'text' },
+    ],
+  },
+  {
+    id: 'test', name: 'Test scores', icon: 'graduation',
+    description: 'Assessment results and predicted grades',
+    columns: [
+      { name: 'Paper 1', type: 'score', max: 100 },
+      { name: 'Paper 2', type: 'score', max: 100 },
+      { name: 'Predicted', type: 'grade' },
+    ],
+  },
+  {
+    id: 'behaviour', name: 'Behaviour log', icon: 'flag',
+    description: 'Conduct and effort each lesson',
+    columns: [
+      { name: 'Conduct', type: 'select', options: ['Excellent', 'Good', 'Concern'] },
+      { name: 'Effort', type: 'rating' },
+      { name: 'Note', type: 'text' },
+    ],
+  },
+];
 
-  React.useEffect(() => {
-    if (open && searchRef.current) searchRef.current.focus();
-  }, [open]);
+// ─── Data grid cell ─────────────────────────────────────────────────────────────
+// One cell of the tracker grid. Renders a compact display value and, for editable
+// types, an inline editor when this cell is being edited. Score/checkbox/rating are
+// styled per the spec (right-aligned mono figures with threshold colours, a toggle,
+// stars). Keyboard navigation and edit lifecycle are driven by the parent via `g`.
+const GridCell = ({ col, value, r, c, focused, editing, seed, g }) => {
+  const type = col.type;
+  const filled = value !== undefined && value !== null && value !== '';
 
-  const sections = React.useMemo(
-    () => groupTrackers(trackers, groupBy, query),
-    [trackers, groupBy, query]
-  );
-  const totalMatches = sections.reduce((n, s) => n + s.items.length, 0);
+  const wrapKeydown = (e) => g.onCellKeyDown(e, r, c);
+  const setRef = (node) => { g.cellRefs.current[r + ':' + c] = node; };
+  // Roving tabindex: the focused cell is tabbable; before any cell is focused the
+  // top-left cell is the tab target so keyboard users can enter the grid.
+  const tabIndex = focused ? 0 : (!g.hasFocus && r === 0 && c === 0 ? 0 : -1);
 
-  const pick = (id) => { onSelect(id); setOpen(false); setQuery(''); };
-  const toggleSection = (key) =>
-    setCollapsedKeys(prev => ({ ...prev, [key]: !prev[key] }));
-
-  return (
-    <div style={{ marginBottom: 20 }}>
-      {/* Active-tracker bar */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 12,
-        padding: '10px 14px', borderRadius: 10,
-        border: `1px solid ${DS.border}`, background: DS.bg,
-      }}>
-        <div style={{
-          width: 32, height: 32, borderRadius: 8, flexShrink: 0,
-          background: DS.accentLight, color: DS.accent,
-          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          <Icon name="star" size={15} />
-        </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 11, color: DS.faint, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-            Tracker
-          </div>
-          {active ? (
-            <div style={{ fontSize: 14, fontWeight: 600, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {active.name}
-              <span style={{ fontSize: 12, fontWeight: 500, color: DS.muted }}> · {active.classGroup}</span>
-            </div>
-          ) : (
-            <div style={{ fontSize: 14, fontWeight: 600, color: DS.muted }}>No tracker selected</div>
-          )}
-        </div>
-        <span style={{ fontSize: 12, color: DS.faint, whiteSpace: 'nowrap' }}>
-          {trackers.length} tracker{trackers.length === 1 ? '' : 's'}
-        </span>
-        <Btn variant="secondary" icon={open ? 'chevron_d' : 'chevron_r'} small onClick={() => setOpen(o => !o)}>
-          {open ? 'Close' : 'Switch tracker'}
-        </Btn>
+  // Checkbox and rating are directly interactive — no separate edit mode.
+  if (type === 'checkbox') {
+    const on = value === true;
+    return (
+      <div ref={setRef} tabIndex={tabIndex} role="gridcell" aria-label={col.name}
+        onFocus={() => g.focusCell(r, c)} onKeyDown={wrapKeydown}
+        style={cellShell(focused, 'center')}>
+        <button type="button" aria-pressed={on} title={col.name}
+          onClick={() => { g.focusCell(r, c); g.setValue(r, c, !on); }}
+          style={{
+            width: 26, height: 26, borderRadius: 6, cursor: 'pointer',
+            border: `1px solid ${on ? DS.successBorder : DS.border}`,
+            background: on ? DS.successBg : DS.bg, color: on ? DS.success : DS.faint,
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+          {on && <Icon name="check" size={15} />}
+        </button>
       </div>
+    );
+  }
 
-      {/* Expandable picker */}
-      {open && (
-        <div style={{
-          marginTop: 8, borderRadius: 10, overflow: 'hidden',
-          border: `1px solid ${DS.border}`, background: DS.bg,
-        }}>
-          {/* Search + group-by controls */}
-          <div style={{
-            padding: '12px 14px', borderBottom: `1px solid ${DS.border}`, background: DS.surface,
-            display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
-          }}>
-            <div style={{ position: 'relative', flex: 1, minWidth: 220 }}>
-              <div style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', display: 'flex' }}>
-                <Icon name="search" size={15} color={DS.faint} />
-              </div>
-              <input
-                ref={searchRef}
-                value={query}
-                onChange={e => setQuery(e.target.value)}
-                placeholder="Search trackers by name, class or description…"
-                style={{
-                  width: '100%', padding: '8px 12px 8px 34px', borderRadius: 8,
-                  border: `1px solid ${DS.border}`, fontSize: 13, outline: 'none',
-                  boxSizing: 'border-box', background: DS.bg, color: DS.text, fontFamily: 'inherit',
-                }}
-              />
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 12, color: DS.muted, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                <Icon name="filter" size={13} color={DS.faint} /> Group by
-              </span>
-              <div style={{ display: 'inline-flex', border: `1px solid ${DS.border}`, borderRadius: 8, overflow: 'hidden' }}>
-                {TRACKER_GROUP_BY.map((g, i) => {
-                  const isOn = groupBy === g.id;
-                  return (
-                    <button
-                      key={g.id}
-                      onClick={() => setGroupBy(g.id)}
-                      style={{
-                        padding: '6px 12px', cursor: 'pointer', fontSize: 12.5,
-                        fontWeight: isOn ? 600 : 500,
-                        border: 'none', borderLeft: i ? `1px solid ${DS.border}` : 'none',
-                        background: isOn ? DS.accentLight : DS.bg,
-                        color: isOn ? DS.accent : DS.sub,
-                        display: 'inline-flex', alignItems: 'center', gap: 6,
-                      }}
-                    >
-                      <Icon name={g.icon} size={12} color={isOn ? DS.accent : DS.muted} />
-                      {g.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-
-          {/* Grouped list */}
-          <div style={{ maxHeight: 380, overflow: 'auto' }}>
-            {totalMatches === 0 ? (
-              <div style={{ padding: '28px 16px', textAlign: 'center', color: DS.muted, fontSize: 13 }}>
-                {trackers.length === 0
-                  ? 'No trackers yet — create one to get started.'
-                  : `No trackers match “${query}”.`}
-              </div>
-            ) : sections.map(section => {
-              const isCollapsed = !!collapsedKeys[section.key];
-              return (
-                <div key={section.key}>
-                  <button
-                    onClick={() => toggleSection(section.key)}
-                    style={{
-                      width: '100%', display: 'flex', alignItems: 'center', gap: 8,
-                      padding: '8px 14px', cursor: 'pointer', textAlign: 'left',
-                      border: 'none', borderBottom: `1px solid ${DS.border}`,
-                      background: DS.surface, color: DS.muted,
-                      fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em',
-                    }}
-                  >
-                    <Icon name={isCollapsed ? 'chevron_r' : 'chevron_d'} size={12} color={DS.faint} />
-                    <span style={{ flex: 1 }}>{section.key}</span>
-                    <span style={{ fontWeight: 600, color: DS.faint }}>{section.items.length}</span>
-                  </button>
-                  {!isCollapsed && section.items.map(t => {
-                    const isActive = active && t.id === active.id;
-                    return (
-                      <button
-                        key={t.id}
-                        onClick={() => pick(t.id)}
-                        style={{
-                          width: '100%', display: 'flex', alignItems: 'center', gap: 12,
-                          padding: '10px 14px 10px 30px', cursor: 'pointer', textAlign: 'left',
-                          border: 'none', borderBottom: `1px solid ${DS.border}`,
-                          background: isActive ? DS.accentLight : DS.bg,
-                        }}
-                        onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = DS.surface; }}
-                        onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = DS.bg; }}
-                      >
-                        <Icon name="star" size={13} color={isActive ? DS.accent : DS.faint} />
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 13.5, fontWeight: isActive ? 600 : 500, color: isActive ? DS.accent : DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            {t.name}
-                          </div>
-                          <div style={{ fontSize: 11.5, color: DS.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            {t.classGroup}{t.description ? ` · ${t.description}` : ''}
-                          </div>
-                        </div>
-                        {isActive && <Badge variant="accent">Open</Badge>}
-                      </button>
-                    );
-                  })}
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Footer */}
-          <div style={{
-            padding: '10px 14px', borderTop: `1px solid ${DS.border}`, background: DS.surface,
-            display: 'flex', alignItems: 'center', gap: 10,
-          }}>
-            <span style={{ fontSize: 12, color: DS.faint }}>
-              {totalMatches} of {trackers.length} shown
-            </span>
-            <Btn variant="primary" icon="plus" small style={{ marginLeft: 'auto' }} onClick={() => { setOpen(false); onNew(); }}>
-              New tracker
-            </Btn>
-          </div>
+  if (type === 'rating') {
+    const v = typeof value === 'number' ? value : 0;
+    return (
+      <div ref={setRef} tabIndex={tabIndex} role="gridcell" aria-label={`${col.name}: ${v || 'unrated'}`}
+        onFocus={() => g.focusCell(r, c)} onKeyDown={wrapKeydown}
+        style={cellShell(focused, 'left')}>
+        <div style={{ display: 'inline-flex', gap: 1 }}>
+          {[1, 2, 3, 4, 5].map(n => (
+            <button key={n} type="button" title={`${n} star${n > 1 ? 's' : ''}`}
+              onClick={() => { g.focusCell(r, c); g.setValue(r, c, v === n ? null : n); }}
+              style={{ background: 'none', border: 'none', padding: '0 1px', cursor: 'pointer', fontSize: 15, lineHeight: 1, color: n <= v ? '#F59E0B' : DS.border }}>
+              {n <= v ? '★' : '☆'}
+            </button>
+          ))}
         </div>
-      )}
-    </div>
-  );
+      </div>
+    );
+  }
+
+  // Editable types (score / text / grade / select / date) — display + inline editor.
+  if (editing) {
+    return (
+      <div ref={setRef} tabIndex={-1} role="gridcell" style={cellShell(true, 'left', true)}>
+        <CellEditor col={col} value={value} seed={seed} r={r} c={c} g={g} />
+      </div>
+    );
+  }
+
+  let display;
+  if (type === 'score') {
+    display = filled
+      ? <span style={{ fontFamily: "'JetBrains Mono', monospace", fontVariantNumeric: 'tabular-nums', fontWeight: 600, fontSize: 13, color: scoreTone(value, col.max) }}>{value}</span>
+      : <span style={{ color: DS.faint }}>·</span>;
+    return editableCell(display, 'right');
+  }
+  if (type === 'select') {
+    const opts = col.options || [];
+    const idx = opts.indexOf(value);
+    display = filled
+      ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: DS.text }}>
+          <span style={{ width: 7, height: 7, borderRadius: '50%', background: optionDot(idx < 0 ? 0 : idx), flexShrink: 0 }} />{value}
+        </span>
+      : <span style={{ color: DS.faint }}>·</span>;
+    return editableCell(display, 'left');
+  }
+  if (type === 'grade') {
+    display = filled
+      ? <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, fontSize: 13, color: DS.text }}>{value}</span>
+      : <span style={{ color: DS.faint }}>·</span>;
+    return editableCell(display, 'left');
+  }
+  if (type === 'date') {
+    display = filled ? <span style={{ fontSize: 12.5, color: DS.text }}>{value}</span> : <span style={{ color: DS.faint }}>·</span>;
+    return editableCell(display, 'left');
+  }
+  // text (and any legacy 'number' without max)
+  display = filled
+    ? <span style={{ fontSize: 12.5, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'block', maxWidth: 220 }}>{value}</span>
+    : <span style={{ color: DS.faint }}>·</span>;
+  return editableCell(display, type === 'number' ? 'right' : 'left');
+
+  function editableCell(node, align) {
+    return (
+      <div ref={setRef} tabIndex={tabIndex} role="gridcell" aria-label={col.name}
+        onFocus={() => g.focusCell(r, c)} onKeyDown={wrapKeydown}
+        onClick={() => g.startEdit(r, c)}
+        style={{ ...cellShell(focused, align), cursor: 'text' }}>
+        {node}
+      </div>
+    );
+  }
 };
 
-const TrackingCell = ({ col, value, onChange }) => {
-  const baseInputStyle = {
-    width: '100%', padding: '6px 8px', fontSize: 13,
-    border: `1px solid ${DS.border}`, borderRadius: 6,
-    background: DS.bg, color: DS.text, fontFamily: 'inherit', outline: 'none',
+// Shared cell shell — the focus ring and alignment live here so every cell type
+// looks consistent.
+const cellShell = (focused, align, editing) => ({
+  minHeight: 34, display: 'flex', alignItems: 'center',
+  justifyContent: align === 'right' ? 'flex-end' : align === 'center' ? 'center' : 'flex-start',
+  padding: editing ? 2 : '4px 6px', borderRadius: 7, outline: 'none',
+  boxShadow: focused ? `0 0 0 2px ${DS.accent}` : 'none',
+  background: focused && !editing ? DS.accentLight : 'transparent',
+  transition: 'box-shadow 0.1s',
+});
+
+// Inline editor rendered inside a focused, editing cell. Commits on Enter (moves
+// down), Tab (moves right / Shift+Tab left), select/date change or blur; cancels on
+// Escape.
+const CellEditor = ({ col, value, seed, r, c, g }) => {
+  const type = col.type;
+  const initial = seed != null ? seed : (value == null ? '' : value);
+  const [draft, setDraft] = React.useState(initial);
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.focus();
+    if (el.select && (type === 'score' || type === 'text')) { try { el.select(); } catch (e) {} }
+  }, []);
+
+  const coerce = (raw) => {
+    if (type === 'score' || type === 'number') {
+      if (raw === '' || raw === null) return null;
+      const n = Number(raw);
+      return Number.isNaN(n) ? null : n;
+    }
+    return raw;
+  };
+  const commit = (dir) => g.commit(r, c, coerce(draft), dir);
+  const onKeyDown = (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commit('down'); }
+    else if (e.key === 'Tab') { e.preventDefault(); commit(e.shiftKey ? 'left' : 'right'); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); g.cancelEdit(); }
+    else { e.stopPropagation(); }
+  };
+  const base = {
+    width: '100%', boxSizing: 'border-box', padding: '5px 7px', fontSize: 13,
+    border: `1px solid ${DS.accent}`, borderRadius: 6, outline: 'none',
+    background: DS.bg, color: DS.text, fontFamily: 'inherit',
   };
 
-  if (col.type === 'check') {
-    const v = !!value;
-    return (
-      <button
-        onClick={() => onChange(!v)}
-        style={{
-          width: 28, height: 28, borderRadius: 6, cursor: 'pointer',
-          border: `1px solid ${v ? DS.successBorder : DS.border}`,
-          background: v ? DS.successBg : DS.surface,
-          color: v ? DS.success : DS.faint,
-          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-        }}
-      >
-        {v ? <Icon name="check" size={14} /> : <Icon name="x" size={12} />}
-      </button>
-    );
+  if (type === 'score' || type === 'number') {
+    return <input ref={ref} type="number" value={draft} onChange={e => setDraft(e.target.value)}
+      onKeyDown={onKeyDown} onBlur={() => commit(null)}
+      style={{ ...base, textAlign: 'right', fontFamily: "'JetBrains Mono', monospace", fontVariantNumeric: 'tabular-nums', fontWeight: 600 }} />;
   }
-  if (col.type === 'grade') {
-    return (
-      <select value={value || ''} onChange={e => onChange(e.target.value)} style={baseInputStyle}>
-        <option value="">—</option>
-        {GRADE_OPTIONS.map(g => <option key={g} value={g}>{g}</option>)}
-      </select>
-    );
+  if (type === 'grade' || type === 'select') {
+    const opts = type === 'grade' ? GRADE_OPTIONS : (col.options || []);
+    return <select ref={ref} value={draft} onChange={e => { setDraft(e.target.value); g.commit(r, c, e.target.value, null); }}
+      onKeyDown={onKeyDown} onBlur={() => commit(null)} style={base}>
+      <option value="">—</option>
+      {opts.map(o => <option key={o} value={o}>{o}</option>)}
+    </select>;
   }
-  if (col.type === 'select') {
-    const opts = col.options || [];
-    return (
-      <select value={value || ''} onChange={e => onChange(e.target.value)} style={baseInputStyle}>
-        <option value="">—</option>
-        {opts.map(o => <option key={o} value={o}>{o}</option>)}
-      </select>
-    );
+  if (type === 'date') {
+    return <input ref={ref} type="date" value={draft} onChange={e => setDraft(e.target.value)}
+      onKeyDown={onKeyDown} onBlur={() => commit(null)} style={base} />;
   }
-  if (col.type === 'date') {
-    return (
-      <input type="date" value={value || ''} onChange={e => onChange(e.target.value)} style={baseInputStyle} />
-    );
-  }
-  if (col.type === 'score' || col.type === 'number') {
-    const max = col.type === 'score' ? (col.max || 100) : null;
-    const num = value === '' || value === null || value === undefined ? '' : value;
-    const pct = (col.type === 'score' && typeof value === 'number' && max) ? (value / max) * 100 : null;
-    const colour = pct === null ? DS.text : pct >= 70 ? DS.success : pct >= 50 ? DS.warning : DS.danger;
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <input
-          type="number"
-          value={num}
-          onChange={e => {
-            const v = e.target.value;
-            onChange(v === '' ? null : Number(v));
-          }}
-          style={{ ...baseInputStyle, color: colour, fontWeight: 600 }}
-        />
-        {max != null && <span style={{ fontSize: 11, color: DS.faint, whiteSpace: 'nowrap' }}>/ {max}</span>}
-      </div>
-    );
-  }
-  // text
-  return (
-    <input
-      type="text"
-      value={value || ''}
-      onChange={e => onChange(e.target.value)}
-      placeholder="—"
-      style={baseInputStyle}
-    />
-  );
+  return <input ref={ref} type="text" value={draft} onChange={e => setDraft(e.target.value)}
+    onKeyDown={onKeyDown} onBlur={() => commit(null)} placeholder="—" style={base} />;
 };
 
-const ColumnSummary = ({ col, entries, students }) => {
+// Bottom summary cell — all figures derived from cell values at render time.
+const ColumnSummaryCell = ({ col, entries, students }) => {
   const values = students.map(s => entries[s] && entries[s][col.id]).filter(v => v !== undefined && v !== null && v !== '');
-  if (values.length === 0) return <span style={{ fontSize: 11, color: DS.faint }}>—</span>;
+  if (!values.length) return <span style={{ fontSize: 11, color: DS.faint }}>—</span>;
+  const muted = { fontSize: 11, color: DS.muted };
 
   if (col.type === 'score' || col.type === 'number') {
     const nums = values.filter(v => typeof v === 'number');
     if (!nums.length) return <span style={{ fontSize: 11, color: DS.faint }}>—</span>;
     const avg = nums.reduce((a, b) => a + b, 0) / nums.length;
-    if (col.type === 'score' && col.max) {
+    if (col.max) {
       const pct = (avg / col.max) * 100;
-      return <span style={{ fontSize: 11, color: DS.muted }}>avg <b style={{ color: pct >= 70 ? DS.success : pct >= 50 ? DS.warning : DS.danger }}>{avg.toFixed(1)} / {col.max}</b> ({pct.toFixed(0)}%)</span>;
+      return <span style={muted}>avg <b style={{ fontFamily: "'JetBrains Mono', monospace", color: scoreTone(avg, col.max) }}>{avg.toFixed(1)}</b> · {pct.toFixed(0)}%</span>;
     }
-    return <span style={{ fontSize: 11, color: DS.muted }}>avg <b style={{ color: DS.text }}>{avg.toFixed(1)}</b></span>;
+    return <span style={muted}>avg <b style={{ fontFamily: "'JetBrains Mono', monospace", color: DS.text }}>{avg.toFixed(1)}</b></span>;
   }
-  if (col.type === 'check') {
+  if (col.type === 'checkbox') {
     const yes = values.filter(v => v === true).length;
-    return <span style={{ fontSize: 11, color: DS.muted }}>{yes}/{values.length} yes</span>;
+    return <span style={muted}><b style={{ color: DS.text }}>{yes}</b>/{values.length} yes</span>;
+  }
+  if (col.type === 'rating') {
+    const nums = values.filter(v => typeof v === 'number');
+    if (!nums.length) return <span style={{ fontSize: 11, color: DS.faint }}>—</span>;
+    const avg = nums.reduce((a, b) => a + b, 0) / nums.length;
+    return <span style={muted}><span style={{ color: '#F59E0B' }}>★</span> <b style={{ color: DS.text }}>{avg.toFixed(1)}</b></span>;
   }
   if (col.type === 'grade' || col.type === 'select') {
     const counts = {};
     values.forEach(v => { counts[v] = (counts[v] || 0) + 1; });
     const top = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 3);
-    return <span style={{ fontSize: 11, color: DS.muted }}>{top.map(([k, n]) => `${k}×${n}`).join(' · ')}</span>;
+    return <span style={muted}>{top.map(([k, n]) => `${k}×${n}`).join(' · ')}</span>;
   }
   return <span style={{ fontSize: 11, color: DS.faint }}>{values.length} filled</span>;
 };
 
-const ColumnEditor = ({ col, onSave, onCancel, onDelete }) => {
+// ─── Column editor popover ──────────────────────────────────────────────────────
+// Opened from a column header (or the Add-column button). Rename, change type, set
+// the max / options, or delete the column (two-step confirm). Replaces the old
+// inline pencil form.
+const ColumnForm = ({ col, onSave, onDelete, onClose }) => {
+  const isNew = !col;
   const [draft, setDraft] = React.useState(() => ({
-    name: col.name || '',
-    type: col.type || 'score',
-    max: col.max || 100,
-    options: (col.options || []).join(', '),
+    name: (col && col.name) || '',
+    type: (col && (col.type === 'check' ? 'checkbox' : col.type === 'number' ? 'score' : col.type)) || 'score',
+    max: (col && col.max) || 100,
+    options: ((col && col.options) || []).join('\n'),
   }));
-  const inputStyle = {
-    width: '100%', padding: '7px 10px', fontSize: 13,
-    border: `1px solid ${DS.border}`, borderRadius: 6,
-    background: DS.bg, color: DS.text, fontFamily: 'inherit', outline: 'none',
-  };
+  const [confirm, setConfirm] = React.useState(false);
+  const nameRef = React.useRef(null);
+  React.useEffect(() => { if (nameRef.current) nameRef.current.focus(); }, []);
+
   const submit = () => {
     if (!draft.name.trim()) return;
-    const next = { ...col, name: draft.name.trim(), type: draft.type };
+    const next = { name: draft.name.trim(), type: draft.type };
     if (draft.type === 'score') next.max = Number(draft.max) || 100;
-    else delete next.max;
-    if (draft.type === 'select') {
-      next.options = draft.options.split(',').map(s => s.trim()).filter(Boolean);
-    } else {
-      delete next.options;
-    }
+    if (draft.type === 'select') next.options = draft.options.split(/[\n,]/).map(s => s.trim()).filter(Boolean);
     onSave(next);
   };
+
   return (
-    <div style={{
-      background: DS.bg, border: `1px solid ${DS.cardBorder}`, borderRadius: 10,
-      padding: 16, display: 'flex', flexDirection: 'column', gap: 10, width: 320,
-    }}>
-      <div style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>
-        {onDelete ? 'Edit column' : 'New column'}
-      </div>
-      <label style={{ fontSize: 11, color: DS.muted, fontWeight: 500 }}>
-        Column name
-        <input
-          autoFocus
-          value={draft.name}
-          onChange={e => setDraft(d => ({ ...d, name: e.target.value }))}
-          placeholder="e.g. Mock Paper 1"
-          style={{ ...inputStyle, marginTop: 4 }}
-        />
-      </label>
-      <label style={{ fontSize: 11, color: DS.muted, fontWeight: 500 }}>
-        Type
-        <select
-          value={draft.type}
-          onChange={e => setDraft(d => ({ ...d, type: e.target.value }))}
-          style={{ ...inputStyle, marginTop: 4 }}
-        >
-          {COLUMN_TYPES.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
-        </select>
-      </label>
+    <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ fontSize: 13, fontWeight: 700, color: DS.text }}>{isNew ? 'New column' : 'Edit column'}</div>
+      <Field label="Name" style={{ margin: 0 }}>
+        <input ref={nameRef} value={draft.name} onChange={e => setDraft(d => ({ ...d, name: e.target.value }))}
+          onKeyDown={e => { if (e.key === 'Enter') submit(); }} placeholder="e.g. Mock Paper 1"
+          style={fieldInput} />
+      </Field>
+      <Field label="Type" style={{ margin: 0 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+          {COLUMN_TYPES.filter(t => t.id !== 'date' || draft.type === 'date').slice(0, 6).map(t => {
+            const on = draft.type === t.id;
+            return (
+              <button key={t.id} type="button" onClick={() => setDraft(d => ({ ...d, type: t.id }))}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 7, padding: '7px 9px', borderRadius: 7, cursor: 'pointer',
+                  border: `1px solid ${on ? DS.accent : DS.border}`, background: on ? DS.accentLight : DS.bg,
+                  color: on ? DS.accent : DS.sub, fontSize: 12.5, fontWeight: on ? 600 : 500, textAlign: 'left',
+                }}>
+                <Icon name={t.icon} size={13} color={on ? DS.accent : DS.faint} />{t.label}
+              </button>
+            );
+          })}
+        </div>
+      </Field>
       {draft.type === 'score' && (
-        <label style={{ fontSize: 11, color: DS.muted, fontWeight: 500 }}>
-          Out of (max)
-          <input
-            type="number"
-            value={draft.max}
-            onChange={e => setDraft(d => ({ ...d, max: e.target.value }))}
-            style={{ ...inputStyle, marginTop: 4 }}
-          />
-        </label>
+        <Field label="Out of (max)" style={{ margin: 0 }}>
+          <input type="number" value={draft.max} onChange={e => setDraft(d => ({ ...d, max: e.target.value }))} style={fieldInput} />
+        </Field>
       )}
       {draft.type === 'select' && (
-        <label style={{ fontSize: 11, color: DS.muted, fontWeight: 500 }}>
-          Options (comma separated)
-          <input
-            value={draft.options}
-            onChange={e => setDraft(d => ({ ...d, options: e.target.value }))}
-            placeholder="e.g. Excellent, Good, Needs work"
-            style={{ ...inputStyle, marginTop: 4 }}
-          />
-        </label>
+        <Field label="Options" hint="One per line" style={{ margin: 0 }}>
+          <textarea value={draft.options} onChange={e => setDraft(d => ({ ...d, options: e.target.value }))}
+            placeholder={'Excellent\nGood\nConcern'} rows={4} style={{ ...fieldInput, resize: 'vertical', minHeight: 72 }} />
+        </Field>
       )}
-      <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
-        <Btn variant="primary" small onClick={submit}>Save</Btn>
-        <Btn variant="secondary" small onClick={onCancel}>Cancel</Btn>
-        {onDelete && (
-          <button onClick={onDelete} style={{
-            marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer',
-            color: DS.danger, fontSize: 12, fontWeight: 500, padding: '6px 8px',
-          }}>Delete column</button>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingTop: 2 }}>
+        <Btn variant="primary" small onClick={submit}>{isNew ? 'Add column' : 'Save'}</Btn>
+        <Btn variant="secondary" small onClick={onClose}>Cancel</Btn>
+        {!isNew && onDelete && (
+          confirm ? (
+            <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 11.5, color: DS.danger }}>Delete?</span>
+              <button onClick={onDelete} style={dangerLink}>Yes, delete</button>
+            </span>
+          ) : (
+            <button onClick={() => setConfirm(true)} style={{ ...dangerLink, marginLeft: 'auto' }}>Delete column</button>
+          )
         )}
       </div>
     </div>
   );
 };
+const ColumnPopover = ({ open, anchorRef, col, onSave, onDelete, onClose }) => (
+  <Popover open={open} onClose={onClose} anchorRef={anchorRef} width={300} ariaLabel="Column settings">
+    {open && <ColumnForm col={col} onSave={onSave} onDelete={onDelete} onClose={onClose} />}
+  </Popover>
+);
 
-const TrackerEditor = ({ tracker, onSave, onCancel }) => {
-  const [draft, setDraft] = React.useState(() => ({
-    name: tracker.name || '',
-    description: tracker.description || '',
-    classGroup: tracker.classGroup || (teacherClasses[0] && teacherClasses[0].group) || '',
-  }));
-  const inputStyle = {
-    width: '100%', padding: '8px 10px', fontSize: 13,
-    border: `1px solid ${DS.border}`, borderRadius: 6,
-    background: DS.bg, color: DS.text, fontFamily: 'inherit', outline: 'none',
-  };
+const fieldInput = {
+  width: '100%', boxSizing: 'border-box', padding: '8px 10px', fontSize: 13,
+  border: `1px solid ${DS.border}`, borderRadius: 7, background: DS.bg, color: DS.text,
+  fontFamily: 'inherit', outline: 'none',
+};
+const dangerLink = { background: 'none', border: 'none', cursor: 'pointer', color: DS.danger, fontSize: 12, fontWeight: 600, padding: '6px 4px' };
+
+// ─── Hub: filter chip ───────────────────────────────────────────────────────────
+const HubFilterChip = ({ label, value, options, onChange }) => {
+  const [open, setOpen] = React.useState(false);
+  const ref = React.useRef(null);
+  const active = value != null;
   return (
-    <div style={{
-      background: DS.bg, border: `1px solid ${DS.cardBorder}`, borderRadius: 10,
-      padding: 16, display: 'flex', flexDirection: 'column', gap: 10, width: 360,
-    }}>
-      <div style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>
-        {tracker.id ? 'Edit tracker' : 'New tracker'}
+    <React.Fragment>
+      <button ref={ref} type="button" onClick={() => setOpen(o => !o)}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 11px', borderRadius: 8,
+          border: `1px solid ${active ? DS.accentBorder : DS.border}`, background: active ? DS.accentLight : DS.bg,
+          color: active ? DS.accent : DS.sub, fontSize: 12.5, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap',
+        }}>
+        <Icon name="filter" size={12} color={active ? DS.accent : DS.faint} />
+        {active ? `${label}: ${value}` : label}
+        <Icon name="chevron_d" size={13} color={active ? DS.accent : DS.faint} />
+      </button>
+      <Popover open={open} onClose={() => setOpen(false)} anchorRef={ref} width={220} maxHeight={300}>
+        <div style={{ padding: 4 }}>
+          <button type="button" onClick={() => { onChange(null); setOpen(false); }} style={filterOption(!active)}>
+            All {label.toLowerCase()}
+          </button>
+          {options.map(o => (
+            <button key={o} type="button" onClick={() => { onChange(o); setOpen(false); }} style={filterOption(o === value)}>
+              <span style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{o}</span>
+              {o === value && <Icon name="check" size={14} color={DS.accent} />}
+            </button>
+          ))}
+        </div>
+      </Popover>
+    </React.Fragment>
+  );
+};
+const filterOption = (on) => ({
+  display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left',
+  padding: '8px 10px', border: 'none', borderRadius: 6, cursor: 'pointer',
+  background: on ? DS.accentLight : 'transparent', color: on ? DS.accent : DS.sub,
+  fontSize: 13, fontWeight: on ? 600 : 500,
+});
+
+// ─── Hub: a single tracker row ──────────────────────────────────────────────────
+const TrackerRow = ({ tracker, onOpen, onTogglePin }) => {
+  const [hover, setHover] = React.useState(false);
+  const edited = trkRelTime(tracker.updatedAt);
+  return (
+    <div role="button" tabIndex={0} onClick={onOpen}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); } }}
+      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 14, padding: '11px 16px', cursor: 'pointer',
+        borderBottom: `1px solid ${DS.border}`, background: hover ? DS.surface : 'transparent', outline: 'none',
+      }}>
+      <button type="button" title={tracker.pinned ? 'Unpin' : 'Pin to top'} aria-pressed={!!tracker.pinned}
+        onClick={e => { e.stopPropagation(); onTogglePin(); }}
+        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, lineHeight: 1, fontSize: 16, color: tracker.pinned ? '#F59E0B' : DS.border, flexShrink: 0 }}>
+        {tracker.pinned ? '★' : '☆'}
+      </button>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 600, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{tracker.name}</div>
+        {tracker.description && <div style={{ fontSize: 12, color: DS.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{tracker.description}</div>}
       </div>
-      <label style={{ fontSize: 11, color: DS.muted, fontWeight: 500 }}>
-        Name
-        <input
-          autoFocus
-          value={draft.name}
-          onChange={e => setDraft(d => ({ ...d, name: e.target.value }))}
-          placeholder="e.g. Behaviour log"
-          style={{ ...inputStyle, marginTop: 4 }}
-        />
-      </label>
-      <label style={{ fontSize: 11, color: DS.muted, fontWeight: 500 }}>
-        Description
-        <input
-          value={draft.description}
-          onChange={e => setDraft(d => ({ ...d, description: e.target.value }))}
-          placeholder="What is this tracker for?"
-          style={{ ...inputStyle, marginTop: 4 }}
-        />
-      </label>
-      <label style={{ fontSize: 11, color: DS.muted, fontWeight: 500 }}>
-        Class / group
-        <select
-          value={draft.classGroup}
-          onChange={e => setDraft(d => ({ ...d, classGroup: e.target.value }))}
-          style={{ ...inputStyle, marginTop: 4 }}
-        >
-          {teacherClasses.map(c => <option key={c.id} value={c.group}>{c.group}</option>)}
-        </select>
-      </label>
-      <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
-        <Btn variant="primary" small onClick={() => {
-          if (!draft.name.trim()) return;
-          onSave({ ...draft, name: draft.name.trim() });
-        }}>Save</Btn>
-        <Btn variant="secondary" small onClick={onCancel}>Cancel</Btn>
-      </div>
+      <span style={{ flexShrink: 0 }}><Badge variant="default">{tracker.classGroup}</Badge></span>
+      <span style={{ flexShrink: 0, fontSize: 11.5, color: DS.muted, background: DS.surface, border: `1px solid ${DS.border}`, borderRadius: 6, padding: '2px 8px', fontWeight: 500 }}>{trackerKind(tracker)}</span>
+      <span style={{ flexShrink: 0, width: 78, textAlign: 'right', fontSize: 12, color: DS.muted, fontVariantNumeric: 'tabular-nums' }}>{studentCountOf(tracker)} students</span>
+      <span style={{ flexShrink: 0, width: 84, textAlign: 'right', fontSize: 11.5, color: DS.faint }}>{edited ? `Edited ${edited}` : 'No edits yet'}</span>
+      <Icon name="chevron_r" size={15} color={DS.faint} />
     </div>
   );
 };
 
+// ─── Hub: grouped section ───────────────────────────────────────────────────────
+const HubSection = ({ label, count, collapsed, onToggle, children, icon }) => (
+  <div style={{ marginBottom: 10 }}>
+    <button type="button" onClick={onToggle}
+      style={{
+        width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '8px 4px', cursor: onToggle ? 'pointer' : 'default',
+        border: 'none', background: 'transparent', textAlign: 'left',
+      }}>
+      {onToggle && <Icon name={collapsed ? 'chevron_r' : 'chevron_d'} size={13} color={DS.faint} />}
+      {icon && <Icon name={icon} size={13} color={DS.muted} />}
+      <span style={{ fontSize: 11.5, fontWeight: 700, color: DS.muted, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</span>
+      <span style={{ fontSize: 11, fontWeight: 600, color: DS.faint }}>{count}</span>
+    </button>
+    {!collapsed && (
+      <div style={{ border: `1px solid ${DS.cardBorder}`, borderRadius: 10, overflow: 'hidden', background: DS.card, boxShadow: DS.cardShadow }}>
+        {children}
+      </div>
+    )}
+  </div>
+);
+
+// ─── Tracker Hub (index state) ──────────────────────────────────────────────────
+const TrackerHub = ({ trackers, recents, onOpen, onTogglePin, onNew, onNewFromTemplate }) => {
+  const [query, setQuery] = React.useState('');
+  const [fClass, setFClass] = React.useState(null);
+  const [fSubject, setFSubject] = React.useState(null);
+  const [fYear, setFYear] = React.useState(null);
+  const [collapsed, setCollapsed] = React.useState({});
+
+  const classes = React.useMemo(() => Array.from(new Set(trackers.map(t => t.classGroup).filter(Boolean))).sort(), [trackers]);
+  const subjects = React.useMemo(() => Array.from(new Set(trackers.map(t => subjectOfGroup(t.classGroup)))).sort(), [trackers]);
+  const years = React.useMemo(() => Array.from(new Set(trackers.map(t => yearOfGroup(t.classGroup)))).sort(), [trackers]);
+
+  const q = query.trim().toLowerCase();
+  const facet = (t) =>
+    (!fClass || t.classGroup === fClass) &&
+    (!fSubject || subjectOfGroup(t.classGroup) === fSubject) &&
+    (!fYear || yearOfGroup(t.classGroup) === fYear);
+  const matches = (t) => (!q || [t.name, t.description, t.classGroup].filter(Boolean).join(' ').toLowerCase().includes(q)) && facet(t);
+  const filtered = trackers.filter(matches);
+  const isFiltering = !!(q || fClass || fSubject || fYear);
+
+  const toggle = (k) => setCollapsed(p => ({ ...p, [k]: !p[k] }));
+
+  if (trackers.length === 0) {
+    return (
+      <div>
+        <div style={{ border: `1px solid ${DS.cardBorder}`, borderRadius: 12, background: DS.card, boxShadow: DS.cardShadow, padding: '40px 28px', textAlign: 'center' }}>
+          <div style={{ width: 52, height: 52, borderRadius: 14, margin: '0 auto 16px', background: DS.accentLight, color: DS.accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Icon name="chart" size={24} />
+          </div>
+          <div style={{ fontSize: 17, fontWeight: 700, color: DS.text }}>Start tracking anything</div>
+          <div style={{ fontSize: 13.5, color: DS.muted, marginTop: 5, maxWidth: 420, margin: '5px auto 0', lineHeight: 1.5 }}>
+            Build a custom grid for homework marks, test scores, behaviour — whatever you want to log per student. Pick a template to get going or start from blank.
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginTop: 24, textAlign: 'left', maxWidth: 720, marginLeft: 'auto', marginRight: 'auto' }}>
+            {STARTER_TEMPLATES.map(tpl => (
+              <button key={tpl.id} type="button" onClick={() => onNewFromTemplate(tpl)} style={templateCard}>
+                <div style={{ width: 32, height: 32, borderRadius: 8, background: DS.accentLight, color: DS.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 10 }}><Icon name={tpl.icon} size={16} /></div>
+                <div style={{ fontSize: 13.5, fontWeight: 600, color: DS.text }}>{tpl.name}</div>
+                <div style={{ fontSize: 12, color: DS.muted, marginTop: 3, lineHeight: 1.45 }}>{tpl.description}</div>
+              </button>
+            ))}
+            <button type="button" onClick={() => onNew()} style={{ ...templateCard, borderStyle: 'dashed' }}>
+              <div style={{ width: 32, height: 32, borderRadius: 8, background: DS.surface, color: DS.muted, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 10 }}><Icon name="plus" size={16} /></div>
+              <div style={{ fontSize: 13.5, fontWeight: 600, color: DS.text }}>Blank tracker</div>
+              <div style={{ fontSize: 12, color: DS.muted, marginTop: 3, lineHeight: 1.45 }}>Start with no columns and build your own.</div>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const pinned = filtered.filter(t => t.pinned);
+  const recentList = recents.map(id => filtered.find(t => t.id === id)).filter(Boolean).filter(t => !t.pinned).slice(0, 4);
+  const grouped = groupTrackers(filtered, 'class', '');
+
+  return (
+    <div>
+      {/* Toolbar */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18, flexWrap: 'wrap' }}>
+        <SearchInput value={query} onChange={e => setQuery(e.target.value)} placeholder="Search trackers by name, class or description…" style={{ minWidth: 260 }} />
+        <HubFilterChip label="Class" value={fClass} options={classes} onChange={setFClass} />
+        <HubFilterChip label="Subject" value={fSubject} options={subjects} onChange={setFSubject} />
+        <HubFilterChip label="Year group" value={fYear} options={years} onChange={setFYear} />
+        <Btn variant="primary" icon="plus" small style={{ marginLeft: 'auto' }} onClick={() => onNew()}>New tracker</Btn>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div style={{ border: `1px solid ${DS.cardBorder}`, borderRadius: 10, background: DS.card, boxShadow: DS.cardShadow }}>
+          <EmptyState icon="search" title="No trackers match" message="Try a different search or clear the filters." />
+        </div>
+      ) : isFiltering ? (
+        <HubSection label="Results" count={filtered.length} icon="list">
+          {filtered.map(t => <TrackerRow key={t.id} tracker={t} onOpen={() => onOpen(t.id)} onTogglePin={() => onTogglePin(t.id)} />)}
+        </HubSection>
+      ) : (
+        <React.Fragment>
+          {pinned.length > 0 && (
+            <HubSection label="Pinned" count={pinned.length} icon="pin">
+              {pinned.map(t => <TrackerRow key={t.id} tracker={t} onOpen={() => onOpen(t.id)} onTogglePin={() => onTogglePin(t.id)} />)}
+            </HubSection>
+          )}
+          {recentList.length > 0 && (
+            <HubSection label="Recently opened" count={recentList.length} icon="clock">
+              {recentList.map(t => <TrackerRow key={t.id} tracker={t} onOpen={() => onOpen(t.id)} onTogglePin={() => onTogglePin(t.id)} />)}
+            </HubSection>
+          )}
+          <div style={{ fontSize: 11.5, fontWeight: 700, color: DS.faint, textTransform: 'uppercase', letterSpacing: '0.06em', margin: '18px 4px 8px' }}>All trackers</div>
+          {grouped.map(sec => (
+            <HubSection key={sec.key} label={sec.key} count={sec.items.length} collapsed={!!collapsed[sec.key]} onToggle={() => toggle(sec.key)} icon="users">
+              {sec.items.map(t => <TrackerRow key={t.id} tracker={t} onOpen={() => onOpen(t.id)} onTogglePin={() => onTogglePin(t.id)} />)}
+            </HubSection>
+          ))}
+        </React.Fragment>
+      )}
+    </div>
+  );
+};
+const templateCard = {
+  display: 'block', textAlign: 'left', padding: 14, borderRadius: 10, cursor: 'pointer',
+  border: `1px solid ${DS.border}`, background: DS.bg,
+};
+
+// ─── Detail: settings slide-over ────────────────────────────────────────────────
+const TrackerSettingsPanel = ({ tracker, api, onClose }) => {
+  const [name, setName] = React.useState(tracker.name);
+  const [description, setDescription] = React.useState(tracker.description || '');
+  const [classGroup, setClassGroup] = React.useState(tracker.classGroup);
+  const [confirmCol, setConfirmCol] = React.useState(null);
+
+  const save = () => {
+    api.saveSettings(tracker.id, { name: name.trim() || tracker.name, description: description.trim(), classGroup });
+    onClose();
+  };
+
+  return (
+    <SlideOver open onClose={onClose} title="Tracker settings" subtitle="Rename, re-home and manage columns" icon="settings"
+      footer={<><Btn variant="secondary" small onClick={onClose}>Cancel</Btn><Btn variant="primary" small onClick={save}>Save changes</Btn></>}>
+      <Field label="Name"><Input value={name} onChange={e => setName(e.target.value)} placeholder="Tracker name" /></Field>
+      <Field label="Description" hint="What is this tracker for?"><Textarea value={description} onChange={e => setDescription(e.target.value)} rows={2} /></Field>
+      <Field label="Class / group">
+        <Select value={classGroup} onChange={e => setClassGroup(e.target.value)}>
+          {teacherClasses.map(c => <option key={c.id} value={c.group}>{c.group}</option>)}
+        </Select>
+      </Field>
+
+      <div style={{ marginTop: 8, marginBottom: 8, fontSize: 12.5, fontWeight: 700, color: DS.sub }}>Columns</div>
+      <div style={{ border: `1px solid ${DS.border}`, borderRadius: 10, overflow: 'hidden' }}>
+        {(tracker.columns || []).length === 0 && (
+          <div style={{ padding: '14px 12px', fontSize: 12.5, color: DS.muted, textAlign: 'center' }}>No columns yet.</div>
+        )}
+        {(tracker.columns || []).map((col, i) => (
+          <div key={col.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 10px', borderBottom: i < tracker.columns.length - 1 ? `1px solid ${DS.border}` : 'none' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+              <button type="button" title="Move up" disabled={i === 0} onClick={() => api.moveColumn(tracker.id, col.id, -1)} style={reorderBtn(i === 0)}><Icon name="chevron_d" size={11} color={DS.muted} style={{ transform: 'rotate(180deg)' }} /></button>
+              <button type="button" title="Move down" disabled={i === tracker.columns.length - 1} onClick={() => api.moveColumn(tracker.id, col.id, 1)} style={reorderBtn(i === tracker.columns.length - 1)}><Icon name="chevron_d" size={11} color={DS.muted} /></button>
+            </div>
+            <input value={col.name} onChange={e => api.updateColumn(tracker.id, col.id, { ...col, name: e.target.value })}
+              style={{ flex: 1, minWidth: 0, padding: '6px 8px', fontSize: 13, border: `1px solid ${DS.border}`, borderRadius: 6, background: DS.bg, color: DS.text, fontFamily: 'inherit', outline: 'none' }} />
+            <span style={{ flexShrink: 0, fontSize: 11, color: DS.muted, background: DS.surface, borderRadius: 5, padding: '2px 7px' }}>
+              {COLUMN_TYPE_LABEL[col.type] || col.type}{col.type === 'score' && col.max ? ` /${col.max}` : ''}
+            </span>
+            {confirmCol === col.id ? (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
+                <button onClick={() => { api.deleteColumn(tracker.id, col.id); setConfirmCol(null); }} style={dangerLink}>Delete</button>
+                <button onClick={() => setConfirmCol(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: DS.muted, fontSize: 12 }}>Cancel</button>
+              </span>
+            ) : (
+              <button type="button" title="Delete column" onClick={() => setConfirmCol(col.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: DS.faint, padding: 4, flexShrink: 0, display: 'flex' }}><Icon name="trash" size={14} /></button>
+            )}
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: 10 }}>
+        <Btn variant="secondary" icon="plus" small onClick={() => api.addColumn(tracker.id, { name: 'New column', type: 'score', max: 100 })}>Add column</Btn>
+      </div>
+      <div style={{ fontSize: 11.5, color: DS.faint, marginTop: 8 }}>Tip: change a column's type, max or options from its header in the grid.</div>
+    </SlideOver>
+  );
+};
+const reorderBtn = (disabled) => ({ background: 'none', border: 'none', cursor: disabled ? 'default' : 'pointer', padding: 0, lineHeight: 0, opacity: disabled ? 0.3 : 1, display: 'flex' });
+
+// ─── Tracker Detail ─────────────────────────────────────────────────────────────
+const TrackerDetail = ({ tracker, trackers, api, onBack, onSwitch, onNew }) => {
+  const columns = tracker.columns || [];
+  const students = studentsOf(tracker);
+
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const [colMenu, setColMenu] = React.useState(null);          // colId | '__new' | null
+  const [confirmDelete, setConfirmDelete] = React.useState(false);
+  const [extra, setExtra] = React.useState('');
+
+  // Grid focus / edit state.
+  const [focus, setFocus] = React.useState(null);              // { r, c } | null
+  const [edit, setEdit] = React.useState(null);                // { r, c, seed } | null
+  const cellRefs = React.useRef({});
+  const thRefs = React.useRef({});
+
+  // Move focus onto the active cell when navigating (but not while an editor is up).
+  React.useEffect(() => {
+    if (focus && !edit) {
+      const node = cellRefs.current[focus.r + ':' + focus.c];
+      if (node && node.focus) node.focus();
+    }
+  }, [focus, edit]);
+
+  const clampFocus = (r, c) => ({ r: Math.min(Math.max(0, r), students.length - 1), c: Math.min(Math.max(0, c), columns.length - 1) });
+
+  const g = {
+    cellRefs,
+    hasFocus: !!focus,
+    focusCell: (r, c) => { setEdit(null); setFocus({ r, c }); },
+    startEdit: (r, c, seed) => { const col = columns[c]; if (!col || col.type === 'checkbox' || col.type === 'rating') return; setFocus({ r, c }); setEdit({ r, c, seed }); },
+    cancelEdit: () => { setEdit(null); setFocus(f => f); },
+    setValue: (r, c, v) => api.setCell(tracker.id, students[r], columns[c].id, v),
+    commit: (r, c, v, dir) => {
+      api.setCell(tracker.id, students[r], columns[c].id, v);
+      setEdit(null);
+      if (dir === 'down') setFocus(clampFocus(r + 1, c));
+      else if (dir === 'right') setFocus(clampFocus(r, c + 1));
+      else if (dir === 'left') setFocus(clampFocus(r, c - 1));
+      else setFocus({ r, c });
+    },
+    onCellKeyDown: (e, r, c) => {
+      if (edit) return;
+      const col = columns[c];
+      const key = e.key;
+      if (key === 'ArrowUp') { e.preventDefault(); setFocus(clampFocus(r - 1, c)); }
+      else if (key === 'ArrowDown') { e.preventDefault(); setFocus(clampFocus(r + 1, c)); }
+      else if (key === 'ArrowLeft') { e.preventDefault(); setFocus(clampFocus(r, c - 1)); }
+      else if (key === 'ArrowRight') { e.preventDefault(); setFocus(clampFocus(r, c + 1)); }
+      else if (key === 'Home') { e.preventDefault(); setFocus(clampFocus(r, 0)); }
+      else if (key === 'End') { e.preventDefault(); setFocus(clampFocus(r, columns.length - 1)); }
+      else if (col && col.type === 'checkbox' && (key === 'Enter' || key === ' ')) { e.preventDefault(); g.setValue(r, c, !(tracker.entries[students[r]] && tracker.entries[students[r]][col.id] === true)); }
+      else if (col && col.type === 'rating' && /^[0-5]$/.test(key)) { e.preventDefault(); g.setValue(r, c, key === '0' ? null : Number(key)); }
+      else if (key === 'Enter' || key === 'F2') { e.preventDefault(); g.startEdit(r, c); }
+      else if ((key === 'Backspace' || key === 'Delete') && col && col.type !== 'checkbox' && col.type !== 'rating') { e.preventDefault(); g.setValue(r, c, col.type === 'text' ? '' : null); }
+      else if (col && (col.type === 'score' || col.type === 'text') && key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); g.startEdit(r, c, key); }
+    },
+  };
+
+  const addStudent = () => { const name = extra.trim(); if (!name) return; api.addStudent(tracker.id, name); setExtra(''); };
+
+  const switcherGroups = React.useMemo(() =>
+    groupTrackers(trackers, 'class', '').map(sec => ({
+      key: sec.key, label: sec.key,
+      items: sec.items.map(t => ({ id: t.id, label: t.name, sublabel: trackerKind(t), icon: 'chart' })),
+    })), [trackers]);
+
+  const activeCol = colMenu && colMenu !== '__new' ? columns.find(c => c.id === colMenu) : null;
+  const colAnchorRef = { current: colMenu ? thRefs.current[colMenu] : null };
+
+  return (
+    <div>
+      {/* Detail header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18, flexWrap: 'wrap' }}>
+        <button type="button" onClick={onBack} title="Back to all trackers"
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '7px 10px', borderRadius: 8, border: `1px solid ${DS.border}`, background: DS.bg, color: DS.sub, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}>
+          <Icon name="chevron_l" size={15} /> All trackers
+        </button>
+        <Combobox value={tracker.id} groups={switcherGroups} onSelect={onSwitch} width={320} icon="chart" ariaLabel="Switch tracker"
+          triggerStyle={{ maxWidth: 320 }}
+          footer={<Btn variant="primary" icon="plus" small style={{ width: '100%', justifyContent: 'center' }} onClick={() => onNew()}>New tracker</Btn>} />
+        <div style={{ flex: 1 }} />
+        <span style={{ flexShrink: 0 }}><Badge variant="default">{tracker.classGroup}</Badge></span>
+        <span style={{ flexShrink: 0 }}><Badge variant="accent">{students.length} students</Badge></span>
+        <Btn variant="secondary" icon="settings" small onClick={() => setSettingsOpen(true)}>Settings</Btn>
+        <Btn variant="secondary" icon="download" small onClick={() => api.exportCSV(tracker)}>Export CSV</Btn>
+        <RowActionsMenu items={[
+          { label: 'Duplicate tracker', icon: 'copy', onClick: () => api.duplicate(tracker.id) },
+          { label: 'Delete tracker', icon: 'trash', danger: true, onClick: () => setConfirmDelete(true) },
+        ]} />
+      </div>
+
+      {tracker.description && <div style={{ fontSize: 13, color: DS.muted, margin: '-6px 4px 14px' }}>{tracker.description}</div>}
+
+      {/* Grid */}
+      <div style={{ border: `1px solid ${DS.cardBorder}`, borderRadius: 12, overflow: 'hidden', background: DS.card, boxShadow: DS.cardShadow }}>
+        <div style={{ overflow: 'auto', maxHeight: '62vh' }}>
+          <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: 13 }}>
+            <thead>
+              <tr>
+                <th style={{ ...thBase, position: 'sticky', left: 0, top: 0, zIndex: 3, minWidth: 200, borderRight: `1px solid ${DS.border}` }}>Student</th>
+                {columns.map(col => (
+                  <th key={col.id} ref={node => { thRefs.current[col.id] = node; }} style={{ ...thBase, position: 'sticky', top: 0, zIndex: 2, minWidth: 132, textAlign: col.type === 'score' ? 'right' : 'left' }}>
+                    <button type="button" onClick={() => setColMenu(m => m === col.id ? null : col.id)} title="Edit column"
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: DS.muted, fontWeight: 600, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', display: 'inline-flex', alignItems: 'center', gap: 5, maxWidth: '100%' }}>
+                      <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{col.name}</span>
+                      {col.type === 'score' && col.max && !new RegExp('/\\s*' + col.max + '\\s*$').test(col.name) ? <span style={{ color: DS.faint, fontWeight: 500 }}>· /{col.max}</span> : null}
+                      <Icon name="chevron_d" size={11} color={DS.faint} />
+                    </button>
+                  </th>
+                ))}
+                <th style={{ ...thBase, position: 'sticky', top: 0, zIndex: 2, minWidth: 120 }}>
+                  <button type="button" ref={node => { thRefs.current['__new'] = node; }} onClick={() => setColMenu('__new')}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: 'none', border: 'none', cursor: 'pointer', color: DS.accent, fontSize: 12, fontWeight: 600, textTransform: 'none', letterSpacing: 0 }}>
+                    <Icon name="plus" size={13} color={DS.accent} /> Add column
+                  </button>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {students.length === 0 ? (
+                <tr><td colSpan={columns.length + 2} style={{ padding: '28px 16px', textAlign: 'center', color: DS.muted, fontSize: 13 }}>No students yet — add one below.</td></tr>
+              ) : students.map((s, ri) => (
+                <tr key={s} style={{ background: DS.bg }}
+                  onMouseEnter={e => { e.currentTarget.querySelectorAll('td').forEach(td => td.style.background = td.dataset.sticky ? DS.surfaceHover : DS.surface); }}
+                  onMouseLeave={e => { e.currentTarget.querySelectorAll('td').forEach(td => td.style.background = td.dataset.sticky ? DS.bg : 'transparent'); }}>
+                  <td data-sticky="1" style={{ position: 'sticky', left: 0, zIndex: 1, background: DS.bg, padding: '6px 14px', borderRight: `1px solid ${DS.border}`, borderBottom: `1px solid ${DS.border}` }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <Avatar name={s} size={26} />
+                      <span style={{ fontSize: 13, color: DS.text, fontWeight: 500, flex: 1, whiteSpace: 'nowrap' }}>{s}</span>
+                      {(tracker.extraStudents || []).includes(s) && (
+                        <button type="button" onClick={() => api.removeStudent(tracker.id, s)} title="Remove from tracker"
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', color: DS.faint, padding: 2, display: 'flex' }}><Icon name="x" size={12} /></button>
+                      )}
+                    </div>
+                  </td>
+                  {columns.map((col, ci) => {
+                    const f = focus && focus.r === ri && focus.c === ci;
+                    return (
+                      <td key={col.id} style={{ padding: '3px 8px', borderBottom: `1px solid ${DS.border}` }}>
+                        <GridCell col={col} value={tracker.entries[s] && tracker.entries[s][col.id]} r={ri} c={ci}
+                          focused={f} editing={!!(edit && edit.r === ri && edit.c === ci)} seed={edit && edit.r === ri && edit.c === ci ? edit.seed : undefined} g={g} />
+                      </td>
+                    );
+                  })}
+                  <td style={{ borderBottom: `1px solid ${DS.border}` }} />
+                </tr>
+              ))}
+            </tbody>
+            {students.length > 0 && columns.length > 0 && (
+              <tfoot>
+                <tr>
+                  <td data-sticky="1" style={{ position: 'sticky', left: 0, bottom: 0, zIndex: 3, background: DS.surface, padding: '10px 14px', borderRight: `1px solid ${DS.border}`, borderTop: `1px solid ${DS.borderDark}`, fontSize: 11, fontWeight: 700, color: DS.muted, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Summary</td>
+                  {columns.map(col => (
+                    <td key={col.id} style={{ position: 'sticky', bottom: 0, zIndex: 2, background: DS.surface, padding: '10px 8px', borderTop: `1px solid ${DS.borderDark}`, textAlign: col.type === 'score' ? 'right' : 'left' }}>
+                      <ColumnSummaryCell col={col} entries={tracker.entries} students={students} />
+                    </td>
+                  ))}
+                  <td style={{ position: 'sticky', bottom: 0, zIndex: 2, background: DS.surface, borderTop: `1px solid ${DS.borderDark}` }} />
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+
+        {/* Add-student row */}
+        <div style={{ padding: '11px 14px', borderTop: `1px solid ${DS.border}`, display: 'flex', alignItems: 'center', gap: 8, background: DS.bg }}>
+          <input value={extra} onChange={e => setExtra(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addStudent(); }}
+            placeholder="Add another student to this tracker…"
+            style={{ flex: 1, maxWidth: 320, padding: '7px 10px', fontSize: 13, border: `1px solid ${DS.border}`, borderRadius: 7, background: DS.bg, color: DS.text, fontFamily: 'inherit', outline: 'none' }} />
+          <Btn variant="secondary" icon="plus" small onClick={addStudent}>Add student</Btn>
+          <span style={{ marginLeft: 'auto', fontSize: 11.5, color: DS.faint }}>Arrow keys to move · Enter to edit · saved locally</span>
+        </div>
+      </div>
+
+      {/* Column editor popover (shared, anchored to the clicked header) */}
+      <ColumnPopover
+        open={!!colMenu} anchorRef={colMenu === '__new' ? { current: thRefs.current['__new'] } : colAnchorRef}
+        col={activeCol}
+        onSave={(data) => { if (colMenu === '__new') api.addColumn(tracker.id, data); else api.updateColumn(tracker.id, colMenu, { ...activeCol, ...data }); setColMenu(null); }}
+        onDelete={activeCol ? () => { api.deleteColumn(tracker.id, colMenu); setColMenu(null); } : null}
+        onClose={() => setColMenu(null)} />
+
+      {/* Settings slide-over */}
+      {settingsOpen && <TrackerSettingsPanel tracker={tracker} api={api} onClose={() => setSettingsOpen(false)} />}
+
+      {/* Delete confirm (second step) */}
+      <Modal open={confirmDelete} onClose={() => setConfirmDelete(false)} title="Delete tracker?" icon="trash" iconColor={DS.danger} width={440}
+        footer={<><Btn variant="secondary" small onClick={() => setConfirmDelete(false)}>Cancel</Btn><Btn variant="danger" small onClick={() => { setConfirmDelete(false); api.remove(tracker.id); }}>Delete tracker</Btn></>}>
+        <div style={{ fontSize: 13.5, color: DS.sub, lineHeight: 1.55 }}>
+          Deleting <b style={{ color: DS.text }}>{tracker.name}</b> removes it and all its logged data for {students.length} student{students.length === 1 ? '' : 's'}. This can't be undone.
+        </div>
+      </Modal>
+    </div>
+  );
+};
+const thBase = {
+  background: DS.surface, padding: '10px 12px', textAlign: 'left',
+  fontSize: 11, fontWeight: 600, color: DS.muted, textTransform: 'uppercase', letterSpacing: '0.06em',
+  borderBottom: `1px solid ${DS.border}`, whiteSpace: 'nowrap',
+};
+
+// ─── New-tracker dialog ─────────────────────────────────────────────────────────
+const NewTrackerModal = ({ open, template, onClose, onCreate }) => {
+  const [name, setName] = React.useState('');
+  const [classGroup, setClassGroup] = React.useState((teacherClasses[0] && teacherClasses[0].group) || '');
+  const [start, setStart] = React.useState('blank');
+  React.useEffect(() => {
+    if (open) {
+      setName(template ? template.name : '');
+      setStart(template ? template.id : 'blank');
+      setClassGroup((teacherClasses[0] && teacherClasses[0].group) || '');
+    }
+  }, [open, template]);
+
+  const startOptions = [{ id: 'blank', label: 'Blank' }, ...STARTER_TEMPLATES.map(t => ({ id: t.id, label: t.name }))];
+  const create = () => {
+    const tpl = STARTER_TEMPLATES.find(t => t.id === start);
+    onCreate({
+      name: name.trim() || (tpl ? tpl.name : 'Untitled tracker'),
+      description: tpl ? tpl.description : '',
+      classGroup,
+      columns: tpl ? tpl.columns : [],
+    });
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title="New tracker" subtitle="Create a custom grid for this class" icon="chart" width={480}
+      footer={<><Btn variant="secondary" small onClick={onClose}>Cancel</Btn><Btn variant="primary" small onClick={create}>Create tracker</Btn></>}>
+      <Field label="Name"><Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Homework scores" autoFocus /></Field>
+      <Field label="Class / group">
+        <Select value={classGroup} onChange={e => setClassGroup(e.target.value)}>
+          {teacherClasses.map(c => <option key={c.id} value={c.group}>{c.group}</option>)}
+        </Select>
+      </Field>
+      <Field label="Start from" hint="Templates add a few starter columns you can change later." style={{ marginBottom: 0 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {startOptions.map(o => {
+            const on = start === o.id;
+            return (
+              <button key={o.id} type="button" onClick={() => setStart(o.id)}
+                style={{ padding: '7px 12px', borderRadius: 8, cursor: 'pointer', fontSize: 13, fontWeight: on ? 600 : 500, border: `1px solid ${on ? DS.accent : DS.border}`, background: on ? DS.accentLight : DS.bg, color: on ? DS.accent : DS.sub }}>
+                {o.label}
+              </button>
+            );
+          })}
+        </div>
+      </Field>
+    </Modal>
+  );
+};
+
+// ─── Tracking Page (owns state; hosts Hub ⇄ Detail) ─────────────────────────────
+// D1: opening Tracking always lands on the Hub. The Hub/Detail split is internal
+// state on this one page — no new page id is introduced.
 const TeacherTrackingPage = () => {
   const [trackers, setTrackers] = React.useState(loadTrackers);
-  const [activeId, setActiveId] = React.useState(() => {
-    const t = loadTrackers();
-    return t[0] ? t[0].id : null;
-  });
-  const [editingTracker, setEditingTracker] = React.useState(null); // {id?} | null
-  const [editingColumn, setEditingColumn] = React.useState(null);   // {trackerId, col} | null
-  const [extraStudent, setExtraStudent] = React.useState('');
+  const [recents, setRecents] = React.useState(loadRecents);
+  const [view, setView] = React.useState('hub');              // 'hub' | 'detail'
+  const [activeId, setActiveId] = React.useState(null);
+  const [newModal, setNewModal] = React.useState(null);       // { template } | null
 
   React.useEffect(() => { saveTrackers(trackers); }, [trackers]);
 
-  const active = trackers.find(t => t.id === activeId) || trackers[0];
+  const active = trackers.find(t => t.id === activeId);
 
-  const updateTracker = (id, mut) => {
-    setTrackers(prev => prev.map(t => t.id === id ? mut(t) : t));
-  };
+  // Every content mutation stamps updatedAt; pinning deliberately does not.
+  const touch = (id, mut) => setTrackers(prev => prev.map(t => t.id === id ? { ...mut(t), updatedAt: Date.now() } : t));
 
-  const addTracker = (data) => {
+  const openTracker = (id) => { setActiveId(id); setView('detail'); setRecents(pushRecent(id)); };
+  const backToHub = () => setView('hub');
+
+  const createTracker = ({ name, description, classGroup, columns }) => {
     const t = {
-      id: newId('t'),
-      name: data.name,
-      description: data.description,
-      classGroup: data.classGroup,
-      columns: [],
-      entries: {},
+      id: newId('t'), name, description: description || '',
+      classGroup: classGroup || (teacherClasses[0] && teacherClasses[0].group) || '',
+      columns: (columns || []).map(c => ({ ...c, id: newId('c') })),
+      entries: {}, extraStudents: [], pinned: false, updatedAt: Date.now(),
     };
     setTrackers(prev => [...prev, t]);
-    setActiveId(t.id);
-    setEditingTracker(null);
+    setNewModal(null);
+    openTracker(t.id);
   };
 
-  const saveTrackerEdit = (id, data) => {
-    updateTracker(id, t => ({ ...t, ...data }));
-    setEditingTracker(null);
-  };
-
-  const deleteTracker = (id) => {
-    if (!window.confirm('Delete this tracker and all its data?')) return;
-    setTrackers(prev => {
+  const api = {
+    saveSettings: (id, data) => touch(id, t => ({ ...t, ...data })),
+    togglePin: (id) => setTrackers(prev => prev.map(t => t.id === id ? { ...t, pinned: !t.pinned } : t)),
+    duplicate: (id) => {
+      const src = trackers.find(t => t.id === id); if (!src) return;
+      const copy = { ...src, id: newId('t'), name: `${src.name} (copy)`, pinned: false, updatedAt: Date.now(), entries: JSON.parse(JSON.stringify(src.entries || {})), extraStudents: [...(src.extraStudents || [])] };
+      setTrackers(prev => [...prev, copy]);
+      openTracker(copy.id);
+    },
+    remove: (id) => setTrackers(prev => {
       const next = prev.filter(t => t.id !== id);
-      if (activeId === id) setActiveId(next[0] ? next[0].id : null);
+      if (activeId === id) { setActiveId(null); setView('hub'); }
       return next;
-    });
-  };
-
-  const addColumn = (col) => {
-    if (!active) return;
-    const withId = { ...col, id: newId('c') };
-    updateTracker(active.id, t => ({ ...t, columns: [...t.columns, withId] }));
-    setEditingColumn(null);
-  };
-
-  const updateColumn = (colId, col) => {
-    updateTracker(active.id, t => ({
-      ...t,
-      columns: t.columns.map(c => c.id === colId ? { ...col, id: colId } : c),
-    }));
-    setEditingColumn(null);
-  };
-
-  const deleteColumn = (colId) => {
-    if (!window.confirm('Delete this column and all its values?')) return;
-    updateTracker(active.id, t => {
-      const newEntries = {};
-      Object.keys(t.entries || {}).forEach(s => {
-        const row = { ...t.entries[s] };
-        delete row[colId];
-        newEntries[s] = row;
-      });
-      return { ...t, columns: t.columns.filter(c => c.id !== colId), entries: newEntries };
-    });
-    setEditingColumn(null);
-  };
-
-  const setCell = (student, colId, value) => {
-    updateTracker(active.id, t => ({
-      ...t,
-      entries: {
-        ...t.entries,
-        [student]: { ...(t.entries[student] || {}), [colId]: value },
-      },
-    }));
-  };
-
-  const removeStudent = (student) => {
-    updateTracker(active.id, t => {
-      const e = { ...t.entries };
-      delete e[student];
-      return { ...t, entries: e, extraStudents: (t.extraStudents || []).filter(s => s !== student) };
-    });
-  };
-
-  const addStudent = () => {
-    const name = extraStudent.trim();
-    if (!name) return;
-    updateTracker(active.id, t => {
+    }),
+    addColumn: (id, col) => touch(id, t => ({ ...t, columns: [...t.columns, { ...col, id: newId('c') }] })),
+    updateColumn: (id, colId, col) => touch(id, t => ({ ...t, columns: t.columns.map(c => c.id === colId ? { ...col, id: colId } : c) })),
+    deleteColumn: (id, colId) => touch(id, t => {
+      const entries = {};
+      Object.keys(t.entries || {}).forEach(s => { const row = { ...t.entries[s] }; delete row[colId]; entries[s] = row; });
+      return { ...t, columns: t.columns.filter(c => c.id !== colId), entries };
+    }),
+    moveColumn: (id, colId, dir) => touch(id, t => {
+      const cols = [...t.columns]; const i = cols.findIndex(c => c.id === colId); const j = i + dir;
+      if (i < 0 || j < 0 || j >= cols.length) return t;
+      [cols[i], cols[j]] = [cols[j], cols[i]];
+      return { ...t, columns: cols };
+    }),
+    setCell: (id, student, colId, value) => touch(id, t => ({ ...t, entries: { ...t.entries, [student]: { ...(t.entries[student] || {}), [colId]: value } } })),
+    addStudent: (id, name) => touch(id, t => {
       const list = t.extraStudents || [];
       if (list.includes(name) || getRosterForGroup(t.classGroup).includes(name)) return t;
       return { ...t, extraStudents: [...list, name], entries: { ...t.entries, [name]: t.entries[name] || {} } };
-    });
-    setExtraStudent('');
+    }),
+    removeStudent: (id, student) => touch(id, t => {
+      const e = { ...t.entries }; delete e[student];
+      return { ...t, entries: e, extraStudents: (t.extraStudents || []).filter(s => s !== student) };
+    }),
+    exportCSV: (t) => {
+      const students = studentsOf(t);
+      const esc = (s) => { const v = s == null ? '' : String(s); return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v; };
+      const header = ['Student', ...t.columns.map(c => c.name)];
+      const rows = students.map(s => [s, ...t.columns.map(c => {
+        const v = t.entries[s] && t.entries[s][c.id];
+        if (typeof v === 'boolean') return v ? 'Yes' : 'No';
+        return v == null ? '' : v;
+      })]);
+      const csv = [header, ...rows].map(r => r.map(esc).join(',')).join('\n');
+      // Export of children's data → audit entry (AADC data-minimisation: tracker
+      // columns only, no contact/DOB/address).
+      if (window.klasioAudit) window.klasioAudit('export_csv', `tracker:${t.name}`, { rows: rows.length, scope: 'teacher' });
+      try {
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = `${t.name.replace(/[^a-z0-9]+/gi, '_')}.csv`; a.click();
+        URL.revokeObjectURL(url);
+      } catch (e) {}
+    },
   };
 
-  const exportCSV = () => {
-    if (!active) return;
-    const students = [...getRosterForGroup(active.classGroup), ...(active.extraStudents || [])];
-    const escape = (s) => {
-      const v = s == null ? '' : String(s);
-      return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
-    };
-    const header = ['Student', ...active.columns.map(c => c.name)];
-    const rows = students.map(s => [s, ...active.columns.map(c => {
-      const v = active.entries[s] && active.entries[s][c.id];
-      if (typeof v === 'boolean') return v ? 'Yes' : 'No';
-      return v == null ? '' : v;
-    })]);
-    const csv = [header, ...rows].map(r => r.map(escape).join(',')).join('\n');
-    // Export of children's data → audit entry (AADC data-minimisation: tracker
-    // columns only, no contact/DOB/address).
-    if (window.klasioAudit) window.klasioAudit('export_csv', `tracker:${active.name}`, { rows: rows.length, scope: 'teacher' });
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${active.name.replace(/[^a-z0-9]+/gi, '_')}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const students = active
-    ? [...getRosterForGroup(active.classGroup), ...(active.extraStudents || [])]
-    : [];
+  const showDetail = view === 'detail' && active;
 
   return (
     <div style={{ padding: '32px' }}>
-      <PageHeader
-        title="Tracking"
-        subtitle="Custom trackers for homework, tests, behaviour — anything you want to log per student"
-        actions={[
-          <Btn key="new" variant="primary" icon="plus" small onClick={() => setEditingTracker({})}>
-            New tracker
-          </Btn>,
-        ]}
-      />
-
-      {/* Tracker switcher — searchable + grouped (scales to dozens of trackers) */}
-      <TrackerSwitcher
-        trackers={trackers}
-        active={active}
-        onSelect={setActiveId}
-        onNew={() => setEditingTracker({})}
-      />
-
-      {/* Inline new-tracker editor */}
-      {editingTracker && !editingTracker.id && (
-        <div style={{ marginBottom: 20 }}>
-          <TrackerEditor
-            tracker={{}}
-            onSave={addTracker}
-            onCancel={() => setEditingTracker(null)}
-          />
-        </div>
+      {!showDetail && (
+        <PageHeader title="Tracking" subtitle="Custom trackers for homework, tests, behaviour — anything you log per student" />
       )}
 
-      {!active && !editingTracker && (
-        <Card>
-          <div style={{ padding: 32, textAlign: 'center', color: DS.muted, fontSize: 14 }}>
-            Click <b>New tracker</b> above to start tracking anything you like.
-          </div>
-        </Card>
+      {showDetail ? (
+        <TrackerDetail
+          tracker={active} trackers={trackers} api={api}
+          onBack={backToHub} onSwitch={openTracker} onNew={() => setNewModal({})} />
+      ) : (
+        <TrackerHub
+          trackers={trackers} recents={recents}
+          onOpen={openTracker} onTogglePin={api.togglePin}
+          onNew={() => setNewModal({})} onNewFromTemplate={(tpl) => setNewModal({ template: tpl })} />
       )}
 
-      {active && (
-        <Card>
-          {/* Tracker header */}
-          <div style={{
-            padding: '16px 20px', borderBottom: `1px solid ${DS.border}`,
-            display: 'flex', alignItems: 'center', gap: 16,
-          }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: DS.text }}>{active.name}</div>
-              {active.description && (
-                <div style={{ fontSize: 12, color: DS.muted, marginTop: 2 }}>{active.description}</div>
-              )}
-            </div>
-            <Badge variant="default">{active.classGroup}</Badge>
-            <Badge variant="accent">{students.length} students</Badge>
-            <Btn variant="ghost" icon="edit" small onClick={() => setEditingTracker({ id: active.id })}>
-              Settings
-            </Btn>
-            <Btn variant="ghost" icon="download" small onClick={exportCSV}>Export CSV</Btn>
-            <button
-              onClick={() => deleteTracker(active.id)}
-              style={{
-                background: 'none', border: 'none', cursor: 'pointer',
-                color: DS.danger, fontSize: 12, fontWeight: 500, padding: '6px 8px',
-              }}
-            >Delete</button>
-          </div>
-
-          {/* Inline tracker-edit form */}
-          {editingTracker && editingTracker.id === active.id && (
-            <div style={{ padding: 16, borderBottom: `1px solid ${DS.border}`, background: DS.surface }}>
-              <TrackerEditor
-                tracker={active}
-                onSave={(data) => saveTrackerEdit(active.id, data)}
-                onCancel={() => setEditingTracker(null)}
-              />
-            </div>
-          )}
-
-          {/* Column editor */}
-          {editingColumn && editingColumn.trackerId === active.id && (
-            <div style={{ padding: 16, borderBottom: `1px solid ${DS.border}`, background: DS.surface }}>
-              <ColumnEditor
-                col={editingColumn.col || { name: '', type: 'score', max: 100 }}
-                onSave={(c) => editingColumn.col && editingColumn.col.id
-                  ? updateColumn(editingColumn.col.id, c)
-                  : addColumn(c)}
-                onCancel={() => setEditingColumn(null)}
-                onDelete={editingColumn.col && editingColumn.col.id
-                  ? () => deleteColumn(editingColumn.col.id)
-                  : null}
-              />
-            </div>
-          )}
-
-          {/* Table */}
-          <div style={{ overflow: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-              <thead>
-                <tr style={{ borderBottom: `1px solid ${DS.border}`, background: DS.surface }}>
-                  <th style={{
-                    position: 'sticky', left: 0, background: DS.surface, zIndex: 1,
-                    padding: '10px 16px', textAlign: 'left',
-                    fontSize: 11, fontWeight: 600, color: DS.muted,
-                    textTransform: 'uppercase', letterSpacing: '0.06em',
-                    minWidth: 200, borderRight: `1px solid ${DS.border}`,
-                  }}>Student</th>
-                  {active.columns.map(col => (
-                    <th key={col.id} style={{
-                      padding: '10px 12px', textAlign: 'left',
-                      fontSize: 11, fontWeight: 600, color: DS.muted,
-                      textTransform: 'uppercase', letterSpacing: '0.06em',
-                      minWidth: 140,
-                    }}>
-                      <button
-                        onClick={() => setEditingColumn({ trackerId: active.id, col })}
-                        style={{
-                          background: 'none', border: 'none', cursor: 'pointer',
-                          padding: 0, color: DS.muted, fontWeight: 600, fontSize: 11,
-                          textTransform: 'uppercase', letterSpacing: '0.06em',
-                          textAlign: 'left', display: 'inline-flex', alignItems: 'center', gap: 5,
-                        }}
-                        title="Edit column"
-                      >
-                        {col.name}
-                        {col.type === 'score' && col.max && (
-                          <span style={{ color: DS.faint, fontWeight: 400 }}>/{col.max}</span>
-                        )}
-                        <Icon name="edit" size={10} color={DS.faint} />
-                      </button>
-                    </th>
-                  ))}
-                  <th style={{ padding: '10px 12px', minWidth: 120 }}>
-                    <Btn variant="ghost" icon="plus" small onClick={() => setEditingColumn({ trackerId: active.id, col: null })}>
-                      Add column
-                    </Btn>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {students.map((s, i) => (
-                  <tr key={s} style={{ borderBottom: `1px solid ${DS.border}` }}>
-                    <td style={{
-                      position: 'sticky', left: 0, background: DS.bg, zIndex: 1,
-                      padding: '8px 16px', borderRight: `1px solid ${DS.border}`,
-                    }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <Avatar name={s} size={26} />
-                        <span style={{ fontSize: 13, color: DS.text, fontWeight: 500, flex: 1 }}>{s}</span>
-                        {(active.extraStudents || []).includes(s) && (
-                          <button
-                            onClick={() => removeStudent(s)}
-                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: DS.faint, padding: 2 }}
-                            title="Remove from tracker"
-                          >
-                            <Icon name="x" size={12} />
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                    {active.columns.map(col => (
-                      <td key={col.id} style={{ padding: '6px 12px' }}>
-                        <TrackingCell
-                          col={col}
-                          value={active.entries[s] && active.entries[s][col.id]}
-                          onChange={(v) => setCell(s, col.id, v)}
-                        />
-                      </td>
-                    ))}
-                    <td />
-                  </tr>
-                ))}
-                {/* Summary row */}
-                {students.length > 0 && active.columns.length > 0 && (
-                  <tr style={{ background: DS.surface }}>
-                    <td style={{
-                      position: 'sticky', left: 0, background: DS.surface, zIndex: 1,
-                      padding: '10px 16px', borderRight: `1px solid ${DS.border}`,
-                      fontSize: 11, fontWeight: 600, color: DS.muted,
-                      textTransform: 'uppercase', letterSpacing: '0.06em',
-                    }}>Summary</td>
-                    {active.columns.map(col => (
-                      <td key={col.id} style={{ padding: '10px 12px' }}>
-                        <ColumnSummary col={col} entries={active.entries} students={students} />
-                      </td>
-                    ))}
-                    <td />
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Add-student row */}
-          <div style={{
-            padding: '12px 16px', borderTop: `1px solid ${DS.border}`,
-            display: 'flex', alignItems: 'center', gap: 8,
-          }}>
-            <input
-              value={extraStudent}
-              onChange={e => setExtraStudent(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') addStudent(); }}
-              placeholder="Add another student to this tracker…"
-              style={{
-                flex: 1, maxWidth: 320,
-                padding: '7px 10px', fontSize: 13,
-                border: `1px solid ${DS.border}`, borderRadius: 6,
-                background: DS.bg, color: DS.text, fontFamily: 'inherit', outline: 'none',
-              }}
-            />
-            <Btn variant="secondary" icon="plus" small onClick={addStudent}>Add student</Btn>
-            <span style={{ marginLeft: 'auto', fontSize: 11, color: DS.faint }}>
-              Tip: click any column header to edit or delete it. All data is saved locally.
-            </span>
-          </div>
-        </Card>
-      )}
+      <NewTrackerModal open={!!newModal} template={newModal && newModal.template} onClose={() => setNewModal(null)} onCreate={createTracker} />
     </div>
   );
 };

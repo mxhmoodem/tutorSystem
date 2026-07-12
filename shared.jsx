@@ -1942,11 +1942,204 @@ const resolveActiveTerm = (terms, today) => {
   return { term: list[0] || null, status: 'none' };
 };
 
+// ─── Popover (generic anchored) ──────────────────────────────────────────────────
+// A lightweight popover positioned off an anchor element (passed as a ref). The
+// consumer owns `open` and renders its own trigger. Uses fixed positioning so it
+// escapes card/overflow clipping (same technique as RowActionsMenu) and repins on
+// scroll/resize. Closes on outside mousedown and Escape. `align`: 'left' | 'right'
+// pins the popover's edge to the matching edge of the anchor; 'stretch' matches the
+// anchor's width. Kept deliberately generic — used by the tracker combobox, column
+// header menu and hub filter chips.
+const Popover = ({ open, onClose, anchorRef, align = 'left', gap = 6, width = 260, maxHeight, children, role = 'dialog', ariaLabel, style }) => {
+  const ref = React.useRef(null);
+  const [pos, setPos] = React.useState({ top: -9999, left: -9999, minWidth: undefined });
+  const place = React.useCallback(() => {
+    const a = anchorRef && anchorRef.current;
+    if (!a) return;
+    const r = a.getBoundingClientRect();
+    const w = typeof width === 'number' ? width : r.width;
+    let left = align === 'right' ? r.right - w : r.left;
+    left = Math.min(Math.max(8, left), Math.max(8, window.innerWidth - w - 8));
+    let top = r.bottom + gap;
+    // Flip above the anchor if it would overflow the viewport bottom.
+    const estH = ref.current ? ref.current.offsetHeight : (maxHeight || 300);
+    if (top + estH > window.innerHeight - 8 && r.top - gap - estH > 8) top = r.top - gap - estH;
+    setPos({ top, left, minWidth: align === 'stretch' ? r.width : undefined });
+  }, [anchorRef, align, gap, width, maxHeight]);
+  React.useLayoutEffect(() => { if (open) place(); }, [open, place]);
+  React.useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => {
+      if (ref.current && ref.current.contains(e.target)) return;
+      if (anchorRef && anchorRef.current && anchorRef.current.contains(e.target)) return;
+      onClose && onClose();
+    };
+    const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); onClose && onClose(); } };
+    const reflow = () => place();
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('resize', reflow);
+    window.addEventListener('scroll', reflow, true);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', reflow);
+      window.removeEventListener('scroll', reflow, true);
+    };
+  }, [open, place, onClose, anchorRef]);
+  if (!open) return null;
+  return (
+    <div ref={ref} role={role} aria-label={ariaLabel} style={{
+      position: 'fixed', top: pos.top, left: pos.left,
+      width: typeof width === 'number' ? width : undefined, minWidth: pos.minWidth,
+      maxHeight, zIndex: 1300, background: DS.bg, border: `1px solid ${DS.border}`,
+      borderRadius: 10, boxShadow: DS.cardShadowHi, overflow: maxHeight ? 'auto' : 'visible',
+      animation: 'tos-pop 0.12s cubic-bezier(0.16,1,0.3,1)', ...style,
+    }}>{children}</div>
+  );
+};
+
+// ─── Slide-over panel ────────────────────────────────────────────────────────────
+// Right-hand drawer with backdrop, header, scrollable body and optional sticky
+// footer — the horizontal counterpart to <Modal/>. Escape and backdrop click both
+// close; focus moves into the panel on open and is restored on close. Used for
+// settings/detail editing where the underlying table should stay visible.
+const SlideOver = ({ open, onClose, title, subtitle, icon, iconColor, width = 440, footer, children }) => {
+  const panelRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => { if (e.key === 'Escape') onClose && onClose(); };
+    window.addEventListener('keydown', onKey);
+    const prev = document.activeElement;
+    const t = setTimeout(() => { panelRef.current && panelRef.current.focus(); }, 20);
+    return () => { window.removeEventListener('keydown', onKey); clearTimeout(t); prev && prev.focus && prev.focus(); };
+  }, [open, onClose]);
+  if (!open) return null;
+  const ic = iconColor || DS.accent;
+  return (
+    <div onClick={onClose} style={{
+      position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(17,24,39,0.45)',
+      backdropFilter: 'blur(2px)', display: 'flex', justifyContent: 'flex-end',
+      animation: 'tos-fade 0.14s ease',
+    }}>
+      <div ref={panelRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={title}
+        onClick={(e) => e.stopPropagation()} style={{
+          width, maxWidth: '100%', height: '100%', background: DS.bg,
+          borderLeft: `1px solid ${DS.border}`, boxShadow: '-16px 0 48px rgba(17,24,39,0.18)',
+          display: 'flex', flexDirection: 'column', outline: 'none',
+          animation: 'tos-slide-in 0.2s cubic-bezier(0.16,1,0.3,1)',
+        }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14, padding: '20px 22px 16px', borderBottom: `1px solid ${DS.border}` }}>
+          {icon && (
+            <div style={{ width: 40, height: 40, borderRadius: 10, flexShrink: 0, background: ic + '18', color: ic, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Icon name={icon} size={19} />
+            </div>
+          )}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: DS.text, letterSpacing: '-0.2px' }}>{title}</div>
+            {subtitle && <div style={{ fontSize: 13, color: DS.muted, marginTop: 2, lineHeight: 1.5 }}>{subtitle}</div>}
+          </div>
+          <button onClick={onClose} aria-label="Close panel" style={{ background: 'none', border: 'none', cursor: 'pointer', color: DS.faint, padding: 4, borderRadius: 6, display: 'flex', flexShrink: 0 }}>
+            <Icon name="x" size={18} />
+          </button>
+        </div>
+        <div style={{ padding: '18px 22px', overflow: 'auto', flex: 1 }}>{children}</div>
+        {footer && (
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '14px 22px', borderTop: `1px solid ${DS.border}`, background: DS.surface }}>{footer}</div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ─── Combobox (searchable, optionally grouped select) ────────────────────────────
+// A compact trigger button that opens a searchable, grouped option list in a
+// <Popover/>. `groups` is [{ key, label?, items:[{ id, label, sublabel?, icon? }] }];
+// pass a single group for a flat list. `value` is the currently-selected id.
+// Generic — the tracker switcher is one caller.
+const Combobox = ({
+  value, groups = [], onSelect, placeholder = 'Select…', searchPlaceholder = 'Search…',
+  width = 300, align = 'left', footer, icon, disabled, triggerStyle, ariaLabel,
+}) => {
+  const [open, setOpen] = React.useState(false);
+  const [q, setQ] = React.useState('');
+  const anchorRef = React.useRef(null);
+  const searchRef = React.useRef(null);
+  React.useEffect(() => {
+    if (open) { setQ(''); const t = setTimeout(() => searchRef.current && searchRef.current.focus(), 20); return () => clearTimeout(t); }
+  }, [open]);
+  const ql = q.trim().toLowerCase();
+  const filtered = groups
+    .map(g => ({ ...g, items: (g.items || []).filter(it => !ql || [it.label, it.sublabel].filter(Boolean).join(' ').toLowerCase().includes(ql)) }))
+    .filter(g => g.items.length);
+  const total = filtered.reduce((n, g) => n + g.items.length, 0);
+  const current = groups.reduce((acc, g) => acc || (g.items || []).find(it => it.id === value), null);
+  return (
+    <React.Fragment>
+      <button ref={anchorRef} type="button" role="combobox" aria-haspopup="listbox" aria-expanded={open}
+        aria-label={ariaLabel} disabled={disabled} onClick={() => setOpen(o => !o)}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 8, maxWidth: '100%',
+          padding: '7px 10px', borderRadius: 8, border: `1px solid ${open ? DS.accent : DS.border}`,
+          boxShadow: open ? `0 0 0 3px ${DS.accentLight}` : 'none',
+          background: DS.bg, color: DS.text, cursor: disabled ? 'not-allowed' : 'pointer',
+          fontSize: 13.5, fontWeight: 600, fontFamily: 'inherit', minWidth: 0,
+          transition: 'border-color 0.12s, box-shadow 0.12s', ...triggerStyle,
+        }}>
+        {icon && <Icon name={icon} size={15} color={DS.accent} />}
+        <span style={{ flex: 1, minWidth: 0, textAlign: 'left', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: current ? DS.text : DS.muted }}>
+          {current ? current.label : placeholder}
+        </span>
+        <Icon name="chevron_d" size={15} color={DS.faint} />
+      </button>
+      <Popover open={open} onClose={() => setOpen(false)} anchorRef={anchorRef} align={align} width={width} role="listbox" ariaLabel={ariaLabel}>
+        <div style={{ padding: 8, borderBottom: `1px solid ${DS.border}` }}>
+          <input ref={searchRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder={searchPlaceholder}
+            style={{ width: '100%', boxSizing: 'border-box', padding: '7px 10px', fontSize: 13, borderRadius: 7, border: `1px solid ${DS.border}`, outline: 'none', background: DS.bg, color: DS.text, fontFamily: 'inherit' }} />
+        </div>
+        <div style={{ maxHeight: 320, overflow: 'auto', padding: 4 }}>
+          {total === 0 ? (
+            <div style={{ padding: '20px 12px', textAlign: 'center', fontSize: 12.5, color: DS.muted }}>No matches</div>
+          ) : filtered.map(g => (
+            <div key={g.key} role="group" aria-label={g.label}>
+              {g.label && (
+                <div style={{ padding: '7px 10px 4px', fontSize: 10.5, fontWeight: 700, color: DS.faint, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{g.label}</div>
+              )}
+              {g.items.map(it => {
+                const active = it.id === value;
+                return (
+                  <button key={it.id} type="button" role="option" aria-selected={active}
+                    onClick={() => { onSelect && onSelect(it.id); setOpen(false); }}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left',
+                      padding: '8px 10px', border: 'none', borderRadius: 7, cursor: 'pointer',
+                      background: active ? DS.accentLight : 'transparent',
+                    }}
+                    onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = DS.surface; }}
+                    onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = 'transparent'; }}>
+                    {it.icon && <Icon name={it.icon} size={14} color={active ? DS.accent : DS.faint} />}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: active ? 600 : 500, color: active ? DS.accent : DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.label}</div>
+                      {it.sublabel && <div style={{ fontSize: 11.5, color: DS.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.sublabel}</div>}
+                    </div>
+                    {active && <Icon name="check" size={14} color={DS.accent} />}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+        {footer && <div style={{ padding: 8, borderTop: `1px solid ${DS.border}` }}>{footer}</div>}
+      </Popover>
+    </React.Fragment>
+  );
+};
+
 // ─── Export ────────────────────────────────────────────────────────────────────
 Object.assign(window, {
   DS, Icon, Badge, StatusPill, Avatar, KPICard, StatCard, shadeColor, Sidebar, PageHeader, Btn, Card,
   Table, TableRow, RowActionsMenu, Checkbox, Sparkline, LineChart, BarChart, ScorePill, Divider, NAV_CONFIG, navParentId,
   Modal, Field, Input, Textarea, Select, Segmented, SearchInput, EmptyState,
-  useDashboardPrefs, CustomiseModal, Toggle,
+  useDashboardPrefs, CustomiseModal, Toggle, Popover, SlideOver, Combobox,
   termTodayISO, getCentreTerms, termStatus, resolveActiveTerm,
 });
