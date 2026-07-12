@@ -1038,6 +1038,90 @@ const Card = ({ children, style = {}, title, subtitle, actions, icon, accent }) 
   );
 };
 
+// ─── Dark hero surface ─────────────────────────────────────────────────────────
+// Premium "ink" panel used at the top of dashboards: a deep slate gradient with
+// a soft radial glow in the live accent (DS.accent is admin-themeable, so the
+// glow re-themes with the centre brand). `heroSurface` is a function so the
+// accent is read at render time; HERO_TXT are the text/hairline tokens for
+// content sitting on the panel.
+const HERO_TXT = {
+  soft:     'rgba(255,255,255,0.75)',
+  faint:    'rgba(255,255,255,0.52)',
+  hairline: 'rgba(255,255,255,0.10)',
+};
+const heroSurface = () => ({
+  position: 'relative', borderRadius: 16, overflow: 'hidden',
+  padding: '26px 28px',
+  background: [
+    `radial-gradient(900px 420px at 88% -10%, ${DS.accent}40, transparent 60%)`,
+    `radial-gradient(700px 380px at -10% 115%, ${DS.accent}1E, transparent 55%)`,
+    'linear-gradient(135deg, #0C1424 0%, #101A30 55%, #14213C 100%)',
+  ].join(', '),
+  boxShadow: `${DS.cardShadowHi}, inset 0 1px 0 rgba(255,255,255,0.06)`,
+});
+
+// Buttons for dark surfaces — the light Btn variants don't read on ink.
+// Solid = white fill / ink text (the hero's primary action); Ghost = translucent.
+const HeroSolidBtn = ({ icon, children, onClick }) => {
+  const [hov, setHov] = React.useState(false);
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 7,
+        padding: '9px 16px', borderRadius: 9, border: 'none', cursor: 'pointer',
+        background: hov ? '#E2E8F0' : '#fff', color: '#0F172A',
+        fontSize: 13.5, fontWeight: 600, whiteSpace: 'nowrap',
+        transition: 'background 0.12s',
+      }}
+    >
+      {icon && <Icon name={icon} size={15} />}
+      {children}
+    </button>
+  );
+};
+const HeroGhostBtn = ({ icon, children, onClick }) => {
+  const [hov, setHov] = React.useState(false);
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 7,
+        padding: '8px 14px', borderRadius: 9, cursor: 'pointer',
+        background: hov ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.06)',
+        border: '1px solid rgba(255,255,255,0.18)', color: '#fff',
+        fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap',
+        transition: 'background 0.12s',
+      }}
+    >
+      {icon && <Icon name={icon} size={14} />}
+      {children}
+    </button>
+  );
+};
+
+// ─── Hover row ─────────────────────────────────────────────────────────────────
+// Generic list row for preview cards — quiet hairline dividers, surface tint on
+// hover when clickable. Pairs with Card (rows carry their own padding).
+const HoverRow = ({ onClick, last, children, pad = '12px 20px' }) => {
+  const [hov, setHov] = React.useState(false);
+  return (
+    <div
+      onClick={onClick}
+      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 12, padding: pad,
+        cursor: onClick ? 'pointer' : 'default',
+        background: hov && onClick ? DS.surface : 'transparent',
+        borderBottom: last ? 'none' : `1px solid ${DS.border}`,
+        transition: 'background 0.1s',
+      }}
+    >{children}</div>
+  );
+};
+
 // ─── Table ─────────────────────────────────────────────────────────────────────
 // One professional table system every consumer inherits. Backward-compatible:
 //   <Table cols={['Name','Score']} rows={[[<a/>, 92], …]} />
@@ -2138,6 +2222,7 @@ const Combobox = ({
 // ─── Export ────────────────────────────────────────────────────────────────────
 Object.assign(window, {
   DS, Icon, Badge, StatusPill, Avatar, KPICard, StatCard, shadeColor, Sidebar, PageHeader, Btn, Card,
+  HERO_TXT, heroSurface, HeroSolidBtn, HeroGhostBtn, HoverRow,
   Table, TableRow, RowActionsMenu, Checkbox, Sparkline, LineChart, BarChart, ScorePill, Divider, NAV_CONFIG, navParentId,
   Modal, Field, Input, Textarea, Select, Segmented, SearchInput, EmptyState,
   useDashboardPrefs, CustomiseModal, Toggle, Popover, SlideOver, Combobox,

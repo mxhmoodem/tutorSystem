@@ -9,9 +9,15 @@
 //
 // Presentation refactor only — all data sources, the live "Reports due"
 // derivation, attendance state and the lesson-planner globals are kept
-// as they were. New layout order: today (hero + later) → action items →
-// quick actions → KPIs → two-up preview lists. Blocks with no source yet
-// render an empty/TODO state rather than inventing data.
+// as they were. Layout order: hero (greeting + now/next session +
+// later-today, on one dark ink panel) → stat deck (action-item band over
+// a KPI stat band, one panel) → two-up preview lists → reports due. Blocks
+// with no source
+// yet render an empty/TODO state rather than inventing data. Quick
+// actions were removed by request (every shortcut had a nav home).
+//
+// Dark-hero primitives (HERO_TXT, heroSurface, HeroSolidBtn, HeroGhostBtn,
+// HoverRow) come from shared.jsx — shared with the admin dashboard.
 
 const TODAY_ISO = '2026-04-25';
 
@@ -21,7 +27,7 @@ const COMPLETION_MIN  = 50;
 const SCORE_DROP      = 10;
 const UP_NEXT_WINDOW  = 120;   // minutes
 
-// Subject → dot colour for session / class items. Local helper following
+// Subject → colour for session / class items. Local helper following
 // the existing per-file convention (no shared exported subjectColor).
 const teacherSubjectColor = (subj = '') =>
   subj.includes('A-Level') ? '#7C3AED' :
@@ -51,81 +57,132 @@ const TSeeAll = ({ label = 'See all', onClick }) => {
   );
 };
 
-// A small "Later today" session card (right column of the hero block).
-const SessionCard = ({ s, onClick }) => (
-  <button onClick={onClick} style={{
-    display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left',
-    padding: '11px 12px', borderRadius: 9, cursor: 'pointer',
-    background: DS.bg, border: `1px solid ${DS.border}`,
-  }}>
-    <span style={{ fontSize: 12.5, fontWeight: 500, color: DS.text, width: 42, flexShrink: 0 }}>{s.time}</span>
-    <span style={{ width: 8, height: 8, borderRadius: '50%', background: teacherSubjectColor(s.subject), flexShrink: 0 }} />
-    <div style={{ flex: 1, minWidth: 0 }}>
-      <div style={{ fontSize: 12.5, fontWeight: 500, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.group}</div>
-      <div style={{ fontSize: 11, color: DS.muted }}>{s.room} · {s.students} students</div>
-    </div>
-  </button>
-);
-
-// One action-item tile (to mark / AI feedback / attendance / messages).
-// Quiet by default — colour shows only when there's something to act on, so a
-// zero reads as "done" rather than an alert.
-const ActionTile = ({ icon, count, label, tone = 'accent', onClick }) => {
-  const tones = { accent: DS.accent, warning: DS.warning, danger: DS.danger, info: DS.info };
-  const active = count > 0;
-  const toneColor = tones[tone] || DS.accent;
+// A "Later today" session row inside the dark hero — translucent surface,
+// slim subject bar (brightened so it reads on ink), tabular time.
+const TLaterRow = ({ s, onClick }) => {
   const [hov, setHov] = React.useState(false);
   return (
     <button
       onClick={onClick}
       onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
       style={{
-        flex: '1 1 160px', minWidth: 0, display: 'flex', alignItems: 'center', gap: 12,
-        padding: '15px 18px', borderRadius: 12, textAlign: 'left', cursor: 'pointer',
-        background: DS.card, border: `1px solid ${hov ? DS.borderDark : DS.cardBorder}`,
-        boxShadow: DS.cardShadow, transition: 'border-color 0.14s ease',
+        display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left',
+        padding: '10px 12px', borderRadius: 10, cursor: 'pointer',
+        background: hov ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.05)',
+        border: '1px solid rgba(255,255,255,0.09)', transition: 'background 0.12s',
       }}
     >
-      <div style={{
-        width: 36, height: 36, borderRadius: 9, flexShrink: 0,
-        background: DS.surface, color: active ? toneColor : DS.faint,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}>
-        <Icon name={icon} size={17} />
-      </div>
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 21, fontWeight: 700, color: active ? DS.text : DS.faint, lineHeight: 1, letterSpacing: '-0.4px' }}>{count}</div>
-        <div style={{ fontSize: 12.5, color: DS.muted, marginTop: 4 }}>{label}</div>
+      <span style={{ fontSize: 12, fontWeight: 600, color: HERO_TXT.soft, width: 40, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{s.time}</span>
+      <span style={{ width: 3, height: 24, borderRadius: 2, background: shadeColor(teacherSubjectColor(s.subject), 30), flexShrink: 0 }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 600, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.group}</div>
+        <div style={{ fontSize: 11, color: HERO_TXT.faint, marginTop: 1 }}>{s.room} · {s.students} students</div>
       </div>
     </button>
   );
 };
 
-// One row in the quick-actions list. Its own component so the hover hook is
-// stable regardless of whether the parent section is toggled on/off (avoids a
-// Rules-of-Hooks violation that would otherwise crash when toggling the section).
-const QuickActionRow = ({ action, divider }) => {
+// One segment of the action-item band (to mark / feedback / attendance /
+// messages). Quiet by default — the icon chip takes its tone colour only when
+// there's something to act on, so a zero reads as "done" rather than an alert.
+// Its own component so the hover hook is stable regardless of whether the
+// parent section is toggled on/off (avoids a Rules-of-Hooks violation).
+const TActionCell = ({ icon, count, label, tone = 'accent', onClick }) => {
+  const tones = {
+    accent:  { bg: DS.accentLight, color: DS.accent },
+    warning: { bg: DS.warningBg,   color: DS.warning },
+    danger:  { bg: DS.dangerBg,    color: DS.danger },
+    info:    { bg: DS.infoBg,      color: DS.info },
+  };
+  const t = tones[tone] || tones.accent;
+  const active = count > 0;
   const [hov, setHov] = React.useState(false);
   return (
     <button
-      onClick={action.onClick}
+      onClick={onClick}
       onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
       style={{
-        flex: '1 1 160px', minWidth: 0, display: 'flex', alignItems: 'center', gap: 10,
-        padding: '14px 16px', border: 'none', background: hov ? DS.surface : 'transparent',
-        cursor: 'pointer', textAlign: 'left',
-        borderRight: divider ? `1px solid ${DS.border}` : 'none',
-        transition: 'background 0.1s',
+        display: 'flex', alignItems: 'center', gap: 13, minWidth: 0,
+        padding: '16px 20px', textAlign: 'left', cursor: 'pointer',
+        background: hov ? DS.surface : 'transparent',
+        border: 'none', borderLeft: `1px solid ${DS.border}`,
+        transition: 'background 0.1s', fontFamily: 'inherit',
       }}
     >
       <div style={{
-        width: 32, height: 32, borderRadius: 7, flexShrink: 0,
-        background: DS.accentLight, color: DS.accent,
+        width: 38, height: 38, borderRadius: 10, flexShrink: 0,
+        background: active ? t.bg : DS.surface,
+        color: active ? t.color : DS.faint,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
+        transition: 'background 0.12s, color 0.12s',
       }}>
-        <Icon name={action.icon} size={14} />
+        <Icon name={icon} size={17} />
       </div>
-      <span style={{ fontSize: 13, fontWeight: 500, color: DS.text }}>{action.label}</span>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{
+          fontSize: 22, fontWeight: 700, lineHeight: 1, letterSpacing: '-0.4px',
+          color: active ? DS.text : DS.faint, fontVariantNumeric: 'tabular-nums',
+        }}>{count}</div>
+        <div style={{ fontSize: 12.5, color: DS.muted, marginTop: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</div>
+      </div>
+      <span style={{
+        display: 'flex', color: DS.faint, flexShrink: 0,
+        opacity: hov ? 1 : 0, transform: hov ? 'none' : 'translateX(-3px)',
+        transition: 'opacity 0.12s, transform 0.12s',
+      }}><Icon name="chevron_r" size={14} /></span>
+    </button>
+  );
+};
+
+// One segment of the KPI stat band — the light-surface sibling of the admin
+// hero's HeroStatBand: caps overline, big tabular value with the unit
+// de-emphasised, sub-line, and for percentage stats a slim meter in place of
+// the old donut ring. Meter tone follows the ScorePill thresholds used
+// elsewhere (≥80 healthy, ≥60 watch, else concern) so colour carries meaning
+// and appears nowhere else in the band. Each cell deep-links to its screen.
+const TKpiCell = ({ k, onClick }) => {
+  const [hov, setHov] = React.useState(false);
+  const unit = /^(\d+(?:\.\d+)?)%$/.exec(k.value || '');
+  const meterCol = k.pct == null ? null : k.pct >= 80 ? DS.success : k.pct >= 60 ? DS.warning : DS.danger;
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+      style={{
+        textAlign: 'left', minWidth: 0, padding: '18px 20px', cursor: 'pointer',
+        background: hov ? DS.surface : 'transparent',
+        border: 'none', borderLeft: `1px solid ${DS.border}`,
+        transition: 'background 0.1s', fontFamily: 'inherit',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <span style={{
+          fontSize: 11, fontWeight: 600, letterSpacing: '0.07em', textTransform: 'uppercase',
+          color: DS.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        }}>{k.label}</span>
+        <span style={{
+          display: 'flex', color: DS.faint, flexShrink: 0,
+          opacity: hov ? 1 : 0, transform: hov ? 'none' : 'translateX(-3px)',
+          transition: 'opacity 0.12s, transform 0.12s',
+        }}><Icon name="chevron_r" size={13} /></span>
+      </div>
+      <div style={{
+        fontSize: 27, fontWeight: 700, color: DS.text, letterSpacing: '-0.6px',
+        lineHeight: 1.15, marginTop: 8, fontVariantNumeric: 'tabular-nums',
+      }}>
+        {unit
+          ? <>{unit[1]}<span style={{ fontSize: 15, fontWeight: 600, color: DS.muted, marginLeft: 1 }}>%</span></>
+          : k.value}
+      </div>
+      <div style={{
+        fontSize: 12, color: DS.muted, marginTop: 4,
+        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+      }}>{k.sub}</div>
+      {k.pct != null && (
+        <div style={{ height: 3, borderRadius: 2, background: DS.border, marginTop: 12, maxWidth: 160, overflow: 'hidden' }}>
+          <div style={{ width: `${Math.max(0, Math.min(100, k.pct))}%`, height: '100%', borderRadius: 2, background: meterCol }} />
+        </div>
+      )}
     </button>
   );
 };
@@ -216,13 +273,6 @@ const TeacherDashboard = () => {
     { icon: 'message', count: unreadMessages,     label: 'unread messages',    tone: 'danger',  onClick: () => go('comms') },
   ];
 
-  const quickActions = [
-    { icon: 'plus',    label: 'New homework',     onClick: () => go('homework') },
-    { icon: 'message', label: 'Message class',    onClick: () => go('comms') },
-    { icon: 'check',   label: 'Mark register',     onClick: () => go('attendance') },
-    { icon: 'bell',    label: 'Send announcement', onClick: () => go('comms') },
-  ];
-
   // ── KPIs (4) — read from the ONE teacher metrics layer (F2) ────────
   // Every count (students, HW completion, avg attendance, to-mark) comes from
   // window.teacherMetrics so the Dashboard reconciles with My Classes, My
@@ -236,11 +286,13 @@ const TeacherDashboard = () => {
     return t.t ? Math.round(t.s / t.t * 100) : 0;
   })();
   const activeAssignments = tmMetrics ? tmMetrics.activeClasses : homeworkItems.filter(h => h.status === 'open' || h.toMark > 0).length;
+  // `pct` re-encodes the same value as a slim meter; `page` is where the cell
+  // deep-links. No new data — presentation hints only.
   const kpis = [
-    { label: 'My students',        value: String(myStudents), sub: `across ${tmMetrics ? tmMetrics.activeClasses : ''} classes`.trim(), icon: 'users', iconBg: DS.accentLight, accent: DS.accent },
-    { label: 'HW completion',      value: `${hwCompletion}%`,  sub: 'this term', icon: 'clip', iconBg: DS.warningBg, accent: DS.warning },
-    { label: 'Avg attendance',     value: tmMetrics ? `${tmMetrics.avgAttendance}%` : '—', sub: tmMetrics ? 'across your students' : 'awaiting register', icon: 'check', iconBg: DS.successBg, accent: DS.success },
-    { label: 'Active classes',     value: String(tmMetrics ? tmMetrics.activeClasses : activeAssignments), sub: `${tmMetrics ? tmMetrics.enrolments : ''} enrolments`.trim(), icon: 'calendar', iconBg: DS.infoBg, accent: DS.info },
+    { label: 'My students',    value: String(myStudents), sub: `across ${tmMetrics ? tmMetrics.activeClasses : ''} classes`.trim(), page: 'students' },
+    { label: 'HW completion',  value: `${hwCompletion}%`,  sub: 'this term', pct: hwCompletion, page: 'homework' },
+    { label: 'Avg attendance', value: tmMetrics ? `${tmMetrics.avgAttendance}%` : '—', sub: tmMetrics ? 'across your students' : 'awaiting register', pct: tmMetrics ? tmMetrics.avgAttendance : null, page: 'attendance' },
+    { label: 'Active classes', value: String(tmMetrics ? tmMetrics.activeClasses : activeAssignments), sub: `${tmMetrics ? tmMetrics.enrolments : ''} enrolments`.trim(), page: 'classes' },
   ];
 
   // ── Students needing attention — reason chip via thresholds ────────
@@ -270,7 +322,6 @@ const TeacherDashboard = () => {
   const SECTIONS = [
     { id: 'today',    label: 'Today',                     hint: 'Current session & later-today' },
     { id: 'actions',  label: 'Action items',              hint: 'To mark, attendance, messages…' },
-    { id: 'quick',    label: 'Quick actions',             hint: 'Common shortcuts' },
     { id: 'kpis',     label: 'Key metrics',               hint: 'Students, completion, attendance…' },
     { id: 'attention',label: 'Students needing attention' },
     { id: 'submissions', label: 'Recent submissions' },
@@ -280,142 +331,182 @@ const TeacherDashboard = () => {
   const [customiseOpen, setCustomiseOpen] = React.useState(false);
   const show = prefs.isOn;
 
+  const hwPct = hwHasDueToday ? Math.round((hwDueToday.submitted / hwDueToday.total) * 100) : 0;
+
   return (
     <div style={{ padding: '32px' }}>
-      <PageHeader
-        title={`Good morning, ${TEACHER_NAME.split(' ')[0]}`}
-        subtitle={`Friday, 25 April 2026 · ${classesToday} ${classesToday === 1 ? 'class' : 'classes'} today`}
-        actions={[
-          <Btn key="cust" variant="secondary" icon="settings" small onClick={() => setCustomiseOpen(true)}>Customise</Btn>,
-        ]}
-      />
+      {/* Pulse for the "Live now" dot in the hero. */}
+      <style>{`@keyframes tosPulseDot {
+        0% { box-shadow: 0 0 0 0 rgba(74,222,128,0.45); }
+        70% { box-shadow: 0 0 0 6px rgba(74,222,128,0); }
+        100% { box-shadow: 0 0 0 0 rgba(74,222,128,0); }
+      }`}</style>
 
-      {/* ── Today — hero + later-today ─────────────────────────────── */}
-      {show('today') && (
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 20, marginBottom: 24 }}>
-        {/* Hero — current / next session. Stands out via elevation + type, not colour. */}
-        <div style={{ flex: '2 1 300px', minWidth: 0 }}>
-          <Card style={{ height: '100%', boxShadow: hero ? DS.cardShadowHi : DS.cardShadow }}>
-            {hero ? (
-              <div style={{ padding: '22px 24px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-                  <span style={{
-                    display: 'inline-flex', alignItems: 'center', gap: 5,
-                    fontSize: 11.5, fontWeight: 600, padding: '3px 10px', borderRadius: 20,
-                    background: DS.accentLight, color: DS.accent, border: `1px solid ${DS.accentBorder}`,
-                  }}>
-                    <Icon name="clock" size={12} />
-                    {heroIsNow ? 'Now' : 'Up next'}
-                  </span>
-                  <span style={{ fontSize: 12.5, color: DS.muted }}>{hero.time} · {hero.room}</span>
+      {/* ── Hero — greeting + now/next session + later-today on one ink panel ── */}
+      <section style={{ ...heroSurface(), marginBottom: 24 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{
+              fontSize: 11.5, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase',
+              color: HERO_TXT.faint,
+            }}>Friday, 25 April 2026 · {classesToday} {classesToday === 1 ? 'class' : 'classes'} today</div>
+            <h1 style={{ fontSize: 24, fontWeight: 700, color: '#fff', margin: '8px 0 0', letterSpacing: '-0.5px' }}>
+              Good morning, {TEACHER_NAME.split(' ')[0]}
+            </h1>
+          </div>
+          <HeroGhostBtn icon="settings" onClick={() => setCustomiseOpen(true)}>Customise</HeroGhostBtn>
+        </div>
+
+        {/* Now / up next + later today. With no session left (and none later),
+            the two columns collapse into one quiet all-clear row. */}
+        {show('today') && (
+        <div style={{
+          display: 'flex', flexWrap: 'wrap', gap: 24, marginTop: 22,
+          borderTop: `1px solid ${HERO_TXT.hairline}`, paddingTop: 22,
+        }}>
+          {!hero ? (
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+              <div style={{
+                width: 44, height: 44, borderRadius: 12, flexShrink: 0,
+                background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#4ADE80',
+              }}>
+                <Icon name="check" size={20} />
+              </div>
+              <div style={{ flex: 1, minWidth: 180 }}>
+                <div style={{ fontSize: 16, fontWeight: 700, color: '#fff' }}>
+                  {classesToday > 0 ? 'Done for today' : 'No classes today'}
+                </div>
+                <div style={{ fontSize: 12.5, color: HERO_TXT.faint, marginTop: 2 }}>
+                  {classesToday > 0
+                    ? `All ${classesToday} ${classesToday === 1 ? 'session' : 'sessions'} wrapped up — nothing else scheduled.`
+                    : 'Your timetable is clear — enjoy the breather.'}
+                </div>
+              </div>
+              <HeroGhostBtn icon="calendar" onClick={() => go('timetable')}>View timetable</HeroGhostBtn>
+            </div>
+          ) : (
+          <>
+          {/* Current / next session */}
+          <div style={{ flex: '1.7 1 320px', minWidth: 0 }}>
+            <>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  {heroIsNow ? (
+                    <span style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 7,
+                      fontSize: 11.5, fontWeight: 600, padding: '4px 11px', borderRadius: 20,
+                      background: 'rgba(74,222,128,0.14)', border: '1px solid rgba(74,222,128,0.30)',
+                      color: '#86EFAC', letterSpacing: '0.03em',
+                    }}>
+                      <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#4ADE80', animation: 'tosPulseDot 2s infinite' }} />
+                      LIVE NOW
+                    </span>
+                  ) : (
+                    <span style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 6,
+                      fontSize: 11.5, fontWeight: 600, padding: '4px 11px', borderRadius: 20,
+                      background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.16)',
+                      color: '#fff', letterSpacing: '0.03em',
+                    }}>
+                      <Icon name="clock" size={12} />
+                      UP NEXT
+                    </span>
+                  )}
+                  <span style={{ fontSize: 12.5, color: HERO_TXT.faint, fontVariantNumeric: 'tabular-nums' }}>{hero.time} · {hero.room}</span>
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
-                  <span style={{ width: 9, height: 9, borderRadius: '50%', background: teacherSubjectColor(hero.subject), flexShrink: 0 }} />
-                  <span style={{ fontSize: 20, fontWeight: 700, color: DS.text, letterSpacing: '-0.4px' }}>{hero.subject}</span>
+                <div style={{ fontSize: 22, fontWeight: 700, color: '#fff', letterSpacing: '-0.5px', marginTop: 14 }}>
+                  {hero.subject}
                 </div>
-                <div style={{ fontSize: 13.5, color: DS.muted, marginBottom: 18 }}>
+                <div style={{ fontSize: 13, color: HERO_TXT.soft, marginTop: 4 }}>
                   {hero.group} · {hero.students} students
                 </div>
 
                 {/* Homework due today progress strip */}
                 {hwHasDueToday ? (
                   <div style={{
-                    padding: '12px 14px', borderRadius: 10, marginBottom: 18,
-                    background: DS.surface, border: `1px solid ${DS.border}`,
+                    padding: '12px 14px', borderRadius: 10, margin: '16px 0 18px', maxWidth: 460,
+                    background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.10)',
                   }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                      <span style={{ fontSize: 12.5, fontWeight: 500, color: DS.sub }}>Homework due today</span>
-                      <span style={{ fontSize: 12.5, fontWeight: 600, color: DS.text }}>{hwDueToday.submitted}/{hwDueToday.total} submitted</span>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 10 }}>
+                      <span style={{ fontSize: 12.5, color: HERO_TXT.soft }}>Homework due today</span>
+                      <span style={{ fontSize: 12.5, fontWeight: 600, color: '#fff', fontVariantNumeric: 'tabular-nums' }}>
+                        {hwDueToday.submitted}/{hwDueToday.total} submitted
+                      </span>
                     </div>
-                    <div style={{ height: 6, background: DS.border, borderRadius: 3, overflow: 'hidden' }}>
-                      <div style={{
-                        width: `${Math.round((hwDueToday.submitted / hwDueToday.total) * 100)}%`,
-                        height: '100%', background: DS.accent, borderRadius: 3,
-                      }} />
+                    <div style={{ height: 6, background: 'rgba(255,255,255,0.14)', borderRadius: 3, overflow: 'hidden' }}>
+                      <div style={{ width: `${hwPct}%`, height: '100%', background: '#fff', borderRadius: 3 }} />
                     </div>
                   </div>
                 ) : (
                   <div style={{
-                    padding: '11px 14px', borderRadius: 10, marginBottom: 18,
-                    background: DS.surface, border: `1px solid ${DS.border}`,
-                    fontSize: 12.5, color: DS.muted,
+                    padding: '11px 14px', borderRadius: 10, margin: '16px 0 18px', maxWidth: 460,
+                    background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.09)',
+                    fontSize: 12.5, color: HERO_TXT.faint,
                   }}>No homework due today for this class.</div>
                 )}
 
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <Btn variant="primary" icon="check" onClick={() => go('attendance')}>Take attendance</Btn>
-                  <Btn variant="secondary" icon={hasPlan(hero.group) ? 'eye' : 'edit'} onClick={() => openPlanner(hero.group)}>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                  <HeroSolidBtn icon="check" onClick={() => go('attendance')}>Take attendance</HeroSolidBtn>
+                  <HeroGhostBtn icon={hasPlan(hero.group) ? 'eye' : 'edit'} onClick={() => openPlanner(hero.group)}>
                     Open lesson
-                  </Btn>
+                  </HeroGhostBtn>
                 </div>
+            </>
+          </div>
+
+          {/* Later today */}
+          <div style={{ flex: '1 1 240px', minWidth: 0 }}>
+            <div style={{
+              fontSize: 11, fontWeight: 600, letterSpacing: '0.07em', textTransform: 'uppercase',
+              color: HERO_TXT.faint, marginBottom: 10,
+            }}>Later today</div>
+            {laterSessions.length === 0 ? (
+              <div style={{ fontSize: 12.5, color: HERO_TXT.faint, padding: '6px 0' }}>
+                Nothing else scheduled.
               </div>
             ) : (
-              <EmptyState
-                icon="calendar"
-                title="Done for today"
-                message="You have no more sessions scheduled today."
-              />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {laterSessions.slice(0, 3).map((s, i) => (
+                  <TLaterRow key={i} s={s} onClick={() => openPlanner(s.group)} />
+                ))}
+                {laterSessions.length > 3 && (
+                  <button onClick={() => go('timetable')} style={{
+                    border: 'none', background: 'transparent', cursor: 'pointer',
+                    fontSize: 12.5, fontWeight: 500, color: HERO_TXT.soft, padding: '4px 4px',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
+                  }}>
+                    +{laterSessions.length - 3} more <Icon name="chevron_r" size={13} />
+                  </button>
+                )}
+              </div>
             )}
-          </Card>
+          </div>
+          </>
+          )}
         </div>
+        )}
+      </section>
 
-        {/* Later today */}
-        <div style={{ flex: '1 1 200px', minWidth: 0 }}>
-          <Card title="Later today" style={{ height: '100%' }}>
-            <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {laterSessions.length === 0 ? (
-                <div style={{ padding: '20px 6px', textAlign: 'center', fontSize: 12.5, color: DS.muted }}>
-                  Done for today
-                </div>
-              ) : (
-                <>
-                  {laterSessions.slice(0, 3).map((s, i) => (
-                    <SessionCard key={i} s={s} onClick={() => openPlanner(s.group)} />
-                  ))}
-                  {laterSessions.length > 3 && (
-                    <button onClick={() => go('timetable')} style={{
-                      border: 'none', background: 'transparent', cursor: 'pointer',
-                      fontSize: 12.5, fontWeight: 500, color: DS.accent, padding: '6px 4px',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
-                    }}>
-                      +{laterSessions.length - 3} more <Icon name="chevron_r" size={13} />
-                    </button>
-                  )}
-                </>
-              )}
-            </div>
-          </Card>
-        </div>
-      </div>
-      )}
-
-      {/* ── Action items (4 tiles) ─────────────────────────────────── */}
-      {show('actions') && (
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 24 }}>
-        {actionItems.map((a, i) => <ActionTile key={i} {...a} />)}
-      </div>
-      )}
-
-      {/* ── Quick actions row ──────────────────────────────────────── */}
-      {show('quick') && (
-      <Card title="Quick actions" style={{ marginBottom: 24 }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap' }}>
-          {quickActions.map((a, i) => (
-            <QuickActionRow key={a.label} action={a} divider={i < quickActions.length - 1} />
-          ))}
-        </div>
+      {/* ── Stat deck — action items over a KPI band, one panel ─────────
+          Both halves share the same column grid so the vertical hairlines
+          align; the Card's overflow:hidden clips the -1px divider trick. */}
+      {(show('actions') || show('kpis')) && (
+      <Card style={{ marginBottom: 24 }}>
+        {show('actions') && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', marginLeft: -1 }}>
+            {actionItems.map((a, i) => <TActionCell key={i} {...a} />)}
+          </div>
+        )}
+        {show('kpis') && (
+          <div style={{
+            display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', marginLeft: -1,
+            borderTop: show('actions') ? `1px solid ${DS.border}` : 'none',
+          }}>
+            {kpis.map(k => <TKpiCell key={k.label} k={k} onClick={() => go(k.page)} />)}
+          </div>
+        )}
       </Card>
-      )}
-
-      {/* ── KPI cards (4) ──────────────────────────────────────────── */}
-      {show('kpis') && (
-      <div style={{
-        display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-        gap: 16, marginBottom: 24,
-      }}>
-        {kpis.map(k => <StatCard key={k.label} {...k} />)}
-      </div>
       )}
 
       {/* ── Two-up: needs attention · recent submissions ───────────── */}
@@ -424,29 +515,26 @@ const TeacherDashboard = () => {
         {/* Students needing attention */}
         {show('attention') && (
         <div style={{ flex: '1 1 320px', minWidth: 0 }}>
-          <Card title="Students needing attention" actions={[
-            needsAttention.length > 0 && <Badge key="c" variant="warning">{needsAttention.length}</Badge>,
+          <Card style={{ height: '100%' }} title="Students needing attention" actions={[
+            needsAttention.length > 0 && <StatusPill key="c" tone="warning">{needsAttention.length}</StatusPill>,
             <Btn key="v" variant="ghost" icon="chevron_r" small onClick={() => go('progress')}>See all</Btn>,
           ].filter(Boolean)}>
             {needsAttention.length === 0 ? (
-              <div style={{ padding: '18px 16px', fontSize: 13, color: DS.muted }}>
+              <div style={{ padding: '18px 20px', fontSize: 13, color: DS.muted }}>
                 No students currently flagged — scores are holding steady.
               </div>
             ) : (
               <>
                 {needsAttention.slice(0, 6).map((s, i, arr) => (
-                  <div key={s.name} onClick={() => go('progress')} style={{
-                    display: 'flex', alignItems: 'center', gap: 11, padding: '11px 16px', cursor: 'pointer',
-                    borderBottom: i < Math.min(arr.length, 6) - 1 ? `1px solid ${DS.border}` : 'none',
-                  }}>
-                    <Avatar name={s.name} size={30} />
+                  <HoverRow key={s.name} onClick={() => go('progress')} last={i === Math.min(arr.length, 6) - 1}>
+                    <Avatar name={s.name} size={32} />
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13, fontWeight: 500, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.name}</div>
-                      <div style={{ fontSize: 11.5, color: DS.muted }}>Predicted {s.predicted}</div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.name}</div>
+                      <div style={{ fontSize: 11.5, color: DS.muted, marginTop: 1 }}>Predicted {s.predicted}</div>
                     </div>
-                    <Badge variant={s.tone === 'danger' ? 'danger' : 'warning'}>{s.reason}</Badge>
+                    <StatusPill tone={s.tone === 'danger' ? 'negative' : 'warning'}>{s.reason}</StatusPill>
                     <ScorePill score={s.scores[s.scores.length - 1]} />
-                  </div>
+                  </HoverRow>
                 ))}
                 {needsAttention.length > 6 && <TSeeAll onClick={() => go('progress')} />}
               </>
@@ -458,7 +546,7 @@ const TeacherDashboard = () => {
         {/* Recent submissions */}
         {show('submissions') && (
         <div style={{ flex: '1 1 320px', minWidth: 0 }}>
-          <Card title="Recent submissions" actions={[
+          <Card style={{ height: '100%' }} title="Recent submissions" actions={[
             <Btn key="v" variant="ghost" icon="chevron_r" small onClick={() => go('homework')}>See all</Btn>,
           ]}>
             {recentSubmissions.length === 0 ? (
@@ -471,17 +559,14 @@ const TeacherDashboard = () => {
             ) : (
               <>
                 {recentSubmissions.slice(0, 5).map((r, i, arr) => (
-                  <div key={i} style={{
-                    display: 'flex', alignItems: 'center', gap: 11, padding: '11px 16px',
-                    borderBottom: i < Math.min(arr.length, 5) - 1 ? `1px solid ${DS.border}` : 'none',
-                  }}>
-                    <Avatar name={r.student} size={30} />
+                  <HoverRow key={i} last={i === Math.min(arr.length, 5) - 1}>
+                    <Avatar name={r.student} size={32} />
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13, fontWeight: 500, color: DS.text }}>{r.student}</div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>{r.student}</div>
                       <div style={{ fontSize: 11.5, color: DS.muted }}>{r.assignment}</div>
                     </div>
                     <span style={{ fontSize: 11.5, color: DS.faint }}>{r.time}</span>
-                  </div>
+                  </HoverRow>
                 ))}
                 <TSeeAll onClick={() => go('homework')} />
               </>
@@ -498,32 +583,32 @@ const TeacherDashboard = () => {
         title="Reports due"
         actions={[
           dueOverdue > 0
-            ? <Badge key="o" variant="danger"><Icon name="flag" size={11} /> {dueOverdue} overdue</Badge>
+            ? <StatusPill key="o" tone="negative" dot>{dueOverdue} overdue</StatusPill>
             : reportsDue.length > 0
-              ? <Badge key="b" variant="accent"><Icon name="clock" size={11} /> {reportsDue.length} upcoming</Badge>
-              : <Badge key="b" variant="success"><Icon name="check" size={11} /> Nothing due</Badge>,
-          reportDrafts.length > 0 && <Badge key="d" variant="warning"><Icon name="edit" size={11} /> {reportDrafts.length} draft{reportDrafts.length !== 1 ? 's' : ''}</Badge>,
+              ? <StatusPill key="b" tone="accent">{reportsDue.length} upcoming</StatusPill>
+              : <StatusPill key="b" tone="positive">Nothing due</StatusPill>,
+          reportDrafts.length > 0 && <StatusPill key="d" tone="warning">{reportDrafts.length} draft{reportDrafts.length !== 1 ? 's' : ''}</StatusPill>,
           <Btn key="v" variant="ghost" icon="eye" small onClick={() => go('reports')}>View all</Btn>,
         ].filter(Boolean)}
       >
         <div>
           {reportsDue.length === 0 && (
-            <div style={{ padding: '18px 16px', fontSize: 13, color: DS.muted }}>No reports due — every student you teach resolves to optional or off, or is already up to date.</div>
+            <div style={{ padding: '18px 20px', fontSize: 13, color: DS.muted }}>No reports due — every student you teach resolves to optional or off, or is already up to date.</div>
           )}
           {reportsDue.slice(0, 6).map((d, i, arr) => (
-            <div key={d.id} onClick={() => go('reports')}
-              style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', cursor: 'pointer',
-                borderBottom: i < Math.min(arr.length, 6) - 1 ? `1px solid ${DS.border}` : 'none' }}>
+            <HoverRow key={d.id} onClick={() => go('reports')} last={i === Math.min(arr.length, 6) - 1} pad="13px 20px">
               <Avatar name={d.name} size={32} />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 500, color: DS.text }}>{rptFreqLabel(d.frequency)} report — {d.name}</div>
-                <div style={{ fontSize: 12, color: DS.muted }}>{d.templateName} · {d.source}{d.requirement === 'OPTIONAL' ? ' · optional' : ''}</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {rptFreqLabel(d.frequency)} report — {d.name}
+                </div>
+                <div style={{ fontSize: 12, color: DS.muted, marginTop: 1 }}>{d.templateName} · {d.source}{d.requirement === 'OPTIONAL' ? ' · optional' : ''}</div>
               </div>
               {d.overdue
-                ? <Badge variant="danger">Overdue · was {fmtDue(d.due)}</Badge>
-                : <Badge variant="default">Due {fmtDue(d.due)}</Badge>}
+                ? <StatusPill tone="negative" dot>Overdue · was {fmtDue(d.due)}</StatusPill>
+                : <StatusPill tone="neutral">Due {fmtDue(d.due)}</StatusPill>}
               <Icon name="chevron_r" size={14} color={DS.faint} />
-            </div>
+            </HoverRow>
           ))}
         </div>
       </Card>

@@ -5,10 +5,17 @@
 // Mock data (atRiskStudents, revenueData, recentActivity) lives in
 // mocks/adminDashboard.mock.jsx, loaded before this file in index.html.
 //
-// Layout follows the dashboard triage order: alerts → KPIs → quick
-// actions → today → light trends → preview lists. Presentation only —
-// every value keeps the source it already had; blocks with no source
-// yet render an empty/TODO state rather than inventing data.
+// Layout follows the dashboard triage order: hero (title + alerts + KPI
+// band) → setup prompt → today → trends → preview lists. Presentation
+// only — every value keeps the source it already had; blocks with no
+// source yet render an empty/TODO state rather than inventing data.
+// Quick actions were removed by request; "Send announcement" (the one
+// action with no page of its own) lives in the hero instead.
+//
+// The hero is a dark "ink" panel with a soft glow in the live accent
+// (DS.accent is admin-themeable, so the glow re-themes with the centre
+// brand). KPIs render inside it as a hairline-divided stat band instead
+// of a row of boxed cards.
 
 // ── Centre-wide flag thresholds (shared with the at-risk logic) ──
 // Reuse these if equivalent constants appear elsewhere later.
@@ -35,33 +42,65 @@ const adminSubjectColor = (name = '') => {
 // The centre name/identity now comes from centreMetrics.getActiveCentre()
 // (single source of truth) — no per-screen "demo centre" literal.
 
-// ── Small presentational subcomponents ──────────────────────────
+// Dark-hero primitives (HERO_TXT, heroSurface, HeroGhostBtn, HoverRow) come
+// from shared.jsx — shared with the teacher dashboard.
 
-// One row in the alert strip — only rendered by the caller when count > 0.
-const AlertRow = ({ tone, icon, text, cta, onClick }) => {
-  const c = tone === 'danger'
-    ? { bg: DS.dangerBg, border: DS.dangerBorder, color: DS.danger }
-    : { bg: DS.warningBg, border: DS.warningBorder, color: DS.warning };
+// One alert chip in the hero footer — translucent pill, tone shows only on
+// the icon so the strip stays calm. Only rendered when its count > 0.
+const HeroAlertChip = ({ tone, icon, text, cta, onClick }) => {
+  const iconColor = tone === 'danger' ? '#FCA5A5' : '#FCD34D';
   const [hov, setHov] = React.useState(false);
   return (
     <button
       onClick={onClick}
       onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
       style={{
-        display: 'flex', alignItems: 'center', gap: 10, width: '100%',
-        padding: '11px 14px', borderRadius: 10, textAlign: 'left', cursor: 'pointer',
-        background: c.bg, border: `1px solid ${c.border}`, borderLeft: `3px solid ${c.color}`,
-        boxShadow: hov ? DS.cardShadow : 'none', transition: 'box-shadow 0.12s',
+        display: 'inline-flex', alignItems: 'center', gap: 9,
+        padding: '8px 14px', borderRadius: 10, cursor: 'pointer', textAlign: 'left',
+        background: hov ? 'rgba(255,255,255,0.11)' : 'rgba(255,255,255,0.06)',
+        border: '1px solid rgba(255,255,255,0.13)',
+        transition: 'background 0.12s', maxWidth: '100%',
       }}
     >
-      <span style={{ display: 'flex', color: c.color, flexShrink: 0 }}><Icon name={icon} size={16} /></span>
-      <span style={{ fontSize: 13, color: DS.sub, flex: 1, minWidth: 0 }}>{text}</span>
-      <span style={{ fontSize: 12, fontWeight: 500, color: c.color, whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 3 }}>
-        {cta} <Icon name="chevron_r" size={13} />
+      <span style={{ display: 'flex', color: iconColor, flexShrink: 0 }}><Icon name={icon} size={14} /></span>
+      <span style={{ fontSize: 12.5, color: HERO_TXT.soft, minWidth: 0 }}>{text}</span>
+      <span style={{
+        fontSize: 12, fontWeight: 600, color: '#fff', whiteSpace: 'nowrap',
+        display: 'inline-flex', alignItems: 'center', gap: 3, flexShrink: 0,
+      }}>
+        {cta} <Icon name="chevron_r" size={12} />
       </span>
     </button>
   );
 };
+
+// KPI stat band inside the hero: hairline-divided columns, caps overline
+// labels, tabular figures. The -1px margin inside an overflow-hidden wrapper
+// hides the first column's divider on every wrapped row.
+const HeroStatBand = ({ stats }) => (
+  <div style={{ overflow: 'hidden', borderTop: `1px solid ${HERO_TXT.hairline}`, marginTop: 22, paddingTop: 20 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', rowGap: 18, marginLeft: -1 }}>
+      {stats.map(k => (
+        <div key={k.label} style={{ borderLeft: `1px solid ${HERO_TXT.hairline}`, padding: '2px 18px', minWidth: 0 }}>
+          <div style={{
+            fontSize: 11, fontWeight: 600, letterSpacing: '0.07em', textTransform: 'uppercase',
+            color: HERO_TXT.faint, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          }}>{k.label}</div>
+          <div style={{
+            fontSize: 27, fontWeight: 700, color: '#fff', letterSpacing: '-0.6px',
+            lineHeight: 1.15, marginTop: 7, fontVariantNumeric: 'tabular-nums',
+          }}>{k.value}</div>
+          <div style={{
+            fontSize: 12, color: HERO_TXT.faint, marginTop: 4,
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          }}>{k.sub}</div>
+        </div>
+      ))}
+    </div>
+  </div>
+);
+
+// ── Small presentational subcomponents (light surfaces) ─────────
 
 // "See all →" footer link used at the foot of every preview list.
 const SeeAll = ({ label = 'See all', onClick }) => {
@@ -82,62 +121,69 @@ const SeeAll = ({ label = 'See all', onClick }) => {
   );
 };
 
-// Compact session row for "Today's schedule".
-const SessionRow = ({ s, last, onClick }) => {
-  const statusBadge = s.status === 'no_teacher'
-    ? <Badge variant="warning">No teacher</Badge>
+// Compact session row for "Today's schedule" — time in tabular figures, a
+// slim subject bar instead of a dot, status as a soft StatusPill.
+const AdminSessionRow = ({ s, last, onClick }) => {
+  const status = s.status === 'no_teacher'
+    ? <StatusPill tone="warning">No teacher</StatusPill>
     : s.status === 'done'
-      ? <Badge variant="success">Attendance taken</Badge>
-      : <Badge variant="default">Upcoming</Badge>;
+      ? <StatusPill tone="positive">Attendance taken</StatusPill>
+      : <StatusPill tone="neutral">Upcoming</StatusPill>;
   return (
-    <div onClick={onClick} style={{
-      display: 'flex', alignItems: 'center', gap: 12, padding: '11px 16px', cursor: 'pointer',
-      borderBottom: last ? 'none' : `1px solid ${DS.border}`,
-    }}>
-      <span style={{ fontSize: 13, fontWeight: 500, color: DS.text, width: 46, flexShrink: 0 }}>{s.time}</span>
-      <span style={{ width: 8, height: 8, borderRadius: '50%', background: adminSubjectColor(s.subject), flexShrink: 0 }} />
+    <HoverRow onClick={onClick} last={last}>
+      <span style={{ fontSize: 12.5, fontWeight: 600, color: DS.muted, width: 44, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{s.time}</span>
+      <span style={{ width: 3, height: 26, borderRadius: 2, background: adminSubjectColor(s.subject), flexShrink: 0 }} />
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 500, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.subject}</div>
-        <div style={{ fontSize: 12, color: DS.muted }}>{s.teacher} · {s.room}</div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.subject}</div>
+        <div style={{ fontSize: 12, color: DS.muted, marginTop: 1 }}>{s.teacher} · {s.room}</div>
       </div>
-      {statusBadge}
-    </div>
+      {status}
+    </HoverRow>
   );
 };
 
-// One row in the quick-actions list. Its own component so the hover hook is
-// stable regardless of whether the parent section is toggled on/off (avoids a
-// Rules-of-Hooks violation that would otherwise crash when toggling the section).
-const QuickActionRow = ({ action, divider }) => {
-  const [hov, setHov] = React.useState(false);
-  return (
-    <button
-      onClick={action.onClick}
-      onMouseEnter={() => setHov(true)}
-      onMouseLeave={() => setHov(false)}
-      style={{
-        width: '100%', display: 'flex', alignItems: 'center', gap: 12,
-        padding: '11px 16px', border: 'none', background: hov ? DS.surface : 'transparent',
-        cursor: 'pointer', textAlign: 'left',
-        borderBottom: divider ? `1px solid ${DS.border}` : 'none',
-        transition: 'background 0.1s',
-      }}
-    >
-      <div style={{
-        width: 32, height: 32, borderRadius: 7,
-        background: DS.accentLight, color: DS.accent,
-        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-      }}>
-        <Icon name={action.icon} size={14} />
-      </div>
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 500, color: DS.text }}>{action.label}</div>
-        <div style={{ fontSize: 11, color: DS.muted }}>{action.desc}</div>
-      </div>
-      <Icon name="chevron_r" size={14} color={DS.faint} style={{ marginLeft: 'auto' }} />
-    </button>
-  );
+// Month-over-month % change from a series (last vs previous point) — used
+// for the headline delta on the trend cards. Derived, never invented.
+const trendDelta = (arr = []) => {
+  if (arr.length < 2 || !arr[arr.length - 2]) return null;
+  const prev = arr[arr.length - 2], cur = arr[arr.length - 1];
+  return Math.round(((cur - prev) / prev) * 1000) / 10;
 };
+
+// Trend card: quiet label → headline number → delta chip → soft area chart.
+const TrendCard = ({ label, headline, delta, series, labels, color, onOpen }) => (
+  <Card>
+    <div style={{ padding: '18px 20px 0' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 500, color: DS.muted }}>{label}</div>
+          <div style={{
+            fontSize: 26, fontWeight: 700, color: DS.text, letterSpacing: '-0.6px',
+            marginTop: 6, fontVariantNumeric: 'tabular-nums',
+          }}>{headline}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7 }}>
+            {delta != null && (
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+                fontSize: 12, fontWeight: 600, padding: '2px 8px', borderRadius: 6,
+                background: delta >= 0 ? DS.successBg : DS.dangerBg,
+                color: delta >= 0 ? DS.success : DS.danger,
+              }}>
+                <Icon name={delta >= 0 ? 'trending_up' : 'trending_dn'} size={12} />
+                {Math.abs(delta)}%
+              </span>
+            )}
+            <span style={{ fontSize: 12, color: DS.muted }}>vs last month</span>
+          </div>
+        </div>
+        <Btn variant="ghost" icon="chevron_r" small onClick={onOpen}>Reports</Btn>
+      </div>
+    </div>
+    <div style={{ padding: '10px 12px 10px 4px', height: 150 }}>
+      <LineChart labels={labels} series={[{ ...series, color }]} height="auto" area />
+    </div>
+  </Card>
+);
 
 const AdminDashboard = () => {
   const [announcementOpen, setAnnouncementOpen] = React.useState(false);
@@ -155,6 +201,7 @@ const AdminDashboard = () => {
   })();
   const setupSteps = (setupState && setupState.steps) || {};
   const setupRemaining = ['invite', 'students', 'classes'].filter(k => !setupSteps[k]).length;
+  const setupDone = 3 - setupRemaining;
 
   // ── Everything below derives from the centre-metrics selector layer
   //    (single source of truth). No hardcoded student / at-risk / session /
@@ -177,7 +224,7 @@ const AdminDashboard = () => {
   }));
   const flaggedCount = flaggedRows.length;
 
-  // ── Alerts (render a row only when its count > 0) — all derived ──
+  // ── Alerts (render a chip only when its count > 0) — all derived ──
   const classesToday   = cm.getClassesForCentre().filter(c => c.day ===
     ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date().getDay()] && c.status !== 'archived');
   const unstaffedToday = classesToday.filter(c => !c.teacher).length;
@@ -192,18 +239,11 @@ const AdminDashboard = () => {
 
   // ── KPIs — every hero value is wired (no dashes, §8). ──
   const kpis = [
-    { label: 'Active students',   value: String(cm.getActiveStudentCount()), sub: `${cm.getClassEnrolments()} enrolments`,        icon: 'users',    iconBg: DS.accentLight, accent: DS.accent  },
-    { label: 'Attendance (week)', value: `${cm.getAttendanceWeek()}%`,        sub: 'across active students',                       icon: 'check',    iconBg: DS.successBg,   accent: DS.success },
-    { label: 'Outstanding',       value: money(invRollup.outstanding),        sub: invRollup.overdue > 0 ? `${money(invRollup.overdue)} overdue` : 'all current', icon: 'invoice', iconBg: DS.warningBg, accent: DS.warning },
-    { label: 'Sessions (week)',   value: String(sessions.total),              sub: `${sessions.today} today`,                      icon: 'calendar', iconBg: DS.infoBg,      accent: DS.info    },
-    { label: 'Capacity used',     value: `${capacity.pct}%`,                  sub: `${capacity.used}/${capacity.cap} seats`,       icon: 'chart',    iconBg: DS.accentLight, accent: DS.accent  },
-  ];
-
-  const quickActions = [
-    { icon: 'plus',     label: 'Add student',       desc: 'Enrol a new student', onClick: () => go('students') },
-    { icon: 'invoice',  label: 'Create invoice',     desc: 'Bill a family',       onClick: () => go('invoices') },
-    { icon: 'calendar', label: 'New session',        desc: 'Schedule a class',    onClick: () => go('schedule') },
-    { icon: 'bell',     label: 'Send announcement',  desc: 'All parents & teachers', onClick: () => setAnnouncementOpen(true) },
+    { label: 'Active students',   value: String(cm.getActiveStudentCount()), sub: `${cm.getClassEnrolments()} enrolments` },
+    { label: 'Attendance (week)', value: `${cm.getAttendanceWeek()}%`,        sub: 'across active students' },
+    { label: 'Outstanding',       value: money(invRollup.outstanding),        sub: invRollup.overdue > 0 ? `${money(invRollup.overdue)} overdue` : 'all current' },
+    { label: 'Sessions (week)',   value: String(sessions.total),              sub: `${sessions.today} today` },
+    { label: 'Capacity used',     value: `${capacity.pct}%`,                  sub: `${capacity.used}/${capacity.cap} seats` },
   ];
 
   // ── Today's schedule — no admin schedule source yet ─────────────
@@ -224,7 +264,6 @@ const AdminDashboard = () => {
     { id: 'alerts',    label: 'Alerts',                  hint: 'Things that need attention now' },
     { id: 'kpis',      label: 'Key metrics',             hint: 'Students, attendance, sessions…' },
     { id: 'today',     label: "Today's schedule",        hint: 'Sessions running today' },
-    { id: 'actions',   label: 'Quick actions',           hint: 'Common shortcuts' },
     { id: 'trends',    label: 'Trends',                  hint: 'Enrolment & revenue charts' },
     { id: 'flagged',   label: 'Students needing attention' },
     { id: 'invoices',  label: 'Outstanding invoices' },
@@ -234,129 +273,127 @@ const AdminDashboard = () => {
   const [customiseOpen, setCustomiseOpen] = React.useState(false);
   const show = prefs.isOn;
 
+  const dateStr = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+
   return (
     <div style={{ padding: '32px' }}>
-      <PageHeader
-        title="Centre overview"
-        subtitle={`${cm.getActiveCentre().name} · ${new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}`}
-        actions={[
-          <Btn key="cust" variant="secondary" icon="settings" small onClick={() => setCustomiseOpen(true)}>Customise</Btn>,
-        ]}
-      />
+      {/* ── Hero — title, alert chips, KPI stat band on one ink panel ── */}
+      <section style={{ ...heroSurface(), marginBottom: 24 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{
+              fontSize: 11.5, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase',
+              color: HERO_TXT.faint,
+            }}>{cm.getActiveCentre().name} · {dateStr}</div>
+            <h1 style={{ fontSize: 24, fontWeight: 700, color: '#fff', margin: '8px 0 0', letterSpacing: '-0.5px' }}>
+              Centre overview
+            </h1>
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <HeroGhostBtn icon="megaphone" onClick={() => setAnnouncementOpen(true)}>Send announcement</HeroGhostBtn>
+            <HeroGhostBtn icon="settings" onClick={() => setCustomiseOpen(true)}>Customise</HeroGhostBtn>
+          </div>
+        </div>
+
+        {/* Alert chips (hidden entirely if nothing is flagged) */}
+        {show('alerts') && alerts.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 18 }}>
+            {alerts.map(a => <HeroAlertChip key={a.key} {...a} />)}
+          </div>
+        )}
+
+        {/* KPI stat band */}
+        {show('kpis') && <HeroStatBand stats={kpis} />}
+      </section>
 
       {/* ── Set up your centre (post-signup checklist prompt) ─────── */}
       {setupRemaining > 0 && (
         <div style={{
-          display: 'flex', alignItems: 'center', gap: 16, marginBottom: 24,
+          display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', marginBottom: 24,
           padding: '16px 20px', borderRadius: 12,
-          background: `linear-gradient(135deg, ${DS.accentLight}, ${DS.bg})`,
-          border: `1px solid ${DS.accentBorder}`,
+          background: DS.card, border: `1px solid ${DS.cardBorder}`, boxShadow: DS.cardShadow,
         }}>
           <div style={{
             width: 42, height: 42, borderRadius: 11, flexShrink: 0,
-            background: DS.accent, color: '#fff',
+            background: `linear-gradient(135deg, ${DS.accent}, ${shadeColor(DS.accent, -18)})`,
+            color: '#fff', boxShadow: `0 3px 10px ${DS.accent}40`,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}>
             <Icon name="zap" size={20} />
           </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ flex: 1, minWidth: 200 }}>
             <div style={{ fontSize: 15, fontWeight: 700, color: DS.text }}>Finish setting up your centre</div>
-            <div style={{ fontSize: 13, color: DS.muted, marginTop: 2 }}>
-              {setupRemaining} of 3 steps to go — invite teachers, add students and create classes.
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 6 }}>
+              <div style={{ display: 'flex', gap: 4 }}>
+                {[0, 1, 2].map(i => (
+                  <span key={i} style={{
+                    width: 30, height: 5, borderRadius: 3,
+                    background: i < setupDone ? DS.accent : DS.border,
+                  }} />
+                ))}
+              </div>
+              <span style={{ fontSize: 12.5, color: DS.muted }}>
+                {setupRemaining} of 3 steps to go — invite teachers, add students and create classes.
+              </span>
             </div>
           </div>
-          <Btn variant="secondary" icon="send" onClick={() => go('people')}>People &amp; invites</Btn>
-          <Btn variant="primary" icon="chevron_r" onClick={() => go('setup')}>Continue setup</Btn>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <Btn variant="secondary" icon="send" onClick={() => go('people')}>People &amp; invites</Btn>
+            <Btn variant="primary" icon="chevron_r" onClick={() => go('setup')}>Continue setup</Btn>
+          </div>
         </div>
       )}
 
-      {/* ── Alert strip (hidden entirely if nothing is flagged) ──── */}
-      {show('alerts') && alerts.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 24 }}>
-          {alerts.map(a => <AlertRow key={a.key} {...a} />)}
-        </div>
-      )}
-
-      {/* ── KPI row (responsive auto-fit grid) ─────────────────────── */}
-      {show('kpis') && (
-        <div style={{
-          display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-          gap: 16, marginBottom: 24,
-        }}>
-          {kpis.map(k => <StatCard key={k.label} {...k} />)}
-        </div>
-      )}
-
-      {/* ── Today + quick actions (two-up) ─────────────────────────── */}
-      {(show('today') || show('actions')) && (
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 20, marginBottom: 24 }}>
-        {/* Today's schedule */}
-        {show('today') && (
-        <div style={{ flex: '2 1 360px', minWidth: 0 }}>
-          <Card title="Today's schedule" actions={[
-            <Badge key="b" variant="accent">{todaySessions.length} sessions</Badge>,
-          ]}>
-            {todaySessions.length === 0 ? (
-              <EmptyState
-                icon="calendar"
-                title="No sessions to show yet"
-                message="Today's centre-wide timetable will appear here once the schedule is connected."
-                action={<Btn variant="secondary" icon="calendar" small onClick={() => go('schedule')}>Open schedule</Btn>}
-              />
-            ) : (
-              <>
-                {todaySessions.slice(0, 6).map((s, i, arr) => (
-                  <SessionRow key={i} s={s} last={i === Math.min(arr.length, 6) - 1} onClick={() => go('schedule')} />
-                ))}
-                <SeeAll onClick={() => go('schedule')} />
-              </>
-            )}
-          </Card>
-        </div>
+      {/* ── Today's schedule ───────────────────────────────────────── */}
+      {show('today') && (
+      <Card title="Today's schedule" style={{ marginBottom: 24 }} actions={[
+        <StatusPill key="b" tone={todaySessions.length > 0 ? 'accent' : 'neutral'}>{todaySessions.length} sessions</StatusPill>,
+      ]}>
+        {todaySessions.length === 0 ? (
+          <EmptyState
+            icon="calendar"
+            title="No sessions to show yet"
+            message="Today's centre-wide timetable will appear here once the schedule is connected."
+            action={<Btn variant="secondary" icon="calendar" small onClick={() => go('schedule')}>Open schedule</Btn>}
+          />
+        ) : (
+          <>
+            {todaySessions.slice(0, 6).map((s, i, arr) => (
+              <AdminSessionRow key={i} s={s} last={i === Math.min(arr.length, 6) - 1} onClick={() => go('schedule')} />
+            ))}
+            <SeeAll onClick={() => go('schedule')} />
+          </>
         )}
-
-        {/* Quick actions (kept from the original page) */}
-        {show('actions') && (
-        <div style={{ flex: '1 1 260px', minWidth: 0 }}>
-          <Card title="Quick actions">
-            <div style={{ padding: '6px 0' }}>
-              {quickActions.map((a, i) => (
-                <QuickActionRow key={a.label} action={a} divider={i < quickActions.length - 1} />
-              ))}
-            </div>
-          </Card>
-        </div>
-        )}
-      </div>
+      </Card>
       )}
 
-      {/* ── Trends (two-up, compact) ──────────────────────────────── */}
+      {/* ── Trends (two-up: headline number + delta + soft area) ──── */}
       {show('trends') && (
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 20, marginBottom: 24 }}>
         {enrolSeries && (
-          <div style={{ flex: '1 1 280px', minWidth: 0 }}>
-            <Card
-              title="Enrolment"
-              subtitle="Last 6 months"
-              actions={[<Btn key="v" variant="ghost" icon="chevron_r" small onClick={() => go('reports')}>Reports</Btn>]}
-            >
-              <div style={{ padding: '14px 16px 8px', height: 150 }}>
-                <LineChart labels={trendLabels} series={[{ ...enrolSeries, data: last6(enrolSeries.data), color: '#0891B2' }]} height="auto" />
-              </div>
-            </Card>
+          <div style={{ flex: '1 1 300px', minWidth: 0 }}>
+            <TrendCard
+              label="Enrolment"
+              headline={String(enrolSeries.data[enrolSeries.data.length - 1])}
+              delta={trendDelta(enrolSeries.data)}
+              series={{ ...enrolSeries, data: last6(enrolSeries.data) }}
+              labels={trendLabels}
+              color="#0891B2"
+              onOpen={() => go('reports')}
+            />
           </div>
         )}
         {revSeries && (
-          <div style={{ flex: '1 1 280px', minWidth: 0 }}>
-            <Card
-              title="Revenue billed"
-              subtitle="Last 6 months"
-              actions={[<Btn key="v" variant="ghost" icon="chevron_r" small onClick={() => go('reports')}>Reports</Btn>]}
-            >
-              <div style={{ padding: '14px 16px 8px', height: 150 }}>
-                <LineChart labels={trendLabels} series={[{ ...revSeries, data: last6(revSeries.data), color: DS.accent }]} height="auto" />
-              </div>
-            </Card>
+          <div style={{ flex: '1 1 300px', minWidth: 0 }}>
+            <TrendCard
+              label="Revenue billed"
+              headline={money(revSeries.data[revSeries.data.length - 1])}
+              delta={trendDelta(revSeries.data)}
+              series={{ ...revSeries, data: last6(revSeries.data) }}
+              labels={trendLabels}
+              color={DS.accent}
+              onOpen={() => go('reports')}
+            />
           </div>
         )}
       </div>
@@ -368,26 +405,24 @@ const AdminDashboard = () => {
         title="Students needing attention"
         style={{ marginBottom: 24 }}
         actions={[
-          <Badge key="c" variant="warning">{flaggedCount} flagged</Badge>,
+          <StatusPill key="c" tone="warning">{flaggedCount} flagged</StatusPill>,
           <Btn key="v" variant="ghost" icon="chevron_r" small onClick={() => go('students')}>See all</Btn>,
         ]}
       >
         {flaggedRows.slice(0, 6).map((s, i, arr) => {
           const last = i === Math.min(arr.length, 6) - 1;
           return (
-            <div key={s.name} onClick={() => go('students')} style={{
-              display: 'flex', alignItems: 'center', gap: 12, padding: '11px 16px', cursor: 'pointer',
-              borderBottom: last ? 'none' : `1px solid ${DS.border}`,
-            }}>
-              <Avatar name={s.name} size={30} />
-              <span style={{ width: 8, height: 8, borderRadius: '50%', background: adminSubjectColor(s.subject), flexShrink: 0 }} />
+            <HoverRow key={s.name} onClick={() => go('students')} last={last}>
+              <Avatar name={s.name} size={32} />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 500, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.name}</div>
-                <div style={{ fontSize: 12, color: DS.muted }}>{s.subject} · {s.reason}</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.name}</div>
+                <div style={{ fontSize: 12, color: DS.muted, marginTop: 1 }}>{s.subject} · {s.reason}</div>
               </div>
-              <Badge variant={s.severity === 'danger' ? 'danger' : 'warning'}>{s.severity === 'danger' ? 'Critical' : 'Moderate'}</Badge>
+              <StatusPill tone={s.severity === 'danger' ? 'negative' : 'warning'} dot>
+                {s.severity === 'danger' ? 'Critical' : 'Moderate'}
+              </StatusPill>
               <Icon name="chevron_r" size={14} color={DS.faint} />
-            </div>
+            </HoverRow>
           );
         })}
       </Card>
@@ -399,7 +434,7 @@ const AdminDashboard = () => {
         {/* Outstanding invoices */}
         {show('invoices') && (
         <div style={{ flex: '1 1 320px', minWidth: 0 }}>
-          <Card title="Outstanding invoices" actions={[
+          <Card title="Outstanding invoices" style={{ height: '100%' }} actions={[
             <Btn key="v" variant="ghost" icon="chevron_r" small onClick={() => go('invoices')}>See all</Btn>,
           ]}>
             {outstandingInvoices.length === 0 ? (
@@ -412,20 +447,17 @@ const AdminDashboard = () => {
             ) : (
               <>
                 {outstandingInvoices.slice(0, 5).map((inv, i, arr) => (
-                  <div key={i} style={{
-                    display: 'flex', alignItems: 'center', gap: 12, padding: '11px 16px',
-                    borderBottom: i < Math.min(arr.length, 5) - 1 ? `1px solid ${DS.border}` : 'none',
-                  }}>
-                    <Avatar name={inv.name} size={30} />
+                  <HoverRow key={i} last={i === Math.min(arr.length, 5) - 1}>
+                    <Avatar name={inv.name} size={32} />
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13, fontWeight: 500, color: DS.text }}>{inv.name}</div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>{inv.name}</div>
                       <div style={{ fontSize: 12, color: DS.muted }}>{inv.class}</div>
                     </div>
                     <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: 13, fontWeight: 500, color: DS.text }}>{inv.amount}</div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: DS.text, fontVariantNumeric: 'tabular-nums' }}>{inv.amount}</div>
                       <div style={{ fontSize: 11, color: DS.danger }}>{inv.daysOverdue}d overdue</div>
                     </div>
-                  </div>
+                  </HoverRow>
                 ))}
                 <SeeAll onClick={() => go('invoices')} />
               </>
@@ -434,26 +466,34 @@ const AdminDashboard = () => {
         </div>
         )}
 
-        {/* Recent activity (real — recentActivity mock) */}
+        {/* Recent activity (real — recentActivity mock) as a timeline */}
         {show('activity') && (
         <div style={{ flex: '1 1 320px', minWidth: 0 }}>
-          <Card title="Recent activity">
-            <div style={{ padding: '6px 0' }}>
-              {recentActivity.slice(0, 5).map((a, i, arr) => (
-                <div key={i} style={{
-                  display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 16px',
-                  borderBottom: i < arr.length - 1 ? `1px solid ${DS.border}` : 'none',
-                }}>
-                  <div style={{
-                    width: 6, height: 6, borderRadius: '50%', marginTop: 6, flexShrink: 0,
-                    background: a.type === 'alert' ? DS.danger : a.type === 'invoice' ? DS.warning : DS.success,
-                  }} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 12.5, color: DS.sub, lineHeight: 1.4 }}>{a.text}</div>
-                    <div style={{ fontSize: 11, color: DS.faint, marginTop: 2 }}>{a.time}</div>
+          <Card title="Recent activity" style={{ height: '100%' }}>
+            <div style={{ padding: '14px 20px 10px' }}>
+              {recentActivity.slice(0, 5).map((a, i, arr) => {
+                const tone = a.type === 'alert'
+                  ? { dot: DS.danger, ring: DS.dangerBg }
+                  : a.type === 'invoice'
+                    ? { dot: DS.warning, ring: DS.warningBg }
+                    : { dot: DS.success, ring: DS.successBg };
+                const isLast = i === arr.length - 1;
+                return (
+                  <div key={i} style={{ display: 'flex', gap: 13 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 10, flexShrink: 0 }}>
+                      <div style={{
+                        width: 9, height: 9, borderRadius: '50%', marginTop: 4, flexShrink: 0,
+                        background: tone.dot, boxShadow: `0 0 0 3px ${tone.ring}`,
+                      }} />
+                      {!isLast && <div style={{ width: 2, flex: 1, background: DS.border, margin: '7px 0 3px' }} />}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0, paddingBottom: isLast ? 6 : 18 }}>
+                      <div style={{ fontSize: 12.5, color: DS.sub, lineHeight: 1.45 }}>{a.text}</div>
+                      <div style={{ fontSize: 11, color: DS.faint, marginTop: 3 }}>{a.time}</div>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </Card>
         </div>
@@ -464,67 +504,44 @@ const AdminDashboard = () => {
       {/* ── Customise dashboard modal ─────────────────────────────── */}
       <CustomiseModal open={customiseOpen} onClose={() => setCustomiseOpen(false)} prefs={prefs} />
 
-      {/* ── Announcement Modal (unchanged behaviour) ──────────────── */}
-      {announcementOpen && (
-        <div style={{
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          zIndex: 1000,
-        }} onClick={() => setAnnouncementOpen(false)}>
-          <div style={{
-            background: DS.bg, borderRadius: 12, padding: '28px',
-            width: 480, border: `1px solid ${DS.border}`,
-            boxShadow: '0 20px 60px rgba(0,0,0,0.15)',
-          }} onClick={e => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 20 }}>
-              <div>
-                <div style={{ fontSize: 16, fontWeight: 700 }}>Send announcement</div>
-                <div style={{ fontSize: 13, color: DS.muted, marginTop: 2 }}>Sent to all parents and teachers</div>
-              </div>
-              <button onClick={() => setAnnouncementOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: DS.muted }}>
-                <Icon name="x" size={18} />
-              </button>
-            </div>
-            {announcementSent ? (
-              <div style={{ textAlign: 'center', padding: '24px 0', color: DS.success }}>
-                <Icon name="check" size={32} />
-                <div style={{ marginTop: 8, fontWeight: 600 }}>Announcement sent!</div>
-              </div>
-            ) : (
-              <>
-                <div style={{ marginBottom: 12 }}>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: DS.sub, display: 'block', marginBottom: 6 }}>Subject</label>
-                  <input style={{
-                    width: '100%', padding: '8px 12px', borderRadius: 7,
-                    border: `1px solid ${DS.border}`, fontSize: 14, color: DS.text,
-                    outline: 'none', boxSizing: 'border-box',
-                  }} placeholder="e.g. Centre closed Monday 28 April" />
-                </div>
-                <div style={{ marginBottom: 20 }}>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: DS.sub, display: 'block', marginBottom: 6 }}>Message</label>
-                  <textarea
-                    rows={4}
-                    value={announcementText}
-                    onChange={e => setAnnouncementText(e.target.value)}
-                    style={{
-                      width: '100%', padding: '8px 12px', borderRadius: 7,
-                      border: `1px solid ${DS.border}`, fontSize: 14, color: DS.text,
-                      outline: 'none', resize: 'vertical', boxSizing: 'border-box',
-                    }}
-                    placeholder="Write your announcement here..."
-                  />
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-                  <Btn variant="secondary" onClick={() => setAnnouncementOpen(false)}>Cancel</Btn>
-                  <Btn variant="primary" icon="bell" onClick={() => { setAnnouncementSent(true); setTimeout(() => { setAnnouncementOpen(false); setAnnouncementSent(false); }, 1500); }}>
-                    Send to all
-                  </Btn>
-                </div>
-              </>
-            )}
+      {/* ── Announcement modal (shared Modal chrome; behaviour unchanged) ── */}
+      <Modal
+        open={announcementOpen}
+        onClose={() => setAnnouncementOpen(false)}
+        title="Send announcement"
+        subtitle="Sent to all parents and teachers"
+        icon="megaphone"
+        width={500}
+        footer={!announcementSent && (
+          <>
+            <Btn variant="secondary" onClick={() => setAnnouncementOpen(false)}>Cancel</Btn>
+            <Btn variant="primary" icon="send" onClick={() => { setAnnouncementSent(true); setTimeout(() => { setAnnouncementOpen(false); setAnnouncementSent(false); }, 1500); }}>
+              Send to all
+            </Btn>
+          </>
+        )}
+      >
+        {announcementSent ? (
+          <div style={{ textAlign: 'center', padding: '24px 0', color: DS.success }}>
+            <Icon name="check" size={32} />
+            <div style={{ marginTop: 8, fontWeight: 600 }}>Announcement sent!</div>
           </div>
-        </div>
-      )}
+        ) : (
+          <>
+            <Field label="Subject">
+              <Input placeholder="e.g. Centre closed Monday 28 April" />
+            </Field>
+            <Field label="Message" style={{ marginBottom: 0 }}>
+              <Textarea
+                rows={4}
+                value={announcementText}
+                onChange={e => setAnnouncementText(e.target.value)}
+                placeholder="Write your announcement here..."
+              />
+            </Field>
+          </>
+        )}
+      </Modal>
     </div>
   );
 };
