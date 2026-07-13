@@ -180,35 +180,8 @@ const SplitLayout = ({ wide, left, right }) => (
   </div>
 );
 
-// ─── Icon + underline tab bar (top-level Settings tabs) ────────────────────────────
-const TabBtn = ({ tab, active, onClick }) => {
-  const [hov, setHov] = React.useState(false);
-  const color = active ? DS.accent : hov ? DS.text : DS.muted;
-  return (
-    <button
-      type="button" onClick={onClick}
-      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: 7, padding: '11px 14px',
-        border: 'none', background: 'transparent', cursor: 'pointer', whiteSpace: 'nowrap',
-        color, fontSize: 13.5, fontWeight: active ? 600 : 500, marginBottom: -1,
-        borderBottom: `2px solid ${active ? DS.accent : 'transparent'}`,
-        transition: 'color 0.12s, border-color 0.12s',
-      }}
-    >
-      {tab.icon && <Icon name={tab.icon} size={15} color={color} />}
-      {tab.label}
-    </button>
-  );
-};
-const TabNav = ({ tabs, value, onChange }) => (
-  <div style={{
-    display: 'flex', gap: 2, marginBottom: 24, overflowX: 'auto',
-    borderBottom: `1px solid ${DS.border}`,
-  }}>
-    {tabs.map(t => <TabBtn key={t.id} tab={t} active={t.id === value} onClick={() => onChange(t.id)} />)}
-  </div>
-);
+// The icon + underline tab bar (TabNav / TabBtn) lives in shared.jsx — it's also
+// used by the admin Reports settings hub (Reports.jsx).
 
 // ─── Shared tabs (every role) ────────────────────────────────────────────────────
 

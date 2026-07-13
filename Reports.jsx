@@ -2407,9 +2407,22 @@ const AdminReportsBrowser = ({ store }) => {
   );
 };
 
+// One tab per settings section, using the same icon + underline TabNav (shared.jsx)
+// as the main Settings page.
+const RPT_SETTINGS_TABS = [
+  { id: 'rules',         label: 'Reporting rules',  icon: 'clock' },
+  { id: 'templates',     label: 'Templates',        icon: 'file' },
+  { id: 'standards',     label: 'Centre standards', icon: 'shield' },
+  { id: 'branding',      label: 'PDF branding',     icon: 'print' },
+  { id: 'permissions',   label: 'Permissions',      icon: 'lock' },
+  { id: 'notifications', label: 'Notifications',    icon: 'bell' },
+];
+
 // `onEditTemplate(template|null)` opens the full-page template builder (owned by
 // the hub). `savedToast` flashes the "Saved" badge after a template is saved.
-const AdminReportsSettings = ({ store, onEditTemplate, savedToast }) => {
+// `tab`/`setTab` are owned by the hub so the active tab survives the round-trip
+// through the full-page template builder.
+const AdminReportsSettings = ({ store, onEditTemplate, savedToast, tab, setTab }) => {
   const c = store.store.config;
   const cs = c.centreStandards || {};
   const [saved, setSaved] = React.useState(false);
@@ -2438,16 +2451,22 @@ const AdminReportsSettings = ({ store, onEditTemplate, savedToast }) => {
 
   return (
     <div style={{ maxWidth: 1120, margin: '0 auto' }}>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12, height: 22 }}>
-        {(saved || savedToast) && <Badge variant="success"><Icon name="check" size={11} /> Saved</Badge>}
+      {/* Tab bar with the transient "Saved" badge overlaid on its right edge */}
+      <div style={{ position: 'relative' }}>
+        <TabNav tabs={RPT_SETTINGS_TABS} value={tab} onChange={setTab} />
+        {(saved || savedToast) && (
+          <div style={{ position: 'absolute', right: 0, top: 9 }}>
+            <Badge variant="success"><Icon name="check" size={11} /> Saved</Badge>
+          </div>
+        )}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
 
-        {/* 1 ─ Reporting rules (cadence: required / optional / off + frequency + template) */}
-        <AdminReportingRules store={store} config={c} />
+        {/* Reporting rules (cadence: required / optional / off + frequency + template) */}
+        {tab === 'rules' && <AdminReportingRules store={store} config={c} />}
 
-        {/* 2 ─ Templates (list only — the maker is unchanged and owns all section/rating config) */}
-        <Card title="Templates" subtitle="Sections, rating scale and categories are configured inside each template"
+        {/* Templates (list only — the maker is unchanged and owns all section/rating config) */}
+        {tab === 'templates' && <Card title="Templates" subtitle="Sections, rating scale and categories are configured inside each template"
           actions={[<Btn key="a" variant="ghost" icon="plus" small onClick={() => onEditTemplate(null)}>New template</Btn>]}>
           <div style={{ padding: '8px 20px 16px' }}>
             {store.store.templates.map(t => {
@@ -2472,10 +2491,10 @@ const AdminReportsSettings = ({ store, onEditTemplate, savedToast }) => {
             })}
             <TeachersSee>The report form a teacher fills in — which sections appear and the rating scale — comes entirely from the template the rule resolves to. Edit a template to change them.</TeachersSee>
           </div>
-        </Card>
+        </Card>}
 
-        {/* 3 ─ Centre standards (completion FLOORS only — distinct from cadence "required") */}
-        <Card title="Centre standards" subtitle="Minimum bar every report must clear before it can be submitted">
+        {/* Centre standards (completion FLOORS only — distinct from cadence "required") */}
+        {tab === 'standards' && <Card title="Centre standards" subtitle="Minimum bar every report must clear before it can be submitted">
           <div style={{ padding: '14px 20px 16px' }}>
             <Field label="Minimum comment length (characters)" hint="A report can’t be submitted until the teacher’s comment reaches this length">
               <Input type="number" value={cs.minCommentLength} onChange={e => setStd({ minCommentLength: +e.target.value })} style={{ width: 160 }} />
@@ -2500,10 +2519,10 @@ const AdminReportsSettings = ({ store, onEditTemplate, savedToast }) => {
             </div>
             <TeachersSee>Required-field markers appear on these sections, and <strong>Submit for review</strong> stays blocked until the comment reaches {cs.minCommentLength} characters{cs.requireSignature ? ' and a signature is added' : ''}.</TeachersSee>
           </div>
-        </Card>
+        </Card>}
 
-        {/* 4 ─ Branding (existing fields + live PDF header preview) */}
-        <Card title="PDF branding">
+        {/* Branding (existing fields + live PDF header preview) */}
+        {tab === 'branding' && <Card title="PDF branding">
           <div style={{ padding: '16px 20px' }}>
             {/* live header preview */}
             <div style={{ fontSize: 11, fontWeight: 700, color: DS.faint, letterSpacing: '0.04em', marginBottom: 8 }}>LIVE PDF HEADER</div>
@@ -2552,10 +2571,10 @@ const AdminReportsSettings = ({ store, onEditTemplate, savedToast }) => {
             </div>
             <TeachersSee>This header, the accent colour and the footer appear on every exported report PDF a teacher or student downloads.</TeachersSee>
           </div>
-        </Card>
+        </Card>}
 
-        {/* 5 ─ Permissions */}
-        <Card title="Teacher permissions">
+        {/* Permissions */}
+        {tab === 'permissions' && <Card title="Teacher permissions">
           <div style={{ padding: '8px 20px 14px' }}>
             {Object.keys(permLabels).map(k => (
               <ToggleRow key={k} label={permLabels[k][0]} on={c.permissions[k]} onChange={v => updNested('permissions', { [k]: v })} />
@@ -2566,10 +2585,10 @@ const AdminReportsSettings = ({ store, onEditTemplate, savedToast }) => {
                 : <>{Object.keys(permLabels).filter(k => !c.permissions[k]).map(k => permLabels[k][1]).join(' ')}</>}
             </TeachersSee>
           </div>
-        </Card>
+        </Card>}
 
-        {/* 6 ─ Notifications */}
-        <Card title="Notifications">
+        {/* Notifications */}
+        {tab === 'notifications' && <Card title="Notifications">
           <div style={{ padding: '8px 20px 14px' }}>
             <ToggleRow label="Teacher report-due reminders" on={c.notifications.dueReminder} onChange={v => updNested('notifications', { dueReminder: v })} />
             <ToggleRow label="Overdue report alerts" on={c.notifications.overdueReminder} onChange={v => updNested('notifications', { overdueReminder: v })} />
@@ -2583,7 +2602,7 @@ const AdminReportsSettings = ({ store, onEditTemplate, savedToast }) => {
               ].filter(Boolean).join('; ') || 'no automatic reminders or alerts are sent.'}
             </TeachersSee>
           </div>
-        </Card>
+        </Card>}
       </div>
     </div>
   );
@@ -2985,6 +3004,7 @@ const AdminReportsConfig = ({ section }) => {
   const [genType, setGenType] = React.useState('progress');
   const [tplEdit, setTplEdit] = React.useState(undefined);   // undefined=closed, null=new, obj=editing
   const [savedToast, setSavedToast] = React.useState(false);
+  const [settingsTab, setSettingsTab] = React.useState('rules');  // lives here so it survives the template builder
   const [dueOpen, setDueOpen] = React.useState(false);       // full "Reports due" page
   const goGenerate = (t) => { setGenType(t); goTab('generate'); };
 
@@ -3021,7 +3041,7 @@ const AdminReportsConfig = ({ section }) => {
       {tab === 'overview' && <AdminReportsOverview store={store} onGenerate={goGenerate} onBrowse={() => goTab('browse')} onViewDue={() => setDueOpen(true)} />}
       {tab === 'browse' && <AdminReportsBrowser store={store} />}
       {tab === 'generate' && <AdminReportsGenerate store={store} initialType={genType} />}
-      {tab === 'settings' && <AdminReportsSettings store={store} onEditTemplate={setTplEdit} savedToast={savedToast} />}
+      {tab === 'settings' && <AdminReportsSettings store={store} onEditTemplate={setTplEdit} savedToast={savedToast} tab={settingsTab} setTab={setSettingsTab} />}
     </div>
   );
 };

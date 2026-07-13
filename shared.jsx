@@ -414,13 +414,6 @@ const NAV_CONFIG = {
     color: DS.accent,
     items: [
       { id: 'dashboard', icon: 'dashboard', label: 'Dashboard' },
-      // ── ACCOUNT tier (§3) — the account-wide surface. Rendered ONLY for the
-      //    single account owner (isAccountOwner); a plain centre admin sees none
-      //    of it. These are the only screens where data crosses centre lines
-      //    (centres CRUD, the pooled plan/seat/storage entitlement).
-      { id: 'centres',   icon: 'grid',     label: 'Centres',         section: 'Account', tier: 'account' },
-      { id: 'plans',     icon: 'invoice',  label: 'Plans & Billing', section: 'Account', tier: 'account' },
-      { id: 'storage',   icon: 'cloud',    label: 'Storage',         section: 'Account', tier: 'account' },
       // ── CENTRE tier — scoped to the active centre; visible to any centre admin.
       { id: 'students',  icon: 'users',    label: 'Students', section: 'People' },
       // Staff grouping — operational staff admin (Teachers + Timesheets) under one
@@ -447,6 +440,14 @@ const NAV_CONFIG = {
         { id: 'reports:settings', label: 'Settings',    icon: 'settings' },
       ] },
       { id: 'comms',     icon: 'message',  label: 'Communications', sub: commsSub('admin') },
+      // ── ACCOUNT tier (§3) — the account-wide surface. Rendered ONLY for the
+      //    single account owner (isAccountOwner); a plain centre admin sees none
+      //    of it. These are the only screens where data crosses centre lines
+      //    (centres CRUD, the pooled plan/seat/storage entitlement). Kept at the
+      //    bottom of the list so day-to-day centre operations lead.
+      { id: 'centres',   icon: 'grid',     label: 'Centres',         section: 'Account', tier: 'account' },
+      { id: 'plans',     icon: 'invoice',  label: 'Plans & Billing', section: 'Account', tier: 'account' },
+      { id: 'storage',   icon: 'cloud',    label: 'Storage',         section: 'Account', tier: 'account' },
     ],
     bottom: [{ id: 'settings', icon: 'settings', label: 'Settings', chevron: true }],
   },
@@ -1856,6 +1857,36 @@ const Segmented = ({ options, value, onChange, fullWidth }) => (
   </div>
 );
 
+// ─── Icon + underline tab bar (in-page top-level tabs, e.g. Settings) ────────────
+const TabBtn = ({ tab, active, onClick }) => {
+  const [hov, setHov] = React.useState(false);
+  const color = active ? DS.accent : hov ? DS.text : DS.muted;
+  return (
+    <button
+      type="button" onClick={onClick}
+      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 7, padding: '11px 14px',
+        border: 'none', background: 'transparent', cursor: 'pointer', whiteSpace: 'nowrap',
+        color, fontSize: 13.5, fontWeight: active ? 600 : 500, marginBottom: -1,
+        borderBottom: `2px solid ${active ? DS.accent : 'transparent'}`,
+        transition: 'color 0.12s, border-color 0.12s',
+      }}
+    >
+      {tab.icon && <Icon name={tab.icon} size={15} color={color} />}
+      {tab.label}
+    </button>
+  );
+};
+const TabNav = ({ tabs, value, onChange }) => (
+  <div style={{
+    display: 'flex', gap: 2, marginBottom: 24, overflowX: 'auto',
+    borderBottom: `1px solid ${DS.border}`,
+  }}>
+    {tabs.map(t => <TabBtn key={t.id} tab={t} active={t.id === value} onClick={() => onChange(t.id)} />)}
+  </div>
+);
+
 // ─── Search input ────────────────────────────────────────────────────────────────
 const SearchInput = ({ value, onChange, placeholder = 'Search…', style }) => {
   const [focused, setFocused] = React.useState(false);
@@ -2224,7 +2255,7 @@ Object.assign(window, {
   DS, Icon, Badge, StatusPill, Avatar, KPICard, StatCard, shadeColor, Sidebar, PageHeader, Btn, Card,
   HERO_TXT, heroSurface, HeroSolidBtn, HeroGhostBtn, HoverRow,
   Table, TableRow, RowActionsMenu, Checkbox, Sparkline, LineChart, BarChart, ScorePill, Divider, NAV_CONFIG, navParentId,
-  Modal, Field, Input, Textarea, Select, Segmented, SearchInput, EmptyState,
+  Modal, Field, Input, Textarea, Select, Segmented, TabNav, TabBtn, SearchInput, EmptyState,
   useDashboardPrefs, CustomiseModal, Toggle, Popover, SlideOver, Combobox,
   termTodayISO, getCentreTerms, termStatus, resolveActiveTerm,
 });
