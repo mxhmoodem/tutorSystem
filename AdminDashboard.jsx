@@ -123,22 +123,184 @@ const SeeAll = ({ label = 'See all', onClick }) => {
 
 // Compact session row for "Today's schedule" — time in tabular figures, a
 // slim subject bar instead of a dot, status as a soft StatusPill.
-const AdminSessionRow = ({ s, last, onClick }) => {
+const AdminSessionRow = ({ s, last, onClick, pad }) => {
   const status = s.status === 'no_teacher'
     ? <StatusPill tone="warning">No teacher</StatusPill>
     : s.status === 'done'
       ? <StatusPill tone="positive">Attendance taken</StatusPill>
       : <StatusPill tone="neutral">Upcoming</StatusPill>;
   return (
-    <HoverRow onClick={onClick} last={last}>
+    <HoverRow onClick={onClick} last={last} pad={pad}>
       <span style={{ fontSize: 12.5, fontWeight: 600, color: DS.muted, width: 44, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{s.time}</span>
       <span style={{ width: 3, height: 26, borderRadius: 2, background: adminSubjectColor(s.subject), flexShrink: 0 }} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.subject}</div>
-        <div style={{ fontSize: 12, color: DS.muted, marginTop: 1 }}>{s.teacher} · {s.room}</div>
+        <div style={{ fontSize: 12, color: DS.muted, marginTop: 1 }}>{s.teacher || 'Unassigned'} · {s.room}</div>
       </div>
       {status}
     </HoverRow>
+  );
+};
+
+// ── Mini month calendar for the schedule card ───────────────────────────────
+// Square day grid: today gets an accent ring, the selected day an accent fill,
+// and any day with sessions a small dot. The month is navigable; picking a day
+// switches the schedule shown beside it. Monday-first to match UK timetables.
+const adminIsoOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const CAL_DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+const CalDay = ({ label, iso, isSel, isToday, has, onSelect }) => {
+  const [hov, setHov] = React.useState(false);
+  return (
+    <button
+      onClick={() => onSelect(iso)}
+      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+      style={{
+        position: 'relative', width: '100%', height: '100%', border: 'none', padding: 0,
+        borderRadius: 8, cursor: 'pointer', fontSize: 12.5, fontVariantNumeric: 'tabular-nums',
+        fontWeight: isSel || isToday ? 700 : 500,
+        background: isSel ? DS.accent : hov ? DS.surface : 'transparent',
+        color: isSel ? '#fff' : isToday ? DS.accent : DS.text,
+        boxShadow: isToday && !isSel ? `inset 0 0 0 1.5px ${DS.accent}` : 'none',
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        transition: 'background 0.12s',
+      }}
+    >
+      {label}
+      {has && (
+        <span style={{
+          position: 'absolute', bottom: 5, left: '50%', transform: 'translateX(-50%)',
+          width: 4, height: 4, borderRadius: '50%',
+          background: isSel ? 'rgba(255,255,255,0.9)' : DS.accent,
+        }} />
+      )}
+    </button>
+  );
+};
+
+const MiniMonthCalendar = ({ selectedISO, todayISO, sessionDays, onSelect }) => {
+  const seed = selectedISO ? new Date(selectedISO + 'T12:00:00') : new Date();
+  const [view, setView] = React.useState({ y: seed.getFullYear(), m: seed.getMonth() });
+  const first = new Date(view.y, view.m, 1);
+  const monthLabel = first.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+  const startOffset = (first.getDay() + 6) % 7;                 // Monday-first
+  const daysInMonth = new Date(view.y, view.m + 1, 0).getDate();
+  const shift = (delta) => setView(v => { const n = new Date(v.y, v.m + delta, 1); return { y: n.getFullYear(), m: n.getMonth() }; });
+  const navBtn = (icon, onClick, title) => (
+    <button onClick={onClick} title={title} style={{
+      width: 26, height: 26, borderRadius: 7, border: `1px solid ${DS.border}`,
+      background: DS.bg, color: DS.muted, cursor: 'pointer',
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    }}><Icon name={icon} size={14} /></button>
+  );
+  const cells = [];
+  for (let i = 0; i < startOffset; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+  const weekRows = Math.ceil(cells.length / 7);                // 5 or 6 rows
+  return (
+    <div style={{ width: 236, flexShrink: 0, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+        {navBtn('chevron_l', () => shift(-1), 'Previous month')}
+        <span style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>{monthLabel}</span>
+        {navBtn('chevron_r', () => shift(1), 'Next month')}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 3, marginBottom: 4 }}>
+        {CAL_DOW.map((d, i) => (
+          <div key={i} style={{ textAlign: 'center', fontSize: 10, fontWeight: 600, color: DS.muted }}>{d[0]}</div>
+        ))}
+      </div>
+      {/* Weeks fill the remaining height so the calendar matches the list beside
+          it (no empty space below). minmax keeps a comfortable min cell height. */}
+      <div style={{
+        flex: 1, display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)',
+        gridTemplateRows: `repeat(${weekRows}, minmax(34px, 1fr))`, gap: 3,
+      }}>
+        {cells.map((d, i) => {
+          if (d == null) return <span key={i} />;
+          const iso = `${view.y}-${String(view.m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+          return (
+            <CalDay key={i} label={d} iso={iso}
+              isSel={iso === selectedISO} isToday={iso === todayISO}
+              has={sessionDays && sessionDays.has(iso)} onSelect={onSelect} />
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+// ── Schedule content — list (scrolling rows) vs board (carousel of cards) ────
+const ScheduleList = ({ sessions, onOpen }) => (
+  <div style={{ maxHeight: 300, overflowY: 'auto', marginRight: -6 }}>
+    {sessions.map((s, i, arr) => (
+      <AdminSessionRow key={i} s={s} last={i === arr.length - 1} onClick={onOpen} pad="9px 8px" />
+    ))}
+  </div>
+);
+
+const SessionBoardCard = ({ s, onClick }) => {
+  const [hov, setHov] = React.useState(false);
+  const meta = s.status === 'no_teacher' ? { tone: 'warning', label: 'No teacher' }
+    : s.status === 'done' ? { tone: 'positive', label: 'Attendance taken' }
+      : { tone: 'neutral', label: 'Upcoming' };
+  return (
+    <div
+      onClick={onClick}
+      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+      style={{
+        flex: '0 0 auto', width: 198, aspectRatio: '1 / 1', scrollSnapAlign: 'start', cursor: 'pointer',
+        border: `1px solid ${hov ? DS.accent : DS.cardBorder}`, borderRadius: 12, padding: 15,
+        background: DS.bg, display: 'flex', flexDirection: 'column',
+        boxShadow: hov ? DS.cardShadow : 'none', transition: 'border-color 0.12s, box-shadow 0.12s',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span style={{ fontSize: 16, fontWeight: 700, color: DS.text, fontVariantNumeric: 'tabular-nums' }}>{s.time}</span>
+        <span style={{ width: 3, height: 20, borderRadius: 2, background: adminSubjectColor(s.subject) }} />
+      </div>
+      <div style={{ flex: 1, minWidth: 0, marginTop: 12 }}>
+        <div style={{
+          fontSize: 13.5, fontWeight: 700, color: DS.text, lineHeight: 1.3,
+          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+        }}>{s.subject}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 9, fontSize: 12, color: DS.muted, minWidth: 0 }}>
+          <Icon name="user" size={12} />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.teacher || 'Unassigned'}</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, fontSize: 12, color: DS.muted }}>
+          <Icon name="pin" size={12} />{s.room}
+        </div>
+      </div>
+      <StatusPill tone={meta.tone}>{meta.label}</StatusPill>
+    </div>
+  );
+};
+
+const ScheduleBoard = ({ sessions, onOpen }) => {
+  const ref = React.useRef(null);
+  const by = (dir) => ref.current && ref.current.scrollBy({ left: dir * 220, behavior: 'smooth' });
+  const arrow = (icon, dir, title) => (
+    <button onClick={() => by(dir)} title={title} style={{
+      width: 28, height: 28, borderRadius: 8, border: `1px solid ${DS.border}`,
+      background: DS.bg, color: DS.muted, cursor: 'pointer',
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    }}><Icon name={icon} size={15} /></button>
+  );
+  return (
+    <div>
+      {sessions.length > 2 && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginBottom: 10 }}>
+          {arrow('chevron_l', -1, 'Scroll left')}
+          {arrow('chevron_r', 1, 'Scroll right')}
+        </div>
+      )}
+      <div ref={ref} style={{
+        display: 'flex', gap: 12, overflowX: 'auto', overflowY: 'hidden',
+        scrollSnapType: 'x mandatory', padding: '2px 2px 12px',
+      }}>
+        {sessions.map((s, i) => <SessionBoardCard key={i} s={s} onClick={onOpen} />)}
+      </div>
+    </div>
   );
 };
 
@@ -246,9 +408,44 @@ const AdminDashboard = () => {
     { label: 'Capacity used',     value: `${capacity.pct}%`,                  sub: `${capacity.used}/${capacity.cap} seats` },
   ];
 
-  // ── Today's schedule — no admin schedule source yet ─────────────
-  // Render an empty preview rather than inventing sessions.
-  const todaySessions = [];   // TODO: wire centre-wide sessions for today
+  // ── Schedule browser — centre-wide sessions materialised from the same
+  //    source the attendance screen uses (derive-don't-store), grouped by day so
+  //    the mini-calendar can browse any date. A wide window covers a few months
+  //    of navigation; cancelled sessions are dropped rather than invented.
+  // useAttendanceStore is window-exported; useAdminStore is a bare global const
+  // (classic scripts don't attach top-level `const` to window), so fall back to it.
+  const attStore   = window.useAttendanceStore ? window.useAttendanceStore() : null;
+  const adminStore = window.useAdminStore ? window.useAdminStore()
+    : (typeof useAdminStore === 'function' ? useAdminStore() : null);
+  const todayISO = window.attIso ? window.attIso(new Date(window.getNow())) : adminIsoOf(new Date());
+  const [selectedDate, setSelectedDate] = React.useState(todayISO);
+  const [scheduleView, setScheduleView] = React.useState('list');
+
+  const schedule = React.useMemo(() => {
+    const empty = { byDay: new Map(), days: new Set() };
+    if (!attStore || !adminStore || !window.materialiseSessions) return empty;
+    const now = window.getNow();
+    const classes = (adminStore.classes || []).filter(c => c.status !== 'paused' && c.status !== 'archived');
+    const all = window.materialiseSessions(classes, window.REGISTER_SETTINGS, now, attStore, { backDays: 45, fwdDays: 92 });
+    const byDay = new Map();
+    all.forEach(s => {
+      if (s.derived.state === 'cancelled') return;
+      if (!byDay.has(s.dateISO)) byDay.set(s.dateISO, []);
+      byDay.get(s.dateISO).push(s);
+    });
+    byDay.forEach(list => list.sort((a, b) => a.starts_at - b.starts_at));
+    return { byDay, days: new Set(byDay.keys()) };
+  }, [attStore, adminStore]);
+
+  const daySessions = (schedule.byDay.get(selectedDate) || []).map(s => ({
+    time: new Date(s.starts_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
+    subject: s.name,
+    teacher: s.teacher || '',
+    room: s.room || '—',
+    status: !s.teacher ? 'no_teacher' : (s.derived.state === 'recorded' ? 'done' : 'upcoming'),
+  }));
+  const selectedDateLabel = new Date(selectedDate + 'T12:00:00')
+    .toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
 
   // ── Trends — split the existing 6-month series into two panels ──
   const enrolSeries = revenueData.series.find(s => /enrol/i.test(s.label));
@@ -344,26 +541,52 @@ const AdminDashboard = () => {
         </div>
       )}
 
-      {/* ── Today's schedule ───────────────────────────────────────── */}
+      {/* ── Schedule (browse any day · list or board view) ─────────── */}
       {show('today') && (
-      <Card title="Today's schedule" style={{ marginBottom: 24 }} actions={[
-        <StatusPill key="b" tone={todaySessions.length > 0 ? 'accent' : 'neutral'}>{todaySessions.length} sessions</StatusPill>,
+      <Card title="Schedule" style={{ marginBottom: 24 }} actions={[
+        <Segmented key="v" value={scheduleView} onChange={setScheduleView} options={[
+          { id: 'list',  label: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><Icon name="list" size={14} />List</span> },
+          { id: 'board', label: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><Icon name="grid" size={14} />Board</span> },
+        ]} />,
       ]}>
-        {todaySessions.length === 0 ? (
-          <EmptyState
-            icon="calendar"
-            title="No sessions to show yet"
-            message="Today's centre-wide timetable will appear here once the schedule is connected."
-            action={<Btn variant="secondary" icon="calendar" small onClick={() => go('schedule')}>Open schedule</Btn>}
+        <div style={{ display: 'flex', gap: 34, padding: 20, flexWrap: 'wrap' }}>
+          <MiniMonthCalendar
+            selectedISO={selectedDate}
+            todayISO={todayISO}
+            sessionDays={schedule.days}
+            onSelect={setSelectedDate}
           />
-        ) : (
-          <>
-            {todaySessions.slice(0, 6).map((s, i, arr) => (
-              <AdminSessionRow key={i} s={s} last={i === Math.min(arr.length, 6) - 1} onClick={() => go('schedule')} />
-            ))}
-            <SeeAll onClick={() => go('schedule')} />
-          </>
-        )}
+          <div style={{ flex: 1, minWidth: 264, display: 'flex', flexDirection: 'column' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 14 }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: DS.text, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {selectedDateLabel}
+                  {selectedDate === todayISO && (
+                    <span style={{ fontSize: 11, fontWeight: 600, color: DS.accent, background: DS.accentLight, padding: '1px 8px', borderRadius: 20 }}>Today</span>
+                  )}
+                </div>
+                <div style={{ fontSize: 12, color: DS.muted, marginTop: 2 }}>
+                  {daySessions.length} session{daySessions.length !== 1 ? 's' : ''}
+                </div>
+              </div>
+              <Btn variant="ghost" icon="chevron_r" small onClick={() => go('schedule')}>Full schedule</Btn>
+            </div>
+            {daySessions.length === 0 ? (
+              <div style={{
+                flex: 1, minHeight: 168, display: 'flex', flexDirection: 'column',
+                alignItems: 'center', justifyContent: 'center', gap: 10, textAlign: 'center',
+                color: DS.muted, padding: '24px 16px',
+              }}>
+                <Icon name="calendar" size={22} color={DS.border} />
+                <div style={{ fontSize: 13 }}>No sessions scheduled for this day.</div>
+              </div>
+            ) : scheduleView === 'list' ? (
+              <ScheduleList sessions={daySessions} onOpen={() => go('schedule')} />
+            ) : (
+              <ScheduleBoard sessions={daySessions} onOpen={() => go('schedule')} />
+            )}
+          </div>
+        </div>
       </Card>
       )}
 

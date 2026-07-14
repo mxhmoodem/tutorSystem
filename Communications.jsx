@@ -27,7 +27,8 @@
 // v2: store gained `config` (per-centre safety posture), `flags` (flag resolutions)
 // and `concerns` (DSL log), plus new seed threads/channels. Bumped so existing v1
 // blobs re-seed cleanly rather than losing the new content to backfill.
-const COMMS_KEY = 'tutoros.comms.v2';
+// v3: expanded announcement seed set (notice-board inbox). Bumped for the same reason.
+const COMMS_KEY = 'tutoros.comms.v3';
 const COMMS_TODAY = '2026-06-18';
 // The demo "now" — used for relative times, scheduling and quiet-hours maths so the
 // prototype reads consistently regardless of the wall clock.
@@ -564,7 +565,118 @@ function scopeChipLabel(a) {
   return (SCOPE_META[a.scope] || {}).label;
 }
 
-const AnnouncementCard = ({ a, comms, onNavigate }) => {
+// Full date, e.g. "1 Jul 2026" — used on list cards and in the reading rail.
+const fmtDate = (iso) => iso ? new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+
+// Reading rail (right pane) — the selected notice opened in full: hero banner,
+// title, author, date, body, descriptive tags, then stacked actions. Mirrors the
+// notice-board "detail" card; marking-read happens on open, so there's no read btn.
+const AnnouncementReader = ({ a, comms, onNavigate }) => {
+  const { ctx } = comms;
+  const isAuthor = a.authorId === ctx.userId;
+  const acked = !!a.acks[ctx.userId];
+  const p = PRIORITY_META[a.priority] || PRIORITY_META.normal;
+  const accent = p.color();
+  const expired = isExpired(a);
+  const scheduled = isAuthor && isScheduled(a);
+  const recipientCount = (a.audience ? commsRecipients(a.scope, a.audience, a.centreId) : []).length;
+  const ackCount = Object.keys(a.acks || {}).length;
+  const scopeIcon = (SCOPE_META[a.scope] || {}).icon;
+
+  // Descriptive "tags" — scope, priority, and each targeted audience role.
+  const tags = [{ label: scopeChipLabel(a), color: DS.accent, bg: DS.accentLight }];
+  if (a.priority !== 'normal') tags.push({ label: p.label, color: accent, bg: p.bg() });
+  const roles = a.audience && a.audience.roles;
+  if (Array.isArray(roles)) roles.forEach(r => tags.push({ label: (ROLE_LABEL[r] || r) + 's', color: DS.sub, bg: DS.surface }));
+
+  return (
+    <div style={{ background: DS.bg, border: `1px solid ${DS.cardBorder}`, borderRadius: 14, overflow: 'hidden', boxShadow: DS.cardShadow }}>
+      {/* Hero banner — scope-tinted, stands in for the notice's photo */}
+      <div style={{
+        height: 118, background: `linear-gradient(135deg, ${accent}26, ${accent}0A)`,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', borderBottom: `1px solid ${DS.border}`,
+      }}>
+        <div style={{ width: 54, height: 54, borderRadius: 13, background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: DS.cardShadow }}>
+          <Icon name={scopeIcon || 'megaphone'} size={24} color={accent} />
+        </div>
+      </div>
+
+      <div style={{ padding: '20px 22px' }}>
+        {(a.pinned || scheduled || expired) && (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 11 }}>
+            {a.pinned && <Chip icon="pin" color={DS.warning} bg={DS.warningBg}>Pinned</Chip>}
+            {scheduled && <Chip icon="clock" color={DS.muted}>Scheduled · {relTime(a.publishAt)}</Chip>}
+            {expired && <Chip color={DS.faint}>Expired</Chip>}
+          </div>
+        )}
+        <h2 style={{ fontSize: 19, fontWeight: 700, color: DS.text, margin: '0 0 12px', lineHeight: 1.3 }}>{a.title}</h2>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+          <Avatar name={a.authorName || '—'} size={32} />
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>{a.authorName}</div>
+            <div style={{ fontSize: 11.5, color: DS.muted }}>{ROLE_LABEL[a.authorRole] || a.authorRole}</div>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: DS.muted, margin: '12px 0 0' }}>
+          <span style={{ background: DS.surface, border: `1px solid ${DS.border}`, borderRadius: 20, padding: '3px 10px' }}>{fmtDate(a.createdAt)}</span>
+          {(ctx.role === 'superadmin' || isAuthor) && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <Icon name="users" size={12} color={DS.muted} />{recipientCount} recipient{recipientCount === 1 ? '' : 's'}
+            </span>
+          )}
+        </div>
+
+        <div style={{ height: 1, background: DS.border, margin: '16px 0' }} />
+
+        <div style={{ fontSize: 13.5, color: DS.sub, lineHeight: 1.6, whiteSpace: 'pre-wrap', marginBottom: 18 }}>{a.body}</div>
+
+        <div style={{ fontSize: 11, fontWeight: 700, color: DS.muted, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 }}>Tags</div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: a.requiresAck || !isAuthor ? 18 : 4 }}>
+          {tags.map((t, i) => (
+            <span key={i} style={{ fontSize: 11.5, fontWeight: 600, color: t.color, background: t.bg, border: `1px solid ${DS.border}`, borderRadius: 20, padding: '4px 11px' }}>{t.label}</span>
+          ))}
+        </div>
+
+        {a.requiresAck && (
+          <div style={{ fontSize: 12.5, color: ackCount ? DS.success : DS.muted, display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 14 }}>
+            <Icon name="check" size={14} color={ackCount ? DS.success : DS.muted} /> {ackCount} acknowledged
+          </div>
+        )}
+
+        {/* Actions — stacked, full width */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {a.requiresAck && !isAuthor && (
+            acked
+              ? <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: DS.success, padding: '9px', borderRadius: 8, background: DS.successBg }}>
+                  <Icon name="check" size={15} color={DS.success} /> Acknowledged
+                </div>
+              : <Btn variant="primary" icon="check" onClick={() => comms.acknowledge(a.id)} style={{ width: '100%', justifyContent: 'center' }}>Acknowledge</Btn>
+          )}
+          {/* §8: only offer "Message <sender>" when the student is actually permitted
+              to contact that sender (canMessage) — never open an unmonitored channel. */}
+          {!isAuthor && a.authorId && ctx.role !== 'superadmin'
+            && (ctx.role !== 'student' || canMessage(ctx.user, userById(a.authorId))) && (
+            <Btn variant="secondary" icon="mail" onClick={() => onNavigate && onNavigate(ctx.role, 'comms:messages')} style={{ width: '100%', justifyContent: 'center' }}>
+              Message {(a.authorName || '').split(' ')[0]}
+            </Btn>
+          )}
+          {(isAuthor || ctx.role === 'superadmin' || ctx.role === 'admin') && (
+            <Btn variant="ghost" icon="pin" onClick={() => comms.togglePin(a.id)}
+              style={{ width: '100%', justifyContent: 'center', color: a.pinned ? DS.accent : DS.muted }}>
+              {a.pinned ? 'Unpin' : 'Pin to top'}
+            </Btn>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Rich list card (left pane) — thumbnail tile, title + date, author line, a
+// two-line body preview, and status badges. The selected card is highlighted.
+const AnnouncementRow = ({ a, comms, active, onClick }) => {
   const { ctx } = comms;
   const isAuthor = a.authorId === ctx.userId;
   const unread = !isAuthor && !a.reads[ctx.userId];
@@ -574,97 +686,64 @@ const AnnouncementCard = ({ a, comms, onNavigate }) => {
   const expired = isExpired(a);
   const scheduled = isAuthor && isScheduled(a);
   const actionNeeded = a.requiresAck && !isAuthor && !acked && !expired;
-  const recipientCount = (a.audience ? commsRecipients(a.scope, a.audience, a.centreId) : []).length;
-  const ackCount = Object.keys(a.acks || {}).length;
+  const scopeIcon = (SCOPE_META[a.scope] || {}).icon;
 
   return (
-    <div style={{
-      position: 'relative', background: DS.bg, border: `1px solid ${unread ? accent + '55' : DS.border}`,
-      borderRadius: 10, overflow: 'hidden', opacity: expired ? 0.6 : 1,
+    <button type="button" onClick={onClick} style={{
+      display: 'flex', gap: 14, textAlign: 'left', width: '100%',
+      background: active ? DS.accentLight : DS.bg,
+      border: `1px solid ${active ? DS.accentBorder : DS.border}`,
+      borderRadius: 12, padding: '15px 17px', cursor: 'pointer', opacity: expired ? 0.6 : 1,
+      transition: 'background 0.12s, border-color 0.12s',
     }}>
-      <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, background: accent }} />
-      <div style={{ padding: '16px 20px 16px 22px' }}>
-        {/* Status badges */}
-        {(a.pinned || actionNeeded || scheduled) && (
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+      {/* Thumbnail tile — scope-tinted icon standing in for the notice image */}
+      <div style={{
+        width: 54, height: 54, borderRadius: 11, flexShrink: 0,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', background: p.bg(),
+      }}>
+        <Icon name={scopeIcon || 'megaphone'} size={22} color={accent} />
+      </div>
+
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 3 }}>
+          {unread && <span style={{ width: 8, height: 8, borderRadius: '50%', background: accent, marginTop: 6, flexShrink: 0 }} />}
+          <span style={{ flex: 1, minWidth: 0, fontSize: 15, fontWeight: unread ? 700 : 600, color: DS.text, lineHeight: 1.3 }}>{a.title}</span>
+          <span style={{
+            flexShrink: 0, fontSize: 11, fontWeight: 500, color: DS.muted, background: DS.surface,
+            border: `1px solid ${DS.border}`, borderRadius: 20, padding: '3px 10px', whiteSpace: 'nowrap',
+          }}>{fmtDate(a.createdAt)}</span>
+        </div>
+        <div style={{ fontSize: 12.5, color: DS.muted, marginBottom: 7 }}>
+          By {a.authorName} · {ROLE_LABEL[a.authorRole] || a.authorRole}
+        </div>
+        <div style={{
+          fontSize: 13, color: DS.sub, lineHeight: 1.5, overflow: 'hidden',
+          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+        }}>{a.body}</div>
+        {(a.pinned || actionNeeded || scheduled || (a.priority !== 'normal' && !expired) || expired) && (
+          <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 10 }}>
             {a.pinned && <Chip icon="pin" color={DS.warning} bg={DS.warningBg}>Pinned</Chip>}
             {actionNeeded && <Chip icon="alert" color={DS.accent} bg={DS.accentLight}>Action needed</Chip>}
-            {scheduled && <Chip icon="clock" color={DS.muted}>Scheduled · {relTime(a.publishAt)}</Chip>}
+            {scheduled && <Chip icon="clock" color={DS.muted}>Scheduled</Chip>}
+            {a.priority !== 'normal' && !expired && <Chip color={accent} bg={p.bg()}>{p.label}</Chip>}
+            {expired && <Chip color={DS.faint}>Expired</Chip>}
           </div>
         )}
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 8 }}>
-          {unread && <div style={{ width: 8, height: 8, borderRadius: '50%', background: accent, marginTop: 6, flexShrink: 0 }} />}
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 2 }}>
-              <span style={{ fontSize: 15, fontWeight: unread ? 700 : 600, color: DS.text }}>{a.title}</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: DS.muted }}>
-              <Avatar name={a.authorName || '—'} size={18} />
-              <span style={{ fontWeight: 500, color: DS.sub }}>{a.authorName}</span>
-              <span>· {ROLE_LABEL[a.authorRole] || a.authorRole}</span>
-              <span>· {relTime(a.createdAt)}</span>
-              {expired && <Chip color={DS.faint}>Expired</Chip>}
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: 6, flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-            <Chip icon={(SCOPE_META[a.scope] || {}).icon} color={DS.sub}>{scopeChipLabel(a)}</Chip>
-            {a.priority !== 'normal' && <Chip color={accent} bg={p.bg()}>{p.label}</Chip>}
-          </div>
-        </div>
-
-        <div style={{ fontSize: 13.5, color: DS.sub, lineHeight: 1.55, marginBottom: 14, whiteSpace: 'pre-wrap' }}>{a.body}</div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          {ctx.role === 'superadmin' && a.scope === 'platform' && (
-            <Chip color={DS.muted}>{a.audience.centreIds === 'all' ? 'All centres' : `${(a.audience.centreIds || []).length} centre(s)`}</Chip>
-          )}
-          {(ctx.role === 'superadmin' || isAuthor) && (
-            <Chip icon="users" color={DS.muted}>{recipientCount} recipient{recipientCount === 1 ? '' : 's'}</Chip>
-          )}
-          {a.requiresAck && (
-            <Chip icon="check" color={ackCount ? DS.success : DS.muted}>{ackCount} acknowledged</Chip>
-          )}
-
-          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-            {/* §8: a student-initiated thread is always a monitored institutional
-                record. Only offer "Message <sender>" when the student is actually
-                permitted to contact that sender (canMessage) — otherwise hide it,
-                so it can never open an unpermitted/unmonitored channel. */}
-            {!isAuthor && a.authorId && ctx.role !== 'superadmin'
-              && (ctx.role !== 'student' || canMessage(ctx.user, userById(a.authorId))) && (
-              <Btn small variant="ghost" icon="mail" onClick={() => onNavigate && onNavigate(ctx.role, 'comms:messages')}>
-                Message {(a.authorName || '').split(' ')[0]}
-              </Btn>
-            )}
-            {a.requiresAck && !isAuthor && (
-              acked
-                ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12.5, fontWeight: 600, color: DS.success }}>
-                    <Icon name="check" size={14} color={DS.success} /> Acknowledged
-                  </span>
-                : <Btn small variant="primary" icon="check" onClick={() => comms.acknowledge(a.id)}>Acknowledge</Btn>
-            )}
-            {!a.requiresAck && !isAuthor && unread && (
-              <Btn small variant="secondary" onClick={() => comms.markRead(a.id)}>Mark read</Btn>
-            )}
-            {(isAuthor || ctx.role === 'superadmin' || ctx.role === 'admin') && (
-              <button onClick={() => comms.togglePin(a.id)} title={a.pinned ? 'Unpin' : 'Pin'} style={{
-                background: 'none', border: `1px solid ${DS.border}`, borderRadius: 6, padding: '5px 7px',
-                cursor: 'pointer', color: a.pinned ? DS.accent : DS.faint, display: 'flex',
-              }}><Icon name="pin" size={14} color={a.pinned ? DS.accent : DS.faint} /></button>
-            )}
-          </div>
-        </div>
       </div>
-    </div>
+    </button>
   );
 };
 
-const AnnouncementsFeed = ({ comms, onNavigate }) => {
+// Two-pane inbox — a scrollable list of notices on the left, the selected notice
+// open in a reading pane on the right (mail-client layout). This is the default
+// Announcements view for every role; authors get a "Compose" button in the toolbar.
+const AnnouncementsInbox = ({ comms, onNavigate, author, onCompose }) => {
   const { ctx } = comms;
   const [scope, setScope] = React.useState('all');
   const [roleFilter, setRoleFilter] = React.useState('all');
   const [unreadOnly, setUnreadOnly] = React.useState(false);
   const [q, setQ] = React.useState('');
+  const [selectedId, setSelectedId] = React.useState(null);
 
   let list = comms.announcements;
   if (scope !== 'all') list = list.filter(a => a.scope === scope);
@@ -675,13 +754,23 @@ const AnnouncementsFeed = ({ comms, onNavigate }) => {
     list = list.filter(a => (a.title + ' ' + a.body + ' ' + (a.authorName || '')).toLowerCase().includes(t));
   }
 
+  // Keep a valid selection: fall back to the first item whenever the current one
+  // drops out of the filtered list (or nothing is selected yet).
+  const selected = list.find(a => a.id === selectedId) || list[0] || null;
+
+  const open = (a) => {
+    setSelectedId(a.id);
+    if (a.authorId !== ctx.userId && !a.reads[ctx.userId]) comms.markRead(a.id);
+  };
+
   const unreadTotal = comms.unread.announcements;
+  const filtered = q || scope !== 'all' || roleFilter !== 'all' || unreadOnly;
 
   return (
     <div>
-      {/* Filter bar */}
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 18, flexWrap: 'wrap' }}>
-        <SearchInput value={q} onChange={e => setQ(e.target.value)} placeholder="Search announcements…" style={{ maxWidth: 300 }} />
+      {/* Toolbar — search, filters, and the Compose entry point */}
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
+        <SearchInput value={q} onChange={e => setQ(e.target.value)} placeholder="Search notices…" style={{ maxWidth: 280 }} />
         <Select value={scope} onChange={e => setScope(e.target.value)} style={{ width: 150 }}>
           <option value="all">All scopes</option>
           {(ctx.role === 'superadmin' ? ['platform','centre','class','year','subject'] : ['centre','class','year','subject']).map(s =>
@@ -701,16 +790,45 @@ const AnnouncementsFeed = ({ comms, onNavigate }) => {
           <div style={{ width: 7, height: 7, borderRadius: '50%', background: unreadOnly ? DS.accent : DS.faint }} />
           Unread {unreadTotal > 0 && `(${unreadTotal})`}
         </button>
+        {author && (
+          <Btn variant="primary" icon="plus" onClick={onCompose} style={{ marginLeft: 'auto' }}>Compose</Btn>
+        )}
       </div>
 
-      {list.length === 0 ? (
-        <EmptyState icon="message" title="No announcements"
-          message={q || scope !== 'all' || roleFilter !== 'all' || unreadOnly ? 'No announcements match your filters.' : 'There are no announcements yet.'} />
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {list.map(a => <AnnouncementCard key={a.id} a={a} comms={comms} onNavigate={onNavigate} />)}
+      {/* List (left, main) grows with the page; reading rail (right) stays sticky */}
+      <div style={{ display: 'flex', gap: 18, alignItems: 'flex-start' }}>
+        <div style={{ flex: '1 1 520px', minWidth: 320 }}>
+          {list.length === 0 ? (
+            <EmptyState icon="message" title="No notices"
+              message={filtered ? 'No notices match your filters.' : 'There are no announcements yet.'} />
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {list.map(a => (
+                <AnnouncementRow key={a.id} a={a} comms={comms} active={selected && selected.id === a.id} onClick={() => open(a)} />
+              ))}
+            </div>
+          )}
         </div>
-      )}
+
+        <div style={{
+          flex: '0 0 400px', minWidth: 340, position: 'sticky', top: 12,
+          maxHeight: 'calc(100vh - 90px)', overflowY: 'auto', paddingRight: 4,
+        }}>
+          {selected
+            ? <AnnouncementReader a={selected} comms={comms} onNavigate={onNavigate} />
+            : (
+              <div style={{
+                minHeight: 320, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                border: `1px dashed ${DS.border}`, borderRadius: 12, color: DS.faint,
+              }}>
+                <div style={{ textAlign: 'center' }}>
+                  <Icon name="mail" size={28} color={DS.faint} />
+                  <div style={{ fontSize: 13.5, marginTop: 8 }}>Select a notice to read it</div>
+                </div>
+              </div>
+            )}
+        </div>
+      </div>
     </div>
   );
 };
@@ -950,21 +1068,30 @@ const AnnouncementCompose = ({ comms, onPublished }) => {
   );
 };
 
-// Compose / Inbox tabbed wrapper — the Announcements page body.
+// The Announcements page body — a two-pane inbox by default, with Compose opening
+// as a separate full-width view (entered from the toolbar button, dismissed with
+// a Back link). Non-authors only ever see the inbox.
 const AnnouncementsSection = ({ comms, onNavigate }) => {
   const author = canCompose(comms.ctx.user);
-  const [tab, setTab] = React.useState(author ? 'compose' : 'inbox');
-  if (!author) return <AnnouncementsFeed comms={comms} onNavigate={onNavigate} />;
-  return (
-    <div>
-      <div style={{ marginBottom: 18 }}>
-        <Segmented value={tab} onChange={setTab}
-          options={[{ id: 'compose', label: 'Compose', icon: 'megaphone' }, { id: 'inbox', label: 'Inbox', icon: 'bell' }]} />
+  const [composing, setComposing] = React.useState(false);
+
+  if (author && composing) {
+    return (
+      <div>
+        <button type="button" onClick={() => setComposing(false)} style={{
+          display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 16, padding: '6px 10px',
+          borderRadius: 8, border: `1px solid ${DS.border}`, background: DS.bg, color: DS.sub,
+          fontSize: 13, fontWeight: 500, cursor: 'pointer',
+        }}>
+          <Icon name="chevron_l" size={14} color={DS.muted} /> Back to inbox
+        </button>
+        <AnnouncementCompose comms={comms} onPublished={() => setComposing(false)} />
       </div>
-      {tab === 'compose'
-        ? <AnnouncementCompose comms={comms} onPublished={() => setTab('inbox')} />
-        : <AnnouncementsFeed comms={comms} onNavigate={onNavigate} />}
-    </div>
+    );
+  }
+
+  return (
+    <AnnouncementsInbox comms={comms} onNavigate={onNavigate} author={author} onCompose={() => setComposing(true)} />
   );
 };
 

@@ -213,31 +213,15 @@ const TeacherDashboard = () => {
   const reportConfig = reportsStore.store.config;
   const reportDrafts = reportsStore.reportsArr.filter(r => r.status === 'draft');
 
-  // ── "Reports due" — derived live from the resolved reporting rules ──
-  // For each of this teacher's students, resolve the effective policy; skip OFF;
-  // compute a due date from the cadence + the last published report; flag overdue.
+  // ── "Reports due" — the ONE due engine (computeUpcomingReports, Reports.jsx),
+  // shared with the teacher Reports page + admin overview so no surface can
+  // disagree about who is due when. Only students whose policy resolves to
+  // Expected get due dates; id-first matching survives display-name typos.
   const TEACHER_NAME = 'Sarah Clarke';   // logged-in teacher in the demo
-  const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
   const fmtDue = (iso) => new Date(iso + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-  const reportsDue = (() => {
-    if (typeof resolveForStudent !== 'function' || typeof reportStudents !== 'function') return [];
-    const myClassIds = (typeof reportClasses === 'function' ? reportClasses() : [])
-      .filter(c => c.teacher === TEACHER_NAME).map(c => c.id);
-    const mine = reportStudents().filter(s => (s.classIds || []).some(id => myClassIds.includes(id)));
-    return mine.map(s => {
-      const pol = resolveForStudent(s, reportConfig);
-      if (pol.requirement === 'OFF') return null;
-      const name = `${s.firstName} ${s.lastName}`;
-      const last = reportsStore.reportsArr
-        .filter(r => r.studentName === name && r.status === 'published' && r.datePublished)
-        .sort((a, b) => b.datePublished.localeCompare(a.datePublished))[0];
-      const base = last ? last.datePublished : '2026-03-15';   // notional last cycle
-      const due = addDays(base, rptFreqDays(pol.frequency));
-      const tpl = reportsStore.store.templates.find(t => t.id === pol.templateId);
-      return { id: s.id, name, requirement: pol.requirement, frequency: pol.frequency,
-        templateName: tpl ? tpl.name : 'report', due, overdue: due < TODAY_ISO, source: pol.source };
-    }).filter(Boolean).sort((a, b) => (a.overdue === b.overdue ? a.due.localeCompare(b.due) : a.overdue ? -1 : 1));
-  })();
+  const reportsDue = (typeof computeUpcomingReports === 'function')
+    ? computeUpcomingReports(reportConfig, reportsStore, { teacherName: TEACHER_NAME, today: TODAY_ISO })
+    : [];
   const dueOverdue = reportsDue.filter(d => d.overdue).length;
 
   // ── Today — hero (current/next) + later-today ──────────────────────
@@ -593,7 +577,7 @@ const TeacherDashboard = () => {
       >
         <div>
           {reportsDue.length === 0 && (
-            <div style={{ padding: '18px 20px', fontSize: 13, color: DS.muted }}>No reports due — every student you teach resolves to optional or off, or is already up to date.</div>
+            <div style={{ padding: '18px 20px', fontSize: 13, color: DS.muted }}>No reports due — no student you teach is expected a report right now, or everyone is up to date.</div>
           )}
           {reportsDue.slice(0, 6).map((d, i, arr) => (
             <HoverRow key={d.id} onClick={() => go('reports')} last={i === Math.min(arr.length, 6) - 1} pad="13px 20px">
@@ -602,7 +586,7 @@ const TeacherDashboard = () => {
                 <div style={{ fontSize: 13, fontWeight: 600, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {rptFreqLabel(d.frequency)} report — {d.name}
                 </div>
-                <div style={{ fontSize: 12, color: DS.muted, marginTop: 1 }}>{d.templateName} · {d.source}{d.requirement === 'OPTIONAL' ? ' · optional' : ''}</div>
+                <div style={{ fontSize: 12, color: DS.muted, marginTop: 1 }}>{d.templateName} · {d.source}</div>
               </div>
               {d.overdue
                 ? <StatusPill tone="negative" dot>Overdue · was {fmtDue(d.due)}</StatusPill>

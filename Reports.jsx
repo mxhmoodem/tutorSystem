@@ -15,7 +15,12 @@ const REPORTS_KEY = 'reports_store_v2';
 // §1: the logged-in student resolves from the one canonical principal (falls back
 // to the seed id if the SoT hasn't loaded).
 const REPORTS_STUDENT_SELF = (window.klasioStudent && window.klasioStudent.currentStudent.id) || 's_oliver';
+// Name fallback: reports created from the admin roster carry SEED_STUDENTS ids
+// (s2…) while the student principal uses the reports id space (s_oliver), so
+// ownership/matching checks accept the id OR the canonical full name.
+const REPORTS_STUDENT_SELF_NAME = (window.klasioStudent && window.klasioStudent.currentStudent.fullName) || 'Oliver Chen';
 const REPORTS_TEACHER_SELF = 'Ms. Sarah Clarke';
+const REPORTS_TEACHER_SELF_SHORT = 'Sarah Clarke';   // as stored on SEED_CLASSES.teacher
 const REPORTS_TODAY = '2026-06-15';
 
 // ─── Constants / labels ──────────────────────────────────────────────────────────
@@ -38,21 +43,6 @@ const RPT_SECTION_LABELS = {
   homework: 'Homework & Independent Study',
   targets: 'Targets & Next Steps', attachments: 'Attachments',
   parentNotes: 'Parent Notes', footer: 'Footer',
-};
-// Icon + order metadata for the template builder's section toggles.
-const RPT_SECTION_META = {
-  studentInfo:  { icon: 'user' },
-  academic:     { icon: 'chart' },
-  attendance:   { icon: 'check' },
-  ratings:      { icon: 'star' },
-  comments:     { icon: 'message' },
-  strengths:    { icon: 'flag' },
-  improvements: { icon: 'flag' },
-  homework:     { icon: 'clip' },
-  targets:      { icon: 'flag' },
-  attachments:  { icon: 'clip' },
-  parentNotes:  { icon: 'message' },
-  footer:       { icon: 'file' },
 };
 const RPT_STATUS_META = {
   draft:     { label: 'Draft',     variant: 'warning' },
@@ -146,6 +136,13 @@ function useReportsStore() {
       mutateReports(rs => { rs[id] = r; return rs; });
       return id;
     },
+    // Bulk insert in ONE persist. Calling addReport in a loop loses all but the
+    // last report — each call spreads the same stale `store` snapshot (this is
+    // how "whole class" silently created only one report).
+    addReports(list) {
+      mutateReports(rs => { list.forEach(r => { rs[r.id] = r; }); return rs; });
+      return list.map(r => r.id);
+    },
     updateReport(id, patch) {
       mutateReports(rs => {
         if (rs[id]) rs[id] = { ...rs[id], ...patch, dateModified: REPORTS_TODAY,
@@ -173,8 +170,10 @@ function useReportsStore() {
       mutateReports(rs => { ids.forEach(id => { if (rs[id]) rs[id] = { ...rs[id], status: 'archived', dateArchived: REPORTS_TODAY,
         history: [...(rs[id].history || []), { action: 'Archived', by: REPORTS_TEACHER_SELF, at: stamp() }] }; }); return rs; });
     },
+    // Unarchiving restores the report to what it was — a previously published
+    // report goes back to published, never silently back to draft.
     unarchiveReports(ids) {
-      mutateReports(rs => { ids.forEach(id => { if (rs[id]) rs[id] = { ...rs[id], status: 'draft', dateArchived: null }; }); return rs; });
+      mutateReports(rs => { ids.forEach(id => { if (rs[id]) rs[id] = { ...rs[id], status: rs[id].datePublished ? 'published' : 'draft', dateArchived: null }; }); return rs; });
     },
     deleteReports(ids) {
       mutateReports(rs => { ids.forEach(id => delete rs[id]); return rs; });
@@ -193,6 +192,11 @@ function useReportsStore() {
     },
     markViewed(id) {
       mutateReports(rs => { if (rs[id]) rs[id] = { ...rs[id], lastViewed: REPORTS_TODAY }; return rs; });
+    },
+    // Separate flag for the student opening a report — drives the "New" badge on
+    // the student list (teacher opens must not clear another reader's "New").
+    markStudentViewed(id) {
+      mutateReports(rs => { if (rs[id]) rs[id] = { ...rs[id], lastViewed: REPORTS_TODAY, viewedByStudent: REPORTS_TODAY }; return rs; });
     },
     duplicateReport(id) {
       const src = store.reports[id];
@@ -363,6 +367,39 @@ function rptRatingText(scale, v) {
   const m = RPT_FOURTIER.find(t => t.v === v); return m ? m.label : v;
 }
 
+// Sanitise teacher-entered rich text before it hits dangerouslySetInnerHTML or the
+// PDF window. Comments come from a contentEditable editor and live in localStorage,
+// so strip script/style blocks, on* handlers and javascript: URLs at every render.
+function rptSanitizeHTML(html) {
+  if (!html) return '';
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  tmp.querySelectorAll('script, style, iframe, object, embed, link, meta').forEach(el => el.remove());
+  tmp.querySelectorAll('*').forEach(el => {
+    Array.from(el.attributes).forEach(a => {
+      const n = a.name.toLowerCase();
+      if (n.startsWith('on')) el.removeAttribute(a.name);
+      else if ((n === 'href' || n === 'src') && /^\s*javascript:/i.test(a.value)) el.removeAttribute(a.name);
+    });
+  });
+  return tmp.innerHTML;
+}
+
+// ─── Rating value ↔ 0–1 score conversion (used when a report's scale is switched) ──
+const RPT_FOURTIER_SCORE = { excellent: 0.95, good: 0.75, satisfactory: 0.5, needs_improvement: 0.25 };
+function rptValueToScore(scale, v) {
+  if (scale === 'stars')   return Math.min(1, Math.max(0, (+v || 3) / 5));
+  if (scale === 'percent') return Math.min(1, Math.max(0, (+v || 75) / 100));
+  return RPT_FOURTIER_SCORE[v] != null ? RPT_FOURTIER_SCORE[v] : 0.75;
+}
+// Convert every rating on a report from one scale to another so stored values never
+// end up as the wrong type (e.g. "excellent" printed as "excellent%" on the PDF).
+function rptConvertRatings(ratings, fromScale, toScale) {
+  const out = {};
+  Object.keys(ratings || {}).forEach(k => { out[k] = rptScoreToScale(toScale, rptValueToScore(fromScale, ratings[k])); });
+  return out;
+}
+
 // `sections` (optional): when provided, only those section keys render — this lets
 // a template drive the export, one source of truth with the live preview. When
 // omitted, every section renders (existing teacher/student/admin export behaviour).
@@ -429,7 +466,7 @@ function reportPdfBody(r, branding, sections) {
     <table class="kv">${ratingRows || '<tr><td class="muted">No ratings recorded.</td></tr>'}</table>`,
     comments: `
     <h2 style="border-color:${acc}">Teacher Comments</h2>
-    <div class="comments">${r.comments || '<p class="muted">No comments.</p>'}</div>`,
+    <div class="comments">${rptSanitizeHTML(r.comments) || '<p class="muted">No comments.</p>'}</div>`,
     strengths: `
     <h2 style="border-color:${acc}">Strengths</h2>
     ${list(academic.strengths)}`,
@@ -459,12 +496,21 @@ function reportPdfBody(r, branding, sections) {
     ${list([].concat(t.parentActions || []))}`,
   };
 
-  // footer / signature section is gated only when a template explicitly omits it
-  const footerBlock = show('footer')
+  // footer / signature section is gated only when a template explicitly omits it.
+  // When the authoring teacher typed a signature (centre-standards requirement),
+  // it prints alongside the centre countersignature — the signed name must
+  // actually appear on the document it signs.
+  const teacherSign = r.signature && r.signature.trim()
     ? `<div class="sign">
       <div class="sigline"></div>
-      <div><strong>${rptEsc(branding.signatureName)}</strong><br/><span class="muted">${rptEsc(branding.signatureTitle)}</span></div>
+      <div><strong>${rptEsc(r.signature.trim())}</strong><br/><span class="muted">${rptEsc(r.teacher || 'Class teacher')}</span></div>
     </div>` : '';
+  const footerBlock = show('footer')
+    ? `<div class="signrow">${teacherSign}
+    <div class="sign">
+      <div class="sigline"></div>
+      <div><strong>${rptEsc(branding.signatureName)}</strong><br/><span class="muted">${rptEsc(branding.signatureTitle)}</span></div>
+    </div></div>` : '';
 
   const bodySections = RPT_ALL_SECTIONS.filter(k => k !== 'footer' && show(k) && sec[k]).map(k => sec[k]).join('\n');
 
@@ -527,8 +573,9 @@ function printReportPDF(reports, branding, opts) {
     .comments { background:#f9fafb; border:1px solid #eef0f3; border-radius:8px; padding:10px 14px; }
     .comments p { margin:0 0 6px; } .comments h3 { margin-top:8px; }
     .ack { margin-top:14px; color:#16a34a; font-weight:600; }
+    .signrow { display:flex; gap:48px; flex-wrap:wrap; }
     .sign { margin-top:34px; display:flex; align-items:flex-end; gap:14px; }
-    .sigline { width:200px; border-bottom:1px solid #9ca3af; height:30px; }
+    .sigline { width:160px; border-bottom:1px solid #9ca3af; height:30px; }
     .pagebreak { page-break-after:always; }
     @media print { .printbar { display:none !important; } }
     .printbar { position:sticky; top:0; background:#111827; color:#fff; padding:10px 16px; display:flex; gap:12px; align-items:center; font-size:13px; z-index:10; }
@@ -625,6 +672,9 @@ const ReportReadingView = ({ report, tags, accent }) => {
   const rtags = (r.tagIds || []).map(id => (tags || []).find(t => t.id === id)).filter(Boolean);
   const academic = r.academic || {};
   const t = r.targets || {};
+  // Reports created from a template carry its `sections`; legacy reports (no
+  // sections key) show everything. Same gate the editor + PDF use.
+  const secOn = (k) => !r.sections || r.sections.includes(k);
   const acadRow = (label, val) => (
     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '9px 0', borderBottom: `1px solid ${DS.border}` }}>
       <span style={{ fontSize: 13, color: DS.muted }}>{label}</span>
@@ -670,56 +720,69 @@ const ReportReadingView = ({ report, tags, accent }) => {
       </div>
 
       {/* academic */}
-      <Card title="Academic Progress" style={{ marginBottom: 20 }}>
+      {secOn('academic') && <Card title="Academic Progress" style={{ marginBottom: 20 }}>
         <div style={{ padding: '4px 20px 16px' }}>
           {acadRow('Understanding of topics', <RatingValue scale="fourtier" value={academic.understanding} />)}
           {acadRow('Class participation', <RatingValue scale="fourtier" value={academic.participation} />)}
           {acadRow('Homework completion', academic.homeworkCompletion)}
           {acadRow('Test performance', academic.testPerformance)}
           {acadRow('Attendance', academic.attendance)}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginTop: 16 }}>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 700, color: DS.success, marginBottom: 8 }}>STRENGTHS</div>
-              <Bullets items={academic.strengths} />
+          {(secOn('strengths') || secOn('improvements')) && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginTop: 16 }}>
+              {secOn('strengths') && <div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: DS.success, marginBottom: 8 }}>STRENGTHS</div>
+                <Bullets items={academic.strengths} />
+              </div>}
+              {secOn('improvements') && <div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: DS.warning, marginBottom: 8 }}>AREAS TO IMPROVE</div>
+                <Bullets items={academic.improvements} />
+              </div>}
             </div>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 700, color: DS.warning, marginBottom: 8 }}>AREAS TO IMPROVE</div>
-              <Bullets items={academic.improvements} />
-            </div>
-          </div>
+          )}
         </div>
-      </Card>
+      </Card>}
+
+      {/* attendance & engagement */}
+      {secOn('attendance') && (r.punctuality || r.engagement) && (
+        <Card title="Attendance & Engagement" style={{ marginBottom: 20 }}>
+          <div style={{ padding: '4px 20px 16px' }}>
+            {acadRow('Attendance', academic.attendance || '—')}
+            {acadRow('Punctuality', r.punctuality || '—')}
+            {acadRow('Engagement', r.engagement || '—')}
+          </div>
+        </Card>
+      )}
 
       {/* ratings */}
-      <Card title="Performance Ratings" style={{ marginBottom: 20 }}>
+      {secOn('ratings') && <Card title="Performance Ratings" style={{ marginBottom: 20 }}>
         <div style={{ padding: '4px 20px 16px' }}>
           {Object.keys(r.ratings || {}).map(k => (
             <div key={k} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: `1px solid ${DS.border}` }}>
-              <span style={{ fontSize: 13, color: DS.sub }}>{RPT_RATING_LABELS[k] || k}</span>
+              <span style={{ fontSize: 13, color: DS.sub }}>{(r.ratingLabels && r.ratingLabels[k]) || RPT_RATING_LABELS[k] || k}</span>
               <RatingValue scale={r.ratingScale} value={r.ratings[k]} />
             </div>
           ))}
         </div>
-      </Card>
+      </Card>}
 
       {/* comments */}
-      <Card title="Teacher Comments" style={{ marginBottom: 20 }}>
+      {secOn('comments') && <Card title="Teacher Comments" style={{ marginBottom: 20 }}>
         <div style={{ padding: '8px 22px 18px', fontSize: 14, lineHeight: 1.65, color: DS.sub }}
-          dangerouslySetInnerHTML={{ __html: r.comments || '<p style="color:#9ca3af">No comments.</p>' }} />
-      </Card>
+          dangerouslySetInnerHTML={{ __html: rptSanitizeHTML(r.comments) || '<p style="color:#9ca3af">No comments.</p>' }} />
+      </Card>}
 
       {/* targets */}
-      <Card title="Targets & Next Steps" style={{ marginBottom: 20 }}>
+      {secOn('targets') && <Card title="Targets & Next Steps" style={{ marginBottom: 20 }}>
         <div style={{ padding: '8px 20px 16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
           <div><div style={{ fontSize: 12, fontWeight: 700, color: DS.text, marginBottom: 8 }}>Current targets</div><Bullets items={t.current} /></div>
           <div><div style={{ fontSize: 12, fontWeight: 700, color: DS.text, marginBottom: 8 }}>Long-term goals</div><Bullets items={t.longTerm} /></div>
           <div><div style={{ fontSize: 12, fontWeight: 700, color: DS.text, marginBottom: 8 }}>Recommended revision</div><Bullets items={t.revision} /></div>
           <div><div style={{ fontSize: 12, fontWeight: 700, color: DS.text, marginBottom: 8 }}>Parent &amp; teacher actions</div><Bullets items={[].concat(t.parentActions || [], t.teacherActions || [])} /></div>
         </div>
-      </Card>
+      </Card>}
 
       {/* attachments */}
-      {(r.attachments || []).length > 0 && (
+      {secOn('attachments') && (r.attachments || []).length > 0 && (
         <Card title="Attachments" style={{ marginBottom: 20 }}>
           <div style={{ padding: '8px 20px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
             {r.attachments.map((a, i) => (
@@ -734,6 +797,14 @@ const ReportReadingView = ({ report, tags, accent }) => {
           </div>
         </Card>
       )}
+
+      {/* teacher signature (typed to meet the centre standard; also on the PDF) */}
+      {r.signature && r.signature.trim() && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', border: `1px solid ${DS.border}`, borderRadius: 10, background: DS.surface }}>
+          <Icon name="edit" size={15} color={DS.muted} />
+          <span style={{ fontSize: 12.5, color: DS.sub }}>Signed <strong style={{ color: DS.text }}>{r.signature.trim()}</strong> · {r.teacher}</span>
+        </div>
+      )}
     </div>
   );
 };
@@ -746,42 +817,78 @@ function commentTextLen(html) {
   return (tmp.textContent || tmp.innerText || '').trim().length;
 }
 // Which centre-standards completion floors a report has NOT yet met.
+// Section-aware: the comment floor only applies when the report's template
+// includes a comments section (the builder can't drop a centre-required section,
+// so in practice it always does — this keeps legacy/edge reports consistent).
 function unmetStandards(r, standards) {
   const s = standards || {};
+  const hasComments = !r.sections || r.sections.includes('comments');
   const out = [];
-  if (commentTextLen(r.comments) < (s.minCommentLength || 0)) out.push(`comment must be at least ${s.minCommentLength} characters (currently ${commentTextLen(r.comments)})`);
+  if (hasComments && commentTextLen(r.comments) < (s.minCommentLength || 0)) out.push(`comment must be at least ${s.minCommentLength} characters (currently ${commentTextLen(r.comments)})`);
   if (s.requireSignature && !(r.signature && r.signature.trim())) out.push('a teacher signature is required');
   return out;
 }
 
 const ReportEditor = ({ report, store, onBack, onSaved }) => {
   const [r, setR] = React.useState(report);
-  const [tab, setTab] = React.useState('edit'); // edit | preview
+  const perms = store.store.config.permissions || {};
+  // Published reports are locked unless the centre allows editing them.
+  const readOnly = report.status === 'published' && !perms.editPublished;
+  const [tab, setTab] = React.useState(readOnly ? 'preview' : 'edit'); // edit | preview
   const [gateMsg, setGateMsg] = React.useState('');
   const set = (patch) => setR(prev => ({ ...prev, ...patch }));
   const setAcad = (patch) => setR(prev => ({ ...prev, academic: { ...prev.academic, ...patch } }));
   const setTargets = (patch) => setR(prev => ({ ...prev, targets: { ...prev.targets, ...patch } }));
   const acc = r.subjectColor || DS.accent;
 
+  // The template's sections drive which editor cards render (one source of truth
+  // with the PDF + reading view). Legacy reports without `sections` show all.
+  const secOn = (k) => !r.sections || r.sections.includes(k);
+
   const standards = store.store.config.centreStandards || {};
   const unmet = unmetStandards(r, standards);
 
-  const saveDraft = () => { commit('draft'); };
-  // Publishing = "submit for review" — blocked until the centre-standards floors are met.
-  // IDEMPOTENCY GUARD: a report that is already published/locked can't be
-  // re-submitted, so a double-click can't push a second "Published" history entry.
+  // Saving keeps the report's status: editing a published report (where the
+  // centre allows it) must not silently unpublish it.
+  const saveDraft = () => { commit(r.status === 'published' ? 'published' : 'draft'); };
+  // Publishing sends the report straight to the student — the button says exactly
+  // that. Blocked until the centre-standards floors are met.
+  // IDEMPOTENCY GUARD: a report that is already published/archived can't be
+  // re-published, so a double-click can't push a second "Published" history entry.
   const publish   = () => {
     if (r.status === 'published' || r.status === 'archived') return;
     const blocking = unmetStandards(r, standards);
-    if (blocking.length) { setGateMsg('Can’t submit yet — ' + blocking.join('; ') + '.'); return; }
+    if (blocking.length) { setGateMsg('Can’t publish yet — ' + blocking.join('; ') + '.'); return; }
     setGateMsg(''); commit('published');
   };
   const commit = (status) => {
     store.saveReport(r, status);
     onSaved && onSaved(status);
   };
+  // Switching scale CONVERTS every stored rating (via a 0–1 score), so values
+  // never end up typed for the wrong scale (e.g. "excellent" exported as "excellent%").
+  const switchScale = (next) => {
+    if (next === r.ratingScale) return;
+    setR(prev => ({ ...prev, ratingScale: next, ratings: rptConvertRatings(prev.ratings, prev.ratingScale, next) }));
+  };
+  // Save-as-template captures the report's ACTUAL shape — its sections, categories and scale.
+  const saveAsTemplate = () => {
+    store.addTemplate({ name: r.title + ' Template',
+      sections: r.sections || ['studentInfo', 'academic', 'ratings', 'comments', 'targets', 'attachments'],
+      ratingCategories: Object.keys(r.ratings || {}), ratingScale: r.ratingScale, description: 'Saved from a report.' });
+  };
+  // Real file picker: name / type / size come from the chosen files (no upload in the prototype).
+  const fileRef = React.useRef(null);
+  const fmtSize = (b) => b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB';
+  const onFiles = (e) => {
+    const fs = Array.from(e.target.files || []);
+    if (fs.length) set({ attachments: [...(r.attachments || []), ...fs.map(f => ({
+      name: f.name, type: (f.type || '').startsWith('image') ? 'image' : 'file', size: fmtSize(f.size) }))] });
+    e.target.value = '';
+  };
 
   const ratingCats = Object.keys(r.ratings || {});
+  const catLabel = (k) => (r.ratingLabels && r.ratingLabels[k]) || RPT_RATING_LABELS[k] || k;
 
   return (
     <div>
@@ -790,17 +897,30 @@ const ReportEditor = ({ report, store, onBack, onSaved }) => {
         <button onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'none', border: 'none', cursor: 'pointer', color: DS.muted, fontSize: 13 }}>
           ← Back to reports
         </button>
-        <Segmented options={[{ value: 'edit', label: 'Edit' }, { value: 'preview', label: 'Preview' }]} value={tab} onChange={setTab} />
+        {!readOnly && <Segmented options={[{ value: 'edit', label: 'Edit' }, { value: 'preview', label: 'Preview' }]} value={tab} onChange={setTab} />}
         <div style={{ flex: 1 }} />
-        <Btn variant="ghost" icon="copy" small onClick={() => { const id = store.duplicateReport(r.id); onSaved && onSaved('duplicated'); }}>Duplicate</Btn>
-        <Btn variant="ghost" icon="file" small onClick={() => store.addTemplate({ name: r.title + ' Template', sections: ['studentInfo', 'academic', 'ratings', 'comments', 'targets'], ratingCategories: ratingCats, ratingScale: r.ratingScale, description: 'Saved from a report.' })}>Save as template</Btn>
-        <Btn variant="secondary" icon="print" small onClick={() => printReportPDF(r, store.store.config.branding)}>Export PDF</Btn>
-        <Btn variant="secondary" small onClick={saveDraft}>Save draft</Btn>
-        <Btn variant="primary" icon="check" small onClick={publish} style={unmet.length ? { opacity: 0.55 } : {}}>Submit for review</Btn>
+        <Btn variant="ghost" icon="copy" small onClick={() => { store.duplicateReport(r.id); onSaved && onSaved('duplicated'); }}>Duplicate</Btn>
+        {!readOnly && <Btn variant="ghost" icon="file" small onClick={saveAsTemplate}>Save as template</Btn>}
+        {perms.exportReports !== false && <Btn variant="secondary" icon="print" small onClick={() => printReportPDF(r, store.store.config.branding)}>Export PDF</Btn>}
+        {!readOnly && <Btn variant="secondary" small onClick={saveDraft}>{r.status === 'published' ? 'Save changes' : 'Save draft'}</Btn>}
+        {!readOnly && r.status !== 'published' && (
+          <Btn variant="primary" icon="check" small onClick={publish} style={unmet.length ? { opacity: 0.55 } : {}}>Publish to student</Btn>
+        )}
       </div>
 
+      {/* Published-and-locked banner (centre permission) */}
+      {readOnly && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '10px 14px', margin: '4px 0 0', borderRadius: 9,
+          background: DS.surface, border: `1px solid ${DS.borderDark}` }}>
+          <Icon name="lock" size={15} color={DS.muted} />
+          <span style={{ fontSize: 12.5, color: DS.sub, fontWeight: 500 }}>
+            This report is published and locked by your centre — <strong>Duplicate</strong> it to make a revised version.
+          </span>
+        </div>
+      )}
+
       {/* Centre-standards gate banner */}
-      {(gateMsg || (tab === 'edit' && unmet.length > 0)) && (
+      {!readOnly && (gateMsg || (tab === 'edit' && unmet.length > 0)) && (
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '10px 14px', margin: '4px 0 0', borderRadius: 9,
           background: gateMsg ? DS.dangerBg : DS.warningBg, border: `1px solid ${gateMsg ? DS.dangerBorder : DS.warningBorder}` }}>
           <Icon name={gateMsg ? 'x' : 'flag'} size={15} color={gateMsg ? DS.danger : DS.warning} />
@@ -810,12 +930,12 @@ const ReportEditor = ({ report, store, onBack, onSaved }) => {
         </div>
       )}
 
-      {tab === 'preview' ? (
+      {(tab === 'preview' || readOnly) ? (
         <div style={{ paddingTop: 16 }}><ReportReadingView report={r} tags={store.store.tags} /></div>
       ) : (
         <div style={{ maxWidth: 820, margin: '0 auto', paddingTop: 8, display: 'flex', flexDirection: 'column', gap: 18 }}>
           {/* Student info */}
-          <Card>
+          {secOn('studentInfo') && <Card>
             <div style={{ padding: '18px 20px' }}>
               <SectionTitle icon="user" color={acc}>{RPT_SECTION_LABELS.studentInfo}</SectionTitle>
               <Field label="Report title"><Input value={r.title} onChange={e => set({ title: e.target.value })} /></Field>
@@ -847,10 +967,10 @@ const ReportEditor = ({ report, store, onBack, onSaved }) => {
                 </Field>
               </div>
             </div>
-          </Card>
+          </Card>}
 
           {/* Academic */}
-          <Card>
+          {secOn('academic') && <Card>
             <div style={{ padding: '18px 20px' }}>
               <SectionTitle icon="chart" color={acc}>{RPT_SECTION_LABELS.academic}</SectionTitle>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -860,35 +980,59 @@ const ReportEditor = ({ report, store, onBack, onSaved }) => {
                 <Field label="Test performance"><Input value={r.academic.testPerformance} onChange={e => setAcad({ testPerformance: e.target.value })} /></Field>
                 <Field label="Attendance"><Input value={r.academic.attendance} onChange={e => setAcad({ attendance: e.target.value })} /></Field>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 8 }}>
-                <Field label="Strengths"><EditList items={r.academic.strengths} onChange={v => setAcad({ strengths: v })} placeholder="Add strength" /></Field>
-                <Field label="Areas to improve"><EditList items={r.academic.improvements} onChange={v => setAcad({ improvements: v })} placeholder="Add area" /></Field>
+              {(secOn('strengths') || secOn('improvements')) && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 8 }}>
+                  {secOn('strengths') && <Field label="Strengths"><EditList items={r.academic.strengths} onChange={v => setAcad({ strengths: v })} placeholder="Add strength" /></Field>}
+                  {secOn('improvements') && <Field label="Areas to improve"><EditList items={r.academic.improvements} onChange={v => setAcad({ improvements: v })} placeholder="Add area" /></Field>}
+                </div>
+              )}
+            </div>
+          </Card>}
+
+          {/* Attendance & Engagement — fills the fields the PDF section prints
+              (previously exported hardcoded defaults with no way to edit them) */}
+          {secOn('attendance') && <Card>
+            <div style={{ padding: '18px 20px' }}>
+              <SectionTitle icon="check" color={acc}>{RPT_SECTION_LABELS.attendance}</SectionTitle>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+                {!secOn('academic') && <Field label="Attendance"><Input value={r.academic.attendance} onChange={e => setAcad({ attendance: e.target.value })} placeholder="e.g. 96%" /></Field>}
+                <Field label="Punctuality"><Input value={r.punctuality || ''} onChange={e => set({ punctuality: e.target.value })} placeholder="e.g. Excellent" /></Field>
+                <Field label="Engagement"><Input value={r.engagement || ''} onChange={e => set({ engagement: e.target.value })} placeholder="e.g. Highly engaged" /></Field>
               </div>
             </div>
-          </Card>
+          </Card>}
+
+          {/* Homework & Independent Study — only when Academic isn't already
+              collecting the same completion field */}
+          {secOn('homework') && !secOn('academic') && <Card>
+            <div style={{ padding: '18px 20px' }}>
+              <SectionTitle icon="clip" color={acc}>{RPT_SECTION_LABELS.homework}</SectionTitle>
+              <Field label="Homework completion"><Input value={r.academic.homeworkCompletion} onChange={e => setAcad({ homeworkCompletion: e.target.value })} placeholder="e.g. 11 of 12 tasks" /></Field>
+            </div>
+          </Card>}
 
           {/* Ratings */}
-          <Card>
+          {secOn('ratings') && <Card>
             <div style={{ padding: '18px 20px' }}>
               <SectionTitle icon="star" color={acc}>{RPT_SECTION_LABELS.ratings}</SectionTitle>
-              <Field label="Rating scale">
+              <Field label="Rating scale" hint="Switching converts the ratings below to the new scale">
                 <Segmented options={[{ value: 'fourtier', label: 'Excellent → NI' }, { value: 'stars', label: '1–5 Stars' }, { value: 'percent', label: 'Percentage' }]}
-                  value={r.ratingScale} onChange={v => set({ ratingScale: v })} />
+                  value={r.ratingScale} onChange={switchScale} />
               </Field>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
                 {ratingCats.map(k => (
                   <div key={k} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: `1px solid ${DS.border}` }}>
-                    <span style={{ fontSize: 13, color: DS.sub, fontWeight: 500 }}>{RPT_RATING_LABELS[k] || k}</span>
-                    <RatingEditor scale={r.ratingScale} value={typeof r.ratings[k] === (r.ratingScale === 'fourtier' ? 'string' : 'number') ? r.ratings[k] : (r.ratingScale === 'fourtier' ? 'good' : r.ratingScale === 'stars' ? 4 : 80)}
+                    <span style={{ fontSize: 13, color: DS.sub, fontWeight: 500 }}>{catLabel(k)}</span>
+                    <RatingEditor scale={r.ratingScale} value={r.ratings[k]}
                       onChange={v => setR(prev => ({ ...prev, ratings: { ...prev.ratings, [k]: v } }))} />
                   </div>
                 ))}
               </div>
             </div>
-          </Card>
+          </Card>}
 
           {/* Comments — gated by the centre minimum-comment-length standard */}
-          <Card>
+          {secOn('comments') && <Card>
             <div style={{ padding: '18px 20px' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <SectionTitle icon="message" color={acc}>
@@ -902,36 +1046,38 @@ const ReportEditor = ({ report, store, onBack, onSaved }) => {
               </div>
               <RichTextEditor value={r.comments} onChange={v => set({ comments: v })} />
             </div>
-          </Card>
+          </Card>}
 
           {/* Signature — gated by the centre require-signature standard */}
           {standards.requireSignature && (
             <Card>
               <div style={{ padding: '18px 20px' }}>
                 <SectionTitle icon="edit" color={acc}>Teacher signature<span style={{ color: DS.danger, marginLeft: 5 }} title="Required to complete">*</span></SectionTitle>
-                <Field label="Type your name to sign this report" hint="Required by your centre before a report can be submitted for review">
+                <Field label="Type your name to sign this report" hint="Required by your centre before publishing — the signed name prints on the report PDF">
                   <Input value={r.signature || ''} onChange={e => set({ signature: e.target.value })} placeholder={REPORTS_TEACHER_SELF} />
                 </Field>
               </div>
             </Card>
           )}
 
-          {/* Targets */}
-          <Card>
+          {/* Targets (parent actions double as the PDF's Parent Notes section) */}
+          {(secOn('targets') || secOn('parentNotes')) && <Card>
             <div style={{ padding: '18px 20px' }}>
-              <SectionTitle icon="flag" color={acc}>{RPT_SECTION_LABELS.targets}</SectionTitle>
+              <SectionTitle icon="flag" color={acc}>{secOn('targets') ? RPT_SECTION_LABELS.targets : RPT_SECTION_LABELS.parentNotes}</SectionTitle>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-                <Field label="Current targets"><EditList items={r.targets.current} onChange={v => setTargets({ current: v })} placeholder="Add target" /></Field>
-                <Field label="Long-term goals"><EditList items={r.targets.longTerm} onChange={v => setTargets({ longTerm: v })} placeholder="Add goal" /></Field>
-                <Field label="Recommended revision"><EditList items={r.targets.revision} onChange={v => setTargets({ revision: v })} placeholder="Add revision" /></Field>
+                {secOn('targets') && <>
+                  <Field label="Current targets"><EditList items={r.targets.current} onChange={v => setTargets({ current: v })} placeholder="Add target" /></Field>
+                  <Field label="Long-term goals"><EditList items={r.targets.longTerm} onChange={v => setTargets({ longTerm: v })} placeholder="Add goal" /></Field>
+                  <Field label="Recommended revision"><EditList items={r.targets.revision} onChange={v => setTargets({ revision: v })} placeholder="Add revision" /></Field>
+                </>}
                 <Field label="Parent actions"><EditList items={r.targets.parentActions} onChange={v => setTargets({ parentActions: v })} placeholder="Add action" /></Field>
-                <Field label="Teacher actions"><EditList items={r.targets.teacherActions} onChange={v => setTargets({ teacherActions: v })} placeholder="Add action" /></Field>
+                {secOn('targets') && <Field label="Teacher actions"><EditList items={r.targets.teacherActions} onChange={v => setTargets({ teacherActions: v })} placeholder="Add action" /></Field>}
               </div>
             </div>
-          </Card>
+          </Card>}
 
           {/* Attachments */}
-          <Card>
+          {secOn('attachments') && <Card>
             <div style={{ padding: '18px 20px' }}>
               <SectionTitle icon="clip" color={acc}>{RPT_SECTION_LABELS.attachments}</SectionTitle>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -943,14 +1089,15 @@ const ReportEditor = ({ report, store, onBack, onSaved }) => {
                     <button onClick={() => set({ attachments: r.attachments.filter((_, k) => k !== i) })} style={{ border: 'none', background: 'none', cursor: 'pointer', color: DS.faint }}><Icon name="x" size={14} /></button>
                   </div>
                 ))}
-                <button onClick={() => set({ attachments: [...(r.attachments || []), { name: 'New_Attachment.pdf', type: 'pdf', size: '— KB' }] })} style={{
+                <input ref={fileRef} type="file" multiple onChange={onFiles} style={{ display: 'none' }} />
+                <button onClick={() => fileRef.current && fileRef.current.click()} style={{
                   alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: 5, border: `1px dashed ${DS.border}`,
                   background: DS.surface, color: DS.muted, fontSize: 12, padding: '7px 12px', borderRadius: 6, cursor: 'pointer' }}>
-                  <Icon name="upload" size={13} /> Attach file
+                  <Icon name="upload" size={13} /> Attach files
                 </button>
               </div>
             </div>
-          </Card>
+          </Card>}
         </div>
       )}
     </div>
@@ -958,19 +1105,41 @@ const ReportEditor = ({ report, store, onBack, onSaved }) => {
 };
 
 // ─── New report modal ─────────────────────────────────────────────────────────────
+// 'Yr 12' (admin store) → 'Year 12' (reports/templates). Both formats circulate.
+function rptNormYear(y) { return String(y || '').replace(/^Yr\s+/, 'Year '); }
+
+// Availability check the template builder's "Assign to…" chips promise: a template
+// is offered only where its assigned years / subjects / classes match (empty = everywhere).
+function templateAvailableFor(tpl, ctx) {
+  const years = tpl.assignedYears || [], subjects = tpl.assignedSubjects || [], classes = tpl.assignedClasses || [];
+  const okYear = !years.length || (ctx.year && years.includes(rptNormYear(ctx.year)));
+  const okSubject = !subjects.length || (ctx.subject && subjects.some(s => ctx.subject.includes(s)));
+  const okClass = !classes.length || (ctx.className && classes.includes(ctx.className));
+  return okYear && okSubject && okClass;
+}
+
 function blankReport(template, opts) {
   opts = opts || {};
   const cats = (template && template.ratingCategories) || ['behaviour', 'effort', 'homework', 'participation', 'confidence', 'communication', 'subjectKnowledge'];
   const scale = (template && template.ratingScale) || 'fourtier';
   const ratings = {};
   cats.forEach(c => ratings[c] = scale === 'fourtier' ? 'good' : scale === 'stars' ? 4 : 80);
+  // Custom template categories carry their labels onto the report so every
+  // surface (editor, reading view, PDF) can render them readably.
+  const customCats = (template && template.customCategories) || [];
+  const ratingLabels = {};
+  cats.forEach(c => { const cc = customCats.find(x => x.key === c); if (cc) ratingLabels[c] = cc.label; });
   return {
-    id: 'r_' + Date.now() + '_' + Math.floor(Math.random() * 9999),
+    id: 'r_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
     title: `${opts.period || 'Summer Term 2026'} — ${opts.subject || 'Subject'} Progress Report`,
-    studentId: opts.studentId || 's_new', studentName: opts.studentName || '', year: opts.year || 'Year 12',
+    studentId: opts.studentId || 's_new', studentName: opts.studentName || '', year: rptNormYear(opts.year) || 'Year 12',
     className: opts.className || '', subject: opts.subject || '', subjectColor: opts.subjectColor || DS.accent,
     teacher: REPORTS_TEACHER_SELF, predicted: '',
     period: opts.period || 'Summer Term 2026', reportType: (template && template.name) || 'Termly Progress',
+    // the template's shape travels with the report — sections drive the editor/PDF/reading view
+    templateId: template ? template.id : null,
+    sections: (template && template.sections) ? template.sections.slice() : null,
+    ratingLabels,
     dateCreated: REPORTS_TODAY, dateModified: REPORTS_TODAY, datePublished: null, dateArchived: null,
     status: 'draft', folderId: opts.folderId || null, tagIds: [], pinned: false, lastViewed: null,
     academic: { understanding: 'good', participation: 'good', homeworkCompletion: '', testPerformance: '', attendance: '', strengths: [], improvements: [] },
@@ -981,55 +1150,81 @@ function blankReport(template, opts) {
   };
 }
 
+// Class-driven creation: pick one of YOUR classes, then one/some/all of its actual
+// roster. Reports are keyed by the roster studentId (never free-typed names) so
+// due-date tracking and the student's own view stay linked.
 const NewReportModal = ({ open, onClose, store, onCreated }) => {
+  const myClasses = reportClasses().filter(c => (c.teacher || '').split(' / ').includes(REPORTS_TEACHER_SELF_SHORT));
   const [mode, setMode] = React.useState('single');  // single | class | multiple
-  const [tplId, setTplId] = React.useState(store.store.templates[0] && store.store.templates[0].id);
-  const [name, setName] = React.useState('');
-  const [className, setClassName] = React.useState('Mathematics — Year 12 (Set A)');
+  const [classId, setClassId] = React.useState((myClasses[0] || {}).id || '');
+  const [studentId, setStudentId] = React.useState('');
   const [selected, setSelected] = React.useState([]);
-  const students = REPORTS_STUDENTS;
-  const tpl = store.store.templates.find(t => t.id === tplId);
+  const cls = reportClassById(classId);
+  const classLabel = cls ? `${cls.name} — ${cls.group}` : '';
+  const classYear = cls ? rptNormYear((cls.group.match(/Year \d+|Yr \d+/) || [''])[0]) : '';
+  const roster = reportStudents().filter(s => (s.classIds || []).includes(classId));
 
+  // Templates: only those available for this class; default to the one the
+  // reporting rules resolve to for this class.
+  const availableTpls = store.store.templates.filter(t => templateAvailableFor(t, { year: classYear, subject: cls ? cls.name : '', className: classLabel }));
+  const resolvedTplId = cls ? resolvePolicy({ classId: cls.id, tags: cls.tags || [] }, store.store.config).templateId : null;
+  const [tplId, setTplId] = React.useState(null);
+  const effectiveTplId = tplId && availableTpls.some(t => t.id === tplId) ? tplId
+    : (availableTpls.some(t => t.id === resolvedTplId) ? resolvedTplId : (availableTpls[0] || {}).id);
+  const tpl = store.store.templates.find(t => t.id === effectiveTplId);
+
+  const onClassChange = (id) => { setClassId(id); setStudentId(''); setSelected([]); setTplId(null); };
   const toggle = (id) => setSelected(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
 
+  const targets = mode === 'class' ? roster
+    : mode === 'multiple' ? roster.filter(s => selected.includes(s.id))
+    : roster.filter(s => s.id === (studentId || (roster[0] || {}).id));
+  const count = targets.length;
+
   const create = () => {
-    let targets = [];
-    if (mode === 'single') targets = name ? [{ studentName: name }] : [{ studentName: 'New Student' }];
-    if (mode === 'class')  targets = students.slice(0, 5).map(s => ({ studentName: s.name, studentId: s.id, year: s.year }));
-    if (mode === 'multiple') targets = students.filter(s => selected.includes(s.id)).map(s => ({ studentName: s.name, studentId: s.id, year: s.year }));
-    let firstId = null;
-    targets.forEach((t, i) => {
-      const rep = blankReport(tpl, { ...t, className, subject: className.split(' — ')[0] });
-      const id = store.addReport(rep);
-      if (i === 0) firstId = id;
-    });
-    onCreated(targets.length, firstId);
+    if (!cls || count === 0) return;
+    const reps = targets.map(s => blankReport(tpl, {
+      studentId: s.id, studentName: reportStudentLabel(s), year: s.year,
+      className: classLabel, subject: cls.name,
+    }));
+    const ids = store.addReports(reps);   // one atomic persist — a loop of addReport() drops all but the last
+    onCreated(count, ids[0] || null);
   };
 
+  const StudentRow = ({ s, on, onToggle, radio }) => (
+    <label style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 10px', borderRadius: 7, cursor: 'pointer', background: on ? DS.accentLight : DS.surface, border: `1px solid ${on ? DS.accentBorder : DS.border}` }}>
+      <input type={radio ? 'radio' : 'checkbox'} name={radio ? 'rpt_new_student' : undefined} checked={on} onChange={onToggle} style={{ accentColor: DS.accent }} />
+      <Avatar name={reportStudentLabel(s)} size={26} /><span style={{ fontSize: 13, color: DS.text }}>{reportStudentLabel(s)}</span>
+      <span style={{ marginLeft: 'auto', fontSize: 12, color: DS.faint }}>{rptNormYear(s.year)}</span>
+    </label>
+  );
+
   return (
-    <Modal open={open} onClose={onClose} title="Create report" subtitle="Generate one or more reports from a template" icon="file" width={560}
-      footer={<><Btn variant="secondary" small onClick={onClose}>Cancel</Btn><Btn variant="primary" small icon="plus" onClick={create}>Create {mode === 'class' ? '5 reports' : mode === 'multiple' ? `${selected.length} reports` : 'report'}</Btn></>}>
+    <Modal open={open} onClose={onClose} title="Create report" subtitle="Drafts are created from a template for students in your class" icon="file" width={560}
+      footer={<><Btn variant="secondary" small onClick={onClose}>Cancel</Btn><Btn variant="primary" small icon="plus" onClick={create} style={count === 0 ? { opacity: 0.55 } : {}}>Create {count === 1 ? 'report' : `${count} reports`}</Btn></>}>
+      <Field label="Class">
+        <Select value={classId} onChange={e => onClassChange(e.target.value)}>
+          {myClasses.map(c => <option key={c.id} value={c.id}>{c.name} · {c.group}</option>)}
+        </Select>
+      </Field>
+      <Field label="Template" hint={availableTpls.length < store.store.templates.length ? 'Only templates assigned to this class / year / subject are shown' : undefined}>
+        <Select value={effectiveTplId || ''} onChange={e => setTplId(e.target.value)}>
+          {availableTpls.map(t => <option key={t.id} value={t.id}>{t.name}{t.id === resolvedTplId ? ' (centre rule)' : ''}</option>)}
+        </Select>
+      </Field>
       <Field label="Who is this report for?">
         <Segmented options={[{ value: 'single', label: 'One student' }, { value: 'class', label: 'Whole class' }, { value: 'multiple', label: 'Selected students' }]} value={mode} onChange={setMode} />
       </Field>
-      <Field label="Template">
-        <Select value={tplId} onChange={e => setTplId(e.target.value)}>
-          {store.store.templates.map(t => <option key={t.id} value={t.id}>{t.name}{t.locked ? ' (locked)' : ''}</option>)}
-        </Select>
-      </Field>
-      <Field label="Class"><Input value={className} onChange={e => setClassName(e.target.value)} /></Field>
-      {mode === 'single' && <Field label="Student name"><Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Oliver Chen" /></Field>}
-      {mode === 'class' && <div style={{ fontSize: 13, color: DS.muted, padding: '4px 2px' }}>A draft report will be created for each of the {students.slice(0, 5).length} students in this class.</div>}
-      {mode === 'multiple' && (
-        <Field label="Select students">
+      {roster.length === 0 ? (
+        <div style={{ fontSize: 13, color: DS.muted, padding: '4px 2px' }}>No students are enrolled in this class yet.</div>
+      ) : mode === 'class' ? (
+        <div style={{ fontSize: 13, color: DS.muted, padding: '4px 2px' }}>A draft report will be created for each of the {roster.length} students enrolled in {classLabel}.</div>
+      ) : (
+        <Field label={mode === 'single' ? 'Student' : 'Select students'}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 200, overflow: 'auto' }}>
-            {students.map(s => (
-              <label key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 10px', borderRadius: 7, cursor: 'pointer', background: selected.includes(s.id) ? DS.accentLight : DS.surface, border: `1px solid ${selected.includes(s.id) ? DS.accentBorder : DS.border}` }}>
-                <input type="checkbox" checked={selected.includes(s.id)} onChange={() => toggle(s.id)} style={{ accentColor: DS.accent }} />
-                <Avatar name={s.name} size={26} /><span style={{ fontSize: 13, color: DS.text }}>{s.name}</span>
-                <span style={{ marginLeft: 'auto', fontSize: 12, color: DS.faint }}>{s.year}</span>
-              </label>
-            ))}
+            {roster.map(s => mode === 'single'
+              ? <StudentRow key={s.id} s={s} radio on={s.id === (studentId || (roster[0] || {}).id)} onToggle={() => setStudentId(s.id)} />
+              : <StudentRow key={s.id} s={s} on={selected.includes(s.id)} onToggle={() => toggle(s.id)} />)}
           </div>
         </Field>
       )}
@@ -1055,27 +1250,39 @@ const TeacherReports = () => {
   const [moveOpen, setMoveOpen] = React.useState(false);
   const [tagOpen, setTagOpen] = React.useState(false);
   const [toast, setToast] = React.useState('');
+  const [newFolder, setNewFolder] = React.useState(null);   // null=closed, ''=typing
 
-  const reports = store.reportsArr;
   const flash = (m) => { setToast(m); setTimeout(() => setToast(''), 2200); };
 
   const config = store.store.config;
+  const perms = config.permissions || {};
+  const standards = config.centreStandards || {};
+  // Scope: own reports only, unless the centre allows viewing other teachers'.
+  const reports = perms.viewOthers === false
+    ? store.reportsArr.filter(r => r.teacher === REPORTS_TEACHER_SELF)
+    : store.reportsArr;
   const subjects = Array.from(new Set(reports.map(r => r.subject)));
 
   // analytics
   const drafts = reports.filter(r => r.status === 'draft');
   const published = reports.filter(r => r.status === 'published');
   const recentlyPublished = published.filter(r => r.datePublished && r.datePublished >= '2026-04-01');
-  const dueThisWeek = drafts.length; // demo: all drafts treated as awaiting/due
+  // "Due this week" comes from the same engine as the Reports-due widget below,
+  // so the two numbers on this page can never disagree.
+  const dueRows = computeUpcomingReports(config, store, { teacherName: REPORTS_TEACHER_SELF_SHORT });
+  const dueThisWeek = dueRows.filter(d => d.overdue || d.dueInDays <= 7).length;
+
+  // "Recently viewed" means viewed in the last 14 days, not ever.
+  const recentCutoff = rptAddDays(REPORTS_TODAY, -14);
+  const isRecent = (r) => r.lastViewed && r.lastViewed >= recentCutoff;
 
   // folder + filter pipeline
   let list = reports.filter(r => {
     if (folder === 'all') return r.status !== 'archived';
     if (folder === 'pinned') return r.pinned;
-    if (folder === 'recent') return !!r.lastViewed;
+    if (folder === 'recent') return isRecent(r);
     if (folder === 'drafts') return r.status === 'draft';
     if (folder === 'archived') return r.status === 'archived';
-    if (folder === 'shared') return (r.tagIds || []).includes('t_pe');
     return r.folderId === folder && r.status !== 'archived';
   });
   if (tagFilter) list = list.filter(r => (r.tagIds || []).includes(tagFilter));
@@ -1120,7 +1327,7 @@ const TeacherReports = () => {
 
   if (view === 'due') {
     return (
-      <UpcomingReportsPage config={config} store={store} teacherName="Sarah Clarke"
+      <UpcomingReportsPage config={config} store={store} teacherName={REPORTS_TEACHER_SELF_SHORT}
         onBack={() => setView('list')}
         onOpenStudent={(r) => { setView('list'); setFolder('all'); setTagFilter(null); setSearch(r.name); }} />
     );
@@ -1161,12 +1368,26 @@ const TeacherReports = () => {
           <div style={{ background: DS.bg, border: `1px solid ${DS.cardBorder}`, borderRadius: 12, padding: 12 }}>
             <RailItem id="all" icon="file" label="All reports" count={reports.filter(r => r.status !== 'archived').length} />
             <RailItem id="pinned" icon="pin" label="Pinned" count={reports.filter(r => r.pinned).length} />
-            <RailItem id="recent" icon="clock" label="Recently viewed" count={reports.filter(r => r.lastViewed).length} />
+            <RailItem id="recent" icon="clock" label="Recently viewed" count={reports.filter(isRecent).length} />
             <RailItem id="drafts" icon="edit" label="Drafts" count={drafts.length} />
-            <RailItem id="shared" icon="users" label="Shared" count={reports.filter(r => (r.tagIds || []).includes('t_pe')).length} />
             <RailItem id="archived" icon="archive" label="Archived" count={reports.filter(r => r.status === 'archived').length} />
             <div style={{ height: 1, background: DS.border, margin: '10px 4px' }} />
-            <div style={{ fontSize: 10.5, fontWeight: 700, color: DS.faint, letterSpacing: '0.05em', padding: '4px 10px' }}>FOLDERS</div>
+            <div style={{ display: 'flex', alignItems: 'center', padding: '4px 10px' }}>
+              <span style={{ flex: 1, fontSize: 10.5, fontWeight: 700, color: DS.faint, letterSpacing: '0.05em' }}>FOLDERS</span>
+              <button onClick={() => setNewFolder(newFolder === null ? '' : null)} title="New folder" style={{ border: 'none', background: 'none', cursor: 'pointer', color: DS.muted, padding: 2, lineHeight: 0 }}>
+                <Icon name="plus" size={13} />
+              </button>
+            </div>
+            {newFolder !== null && (
+              <div style={{ padding: '2px 8px 6px' }}>
+                <Input autoFocus value={newFolder} placeholder="Folder name…"
+                  onChange={e => setNewFolder(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && newFolder.trim()) { store.addFolder({ name: newFolder.trim() }); setNewFolder(null); flash('Folder created.'); }
+                    if (e.key === 'Escape') setNewFolder(null);
+                  }} style={{ width: '100%', fontSize: 12.5, padding: '6px 9px' }} />
+              </div>
+            )}
             {rootFolders.map(f => (
               <React.Fragment key={f.id}>
                 <RailItem id={f.id} icon="folder" label={f.name} color={f.color} count={reports.filter(r => r.folderId === f.id).length} />
@@ -1188,7 +1409,7 @@ const TeacherReports = () => {
           </div>
 
           {/* Reports due — its own card under the filters; overdue first, opens the full due page */}
-          <UpcomingReports config={config} store={store} teacherName="Sarah Clarke" limit={5}
+          <UpcomingReports config={config} store={store} teacherName={REPORTS_TEACHER_SELF_SHORT} limit={5}
             compact onView={() => setView('due')} />
         </div>
 
@@ -1215,11 +1436,25 @@ const TeacherReports = () => {
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', background: DS.accentLight, border: `1px solid ${DS.accentBorder}`, borderRadius: 10, marginBottom: 14 }}>
               <span style={{ fontSize: 13, fontWeight: 600, color: DS.accent }}>{sel.length} selected</span>
               <div style={{ flex: 1 }} />
-              <Btn variant="ghost" icon="check" small onClick={() => { store.publishReports(sel); flash(`${sel.length} report(s) published.`); setSel([]); }}>Publish</Btn>
-              <Btn variant="ghost" icon="archive" small onClick={() => { store.archiveReports(sel); flash(`${sel.length} archived.`); setSel([]); }}>Archive</Btn>
+              {/* Bulk publish enforces the same centre-standards gate as the editor:
+                  reports that don't meet the floors are skipped, not sneaked out. */}
+              <Btn variant="ghost" icon="check" small onClick={() => {
+                const chosen = reports.filter(r => sel.includes(r.id) && r.status === 'draft');
+                const ok = chosen.filter(r => unmetStandards(r, standards).length === 0);
+                const skipped = chosen.length - ok.length;
+                if (ok.length) store.publishReports(ok.map(r => r.id));
+                flash(skipped > 0
+                  ? `${ok.length} published · ${skipped} skipped (centre standards not met — open to finish).`
+                  : `${ok.length} report(s) published.`);
+                setSel([]);
+              }}>Publish</Btn>
+              {perms.archiveReports !== false && <Btn variant="ghost" icon="archive" small onClick={() => { store.archiveReports(sel); flash(`${sel.length} archived.`); setSel([]); }}>Archive</Btn>}
               <Btn variant="ghost" icon="folder" small onClick={() => setMoveOpen(true)}>Move</Btn>
               <Btn variant="ghost" icon="tag" small onClick={() => setTagOpen(true)}>Tag</Btn>
-              <Btn variant="ghost" icon="print" small onClick={() => { printReportPDF(reports.filter(r => sel.includes(r.id)), config.branding); }}>Export</Btn>
+              {perms.exportReports !== false && <Btn variant="ghost" icon="print" small onClick={() => { printReportPDF(reports.filter(r => sel.includes(r.id)), config.branding); }}>Export</Btn>}
+              {perms.deleteReports !== false && <Btn variant="ghost" icon="trash" small onClick={() => {
+                if (confirm(`Delete ${sel.length} report(s)? This can't be undone.`)) { store.deleteReports(sel); flash(`${sel.length} deleted.`); setSel([]); }
+              }}>Delete</Btn>}
               <Btn variant="ghost" icon="x" small onClick={() => setSel([])}>Clear</Btn>
             </div>
           )}
@@ -1232,7 +1467,8 @@ const TeacherReports = () => {
               {pageList.map(r => (
                 <ReportCard key={r.id} r={r} tags={store.store.tags} selected={sel.includes(r.id)}
                   onToggle={() => toggleSel(r.id)} onOpen={() => openReport(r)}
-                  onPin={() => store.togglePin(r.id)} onPrint={() => printReportPDF(r, config.branding)} />
+                  onPin={() => store.togglePin(r.id)}
+                  onPrint={perms.exportReports !== false ? () => printReportPDF(r, config.branding) : null} />
               ))}
             </div>
           ) : (
@@ -1303,7 +1539,7 @@ const ReportCard = ({ r, tags, selected, onToggle, onOpen, onPin, onPrint }) => 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, paddingTop: 12, borderTop: `1px solid ${DS.border}` }}>
           <span style={{ fontSize: 11, color: DS.faint, flex: 1 }}>Modified {r.dateModified}</span>
           <button onClick={onOpen} style={{ border: 'none', background: 'none', cursor: 'pointer', color: DS.muted, padding: 3 }}><Icon name="edit" size={14} /></button>
-          <button onClick={onPrint} style={{ border: 'none', background: 'none', cursor: 'pointer', color: DS.muted, padding: 3 }}><Icon name="print" size={14} /></button>
+          {onPrint && <button onClick={onPrint} style={{ border: 'none', background: 'none', cursor: 'pointer', color: DS.muted, padding: 3 }}><Icon name="print" size={14} /></button>}
         </div>
       </div>
     </div>
@@ -1346,8 +1582,11 @@ const StudentReports = () => {
   const [page, setPage] = React.useState(1);
   const PER_PAGE = 10;   // matches the shared Table page size (§8)
 
-  // only this student's published (or archived) reports
-  const mine = store.reportsArr.filter(r => r.studentId === REPORTS_STUDENT_SELF && r.status === 'published');
+  // Only this student's PUBLISHED reports. Matched by id OR canonical name —
+  // reports created from the admin roster carry SEED ids (s2…) while the student
+  // principal uses the reports id space (s_oliver).
+  const mine = store.reportsArr.filter(r =>
+    (r.studentId === REPORTS_STUDENT_SELF || r.studentName === REPORTS_STUDENT_SELF_NAME) && r.status === 'published');
   const subjects = Array.from(new Set(mine.map(r => r.subject)));
   const teachers = Array.from(new Set(mine.map(r => r.teacher)));
 
@@ -1435,17 +1674,22 @@ const StudentReports = () => {
             </div>
             {pageList.map(r => {
               const acc = r.subjectColor || DS.accent;
-              const isRead = r.acknowledgement && r.acknowledgement.ack;
+              const isAcked = r.acknowledgement && r.acknowledgement.ack;
+              // "New" = this student hasn't opened it. Opened-but-not-confirmed
+              // shows as "Opened", not a nagging "New" forever.
+              const isOpened = !!r.viewedByStudent;
               return (
-                <div key={r.id} onClick={() => { store.markViewed(r.id); setOpen(r); }} style={{ display: 'grid', gridTemplateColumns: '40px 1.6fr 1fr 1fr 0.9fr 0.8fr 36px', gap: 12, padding: '11px 16px', borderBottom: `1px solid ${DS.border}`, alignItems: 'center', cursor: 'pointer' }}>
+                <div key={r.id} onClick={() => { store.markStudentViewed(r.id); setOpen(r); }} style={{ display: 'grid', gridTemplateColumns: '40px 1.6fr 1fr 1fr 0.9fr 0.8fr 36px', gap: 12, padding: '11px 16px', borderBottom: `1px solid ${DS.border}`, alignItems: 'center', cursor: 'pointer' }}>
                   <div style={{ width: 32, height: 32, borderRadius: 8, background: acc + '18', color: acc, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="file" size={16} /></div>
                   <span style={{ fontSize: 13, fontWeight: 600, color: DS.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.title}</span>
                   <span style={{ fontSize: 12.5, color: DS.sub, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.subject}</span>
                   <span style={{ fontSize: 12.5, color: DS.sub, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.teacher}</span>
                   <span style={{ fontSize: 12.5, color: DS.muted }}>{r.datePublished}</span>
-                  <span>{isRead
+                  <span>{isAcked
                     ? <Badge variant="success"><Icon name="check" size={10} /> Read</Badge>
-                    : <Badge variant="accent">New</Badge>}</span>
+                    : isOpened
+                      ? <Badge variant="default">Opened</Badge>
+                      : <Badge variant="accent">New</Badge>}</span>
                   <span style={{ justifySelf: 'end', display: 'flex' }}><Icon name="chevron_r" size={15} color={DS.muted} /></span>
                 </div>
               );
@@ -1489,34 +1733,37 @@ const Pager = ({ page, pageCount, onPage, total, perPage }) => {
 };
 
 // ─── Admin Reports configuration surface ───────────────────────────────────────────
-const AdminToggle = ({ on, onChange }) => (
-  <button onClick={() => onChange(!on)} style={{
-    width: 40, height: 22, borderRadius: 20, border: 'none', cursor: 'pointer', position: 'relative',
-    background: on ? DS.accent : DS.borderDark, transition: 'background .15s', flexShrink: 0 }}>
+const AdminToggle = ({ on, onChange, disabled }) => (
+  <button onClick={() => !disabled && onChange(!on)} disabled={disabled} style={{
+    width: 40, height: 22, borderRadius: 20, border: 'none', cursor: disabled ? 'default' : 'pointer', position: 'relative',
+    background: on ? DS.accent : DS.borderDark, opacity: disabled ? 0.55 : 1, transition: 'background .15s', flexShrink: 0 }}>
     <span style={{ position: 'absolute', top: 2, left: on ? 20 : 2, width: 18, height: 18, borderRadius: '50%', background: '#fff', transition: 'left .15s' }} />
   </button>
 );
 
-const ToggleRow = ({ label, hint, on, onChange }) => (
+const ToggleRow = ({ label, hint, on, onChange, disabled, lock }) => (
   <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 0', borderBottom: `1px solid ${DS.border}` }}>
     <div style={{ flex: 1 }}>
-      <div style={{ fontSize: 13.5, fontWeight: 600, color: DS.text }}>{label}</div>
+      <div style={{ fontSize: 13.5, fontWeight: 600, color: DS.text, display: 'flex', alignItems: 'center', gap: 6 }}>
+        {label}{lock && <Icon name="lock" size={12} color={DS.faint} />}
+      </div>
       {hint && <div style={{ fontSize: 12, color: DS.muted, marginTop: 2 }}>{hint}</div>}
     </div>
-    <AdminToggle on={on} onChange={onChange} />
+    <AdminToggle on={on} onChange={onChange} disabled={disabled} />
   </div>
 );
 
 // ─── Reporting-rule model: enums, labels, the cascade resolver ───────────────────
-// REQUIREMENT is CADENCE ("must a report be written, and how often?") — deliberately
-// worded differently from the centre-standards completion floors ("required to
-// complete a field"), which are a separate concept.
+// The enum value stays REQUIRED for storage compat, but the UI says "Expected":
+// this is CADENCE ("is a report expected, and how often?"), a different concept
+// from the centre-standards completion floors ("required to complete a field") —
+// using the word "required" for both was actively confusing.
 const RPT_REQUIREMENT = ['REQUIRED', 'OPTIONAL', 'OFF'];
 const RPT_REQ_OPTIONS = [
-  { value: 'REQUIRED', label: 'Required' }, { value: 'OPTIONAL', label: 'Optional' }, { value: 'OFF', label: 'Off' },
+  { value: 'REQUIRED', label: 'Expected' }, { value: 'OPTIONAL', label: 'Optional' }, { value: 'OFF', label: 'Off' },
 ];
 const RPT_REQ_META = {
-  REQUIRED: { label: 'Report required', variant: 'accent',   short: 'Required' },
+  REQUIRED: { label: 'Report expected', variant: 'accent',   short: 'Expected' },
   OPTIONAL: { label: 'Report optional', variant: 'default',  short: 'Optional' },
   OFF:      { label: 'Reporting off',   variant: 'warning',  short: 'Off' },
 };
@@ -1553,9 +1800,11 @@ function ruleLabel(rule) {
   return 'Tag · ' + (rule.tag || '—');
 }
 
-// The cascade. `subject` is the narrowest matching target: student > class > tag,
-// then same-level ties break on priority (higher wins). Falls back to the centre
-// default. Always returns the winning rule + the rules it overrode for the resolver UI.
+// The cascade: the narrowest matching target wins (student > class > tag), falling
+// back to the centre default. `priority` survives on stored rules only as a
+// same-level tie-breaker (two tag rules matching one student) — it is no longer a
+// user-facing mechanic; the "What applies to…" resolver shows the outcome instead.
+// Always returns the winning rule + the rules it overrode for the resolver UI.
 function resolvePolicy({ studentId, classId, tags }, config) {
   const rules = config.reportRules || [];
   const matches = rules.filter(r =>
@@ -1580,9 +1829,10 @@ function resolveForStudent(student, config) {
 // ─── Upcoming reports (shared by the teacher + admin Reports pages) ───────────────
 // For every active student, resolve the effective reporting policy, then compute the
 // next due date from (last published report || a notional last cycle) + the cadence.
-// Skips OFF. Returns rows enriched with student / class / subject / teacher so callers
-// can show "what's due next" grouped however they like. Mirrors the teacher-dashboard
-// "Reports due" math so the two surfaces never disagree.
+// Skips OFF and OPTIONAL — an optional report has no due date, so it can never be
+// "overdue" (that contradiction confused everyone). Returns rows enriched with
+// student / class / subject / teacher so callers can group however they like.
+// This IS the teacher-dashboard "Reports due" math — one engine, every surface.
 const RPT_DUE_BASE = '2026-03-15';        // notional last reporting cycle when none published
 const RPT_SOON_DAYS = 14;                 // "due soon" window for the reminder badge
 function rptAddDays(iso, n) { const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); }
@@ -1602,10 +1852,12 @@ function computeUpcomingReports(config, store, opts = {}) {
     const klass = classId ? reportClassById(classId) : null;
     if (teacherName && (!klass || (klass.teacher || '').split(' / ').indexOf(teacherName) === -1)) return null;
     const pol = resolveForStudent(s, config);
-    if (pol.requirement === 'OFF') return null;
+    if (pol.requirement !== 'REQUIRED') return null;   // only Expected students have due dates
     const name = reportStudentLabel(s);
+    // Match the last published report by studentId first; fall back to the display
+    // name only for legacy records — a typo in a name must not reset a cadence.
     const last = reportsArr
-      .filter(r => r.studentName === name && r.status === 'published' && r.datePublished)
+      .filter(r => (r.studentId === s.id || r.studentName === name) && r.status === 'published' && r.datePublished)
       .sort((a, b) => b.datePublished.localeCompare(a.datePublished))[0];
     const base = last ? last.datePublished : RPT_DUE_BASE;
     const due = rptAddDays(base, rptFreqDays(pol.frequency));
@@ -1656,7 +1908,6 @@ const UpcomingReportRow = ({ r, showTeacher, dense, onClick }) => {
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0 }}>
         <Badge variant={chip.variant}>{chip.label}</Badge>
-        {r.requirement === 'OPTIONAL' && <Badge variant="default">Optional</Badge>}
       </div>
     </div>
   );
@@ -1681,7 +1932,7 @@ const UpcomingReports = ({ config, store, teacherName, showTeacher = false, limi
   const shown = rows.slice(0, limit);
   const empty = (
     <div style={{ padding: compact ? '14px 12px' : '20px 14px', fontSize: compact ? 12.5 : 13, color: DS.muted }}>
-      Nothing due — every student in scope resolves to <strong>optional</strong> or <strong>off</strong>, or is already up to date.
+      Nothing due — no student in scope is <strong>expected</strong> a report right now, or everyone is up to date.
     </div>
   );
 
@@ -1773,7 +2024,7 @@ const UpcomingReportsPage = ({ config, store, teacherName, showTeacher = false, 
       </div>
 
       {rows.length === 0 ? (
-        <EmptyState icon="check" title="Nothing due" message="Every student in scope resolves to optional or off, or is already up to date." />
+        <EmptyState icon="check" title="Nothing due" message="No student in scope is expected a report right now, or everyone is up to date." />
       ) : groups.map(g => (
         <div key={g.key} style={{ marginBottom: g.label ? 18 : 0 }}>
           {g.label && (
@@ -1825,19 +2076,13 @@ const AdminReportingRules = ({ store, config }) => {
   const saveRules = (next) => store.setReportRules(next);
   const updateRule = (id, patch) => saveRules(rules.map(r => r.id === id ? { ...r, ...patch } : r));
   const removeRule = (id) => saveRules(rules.filter(r => r.id !== id));
-  // Priority reorder: higher priority wins ties, so "move up" raises priority above
-  // its predecessor. We display rules sorted by priority desc and renumber on reorder.
-  const sorted = rules.slice().sort((a, b) => (b.priority || 0) - (a.priority || 0));
-  const move = (id, dir) => {
-    const i = sorted.findIndex(r => r.id === id);
-    const j = i + dir;
-    if (j < 0 || j >= sorted.length) return;
-    const reordered = sorted.slice();
-    [reordered[i], reordered[j]] = [reordered[j], reordered[i]];
-    // renumber priorities top→bottom (descending) so the new order sticks
-    const n = reordered.length;
-    saveRules(reordered.map((r, k) => ({ ...r, priority: (n - k) * 10 })));
-  };
+  // Display order mirrors how the cascade actually resolves: narrowest targets
+  // first. There is deliberately NO manual reordering — moving rows never changed
+  // which rule wins (narrowness does), so the arrows only misled. Newer rules
+  // win same-level ties (priority = creation time).
+  const narrowOrder = { STUDENT: 3, CLASS: 2, TAG: 1 };
+  const sorted = rules.slice().sort((a, b) =>
+    narrowOrder[b.targetType] - narrowOrder[a.targetType] || (b.priority || 0) - (a.priority || 0));
   const addRule = () => {
     const maxP = rules.reduce((m, r) => Math.max(m, r.priority || 0), 0);
     saveRules([...rules, {
@@ -1893,7 +2138,7 @@ const AdminReportingRules = ({ store, config }) => {
         {/* Centre default */}
         <div style={{ fontSize: 11, fontWeight: 700, color: DS.muted, letterSpacing: '0.04em', marginBottom: 8 }}>CENTRE DEFAULT</div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 150px 1fr', gap: 12, alignItems: 'end', padding: '12px 14px', borderRadius: 10, background: DS.surface, border: `1px solid ${DS.borderDark}` }}>
-          <Field label="Requirement" style={{ margin: 0 }}>
+          <Field label="Expectation" style={{ margin: 0 }}>
             <Segmented value={def.requirement} onChange={v => store.setDefaultRule({ requirement: v })} options={RPT_REQ_OPTIONS} fullWidth />
           </Field>
           <Field label="Frequency" style={{ margin: 0 }}>
@@ -1909,13 +2154,13 @@ const AdminReportingRules = ({ store, config }) => {
         </div>
         <div style={{ fontSize: 12, color: DS.muted, marginTop: 6 }}>Applies to anyone not covered by an override rule below.</div>
 
-        {/* Override rules */}
-        <div style={{ fontSize: 11, fontWeight: 700, color: DS.muted, letterSpacing: '0.04em', margin: '18px 0 8px' }}>OVERRIDE RULES <span style={{ fontWeight: 500, textTransform: 'none', letterSpacing: 0, color: DS.faint }}>· narrowest target wins (student → class → tag); ties break on priority</span></div>
+        {/* Override rules — shown narrowest-first, exactly how they resolve */}
+        <div style={{ fontSize: 11, fontWeight: 700, color: DS.muted, letterSpacing: '0.04em', margin: '18px 0 8px' }}>OVERRIDE RULES <span style={{ fontWeight: 500, textTransform: 'none', letterSpacing: 0, color: DS.faint }}>· the narrowest matching target always wins: student → class → tag → centre default</span></div>
         {sorted.length === 0 && (
           <div style={{ fontSize: 12.5, color: DS.muted, padding: '6px 2px' }}>No override rules — the centre default applies everywhere.</div>
         )}
-        {sorted.map((r, idx) => (
-          <div key={r.id} style={{ display: 'grid', gridTemplateColumns: '130px minmax(150px, 1.2fr) 230px 140px minmax(160px, 1.4fr) 46px 30px', gap: 8, alignItems: 'center', padding: '10px 12px', borderRadius: 8, border: `1px solid ${DS.borderDark}`, marginBottom: 8 }}>
+        {sorted.map((r) => (
+          <div key={r.id} style={{ display: 'grid', gridTemplateColumns: '130px minmax(150px, 1.2fr) 230px 140px minmax(160px, 1.4fr) 30px', gap: 8, alignItems: 'center', padding: '10px 12px', borderRadius: 8, border: `1px solid ${DS.borderDark}`, marginBottom: 8 }}>
             <Select value={r.targetType} onChange={e => updateRule(r.id, { targetType: e.target.value, ...firstTarget(e.target.value) })}>
               {RPT_TARGET_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </Select>
@@ -1927,10 +2172,6 @@ const AdminReportingRules = ({ store, config }) => {
             <Select value={r.templateId || ''} title={tplName(r.templateId)} disabled={r.requirement === 'OFF'} onChange={e => updateRule(r.id, { templateId: e.target.value })}>
               {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
             </Select>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <button onClick={() => move(r.id, -1)} disabled={idx === 0} title="Higher priority" style={{ border: `1px solid ${DS.border}`, background: DS.bg, cursor: idx === 0 ? 'default' : 'pointer', color: idx === 0 ? DS.border : DS.muted, borderRadius: 5, padding: '1px 4px', lineHeight: 0 }}><Icon name="chevron_d" size={12} color="currentColor" /></button>
-              <button onClick={() => move(r.id, 1)} disabled={idx === sorted.length - 1} title="Lower priority" style={{ border: `1px solid ${DS.border}`, background: DS.bg, cursor: idx === sorted.length - 1 ? 'default' : 'pointer', color: idx === sorted.length - 1 ? DS.border : DS.muted, borderRadius: 5, padding: '1px 4px', lineHeight: 0, transform: 'rotate(180deg)' }}><Icon name="chevron_d" size={12} color="currentColor" /></button>
-            </div>
             <button onClick={() => removeRule(r.id)} title="Remove rule" style={{ border: 'none', background: 'none', cursor: 'pointer', color: DS.faint, padding: 4 }}><Icon name="trash" size={15} /></button>
           </div>
         ))}
@@ -1976,7 +2217,7 @@ const AdminReportingRules = ({ store, config }) => {
         <TeachersSee>
           {def.requirement === 'OFF' && (config.reportRules || []).every(r => r.requirement === 'OFF')
             ? 'No “Reports due” items on teacher dashboards while reporting is off everywhere.'
-            : <>A <strong>Reports due</strong> list on each teacher’s dashboard (e.g. “{rptFreqLabel(def.frequency)} report — Oliver Chen — due 12 Dec”), with reminders and overdue flags. Students who resolve to <strong>Off</strong> never appear.</>}
+            : <>A <strong>Reports due</strong> list on each teacher’s dashboard (e.g. “{rptFreqLabel(def.frequency)} report — Oliver Chen — due 12 Dec”), with reminders and overdue flags. Only students who resolve to <strong>Expected</strong> get due dates — <strong>Optional</strong> students never show as overdue, and teachers can still write for them manually.</>}
         </TeachersSee>
       </div>
     </Card>
@@ -2028,9 +2269,14 @@ function rptSampleScore(key) {
 
 const AdminTemplateBuilder = ({ template, store, onClose, onSaved }) => {
   const isNew = !template;
-  const [t, setT] = React.useState(template ? { ...blankTemplate(), ...template } : blankTemplate());
+  // Centre standards floor: these sections can't be toggled off — merged into the
+  // initial state so even a legacy template that predates the floor complies.
+  const requiredSections = (store.store.config.centreStandards || {}).sectionsRequiredEverywhere || [];
+  const withRequired = (tpl) => ({ ...tpl, sections: Array.from(new Set([...(tpl.sections || []), ...requiredSections])) });
+  const [t, setT] = React.useState(withRequired(template ? { ...blankTemplate(), ...template } : blankTemplate()));
   const [newCat, setNewCat] = React.useState('');
   const set = (patch) => setT(prev => ({ ...prev, ...patch }));
+  const isRequired = (s) => requiredSections.includes(s);
 
   const students = adminStudentsData();
   const years = Array.from(new Set(students.map(s => s.year))).sort();
@@ -2040,7 +2286,7 @@ const AdminTemplateBuilder = ({ template, store, onClose, onSaved }) => {
   const acc = branding.primaryColor || DS.accent;
 
   const has = (s) => (t.sections || []).includes(s);
-  const toggleSection = (s) => set({ sections: has(s) ? t.sections.filter(x => x !== s) : [...(t.sections || []), s] });
+  const toggleSection = (s) => { if (isRequired(s)) return; set({ sections: has(s) ? t.sections.filter(x => x !== s) : [...(t.sections || []), s] }); };
   const toggleIn = (key, val) => set({ [key]: (t[key] || []).includes(val) ? t[key].filter(x => x !== val) : [...(t[key] || []), val] });
 
   // category metadata (built-in + custom) and a score for each active category
@@ -2067,7 +2313,8 @@ const AdminTemplateBuilder = ({ template, store, onClose, onSaved }) => {
   });
 
   const commit = () => {
-    const payload = { ...t, name: t.name.trim() || 'Untitled Template' };
+    // Belt & braces: the floor is re-merged on save too.
+    const payload = withRequired({ ...t, name: t.name.trim() || 'Untitled Template' });
     if (isNew) onSaved(store.addTemplate(payload), 'created');
     else { store.updateTemplate(template.id, payload); onSaved(template.id, 'updated'); }
   };
@@ -2107,8 +2354,15 @@ const AdminTemplateBuilder = ({ template, store, onClose, onSaved }) => {
 
           <Divider margin="16px 0 6px" />
           <div style={{ fontSize: 11, fontWeight: 700, color: DS.faint, letterSpacing: '0.05em', textTransform: 'uppercase', margin: '8px 0' }}>Sections</div>
+          {requiredSections.length > 0 && (
+            <div style={{ fontSize: 11.5, color: DS.muted, margin: '0 0 6px' }}>
+              🔒 sections are required by your centre standards and can't be turned off here.
+            </div>
+          )}
           {RPT_ALL_SECTIONS.map(s => (
-            <ToggleRow key={s} label={RPT_SECTION_LABELS[s]} on={has(s)} onChange={() => toggleSection(s)} />
+            <ToggleRow key={s} label={RPT_SECTION_LABELS[s]} on={has(s)} onChange={() => toggleSection(s)}
+              disabled={isRequired(s)} lock={isRequired(s)}
+              hint={isRequired(s) ? 'Required by centre standards' : undefined} />
           ))}
 
           {has('ratings') && (
@@ -2440,13 +2694,14 @@ const AdminReportsSettings = ({ store, onEditTemplate, savedToast, tab, setTab }
   // read-only display, while writes (updNested) still target the report config.
   const b = reportBrandingResolved(c.branding);
   const goCentreProfile = () => window.__navigate && window.__navigate('admin', 'settings');
+  // Every toggle here is enforced in the teacher UI — no decorative settings.
+  // (The old "Share templates" toggle was removed: no such feature exists.)
   const permLabels = {
-    editPublished: ['Edit published reports', 'Edit is greyed out on a published report; teachers must duplicate to revise.'],
-    deleteReports: ['Delete reports', 'The Delete action is hidden in the report toolbar.'],
-    archiveReports: ['Archive reports', 'The Archive action is hidden; reports can’t be moved out of the active list.'],
-    exportReports: ['Export reports', 'The Export / Download PDF button is hidden.'],
-    shareTemplates: ['Share templates', 'Teachers can’t publish their personal templates to the centre.'],
-    viewOthers: ['View other teachers’ reports', 'The “All reports” cross-teacher browser is hidden from teachers.'],
+    editPublished: ['Edit published reports', 'Published reports open read-only; teachers must duplicate to revise.'],
+    deleteReports: ['Delete reports', 'The Delete action disappears from the bulk toolbar.'],
+    archiveReports: ['Archive reports', 'The Archive action disappears; reports stay in the active list.'],
+    exportReports: ['Export reports', 'Export / print PDF buttons disappear from the teacher’s list and editor.'],
+    viewOthers: ['View other teachers’ reports', 'The teacher’s Reports page shows only their own reports.'],
   };
 
   return (
@@ -2501,7 +2756,7 @@ const AdminReportsSettings = ({ store, onEditTemplate, savedToast, tab, setTab }
             </Field>
             <ToggleRow label="Require a teacher signature" hint="The report must carry a signature before submission" on={cs.requireSignature} onChange={v => setStd({ requireSignature: v })} />
             <div style={{ fontSize: 11, fontWeight: 700, color: DS.faint, letterSpacing: '0.04em', margin: '16px 0 8px' }}>SECTIONS THAT MUST APPEAR IN EVERY TEMPLATE</div>
-            <div style={{ fontSize: 12, color: DS.muted, marginBottom: 10 }}>A guardrail the template maker reads. Templates may require <strong>more</strong> than this floor, never less. (Sections themselves are configured in the template maker.)</div>
+            <div style={{ fontSize: 12, color: DS.muted, marginBottom: 10 }}>These sections are locked ON in the template builder — a template may include <strong>more</strong> than this floor, never less.</div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
               {RPT_ALL_SECTIONS.map(sec => {
                 const on = (cs.sectionsRequiredEverywhere || []).includes(sec);
@@ -2517,7 +2772,7 @@ const AdminReportsSettings = ({ store, onEditTemplate, savedToast, tab, setTab }
                 );
               })}
             </div>
-            <TeachersSee>Required-field markers appear on these sections, and <strong>Submit for review</strong> stays blocked until the comment reaches {cs.minCommentLength} characters{cs.requireSignature ? ' and a signature is added' : ''}.</TeachersSee>
+            <TeachersSee>Required-field markers appear on these sections, and <strong>Publish to student</strong> stays blocked until the comment reaches {cs.minCommentLength} characters{cs.requireSignature ? ' and a signature is typed (the signed name prints on the PDF)' : ''}. The same gate applies to bulk publishing from the list.</TeachersSee>
           </div>
         </Card>}
 
@@ -2593,7 +2848,7 @@ const AdminReportsSettings = ({ store, onEditTemplate, savedToast, tab, setTab }
             <ToggleRow label="Teacher report-due reminders" on={c.notifications.dueReminder} onChange={v => updNested('notifications', { dueReminder: v })} />
             <ToggleRow label="Overdue report alerts" on={c.notifications.overdueReminder} onChange={v => updNested('notifications', { overdueReminder: v })} />
             <ToggleRow label="Notify student when report published" on={c.notifications.publishedToStudent} onChange={v => updNested('notifications', { publishedToStudent: v })} />
-            <ToggleRow label="Parent notifications" hint="Coming soon" on={c.notifications.parentNotification} onChange={v => updNested('notifications', { parentNotification: v })} />
+            <ToggleRow label="Parent notifications" hint="Coming soon — not configurable yet" on={false} onChange={() => {}} disabled lock />
             <TeachersSee>
               {[
                 c.notifications.dueReminder && 'a reminder before each report is due',
@@ -2611,12 +2866,14 @@ const AdminReportsSettings = ({ store, onEditTemplate, savedToast, tab, setTab }
 // ─── Admin operational reporting (overview + generate) ──────────────────────────
 // Centre-wide report types driven live from the existing admin data
 // (window.allStudents) + the reports store + REPORTS_INVOICES.
+// Internal staff analytics — a different product from the per-student progress
+// reports teachers write. Descriptions say who each export is for.
 const ADMIN_REPORT_TYPES = [
-  { id: 'progress',   label: 'Student Progress Report', icon: 'chart', desc: 'Per-student scores, attendance and predicted grades — suitable for parents.' },
+  { id: 'progress',   label: 'Student Progress Report', icon: 'chart', desc: 'Whole-cohort table of scores, attendance and at-risk status — internal staff overview (not for parents).' },
   { id: 'attendance', label: 'Attendance Summary',      icon: 'check', desc: 'Attendance breakdown by student and year group.' },
   { id: 'homework',   label: 'Homework Completion',     icon: 'clip',  desc: 'Submission rates and average scores per student.' },
   { id: 'reporting',  label: 'Reporting Activity',      icon: 'file',  desc: 'How many progress reports are drafted, published and acknowledged.' },
-  { id: 'financial',  label: 'Financial Overview',      icon: 'invoice', desc: 'Revenue, outstanding and overdue invoices, enrolment numbers.' },
+  { id: 'financial',  label: 'Financial Overview',      icon: 'invoice', desc: 'Revenue, outstanding and overdue invoices across the whole centre.' },
 ];
 
 function adminStudentsData() {
@@ -2710,17 +2967,17 @@ function buildAdminReport(type, store, f) {
     };
   }
   if (type === 'financial') {
-    const f = financialTotals();
+    const fin = financialTotals();
     return {
       title: 'Financial Overview',
       summary: [
-        ['Total billed', money(f.billed)],
-        ['Paid', money(f.paid)],
-        ['Outstanding', money(f.outstanding)],
-        ['Overdue', money(f.overdue)],
+        ['Total billed', money(fin.billed)],
+        ['Paid', money(fin.paid)],
+        ['Outstanding', money(fin.outstanding)],
+        ['Overdue', money(fin.overdue)],
       ],
       columns: ['Student', 'Plan', 'Amount', 'Status'],
-      rows: f.invoices.map(i => [i.student, i.plan, money(i.amount), i.status[0].toUpperCase() + i.status.slice(1)]),
+      rows: fin.invoices.map(i => [i.student, i.plan, money(i.amount), i.status[0].toUpperCase() + i.status.slice(1)]),
     };
   }
   // progress (default)
@@ -2876,9 +3133,11 @@ const AdminReportsGenerate = ({ store, initialType }) => {
   const uniq = (key) => Array.from(new Set(store.reportsArr.map(r => r[key]).filter(Boolean))).sort();
   const subjects = uniq('subject'), classes = uniq('className'), teachers = uniq('teacher');
 
-  // Report-level filters (subject/class/teacher/status) only affect report-derived types.
-  const reportScoped = type === 'reporting';
-  const filters = { year, period, subject, className, teacher, status };
+  // Only filters that genuinely affect the selected report type are shown —
+  // a visible-but-ignored dropdown produces silently wrong exports.
+  const reportScoped = type === 'reporting';                          // subject/class/teacher/status
+  const yearScoped = type !== 'financial';                            // financial always covers everything
+  const filters = { year: yearScoped ? year : 'all', period, subject, className, teacher, status };
   const report = buildAdminReport(type, store, filters);
   const resetScope = () => { setSubject('all'); setClassName('all'); setTeacher('all'); setStatus('all'); };
 
@@ -2902,18 +3161,24 @@ const AdminReportsGenerate = ({ store, initialType }) => {
         </Card>
         <Card title="Filters">
           <div style={{ padding: '16px' }}>
-            <Field label="Year group">
-              <Select value={year} onChange={e => setYear(e.target.value)}>
-                {years.map(y => <option key={y} value={y}>{y === 'all' ? 'All students' : y}</option>)}
-              </Select>
-            </Field>
-            <Field label="Period">
+            {yearScoped ? (
+              <Field label="Year group">
+                <Select value={year} onChange={e => setYear(e.target.value)}>
+                  {years.map(y => <option key={y} value={y}>{y === 'all' ? 'All students' : y}</option>)}
+                </Select>
+              </Field>
+            ) : (
+              <div style={{ fontSize: 11.5, color: DS.faint, lineHeight: 1.5, margin: '0 0 14px', padding: '8px 10px', background: DS.surface, borderRadius: 7 }}>
+                The Financial Overview always covers <strong>every invoice</strong> in the centre — it can't be filtered here.
+              </div>
+            )}
+            <Field label="Period label" hint="Printed on the PDF header only — the data always reflects current records">
               <Select value={period} onChange={e => setPeriod(e.target.value)}>
                 <option>Spring Term 2026</option><option>Autumn Term 2025</option><option>Summer Term 2025</option>
               </Select>
             </Field>
 
-            {reportScoped ? (
+            {reportScoped && (
               <>
                 <Field label="Subject">
                   <Select value={subject} onChange={e => setSubject(e.target.value)}>
@@ -2936,10 +3201,6 @@ const AdminReportsGenerate = ({ store, initialType }) => {
                   </Select>
                 </Field>
               </>
-            ) : (
-              <div style={{ fontSize: 11.5, color: DS.faint, lineHeight: 1.5, margin: '0 0 14px', padding: '8px 10px', background: DS.surface, borderRadius: 7 }}>
-                Subject, class, teacher and status filters apply to the <strong>Reporting Activity</strong> report.
-              </div>
             )}
 
             <Btn variant="primary" icon="print" onClick={() => printCentreReport(report, branding, period)}>Generate &amp; export PDF</Btn>
@@ -3046,4 +3307,4 @@ const AdminReportsConfig = ({ section }) => {
   );
 };
 
-Object.assign(window, { useReportsStore, printReportPDF, printCentreReport, ReportReadingView, ReportEditor, TeacherReports, StudentReports, AdminReportsConfig, AdminReportsSettings, AdminReportingRules, resolvePolicy, resolveForStudent, ruleLabel, reportClasses, reportStudents, reportStudentLabel, reportClassById, RPT_REQUIREMENT, RPT_REQ_META, RPT_FREQ, rptFreqLabel, rptFreqDays, RatingValue, RatingEditor, RichTextEditor, EditList, RptTag, SectionTitle, RPT_FOURTIER, RPT_RATING_LABELS, RPT_SECTION_LABELS, RPT_STATUS_META });
+Object.assign(window, { useReportsStore, printReportPDF, printCentreReport, ReportReadingView, ReportEditor, TeacherReports, StudentReports, AdminReportsConfig, AdminReportsSettings, AdminReportingRules, resolvePolicy, resolveForStudent, ruleLabel, reportClasses, reportStudents, reportStudentLabel, reportClassById, computeUpcomingReports, UpcomingReports, UpcomingReportsPage, templateAvailableFor, rptSanitizeHTML, RPT_REQUIREMENT, RPT_REQ_META, RPT_FREQ, rptFreqLabel, rptFreqDays, RatingValue, RatingEditor, RichTextEditor, EditList, RptTag, SectionTitle, RPT_FOURTIER, RPT_RATING_LABELS, RPT_SECTION_LABELS, RPT_STATUS_META });
