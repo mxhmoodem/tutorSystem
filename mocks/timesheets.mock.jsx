@@ -11,7 +11,7 @@
 //
 //  sessionId  — `${classId}|${YYYY-MM-DD}` for a teaching entry captured off
 //               the register; null for a manually-added non-teaching entry.
-//  teacherId  — matches SEED_TEACHERS ids (t1 = Sarah Clarke, t3 = David Park).
+//  teacherId  — matches SEED_TEACHERS ids (t1 = Heebz A, t3 = David Park).
 //  classId    — matches SEED_CLASSES ids.
 //  status     — draft | submitted | approved | rejected | exported.
 //

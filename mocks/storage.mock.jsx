@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  TutorOS — Storage usage & quota seed data
+//  Klasio — Storage usage & quota seed data
 //  Loaded AFTER mocks/onboarding.mock.jsx + mocks/plans.mock.jsx (needs
 //  PLANS / centre ids) and consumed by Storage.jsx (the derivation store).
 //
@@ -26,7 +26,7 @@ const STORAGE_ADDON_BLOCK_GB    = 100;     // one add-on block = 100 GB
 const STORAGE_ADDON_BLOCK_PRICE = 5;       // £5 / month per block
 const STORAGE_UNIT_COST_USD_GB  = 0.015;   // ≈ Cloudflare R2 Standard, $/GB/month
 
-// The signed-in demo identity's (Lisa Chen's) account — her admin Storage panel
+// The signed-in demo identity's (Taqqy's) account — her admin Storage panel
 // derives from the LIVE subscription store (Centres.jsx), so its centres/plan
 // stay in sync as she edits them. The registry below mirrors it for the owner
 // view. Files for her centres carry this accountId.
@@ -73,7 +73,7 @@ const _stgRand = (seed) => () => {
   return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 };
 
-const _STG_UPLOADERS = ['Lisa Chen', 'Marcus Webb', 'S. Clarke', 'H. Bell', 'Daniel Foster', 'Grace Adeyemi', 'Leo Whitfield', 'Ava Sinclair'];
+const _STG_UPLOADERS = ['Taqqy', 'Marcus Webb', 'Heebz A', 'H. Bell', 'Daniel Foster', 'Grace Adeyemi', 'Leo Whitfield', 'Ava Sinclair'];
 const _STG_TODAY = new Date('2026-07-01');
 
 // Per-centre category targets in MB (approximate — the generator splits each into

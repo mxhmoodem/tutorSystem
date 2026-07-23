@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  TutorOS — Student Reports & Feedback system
+//  Klasio — Student Reports & Feedback system
 //  Replaces the previous AI-feedback feature. Manual, professional
 //  progress reports authored by teachers, read & acknowledged by
 //  students, configured by admins. Backed by a shared localStorage
@@ -19,8 +19,8 @@ const REPORTS_STUDENT_SELF = (window.klasioStudent && window.klasioStudent.curre
 // (s2…) while the student principal uses the reports id space (s_oliver), so
 // ownership/matching checks accept the id OR the canonical full name.
 const REPORTS_STUDENT_SELF_NAME = (window.klasioStudent && window.klasioStudent.currentStudent.fullName) || 'Oliver Chen';
-const REPORTS_TEACHER_SELF = 'Ms. Sarah Clarke';
-const REPORTS_TEACHER_SELF_SHORT = 'Sarah Clarke';   // as stored on SEED_CLASSES.teacher
+const REPORTS_TEACHER_SELF = 'Ms. Heebz A';
+const REPORTS_TEACHER_SELF_SHORT = 'Heebz A';   // as stored on SEED_CLASSES.teacher
 const REPORTS_TODAY = '2026-06-15';
 
 // ─── Constants / labels ──────────────────────────────────────────────────────────
@@ -2249,7 +2249,7 @@ function blankTemplate() {
 const RPT_SAMPLE = {
   centreName: '', logo: '',   // identity comes from centreProfile (§1); blank fallback
   studentName: 'Oliver Chen', className: 'Mathematics — Year 12 (Set A)', subject: 'Mathematics',
-  teacher: 'Ms. Sarah Clarke', year: 'Year 12', predicted: 'A*', period: 'Summer Term 2026',
+  teacher: 'Ms. Heebz A', year: 'Year 12', predicted: 'A*', period: 'Summer Term 2026',
   understanding: 0.9, participation: 0.78, homeworkCompletion: '94%', testPerformance: '88%',
   attendanceRate: '98%', punctuality: 'Excellent', engagement: 'Highly engaged',
   comments: '<p><strong>A genuinely strong term.</strong> Oliver has shown excellent command of integration techniques and consistently produces well-structured solutions.</p>',

@@ -24,7 +24,7 @@
 const TM_CENTRE = (window.ONB_CENTRE && window.ONB_CENTRE.id) || 'bm';
 // The signed-in teacher principal for the demo (F4). One identity that the topbar,
 // greeting, deliverer, signature and "teacher = You" all resolve through.
-const TM_PRINCIPAL_NAME = 'Sarah Clarke';
+const TM_PRINCIPAL_NAME = 'Heebz A';
 
 // ── Store reads (non-reactive) ──────────────────────────────────────────────
 const tmReadRoster = () => {

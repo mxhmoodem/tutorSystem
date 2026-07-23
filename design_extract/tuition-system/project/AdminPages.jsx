@@ -326,10 +326,10 @@ const AdminReportsPage = () => {
 // ─── Admin Classes Page ─────────────────────────────────────────────────────────
 const AdminClassesPage = () => {
   const classes = [
-    { name:'GCSE Mathematics',    group:'Year 10 – Group A', teacher:'Ms. Sarah Clarke',  day:'Friday',    time:'09:00–10:30', room:'Room 3', students:8,  status:'active' },
-    { name:'GCSE Mathematics',    group:'Year 11 – Group B', teacher:'Ms. Sarah Clarke',  day:'Friday',    time:'10:30–12:00', room:'Room 3', students:7,  status:'active' },
-    { name:'A-Level Mathematics', group:'Year 12 – Group A', teacher:'Ms. Sarah Clarke',  day:'Friday',    time:'13:00–14:30', room:'Room 5', students:5,  status:'active' },
-    { name:'GCSE Mathematics',    group:'Year 9 – Group C',  teacher:'Ms. Sarah Clarke',  day:'Friday',    time:'15:00–16:30', room:'Room 3', students:9,  status:'active' },
+    { name:'GCSE Mathematics',    group:'Year 10 – Group A', teacher:'Ms. Heebz A',  day:'Friday',    time:'09:00–10:30', room:'Room 3', students:8,  status:'active' },
+    { name:'GCSE Mathematics',    group:'Year 11 – Group B', teacher:'Ms. Heebz A',  day:'Friday',    time:'10:30–12:00', room:'Room 3', students:7,  status:'active' },
+    { name:'A-Level Mathematics', group:'Year 12 – Group A', teacher:'Ms. Heebz A',  day:'Friday',    time:'13:00–14:30', room:'Room 5', students:5,  status:'active' },
+    { name:'GCSE Mathematics',    group:'Year 9 – Group C',  teacher:'Ms. Heebz A',  day:'Friday',    time:'15:00–16:30', room:'Room 3', students:9,  status:'active' },
     { name:'GCSE Science',        group:'Year 10 – Group A', teacher:'Ms. Priya Nair',    day:'Wednesday', time:'09:00–10:30', room:'Room 6', students:11, status:'active' },
     { name:'GCSE Science',        group:'Year 11 – Group A', teacher:'Ms. Priya Nair',    day:'Wednesday', time:'11:00–12:30', room:'Room 6', students:8,  status:'active' },
     { name:'A-Level Chemistry',   group:'Year 12 – Group A', teacher:'Mr. David Park',    day:'Thursday',  time:'10:00–11:30', room:'Room 7', students:6,  status:'active' },
@@ -428,7 +428,7 @@ const AdminClassesPage = () => {
 // ─── Admin Teachers Page ────────────────────────────────────────────────────────
 const AdminTeachersPage = () => {
   const teachers = [
-    { name:'Sarah Clarke',  subject:'Mathematics',        classes:4, students:29, hwToMark:7, attendance:96, rating:4.9, joined:'Sep 2023', email:'s.clarke@centre.co.uk',  color:'#4F46E5' },
+    { name:'Heebz A',  subject:'Mathematics',        classes:4, students:29, hwToMark:7, attendance:96, rating:4.9, joined:'Sep 2023', email:'s.clarke@centre.co.uk',  color:'#4F46E5' },
     { name:'Priya Nair',    subject:'Science / Biology',  classes:2, students:19, hwToMark:3, attendance:98, rating:4.8, joined:'Jan 2024', email:'p.nair@centre.co.uk',    color:'#0891B2' },
     { name:'David Park',    subject:'Chemistry / Physics',classes:2, students:14, hwToMark:2, attendance:95, rating:4.7, joined:'Sep 2022', email:'d.park@centre.co.uk',    color:'#0D9488' },
     { name:'Marcus Webb',   subject:'English Literature', classes:1, students:10, hwToMark:4, attendance:92, rating:4.6, joined:'Sep 2023', email:'m.webb@centre.co.uk',    color:'#D97706' },

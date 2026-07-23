@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  TutorOS — Extra Admin Pages
+//  Klasio — Extra Admin Pages
 // ══════════════════════════════════════════════════════════════
 
 // ─── Shared admin store (localStorage-backed) ───────────────────────────────────
@@ -261,7 +261,7 @@ const AdminStudentsPage = () => {
   const [selected, setSelected] = React.useState(null);
 
   // The Students page is the ACTIVE academic roster — provisioned-but-unclaimed
-  // (pending/invited) accounts live on People & invites, not here (§Students:
+  // (pending/invited) accounts live on People & Invites, not here (§Students:
   // purge the "not yet active" noise). Filtering the live store by the SAME
   // predicate the selector counts use keeps this list == the Dashboard headcount.
   const students = store.students.filter(cm.isActiveStudent);
@@ -1910,7 +1910,11 @@ const AddClassPage = () => {
     name:'', description:'',
     subjectId:'', yearGroupId:'', levelId:'', examBoardId:'',
     groupLabel:'',
-    teacher:'', room:'', day:'Monday', startTime:'09:00', endTime:'10:30',
+    // Default the teacher to the signed-in teaching principal so a class the admin
+    // creates immediately shows up on the (single-persona) teacher surface — the
+    // teacher view resolves "my classes" by matching this name. Admin can change it.
+    teacher: (window.teacherMetrics && window.teacherMetrics.getPrincipal && window.teacherMetrics.getPrincipal().name) || '',
+    room:'', day:'Monday', startTime:'09:00', endTime:'10:30',
     capacity:'10', status:'active', studentIds:[],
   });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -1939,7 +1943,7 @@ const AddClassPage = () => {
     setTouched(true);
     if (!stepValid(0)) { setStep(0); return; }
     if (!stepValid(1)) { setStep(1); return; }
-    const teacher = form.teacher || store.teachers[0]?.name || '—';
+    const teacher = form.teacher || (window.teacherMetrics && window.teacherMetrics.getPrincipal && window.teacherMetrics.getPrincipal().name) || store.teachers[0]?.name || '—';
     // Persist the rich record: the four dimension ids + the flat fields the rest of
     // the app already reads (name/group/teacher/day/time/room), plus the roster.
     // createClassWithRoster also writes each student's classIds in the same persist.

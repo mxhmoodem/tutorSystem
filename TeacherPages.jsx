@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  TutorOS — Extra Teacher Pages
+//  Klasio — Extra Teacher Pages
 // ══════════════════════════════════════════════════════════════
 
 // Mock data (teacherClasses, homeworkFull, teacherAllClasses,
@@ -802,7 +802,7 @@ const ClassSettingsTab = ({ cls, color, subject, level, bannerTheme, setBannerTh
 const TeacherClassDetailPage = () => {
   const store = useAdminStore();
   const id  = window.__adminParam;
-  const principalName = window.teacherMetrics ? window.teacherMetrics.getPrincipal().name : 'Sarah Clarke';
+  const principalName = window.teacherMetrics ? window.teacherMetrics.getPrincipal().name : 'Heebz A';
   const [activeTab, setActiveTab] = React.useState('stream');
   const [bannerTheme, setBannerThemeState] = React.useState(() => classLS.getBanner(id));
   const [stream, setStream] = React.useState(() => classLS.getStream(id) || []);
@@ -1259,7 +1259,7 @@ const TeacherProgressPage = () => {
 const TeacherTimetablePage = () => {
   const store = useAdminStore();
   const tsStore = window.useTimesheetStore ? window.useTimesheetStore() : null;
-  const me = store.teachers.find(t => t.name === 'Sarah Clarke') || store.teachers[0];
+  const me = store.teachers.find(t => t.name === 'Heebz A') || store.teachers[0];
   const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
   const todayName = new Date().toLocaleDateString('en-GB', { weekday:'long' });
   const todayISO = window.tsTodayISO ? window.tsTodayISO() : new Date().toISOString().slice(0, 10);
@@ -1795,7 +1795,7 @@ const TeacherAttendancePage = () => {
   const rerender = () => force(x => x + 1);
 
   const now = window.getNow();
-  const me = store.teachers.find(t => t.name === 'Sarah Clarke') || store.teachers[0];
+  const me = store.teachers.find(t => t.name === 'Heebz A') || store.teachers[0];
   const activeTeachers = store.teachers.filter(t => t.status === 'active');
   const myClasses = store.classes.filter(c => me && c.teacher === me.name && c.status !== 'paused');
 
@@ -2599,6 +2599,7 @@ const LessonPlannerPage = ({ initialGroup, initialDate, initialMode }) => {
   const handleSave = () => {
     const now = new Date().toLocaleString('en-GB', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' });
     window.__lessonPlans[key] = { plan, savedAt: now, group: selectedGroup, date: selectedDate };
+    window.__saveLessonPlans && window.__saveLessonPlans();   // persist to localStorage
     setSavedAt(now);
     setSaved(true);
     setMode('view');
@@ -2607,6 +2608,7 @@ const LessonPlannerPage = ({ initialGroup, initialDate, initialMode }) => {
 
   const handleDelete = () => {
     delete window.__lessonPlans[key];
+    window.__saveLessonPlans && window.__saveLessonPlans();   // persist the removal
     setPlan(blankPlan());
     setSavedAt(null);
     setMode('edit');
@@ -3808,10 +3810,10 @@ const TeacherTrackingPage = () => {
 // → store.students). Read-only — the admin owns enrolment; the teacher views and
 // messages from here. Mirrors AdminStudentsPage's list + detail-drawer pattern but
 // scoped to "my" classes, with an extra per-class filter. `me` is resolved the same
-// way as TeacherTimetablePage (Sarah Clarke, falling back to the first teacher).
+// way as TeacherTimetablePage (Heebz A, falling back to the first teacher).
 const TeacherStudentsPage = () => {
   const store = useAdminStore();
-  const me = store.teachers.find(t => t.name === 'Sarah Clarke') || store.teachers[0];
+  const me = store.teachers.find(t => t.name === 'Heebz A') || store.teachers[0];
   // ONE at-risk rule (F2/D5): the same shared selector the Dashboard's "needing
   // attention" uses, so the counts match exactly. Falls back to the stored flag
   // only if the metrics layer hasn't loaded.

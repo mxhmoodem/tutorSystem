@@ -20,7 +20,7 @@ const PLAN_CATALOG_SEED = [
   { id: 'starter', name: 'Starter', price: 60,  maxCentres: 1,  studentSeats: 100, teacherSeats: 5,  storageGb: 10,  order: 0, archived: false,
     features: ['Basic dashboard', '10GB storage', 'Email support'] },
   { id: 'growth',  name: 'Growth',  price: 160, maxCentres: 5,  studentSeats: 250, teacherSeats: 15, storageGb: 50,  order: 1, archived: false,
-    features: ['Lesson Planner', 'AI Feedback', '50GB storage', 'Priority support'] },
+    features: ['Lesson Planner', 'Student Reports', '50GB storage', 'Priority support'] },
   { id: 'scale',   name: 'Scale',   price: 410, maxCentres: 20, studentSeats: 600, teacherSeats: 40, storageGb: 200, order: 2, archived: false,
     features: ['All Growth features', 'Custom branding', '200GB storage', 'Dedicated CSM'] },
   // Retired tier. Archived plans keep their LAST REAL config (price/seats/storage)

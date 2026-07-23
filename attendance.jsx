@@ -227,7 +227,7 @@ const attSeedStore = () => {
   (window.ATT_SEED_DELIVERED || []).forEach(row => {
     submissions[row.sessionId] = {
       submittedAt: new Date(row.at).getTime(),
-      submittedBy: 't1',            // Sarah Clarke (rostered) — resolved to real id below at read time
+      submittedBy: 't1',            // Heebz A (rostered) — resolved to real id below at read time
       synth: true,                  // marks synthesised deterministically from the roster
       note: '', late: false, byAdmin: false,
     };

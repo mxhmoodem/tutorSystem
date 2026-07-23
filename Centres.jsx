@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  TutorOS — Centres (plan-aware multi-centre management)
+//  Klasio — Centres (plan-aware multi-centre management)
 // ══════════════════════════════════════════════════════════════
 //
 //  The admin manages the centres included in their SUBSCRIPTION here. A plan caps

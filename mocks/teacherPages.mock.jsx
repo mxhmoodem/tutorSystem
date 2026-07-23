@@ -37,7 +37,7 @@ const teacherClasses = [
     hwPending: 1, avgScore: 85, attendance: 95,
     studentList: ['Thomas Hughes','Isabella Martinez','Freya Lindqvist','Toby Grant','Ben Carter'],
   },
-  // ── New Sarah Clarke groups added in round 2 (match the admin-store classes
+  // ── New Heebz A groups added in round 2 (match the admin-store classes
   //    c34/c36 by group name so My Classes extras + the register roster resolve). ──
   {
     id: 6, name: 'GCSE Mathematics', group: 'Year 10 – Group C', day: 'Mon', time: '09:00', room: 'Room 3',

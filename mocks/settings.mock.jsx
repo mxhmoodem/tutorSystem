@@ -36,7 +36,7 @@ const SETTINGS_SEED = {
 
   admin: {
     account: {
-      name: 'Lisa Chen', displayName: 'Lisa', email: 'lisa.chen@brightminds.co.uk',
+      name: 'Taqqy', displayName: 'Taqqy', email: 'lisa.chen@brightminds.co.uk',
       phone: '+44 20 7946 0102', twoFactor: false,
     },
     notifications: { ...SET_NOTIF_DEFAULTS },

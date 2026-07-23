@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  TutorOS — Invoices module (admin)
+//  Klasio — Invoices module (admin)
 //
 //  A LEDGER + workflow layer over payments that happen elsewhere (bank
 //  transfer, card machine, cash). No money flows through the system.
@@ -23,7 +23,7 @@
 // ══════════════════════════════════════════════════════════════
 
 const INVOICES_KEY = 'tutoros.invoices.v1';
-const INV_ACTOR = 'Lisa Chen';           // current admin (matches sidebar identity)
+const INV_ACTOR = 'Taqqy';               // current admin (matches sidebar identity)
 const INV_TENANT = 'centre-001';         // current centre. Numbers are allocated + matched per tenant;
                                          // two centres may share INV-0284 — all matching is tenant-scoped.
 const INV_METHODS = ['cash', 'card', 'bank', 'cheque'];

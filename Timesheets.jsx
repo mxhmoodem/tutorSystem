@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  TutorOS — Timesheets module (teacher working hours)
+//  Klasio — Timesheets module (teacher working hours)
 //
 //  Working hours split across two surfaces by their natural lifecycle:
 //    • Capture rides the existing register flow (TimesheetCapture, rendered
@@ -26,7 +26,7 @@
 
 const TIMESHEET_KEY    = 'tutoros.timesheets.v3';   // v3: reseed relative-to-today so the current period always has data
 const TIMESHEET_CENTRE = 'centre-001';                  // single demo centre
-const TIMESHEET_ADMIN  = { id: 'a1', name: 'Lisa Chen' }; // current admin (matches sidebar identity)
+const TIMESHEET_ADMIN  = { id: 'a1', name: 'Taqqy' }; // current admin (matches sidebar identity)
 
 // Entry types — app config (labels + colour), not dummy data.
 const TS_TYPES = [
@@ -84,7 +84,7 @@ const TS_DEFAULT_CONFIG = {
 // ─── Employment + pay-eligibility (derivation only — never stored on the line) ───
 // Each teacher carries an employment type + hourly rate on the admin store record
 // (payType / hourlyRate, edited inline in Settings → Centre). These seed defaults give
-// the demo a realistic spread (Sarah = mixed, David/Tom = hourly) before any edit; a
+// the demo a realistic spread (Heebz A = mixed, David/Tom = hourly) before any edit; a
 // stored value on the teacher always wins.
 const TS_EMPLOYMENT_TYPES = [
   { id: 'salaried', label: 'Salaried' },
@@ -93,7 +93,7 @@ const TS_EMPLOYMENT_TYPES = [
 ];
 const TS_EMP_LABEL = Object.fromEntries(TS_EMPLOYMENT_TYPES.map(e => [e.id, e.label]));
 const TS_EMP_DEFAULTS = {
-  t1: { payType: 'mixed',  hourlyRate: 35 },  // Sarah Clarke — salary + paid cover/extras
+  t1: { payType: 'mixed',  hourlyRate: 35 },  // Heebz A — salary + paid cover/extras
   t3: { payType: 'hourly', hourlyRate: 32 },  // David Park
   t8: { payType: 'hourly', hourlyRate: 28 },  // Tom Rivera
 };
@@ -687,7 +687,7 @@ const AddEntryModal = ({ open, onClose, onAdd }) => {
 
 const TeacherTimesheetPage = () => {
   const adminStore = useAdminStore();
-  const me = adminStore.teachers.find(t => t.name === 'Sarah Clarke') || adminStore.teachers[0];
+  const me = adminStore.teachers.find(t => t.name === 'Heebz A') || adminStore.teachers[0];
   const store = useTimesheetStore();
   const freq = TS_FREQ[store.config.submissionFrequency] || TS_FREQ.week;
   // Period always tracks the centre's submission cadence — current period by default.

@@ -22,7 +22,7 @@ const ATT_MIN = 60 * 1000; // one minute in ms
 
 // ── Injectable clock ──────────────────────────────────────────────────────────
 // Every lifecycle state derives from this single `now`, defaulting to a fixed
-// reference so the demo spread is stable. 2026-07-10 is a FRIDAY — Sarah Clarke's
+// reference so the demo spread is stable. 2026-07-10 is a FRIDAY — Heebz A's
 // heaviest teaching day (4 sessions) — so "today" is rich. A dev-only nudge control
 // (attendance.jsx) offsets it so upcoming→live→awaiting→lapsed can be demonstrated
 // without waiting for the wall clock. Never shipped to product UI (D7).
@@ -53,7 +53,7 @@ const REGISTER_SETTINGS = {
 // `at` is the submission timestamp — it drives the amendment-window lock (D4):
 // today's submission is inside the 24h window (amend allowed); older ones are locked.
 const ATT_SEED_DELIVERED = [
-  // Sarah's classes: c1 Fri 09:00, c2 Fri 10:30, c3 Fri 13:00, c4 Fri 15:00,
+  // Heebz A's classes: c1 Fri 09:00, c2 Fri 10:30, c3 Fri 13:00, c4 Fri 15:00,
   //                  c34 Mon 09:00, c35 Wed 13:00, c36 Tue 11:00, c37 Thu 09:00
   { sessionId: 'c1|2026-07-10',  at: '2026-07-10T10:35:00' }, // today, recorded — amend still OPEN
   { sessionId: 'c35|2026-07-08', at: '2026-07-08T14:35:00' }, // Wed, recorded — amend LOCKED (>24h)

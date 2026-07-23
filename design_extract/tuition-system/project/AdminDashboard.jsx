@@ -215,7 +215,7 @@ const AdminDashboard = () => {
             <Card title="Teacher Utilisation" actions={[<Badge key="b" variant="default">This week</Badge>]}>
               <div style={{ padding: '8px 0' }}>
                 {[
-                  { name: 'Sarah Clarke',  subj: 'Mathematics',  classes: 14, capacity: 16 },
+                  { name: 'Heebz A',  subj: 'Mathematics',  classes: 14, capacity: 16 },
                   { name: 'David Park',    subj: 'Science',       classes: 11, capacity: 14 },
                   { name: 'Priya Nair',    subj: 'English',       classes: 12, capacity: 16 },
                   { name: 'Marcus Webb',   subj: 'Chemistry',     classes: 8,  capacity: 12 },

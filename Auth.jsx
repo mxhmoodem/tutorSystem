@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  TutorOS — Public auth front door (Login · Signup)
+//  Klasio — Public auth front door (Login · Signup)
 // ══════════════════════════════════════════════════════════════
 //
 //  The app's unauthenticated entry. Two public, full-screen pages that share

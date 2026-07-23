@@ -197,3 +197,46 @@ LESSON_PLAN_SEED.forEach(({ group, date, savedAt, plan }) => {
     window.__lessonPlans[key] = { plan, savedAt, group, date };
   }
 });
+
+// ─── Persistence ────────────────────────────────────────────────────────────
+// Lesson plans previously lived only in the in-memory `window.__lessonPlans`
+// global and were lost on reload. They now persist to localStorage so a teacher's
+// saved plans survive a refresh (matching every other store in the app).
+//
+// Uploaded resources carry a base64 `dataUrl` that can be megabytes each — writing
+// those into the ~5MB localStorage quota would throw and wipe out ALL persistence.
+// We strip `dataUrl` on write (keeping name/size/type so the attachment chip still
+// renders) so the text of the plan is never lost to a quota error.
+const LESSON_PLANS_KEY = 'klasio.lessonPlans.v1';
+
+const stripHeavy = (store) => {
+  const out = {};
+  for (const k of Object.keys(store || {})) {
+    const v = store[k] || {};
+    // Copy only the lightweight metadata — explicitly, NOT via `{ dataUrl, ...rest }`
+    // rest-destructuring (Babel-standalone mis-compiles object rest patterns here).
+    const resources = ((v.plan && v.plan.resources) || []).map(r => ({
+      id: r.id, name: r.name, size: r.size, type: r.type,
+    }));
+    out[k] = { ...v, plan: { ...(v.plan || {}), resources } };
+  }
+  return out;
+};
+
+window.__saveLessonPlans = () => {
+  try { localStorage.setItem(LESSON_PLANS_KEY, JSON.stringify(stripHeavy(window.__lessonPlans))); }
+  catch (e) { /* quota or serialisation issue — keep the in-memory copy for the session */ }
+};
+
+// Hydrate persisted plans over the seed. Stored plans win (a teacher may have
+// overwritten a seeded plan), but seeded-only keys remain so the demo always has
+// content on a fresh browser.
+(() => {
+  try {
+    const raw = localStorage.getItem(LESSON_PLANS_KEY);
+    if (raw) {
+      const stored = JSON.parse(raw);
+      Object.keys(stored || {}).forEach(k => { window.__lessonPlans[k] = stored[k]; });
+    }
+  } catch (e) { /* ignore malformed store */ }
+})();

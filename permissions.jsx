@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  TutorOS — Centralised role & permission helpers
+//  Klasio — Centralised role & permission helpers
 //
 //  The single place that answers "what roles does this staff identity hold?"
 //  and "is this person allowed to do X?". Route ALL role/permission checks

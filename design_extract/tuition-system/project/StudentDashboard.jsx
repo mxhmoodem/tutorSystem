@@ -22,12 +22,12 @@ const studentHomework = [
 ];
 
 const studentSessions = [
-  { subject:'Mathematics',   date:'Mon 28 Apr', time:'09:00–10:30', room:'Room 3',  teacher:'Ms. Sarah Clarke', type:'Regular' },
-  { subject:'Further Maths', date:'Wed 30 Apr', time:'10:30–12:00', room:'Room 5',  teacher:'Ms. Sarah Clarke', type:'Regular' },
+  { subject:'Mathematics',   date:'Mon 28 Apr', time:'09:00–10:30', room:'Room 3',  teacher:'Ms. Heebz A', type:'Regular' },
+  { subject:'Further Maths', date:'Wed 30 Apr', time:'10:30–12:00', room:'Room 5',  teacher:'Ms. Heebz A', type:'Regular' },
   { subject:'Physics',       date:'Thu 1 May',  time:'14:00–15:30', room:'Room 7',  teacher:'Mr. David Park',   type:'Regular' },
-  { subject:'Mathematics',   date:'Fri 2 May',  time:'09:00–10:30', room:'Room 3',  teacher:'Ms. Sarah Clarke', type:'Regular' },
+  { subject:'Mathematics',   date:'Fri 2 May',  time:'09:00–10:30', room:'Room 3',  teacher:'Ms. Heebz A', type:'Regular' },
   { subject:'Physics',       date:'Mon 5 May',  time:'14:00–15:30', room:'Room 7',  teacher:'Mr. David Park',   type:'Mock prep' },
-  { subject:'Mathematics',   date:'Wed 7 May',  time:'09:00–10:30', room:'Room 3',  teacher:'Ms. Sarah Clarke', type:'Mock prep' },
+  { subject:'Mathematics',   date:'Wed 7 May',  time:'09:00–10:30', room:'Room 3',  teacher:'Ms. Heebz A', type:'Mock prep' },
 ];
 
 const aiFeedbackLog = [

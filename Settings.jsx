@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  TutorOS — Settings
+//  Klasio — Settings
 //  One tabbed Settings page per role. The first few tabs ("Account",
 //  "Notifications", "Appearance") are common to *every* role; the final
 //  tab is role-specific:
@@ -963,20 +963,43 @@ const CommsTab = ({ comms }) => {
 
       {/* Safeguarding leads */}
       <SettingsSection title="Safeguarding oversight" subtitle="Who can see staff↔student conversations, and for how long they're kept" icon="shield">
-        <SetGrid>
-          <Field label="Designated Safeguarding Lead">
-            <Select value={cfg.dslLeadId || ''} onChange={e => comms.setConfig({ dslLeadId: e.target.value || null })}>
-              <option value="">— Select —</option>
-              {staff.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
-            </Select>
-          </Field>
-          <Field label="Deputy DSL">
-            <Select value={cfg.dslDeputyId || ''} onChange={e => comms.setConfig({ dslDeputyId: e.target.value || null })}>
-              <option value="">— None —</option>
-              {staff.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
-            </Select>
-          </Field>
-        </SetGrid>
+        {(() => {
+          const deputyIds = cfg.dslDeputyIds || [];
+          const staffById = (id) => staff.find(u => u.id === id) || users.find(u => u.id === id);
+          // Changing the Lead drops that person from Deputies (can't be both).
+          const setLead = (id) => comms.setConfig({ dslLeadId: id || null, dslDeputyIds: deputyIds.filter(x => x !== id) });
+          const addDeputy = (id) => { if (id && !deputyIds.includes(id)) comms.setConfig({ dslDeputyIds: [...deputyIds, id] }); };
+          const removeDeputy = (id) => comms.setConfig({ dslDeputyIds: deputyIds.filter(x => x !== id) });
+          const addable = staff.filter(u => u.id !== cfg.dslLeadId && !deputyIds.includes(u.id));
+          return (
+            <SetGrid>
+              <Field label="Designated Safeguarding Lead" hint="One lead per centre.">
+                <Select value={cfg.dslLeadId || ''} onChange={e => setLead(e.target.value)}>
+                  <option value="">— Select —</option>
+                  {staff.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                </Select>
+              </Field>
+              <Field label="Deputy DSLs" hint="Deputies can act on flags when the lead is away. Add as many as you need.">
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: deputyIds.length ? 8 : 0 }}>
+                  {deputyIds.map(id => {
+                    const u = staffById(id);
+                    return (
+                      <span key={id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 600, color: DS.accent, background: DS.accentLight, border: `1px solid ${DS.accentBorder}`, borderRadius: 20, padding: '3px 6px 3px 10px' }}>
+                        {u ? u.name : 'Unknown'}
+                        <button onClick={() => removeDeputy(id)} title="Remove deputy" style={{ border: 'none', background: 'none', cursor: 'pointer', color: DS.accent, display: 'flex', padding: 0 }}><Icon name="x" size={12} color={DS.accent} /></button>
+                      </span>
+                    );
+                  })}
+                  {deputyIds.length === 0 && <span style={{ fontSize: 12.5, color: DS.faint }}>No deputies yet.</span>}
+                </div>
+                <Select value="" onChange={e => { addDeputy(e.target.value); e.target.value = ''; }} disabled={addable.length === 0}>
+                  <option value="">{addable.length ? '+ Add a deputy…' : 'No more staff to add'}</option>
+                  {addable.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                </Select>
+              </Field>
+            </SetGrid>
+          );
+        })()}
         <SettingRow title="DSL observer on every thread" desc="Your DSL can read all staff↔student conversations."
           checked={!!cfg.dslObserver} onToggle={v => comms.setConfig({ dslObserver: v })} />
         <SettingRow title="Message retention"

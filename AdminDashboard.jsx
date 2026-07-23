@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  TutorOS — Admin Dashboard  (Centre overview · triage layout)
+//  Klasio — Admin Dashboard  (Centre overview · triage layout)
 // ══════════════════════════════════════════════════════════════
 
 // Mock data (atRiskStudents, revenueData, recentActivity) lives in

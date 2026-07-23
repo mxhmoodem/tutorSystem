@@ -16,7 +16,7 @@ const parentData = {
       subject: 'Mathematics',
       submitted: '23 Apr',
       score: 92,
-      teacher: 'Ms. Sarah Clarke',
+      teacher: 'Ms. Heebz A',
       feedback: 'Excellent work — your chain rule application is correct. Consider showing intermediate steps for full marks in the exam.',
       questions: [
         { q: 'Q1 — Differentiate f(x) = 3x⁴ − 2x² + 5',        mark: true,  comment: 'Correct — well shown' },
@@ -32,7 +32,7 @@ const parentData = {
       subject: 'Mathematics',
       submitted: '16 Apr',
       score: 87,
-      teacher: 'Ms. Sarah Clarke',
+      teacher: 'Ms. Heebz A',
       feedback: 'Strong performance. The nth term calculation in Q3 had a small error but all other answers were correct.',
       questions: [
         { q: 'Q1 — Find next 3 terms of 3, 7, 13, 21…',     mark: true,  comment: 'Correct' },
@@ -43,15 +43,15 @@ const parentData = {
     },
   ],
   upcomingSessions: [
-    { subject: 'Mathematics',   date: 'Mon 28 Apr', time: '09:00 – 10:30', room: 'Room 3', teacher: 'Ms. Sarah Clarke'  },
-    { subject: 'Further Maths', date: 'Wed 30 Apr', time: '10:30 – 12:00', room: 'Room 5', teacher: 'Ms. Sarah Clarke'  },
+    { subject: 'Mathematics',   date: 'Mon 28 Apr', time: '09:00 – 10:30', room: 'Room 3', teacher: 'Ms. Heebz A'  },
+    { subject: 'Further Maths', date: 'Wed 30 Apr', time: '10:30 – 12:00', room: 'Room 5', teacher: 'Ms. Heebz A'  },
     { subject: 'Physics',       date: 'Thu 1 May',  time: '14:00 – 15:30', room: 'Room 7', teacher: 'Mr. David Park'    },
-    { subject: 'Mathematics',   date: 'Fri 2 May',  time: '09:00 – 10:30', room: 'Room 3', teacher: 'Ms. Sarah Clarke'  },
+    { subject: 'Mathematics',   date: 'Fri 2 May',  time: '09:00 – 10:30', room: 'Room 3', teacher: 'Ms. Heebz A'  },
   ],
   messages: [
-    { from: 'teacher', name: 'Ms. Sarah Clarke', text: 'Oliver did really well in this week\'s test — his differentiation is excellent. I\'d like him to focus on showing workings more clearly in exam conditions.', time: '2:14 PM · Today' },
+    { from: 'teacher', name: 'Ms. Heebz A', text: 'Oliver did really well in this week\'s test — his differentiation is excellent. I\'d like him to focus on showing workings more clearly in exam conditions.', time: '2:14 PM · Today' },
     { from: 'parent',  name: 'You',              text: 'Thank you! He\'s been putting in a lot of extra practice. Is there anything specific he should revise for the mock in two weeks?', time: '2:31 PM · Today' },
-    { from: 'teacher', name: 'Ms. Sarah Clarke', text: 'Integration by parts and implicit differentiation would be the highest-value topics to review. I\'ll share some practice papers on Monday.', time: '2:45 PM · Today' },
+    { from: 'teacher', name: 'Ms. Heebz A', text: 'Integration by parts and implicit differentiation would be the highest-value topics to review. I\'ll share some practice papers on Monday.', time: '2:45 PM · Today' },
   ],
 };
 

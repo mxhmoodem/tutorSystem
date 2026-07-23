@@ -25,15 +25,15 @@ const COMMS_USERS = [
   { id: 'u_marcus', name: 'Marcus Hale',  role: 'superadmin', centreId: null,   classIds: [] },
 
   // ── Bright Minds Tuition ──
-  { id: 'u_lisa',   name: 'Lisa Chen',    role: 'admin',   centreId: 'bm',   classIds: [] },
-  { id: 'u_sarah',  name: 'Sarah Clarke', role: 'teacher', centreId: 'bm',   classIds: ['c1','c2','c3','c4'] },
+  { id: 'u_lisa',   name: 'Taqqy',        role: 'admin',   centreId: 'bm',   classIds: [] },
+  { id: 'u_sarah',  name: 'Heebz A', role: 'teacher', centreId: 'bm',   classIds: ['c1','c2','c3','c4'] },
   { id: 'u_david',  name: 'David Park',   role: 'teacher', centreId: 'bm',   classIds: ['c7','c13','c20','c31'] },
   { id: 'u_priya',  name: 'Priya Nair',   role: 'teacher', centreId: 'bm',   classIds: ['c5','c6'] },
   { id: 'u_marcusw',name: 'Marcus Webb',  role: 'teacher', centreId: 'bm',   classIds: ['c8','c23'] },
   { id: 'u_oliver', name: 'Oliver Chen',  role: 'student', centreId: 'bm',   classIds: ['c3'] },
   { id: 'u_emma',   name: 'Emma Thompson',role: 'student', centreId: 'bm',   classIds: ['c1','c2'] },
   { id: 'u_sophia', name: 'Sophia Patel', role: 'student', centreId: 'bm',   classIds: ['c1','c2'] },
-  // Students wired into David Park's physics classes (c13) + Sarah's Yr 11 Maths
+  // Students wired into David Park's physics classes (c13) + Heebz A's Yr 11 Maths
   // group B (c2) so the message channels + safeguarding flag queue populate.
   { id: 'u_aiden',  name: 'Aiden Foster', role: 'student', centreId: 'bm',   classIds: ['c13'] },
   { id: 'u_james',  name: 'James Wilson', role: 'student', centreId: 'bm',   classIds: ['c2','c13'] },
@@ -73,7 +73,7 @@ const COMMS_ANNOUNCEMENTS = [
   {
     id: 'an_bm_inset',
     scope: 'centre', centreId: 'bm', classId: null,
-    authorId: 'u_lisa', authorName: 'Lisa Chen', authorRole: 'admin',
+    authorId: 'u_lisa', authorName: 'Taqqy', authorRole: 'admin',
     audience: { centreIds: ['bm'], roles: ['teacher'], classIds: [] },
     title: 'INSET day reminder — Friday 27 June',
     body: 'All teaching staff: the centre is closed to students on Friday 27 June for our summer-term INSET. Please confirm you have read this so I can finalise the room plan.',
@@ -85,7 +85,7 @@ const COMMS_ANNOUNCEMENTS = [
   {
     id: 'an_bm_fees',
     scope: 'centre', centreId: 'bm', classId: null,
-    authorId: 'u_lisa', authorName: 'Lisa Chen', authorRole: 'admin',
+    authorId: 'u_lisa', authorName: 'Taqqy', authorRole: 'admin',
     // §5: Klasio invoicing is ledger-only (payments are external), and payment/
     // invoice lines never appear on the student surface — retargeted to staff only
     // and reworded to drop the "view and pay from the portal" capture language.
@@ -99,7 +99,7 @@ const COMMS_ANNOUNCEMENTS = [
   {
     id: 'an_bm_safeguarding',
     scope: 'centre', centreId: 'bm', classId: null,
-    authorId: 'u_lisa', authorName: 'Lisa Chen', authorRole: 'admin',
+    authorId: 'u_lisa', authorName: 'Taqqy', authorRole: 'admin',
     audience: { centreIds: ['bm'], roles: ['teacher'], classIds: [] },
     title: 'URGENT: Updated safeguarding policy — acknowledge today',
     body: 'Our safeguarding policy has been updated following the latest LA guidance. All staff must read and acknowledge before teaching tomorrow. Printed copies are in the staff room.',
@@ -110,7 +110,7 @@ const COMMS_ANNOUNCEMENTS = [
   {
     id: 'an_class_mock',
     scope: 'class', centreId: 'bm', classId: 'c3',
-    authorId: 'u_sarah', authorName: 'Sarah Clarke', authorRole: 'teacher',
+    authorId: 'u_sarah', authorName: 'Heebz A', authorRole: 'teacher',
     audience: { centreIds: ['bm'], roles: ['student'], classIds: ['c3'] },
     title: 'A-Level Maths mock — bring a calculator Friday',
     body: 'Reminder for Year 12 Group A: your end-of-unit mock is this Friday in Room 5. Bring a calculator and the formula booklet. We will review the integration topics on Wednesday.',
@@ -121,7 +121,7 @@ const COMMS_ANNOUNCEMENTS = [
   {
     id: 'an_bm_parents_evening',
     scope: 'centre', centreId: 'bm', classId: null,
-    authorId: 'u_lisa', authorName: 'Lisa Chen', authorRole: 'admin',
+    authorId: 'u_lisa', authorName: 'Taqqy', authorRole: 'admin',
     audience: { centreIds: ['bm'], roles: 'all', classIds: [] },
     title: 'Summer parents’ evening — booking now open',
     body: 'Our end-of-year parents’ evening is on Thursday 3 July, 4–7pm. Booking slots are open now — please reserve a time with each of your child’s tutors. Refreshments provided in the main hall.',
@@ -132,7 +132,7 @@ const COMMS_ANNOUNCEMENTS = [
   {
     id: 'an_bm_reports_due',
     scope: 'centre', centreId: 'bm', classId: null,
-    authorId: 'u_lisa', authorName: 'Lisa Chen', authorRole: 'admin',
+    authorId: 'u_lisa', authorName: 'Taqqy', authorRole: 'admin',
     audience: { centreIds: ['bm'], roles: ['teacher'], classIds: [] },
     title: 'Summer reports due Friday 20 June',
     body: 'A reminder that all summer-term student reports must be submitted by end of day Friday. If you need an extension for a particular group, message me directly.',
@@ -143,7 +143,7 @@ const COMMS_ANNOUNCEMENTS = [
   {
     id: 'an_year11_studyleave',
     scope: 'year', centreId: 'bm', classId: null,
-    authorId: 'u_lisa', authorName: 'Lisa Chen', authorRole: 'admin',
+    authorId: 'u_lisa', authorName: 'Taqqy', authorRole: 'admin',
     audience: { centreIds: ['bm'], roles: ['student', 'teacher'], years: ['Year 11'] },
     title: 'Year 11 study leave begins Monday',
     body: 'Year 11 formal lessons finish this week. Study leave begins Monday — the centre will still run drop-in revision clinics daily 10am–1pm in Room 6 for anyone who wants support.',
@@ -154,7 +154,7 @@ const COMMS_ANNOUNCEMENTS = [
   {
     id: 'an_subject_maths_revision',
     scope: 'subject', centreId: 'bm', classId: null,
-    authorId: 'u_sarah', authorName: 'Sarah Clarke', authorRole: 'teacher',
+    authorId: 'u_sarah', authorName: 'Heebz A', authorRole: 'teacher',
     audience: { centreIds: ['bm'], roles: ['student'], subjects: ['Mathematics'] },
     title: 'Extra maths revision pack now on the portal',
     body: 'I’ve uploaded a full set of exam-style practice papers with mark schemes to the resources area. Work through at least one paper before our next session and bring any questions.',
@@ -176,7 +176,7 @@ const COMMS_ANNOUNCEMENTS = [
   {
     id: 'an_bm_scheduled_openday',
     scope: 'centre', centreId: 'bm', classId: null,
-    authorId: 'u_lisa', authorName: 'Lisa Chen', authorRole: 'admin',
+    authorId: 'u_lisa', authorName: 'Taqqy', authorRole: 'admin',
     audience: { centreIds: ['bm'], roles: 'all', classIds: [] },
     title: 'Autumn open day — save the date',
     body: 'We’re holding an open day for prospective families on Saturday 13 September. More details and a volunteer sign-up will follow — for now, please hold the morning.',
@@ -187,7 +187,7 @@ const COMMS_ANNOUNCEMENTS = [
   {
     id: 'an_bm_library_hours',
     scope: 'centre', centreId: 'bm', classId: null,
-    authorId: 'u_lisa', authorName: 'Lisa Chen', authorRole: 'admin',
+    authorId: 'u_lisa', authorName: 'Taqqy', authorRole: 'admin',
     audience: { centreIds: ['bm'], roles: ['student', 'teacher'], classIds: [] },
     title: 'Extended study-room hours during exam season',
     body: 'The quiet study room will stay open until 6pm on weekdays throughout the exam period. Sign in at reception. Please keep noise down out of respect for others revising.',
@@ -280,7 +280,7 @@ const COMMS_THREADS = [
 // ─── Messages ────────────────────────────────────────────────────────────────────
 const COMMS_MESSAGES = [
   // Staff Room
-  { id: 'm_sr1', threadId: 'th_staffroom', senderId: 'u_lisa',  senderName: 'Lisa Chen',    senderRole: 'admin',
+  { id: 'm_sr1', threadId: 'th_staffroom', senderId: 'u_lisa',  senderName: 'Taqqy',    senderRole: 'admin',
     body: 'Morning all — could everyone confirm their availability for the INSET day by end of week? 🙏', attachments: [],
     createdAt: _ago(6 * HOUR), readBy: { u_lisa: _ago(6 * HOUR), u_sarah: _ago(5 * HOUR), u_david: _ago(4 * HOUR) } },
   { id: 'm_sr2', threadId: 'th_staffroom', senderId: 'u_david', senderName: 'David Park',   senderRole: 'teacher',
@@ -290,35 +290,35 @@ const COMMS_MESSAGES = [
     body: 'Same here. Quick one — are we keeping Room 6 for the GCSE intervention group?', attachments: [],
     createdAt: _ago(40 * MIN), readBy: { u_priya: _ago(40 * MIN) } },
 
-  // Sarah ↔ David
-  { id: 'm_sd1', threadId: 'th_sarah_david', senderId: 'u_sarah', senderName: 'Sarah Clarke', senderRole: 'teacher',
+  // Heebz A ↔ David
+  { id: 'm_sd1', threadId: 'th_sarah_david', senderId: 'u_sarah', senderName: 'Heebz A', senderRole: 'teacher',
     body: 'Hi David — do you have the Year 12 mark scheme for the joint mock? Want to keep our grading consistent.', attachments: [],
     createdAt: _ago(3 * HOUR), readBy: { u_sarah: _ago(3 * HOUR), u_david: _ago(2 * HOUR + 30) } },
   { id: 'm_sd2', threadId: 'th_sarah_david', senderId: 'u_david', senderName: 'David Park', senderRole: 'teacher',
     body: 'Yep, sending it over now. I added a row for the new integration question.', attachments: [],
     createdAt: _ago(2 * HOUR), readBy: { u_david: _ago(2 * HOUR) } },
 
-  // Sarah ↔ Lisa
-  { id: 'm_sl1', threadId: 'th_sarah_lisa', senderId: 'u_lisa', senderName: 'Lisa Chen', senderRole: 'admin',
-    body: 'Sarah, the parents of Year 12 Group A asked about predicted grades — could you draft something this week?', attachments: [],
+  // Heebz A ↔ Taqqy
+  { id: 'm_sl1', threadId: 'th_sarah_lisa', senderId: 'u_lisa', senderName: 'Taqqy', senderRole: 'admin',
+    body: 'Heebz A, the parents of Year 12 Group A asked about predicted grades — could you draft something this week?', attachments: [],
     createdAt: _ago(1 * DAY + 2 * HOUR), readBy: { u_lisa: _ago(1 * DAY + 2 * HOUR), u_sarah: _ago(1 * DAY + 1 * HOUR) } },
-  { id: 'm_sl2', threadId: 'th_sarah_lisa', senderId: 'u_sarah', senderName: 'Sarah Clarke', senderRole: 'teacher',
+  { id: 'm_sl2', threadId: 'th_sarah_lisa', senderId: 'u_sarah', senderName: 'Heebz A', senderRole: 'teacher',
     body: 'Will do — I should have draft reports ready by Thursday.', attachments: [],
     createdAt: _ago(1 * DAY), readBy: { u_sarah: _ago(1 * DAY), u_lisa: _ago(23 * HOUR) } },
 
-  // Sarah ↔ Oliver (teacher ↔ own student)
+  // Heebz A ↔ Oliver (teacher ↔ own student)
   { id: 'm_so1', threadId: 'th_sarah_oliver', senderId: 'u_oliver', senderName: 'Oliver Chen', senderRole: 'student',
     body: 'Hi Miss, I had a question about Q4 on the integration sheet — I keep getting a negative area. Could you take a look?', attachments: [],
     createdAt: _ago(20 * MIN), readBy: { u_oliver: _ago(20 * MIN) } },
 
   // ── Class channel: Yr 11 GCSE Maths · Group B (c2) ──
-  { id: 'm_c2_1', threadId: 'th_chan_c2', senderId: 'u_sarah', senderName: 'Sarah Clarke', senderRole: 'teacher',
+  { id: 'm_c2_1', threadId: 'th_chan_c2', senderId: 'u_sarah', senderName: 'Heebz A', senderRole: 'teacher',
     body: 'Morning everyone — Worksheet 4B (simultaneous equations) is set for Friday. Sections A and B only.', attachments: [],
     createdAt: _ago(3 * HOUR), readBy: { u_sarah: _ago(3 * HOUR), u_emma: _ago(2 * HOUR + 55), u_james: _ago(2 * HOUR + 52) } },
   { id: 'm_c2_2', threadId: 'th_chan_c2', senderId: 'u_emma', senderName: 'Emma Thompson', senderRole: 'student',
     body: 'Is that the one from the textbook or the printed sheet?', attachments: [],
     createdAt: _ago(2 * HOUR + 50), readBy: { u_emma: _ago(2 * HOUR + 50), u_sarah: _ago(2 * HOUR + 48) } },
-  { id: 'm_c2_3', threadId: 'th_chan_c2', senderId: 'u_sarah', senderName: 'Sarah Clarke', senderRole: 'teacher',
+  { id: 'm_c2_3', threadId: 'th_chan_c2', senderId: 'u_sarah', senderName: 'Heebz A', senderRole: 'teacher',
     body: "The printed sheet I handed out Tuesday. There's a copy in the resources tab if you've lost it.", attachments: [],
     createdAt: _ago(2 * HOUR + 45), readBy: { u_sarah: _ago(2 * HOUR + 45), u_james: _ago(2 * HOUR + 42) } },
   { id: 'm_c2_4', threadId: 'th_chan_c2', senderId: 'u_james', senderName: 'James Wilson', senderRole: 'student',
@@ -327,7 +327,7 @@ const COMMS_MESSAGES = [
   { id: 'm_c2_5', threadId: 'th_chan_c2', senderId: 'u_sophia', senderName: 'Sophia Patel', senderRole: 'student',
     body: 'Do we need to show all working for Q7?', attachments: [],
     createdAt: _ago(2 * HOUR + 30), readBy: { u_sophia: _ago(2 * HOUR + 30) } },
-  { id: 'm_c2_6', threadId: 'th_chan_c2', senderId: 'u_sarah', senderName: 'Sarah Clarke', senderRole: 'teacher',
+  { id: 'm_c2_6', threadId: 'th_chan_c2', senderId: 'u_sarah', senderName: 'Heebz A', senderRole: 'teacher',
     body: 'Yes please — full method marks matter in the exam. Show every line.', attachments: [],
     createdAt: _ago(2 * HOUR + 20), readBy: { u_sarah: _ago(2 * HOUR + 20) } },
 
@@ -360,11 +360,11 @@ const COMMS_MESSAGES = [
     body: 'Understood! Can we go over Q4 next session?', attachments: [],
     createdAt: _ago(1 * DAY), readBy: { u_aiden: _ago(1 * DAY) } },
 
-  // ── Mia ↔ Ms Clarke (out-of-hours trigger: sent 23:14) ──
+  // ── Mia ↔ Heebz A (out-of-hours trigger: sent 23:14) ──
   { id: 'm_ms_1', threadId: 'th_mia_sarah', senderId: 'u_mia', senderName: 'Mia Okonkwo', senderRole: 'student',
     body: "Sorry to message so late, I just wanted to check tomorrow's lesson is still at 4pm?", attachments: [],
     createdAt: '2026-06-16T23:14:00.000Z', readBy: { u_mia: '2026-06-16T23:14:00.000Z' } },
-  { id: 'm_ms_2', threadId: 'th_mia_sarah', senderId: 'u_sarah', senderName: 'Sarah Clarke', senderRole: 'teacher',
+  { id: 'm_ms_2', threadId: 'th_mia_sarah', senderId: 'u_sarah', senderName: 'Heebz A', senderRole: 'teacher',
     body: 'No problem Mia — yes, 4pm as usual in Room 3. See you then. (Best to message during the day where you can.)', attachments: [],
     createdAt: _ago(1 * DAY), readBy: { u_sarah: _ago(1 * DAY) } },
 
@@ -375,13 +375,13 @@ const COMMS_MESSAGES = [
     attachments: [{ name: 'photo-of-working.jpg', type: 'image' }],
     createdAt: _ago(20 * HOUR), readBy: { u_james: _ago(20 * HOUR) } },
 
-  // ── Sophia ↔ Ms Clarke (keyword trigger: "instagram") — already resolved by DSL ──
+  // ── Sophia ↔ Heebz A (keyword trigger: "instagram") — already resolved by DSL ──
   // TRIGGER: keyword
   { id: 'm_sf_kw', threadId: 'th_sophia_sarah', senderId: 'u_sophia', senderName: 'Sophia Patel', senderRole: 'student',
     body: "Miss I've been really stressed about exams. Is it ok if I message you on instagram instead, it's quicker for me?", attachments: [],
     createdAt: _ago(3 * DAY), readBy: { u_sophia: _ago(3 * DAY), u_sarah: _ago(3 * DAY - 1) } },
-  { id: 'm_sf_2', threadId: 'th_sophia_sarah', senderId: 'u_sarah', senderName: 'Sarah Clarke', senderRole: 'teacher',
-    body: "I'm really glad you told me, Sophia — you're not in any trouble at all. Let's keep chatting here so I can support you properly, and I'll let Ms Chen know so we can help. 💛", attachments: [],
+  { id: 'm_sf_2', threadId: 'th_sophia_sarah', senderId: 'u_sarah', senderName: 'Heebz A', senderRole: 'teacher',
+    body: "I'm really glad you told me, Sophia — you're not in any trouble at all. Let's keep chatting here so I can support you properly, and I'll let Taqqy know so we can help. 💛", attachments: [],
     createdAt: _ago(3 * DAY - 1), readBy: { u_sarah: _ago(3 * DAY - 1) } },
 
   // Apex — isolation proof
@@ -434,7 +434,7 @@ const COMMS_ACTIVITY_NOTIFICATIONS = [
 
   // Student
   { id: 's-feedback-ready', userIds: ['u_oliver'], icon: 'star', tone: 'success', page: 'homework',
-    title: 'Integration sheet feedback is ready', sub: 'Homework - Sarah Clarke left comments',
+    title: 'Integration sheet feedback is ready', sub: 'Homework - Heebz A left comments',
     time: _ago(11 * MIN), sig: 's-feedback-ready:integration-sheet' },
   { id: 's-resource-added', userIds: ['u_oliver'], icon: 'book', tone: 'info', page: 'homework',
     title: 'New revision resource added', sub: 'A-Level Maths - integration practice pack',
@@ -451,7 +451,7 @@ const COMMS_CONFIG = {
     quietFrom: '21:00', quietTo: '07:00',
     images: true,
     dslObserver: true,
-    dslLeadId: 'u_lisa', dslDeputyId: 'u_david',
+    dslLeadId: 'u_lisa', dslDeputyIds: ['u_david', 'u_priya'],
     retention: '3y',
     wordlist: ['address', 'meet up', 'whatsapp', 'snapchat', 'instagram', 'phone number', 'kik', 'secret'],
     announceAuthors: 'admins',
@@ -463,7 +463,7 @@ const COMMS_CONFIG = {
     quietFrom: '21:00', quietTo: '07:00',
     images: true,
     dslObserver: true,
-    dslLeadId: 'u_daniel', dslDeputyId: null,
+    dslLeadId: 'u_daniel', dslDeputyIds: [],
     retention: '3y',
     wordlist: ['address', 'meet up', 'whatsapp', 'snapchat', 'instagram'],
     announceAuthors: 'admins',

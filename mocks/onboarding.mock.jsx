@@ -68,7 +68,7 @@ const ONB_SUBSCRIPTION = {
   // Billing details + an applied price-override code (issued by the superadmin and
   // redeemed in the admin's Billing settings). Defaults backfill onto older stored
   // blobs via readSub's spread (Centres.jsx).
-  billing: { company: 'Bright Minds Tuition Ltd', email: 'accounts@brightminds.co.uk', vat: 'GB 432 1098 76', address: '14 Kingsway, London WC2B 6LH', cardName: 'L. Chen', cardBrand: 'Visa', cardLast4: '4242', cardExpiry: '08/27' },
+  billing: { company: 'Bright Minds Tuition Ltd', email: 'accounts@brightminds.co.uk', vat: 'GB 432 1098 76', address: '14 Kingsway, London WC2B 6LH', cardName: 'Taqqy', cardBrand: 'Visa', cardLast4: '4242', cardExpiry: '08/27' },
   redeemedCode: null,
   // NB: storage usage is NOT stored here — it is derived live from file records
   // (mocks/storage.mock.jsx + Storage.jsx) so a running total can never drift.
@@ -84,7 +84,7 @@ const ONB_SUBSCRIPTION = {
 // can add a membership instead of creating a duplicate (see addMembership).
 //
 // This is ALSO the staff role-grant store: a person can hold more than one role at
-// a centre, expressed as multiple rows (Lisa = admin + teacher at bm, below). The
+// a centre, expressed as multiple rows (Taqqy = admin + teacher at bm, below). The
 // Team page groups these rows into a per-identity `roles: []` array via
 // permissions.js `membersForCentre`, and grant/revoke add/remove a single row
 // (useOnboardingStore.grantRole / revokeRole). Assignable staff roles are admin +
@@ -103,7 +103,7 @@ const ONB_MEMBERSHIPS = [
   // has a transfer-ownership target and shows a non-owner admin who also teaches.
   { email: 'm.webb@centre.co.uk',         centreId: 'bm',     role: 'admin'   },
 
-  // ── Apex Learning Centre (apex · Manchester). Lisa is the ACCOUNT owner here
+  // ── Apex Learning Centre (apex · Manchester). Taqqy is the ACCOUNT owner here
   //    too (ownership is account-wide, not per-centre) and runs it as an Admin,
   //    alongside a local centre admin + teachers who only belong to Apex.
   { email: 'lisa.chen@brightminds.co.uk',       centreId: 'apex',   role: 'admin'   },
@@ -116,7 +116,7 @@ const ONB_MEMBERSHIPS = [
   { email: 'marcus.reid@apexlearning.co.uk',    centreId: 'apex',   role: 'teacher' },
 
   // ── Summit Academy (summit · Birmingham) — newly added to the Growth plan.
-  //    Same shape: Lisa as account owner + Admin, a local Summit admin, teachers.
+  //    Same shape: Taqqy as account owner + Admin, a local Summit admin, teachers.
   { email: 'lisa.chen@brightminds.co.uk',       centreId: 'summit', role: 'admin'   },
   { email: 'grace.adeyemi@summitacademy.co.uk', centreId: 'summit', role: 'admin'   },
   { email: 'leo.whitfield@summitacademy.co.uk', centreId: 'summit', role: 'teacher' },
@@ -129,7 +129,7 @@ const ONB_MEMBERSHIPS = [
 // identity) whose memberships above resolve to multiple centres + roles, driving
 // the in-app centre switcher (sidebar) and the Admin/Teacher view switch
 // (Settings). Adults are one account; students/superadmin keep their own personas.
-const ONB_SESSION = { email: 'lisa.chen@brightminds.co.uk', name: 'Lisa Chen' };
+const ONB_SESSION = { email: 'lisa.chen@brightminds.co.uk', name: 'Taqqy' };
 
 // Initial per-centre onboarding state. `steps` drives the setup checklist;
 // `importDraft` auto-saves the in-progress CSV import. Persisted to localStorage

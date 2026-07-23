@@ -293,7 +293,7 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch }) => {
           <Avatar name="User" size={28} color={cfg.color} />
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 13, fontWeight: 500, color: DS.sub, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {role === 'admin' ? 'Lisa Chen' : role === 'teacher' ? 'Sarah Clarke' : 'Oliver Chen'}
+              {role === 'admin' ? 'Lisa Chen' : role === 'teacher' ? 'Heebz A' : 'Oliver Chen'}
             </div>
             <div style={{ fontSize: 11, color: DS.faint }}>{cfg.label}</div>
           </div>

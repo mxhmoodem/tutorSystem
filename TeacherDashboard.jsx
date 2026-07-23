@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  TutorOS — Teacher Dashboard  (triage layout: today-first)
+//  Klasio — Teacher Dashboard  (triage layout: today-first)
 // ══════════════════════════════════════════════════════════════
 
 // Mock data (todaySchedule, homeworkItems, studentProgress,
@@ -217,7 +217,7 @@ const TeacherDashboard = () => {
   // shared with the teacher Reports page + admin overview so no surface can
   // disagree about who is due when. Only students whose policy resolves to
   // Expected get due dates; id-first matching survives display-name typos.
-  const TEACHER_NAME = 'Sarah Clarke';   // logged-in teacher in the demo
+  const TEACHER_NAME = 'Heebz A';   // logged-in teacher in the demo
   const fmtDue = (iso) => new Date(iso + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
   const reportsDue = (typeof computeUpcomingReports === 'function')
     ? computeUpcomingReports(reportConfig, reportsStore, { teacherName: TEACHER_NAME, today: TODAY_ISO })
@@ -248,11 +248,11 @@ const TeacherDashboard = () => {
   // ── Action items (4 tiles) ─────────────────────────────────────────
   const toMarkCount    = window.teacherMetrics ? window.teacherMetrics.getToMark() : homeworkItems.reduce((n, h) => n + (h.toMark || 0), 0);
   const attendanceToDo = Object.values(attendance).filter(v => !v).length;
-  const aiFeedbackToReview = reportDrafts.length;   // closest wired proxy: draft reports awaiting review
+  const reportsToReview = reportDrafts.length;   // draft reports awaiting review
   const unreadMessages = 0;   // TODO: comms unread isn't passed to this page; wire when available
   const actionItems = [
     { icon: 'edit',    count: toMarkCount,        label: 'to mark',           tone: 'accent',  onClick: () => go('homework') },
-    { icon: 'file',    count: aiFeedbackToReview, label: 'feedback to review', tone: 'warning', onClick: () => go('reports') },
+    { icon: 'file',    count: reportsToReview,    label: 'feedback to review', tone: 'warning', onClick: () => go('reports') },
     { icon: 'check',   count: attendanceToDo,     label: 'attendance to take', tone: 'info',    onClick: () => go('attendance') },
     { icon: 'message', count: unreadMessages,     label: 'unread messages',    tone: 'danger',  onClick: () => go('comms') },
   ];

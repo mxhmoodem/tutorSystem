@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  TutorOS — Self-contained Homework module
+//  Klasio — Self-contained Homework module
 //  Renders TeacherHomework / StudentHomework based on user.role
 // ══════════════════════════════════════════════════════════════
 (() => {
@@ -164,7 +164,7 @@ const populateCohort = (a, students) => {
 
 const seedStore = () => {
   const me = { id: 's_oliver', name: 'Oliver Chen', role: 'student', classLabel: 'Year 12 – Group A' };
-  const teacher = { id: 't_clarke', name: 'Sarah Clarke', role: 'teacher' };
+  const teacher = { id: 't_clarke', name: 'Heebz A', role: 'teacher' };
   // Current student ("me") first, then the seed roster from mocks/homework.mock.jsx.
   const students = [me, ...HW_STUDENTS];
 
@@ -181,7 +181,7 @@ const seedStore = () => {
     title: 'Simultaneous Equations',
     subject: 'Mathematics',
     classLabel: 'Year 10 – Group A',
-    teacherName: 'Sarah Clarke',
+    teacherName: 'Heebz A',
     folderId: 'f_gcse',
     teacherId: teacher.id,
     studentIds: ['s_oliver','s_emma','s_sophia','s_james'],
@@ -207,7 +207,7 @@ const seedStore = () => {
     title: 'Quadratic Equations — Practice Set',
     subject: 'Mathematics',
     classLabel: 'Year 10 – Group A',
-    teacherName: 'Sarah Clarke',
+    teacherName: 'Heebz A',
     folderId: 'f_gcse',
     teacherId: teacher.id,
     studentIds: ['s_oliver','s_emma','s_sophia'],
@@ -364,7 +364,7 @@ const seedStore = () => {
     title: 'Quadratic Equations – Chapter 5',
     subject: 'Mathematics',
     classLabel: 'Year 10 – Group A',
-    teacherName: 'Sarah Clarke',
+    teacherName: 'Heebz A',
     folderId: 'f_gcse',
     teacherId: teacher.id,
     studentIds: ['s_oliver','s_emma','s_sophia','s_james'],
@@ -627,7 +627,7 @@ const seedStore = () => {
     title: 'Calculus: Differentiation Basics',
     subject: 'Mathematics',
     classLabel: 'Year 12 – Group A',
-    teacherName: 'Sarah Clarke',
+    teacherName: 'Heebz A',
     folderId: 'f_alevel',
     teacherId: teacher.id,
     studentIds: ['s_oliver'],
@@ -655,7 +655,7 @@ const seedStore = () => {
     title: 'Integration: Definite & Indefinite',
     subject: 'Mathematics',
     classLabel: 'Year 12 – Group A',
-    teacherName: 'Sarah Clarke',
+    teacherName: 'Heebz A',
     folderId: 'f_alevel',
     teacherId: teacher.id,
     studentIds: ['s_oliver'],
@@ -683,7 +683,7 @@ const seedStore = () => {
     title: 'Number: Surds & Indices',
     subject: 'Mathematics',
     classLabel: 'Year 10 – Group A',
-    teacherName: 'Sarah Clarke',
+    teacherName: 'Heebz A',
     folderId: 'f_gcse',
     teacherId: teacher.id,
     studentIds: [],
@@ -710,7 +710,7 @@ const seedStore = () => {
     title: 'Trigonometry: Ratios & Identities',
     subject: 'Mathematics',
     classLabel: 'Year 11 – Group B',
-    teacherName: 'Sarah Clarke',
+    teacherName: 'Heebz A',
     folderId: 'f_gcse',
     teacherId: teacher.id,
     studentIds: [],
@@ -742,7 +742,7 @@ const seedStore = () => {
     title: 'Statistics: Probability',
     subject: 'Mathematics',
     classLabel: 'Year 10 – Group A',
-    teacherName: 'Sarah Clarke',
+    teacherName: 'Heebz A',
     folderId: 'f_gcse',
     teacherId: teacher.id,
     studentIds: [],
@@ -776,7 +776,7 @@ const seedStore = () => {
     title: 'Further Maths: Vectors',
     subject: 'Further Maths',
     classLabel: 'Year 12 – Group A',
-    teacherName: 'Sarah Clarke',
+    teacherName: 'Heebz A',
     folderId: 'f_alevel',
     teacherId: teacher.id,
     studentIds: ['s_oliver'],
@@ -883,20 +883,87 @@ const migrate = (s) => {
   return s;
 };
 
+// ─── Admin-roster reconciliation (F1 — ONE student universe) ───────────────────
+// The homework store historically had its OWN student ids (s_oliver, s_emma…),
+// disjoint from the admin store (admin_store_v4: s1, s2…). That meant a teacher
+// could not assign homework to the students the admin actually created, and the
+// student surface was a fixed persona. reconcile() folds the two universes into
+// one on every load:
+//   • every real admin student is merged into store.users as an assignable student
+//     (so the teacher builder lists the real roster, incl. freshly-created ones);
+//   • the four hand-authored seed ids are ALIASED to their admin equivalents (same
+//     people by name), so the seed homework shows up for the real students;
+//   • the four aliased legacy users are dropped (no duplicate names in the picker).
+// Idempotent: remapping an already-admin id is a no-op, and users are rebuilt from
+// the current admin roster each load. The active-student pointer decides whose
+// homework the student surface renders (see StudentHomework `me`).
+const HW_ALIAS = { s_oliver: 's2', s_emma: 's1', s_sophia: 's3', s_james: 's4' };
+
+const hwReadAdmin = () => {
+  try {
+    const p = JSON.parse(localStorage.getItem('admin_store_v4') || 'null');
+    if (p && p.students) return { students: p.students, classes: p.classes || window.SEED_CLASSES || [] };
+  } catch (e) {}
+  return { students: window.SEED_STUDENTS || [], classes: window.SEED_CLASSES || [] };
+};
+
+const reconcileWithAdmin = (store) => {
+  const admin = hwReadAdmin();
+  const classById = {};
+  (admin.classes || []).forEach(c => { classById[c.id] = c; });
+  const labelFor = (s) => {
+    const firstClass = (s.classIds || []).map(id => classById[id]).find(Boolean);
+    if (firstClass && firstClass.group) return firstClass.group;
+    const m = String(s.year || '').match(/\d+/);
+    return m ? `Year ${m[0]}` : (s.year || '');
+  };
+  const remap = (id) => HW_ALIAS[id] || id;
+
+  // users: teachers from the existing store + EVERY real admin student. Legacy demo
+  // students are dropped entirely so the assign picker is exactly the real roster.
+  const users = {};
+  Object.values(store.users || {}).forEach(u => { if (u.role === 'teacher') users[u.id] = u; });
+  (admin.students || []).forEach(s => {
+    users[s.id] = { id: s.id, name: `${s.firstName || ''} ${s.lastName || ''}`.trim() || s.id, role: 'student', classLabel: labelFor(s) };
+  });
+
+  // assignments: remap the four aliased ids, then keep only targets/submissions that
+  // resolve to a real student (drops the legacy demo cohorts that were seeded in).
+  const assignments = {};
+  Object.keys(store.assignments || {}).forEach(aid => {
+    const a = store.assignments[aid];
+    const studentIds = Array.from(new Set((a.studentIds || []).map(remap))).filter(id => users[id]);
+    const submissions = {};
+    Object.keys(a.submissions || {}).forEach(sid => { const r = remap(sid); if (users[r]) submissions[r] = a.submissions[sid]; });
+    assignments[aid] = { ...a, studentIds, submissions };
+  });
+
+  // currentUser follows the active student (default s2) so a bare read is sane;
+  // the live student surface re-resolves per render from the active pointer.
+  const activeId = (() => { try { return localStorage.getItem('klasio.activeStudent') || 's2'; } catch (e) { return 's2'; } })();
+  const currentUser = users[activeId] || users['s2'] || store.currentUser;
+
+  return { ...store, users, assignments, currentUser };
+};
+
+// Resolve the homework identity for the student surface = the active admin student.
+const hwActiveMe = (store) => {
+  const id = (window.__getActiveStudent && window.__getActiveStudent())
+    || (() => { try { return localStorage.getItem('klasio.activeStudent') || 's2'; } catch (e) { return 's2'; } })();
+  return (store.users && store.users[id]) || store.currentUser || { id, name: 'Student', role: 'student' };
+};
+
 const loadStore = () => {
+  let s;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      const s = seedStore();
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
-      return s;
-    }
-    return migrate(JSON.parse(raw));
+    s = raw ? migrate(JSON.parse(raw)) : seedStore();
   } catch (e) {
-    const s = seedStore();
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
-    return s;
+    s = seedStore();
   }
+  s = reconcileWithAdmin(s);
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); } catch (e) {}
+  return s;
 };
 
 const saveStore = (s) => {
@@ -2063,7 +2130,7 @@ const QuestionAnswerDisplay = ({ question, answer }) => {
 const TeacherHomework = ({ section }) => {
   const [store, update] = useStore();
   const [view, setView] = React.useState({ name: 'list' }); // list | builder | review
-  const me = Object.values(store.users).find(u => u.role === 'teacher') || { id: 't_clarke', name: 'Sarah Clarke' };
+  const me = Object.values(store.users).find(u => u.role === 'teacher') || { id: 't_clarke', name: 'Heebz A' };
 
   // (D1) Teacher-scoped: the teacher only sees homework for the subjects/classes
   // they actually teach. The shared store also holds this student's other-subject
@@ -4571,7 +4638,9 @@ const HwEmpty = ({ text }) => (
 const StudentHomework = ({ section, onNav }) => {
   const [store, update] = useStore();
   const toast = useToast();
-  const me = store.currentUser;
+  // The student surface represents the ACTIVE admin student (header switcher), not a
+  // fixed persona — resolve identity from the active pointer each render.
+  const me = hwActiveMe(store);
   // Drill-downs (detail / attempt / result …) live in local `view`; the *home*
   // section (assignments | submitted | results) is driven by the sidebar dropdown
   // via the `section` prop. `goHome` returns to the home view on the given section,
@@ -5513,7 +5582,7 @@ const StudentHomeworkRoot = (props) => (
 // ─── Helpers exposed for nav badges ────────────────────────────
 const getHomeworkBadges = () => {
   const s = loadStore();
-  const me = s.currentUser;
+  const me = hwActiveMe(s);
   const teacher = Object.values(s.users).find(u => u.role === 'teacher');
   const teacherToMark = teacher
     ? Object.values(s.assignments).filter(a => a.teacherId === teacher.id)

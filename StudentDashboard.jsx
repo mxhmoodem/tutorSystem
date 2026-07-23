@@ -16,6 +16,22 @@ const subjectThemes = {
   'Further Maths': { tint:'#EFE9FC', tint2:'#C9BAF5', deep:'#6B5BA8', text:'#332083', shape:'#8D75E9', shapeShadow:'#B6A6F5', symbol:'diamond', glyph:'Σ' },
   'Physics':       { tint:'#E7F4FD', tint2:'#B4DBF6', deep:'#4B7EA8', text:'#124979', shape:'#5BA6EA', shapeShadow:'#86BFEC', symbol:'circle', glyph:'⚛' },
   'Chemistry':     { tint:'#FDEFE0', tint2:'#F8CFA2', deep:'#9A5B22', text:'#7A3E12', shape:'#F0A45C', shapeShadow:'#F6C394', symbol:'diamond', glyph:'⚗' },
+  'Biology':       { tint:'#E7F6EC', tint2:'#BEE7CC', deep:'#2E7D48', text:'#14532D', shape:'#4FB477', shapeShadow:'#93D3AC', symbol:'circle', glyph:'✿' },
+  'English':       { tint:'#FDE9F1', tint2:'#F6C2D8', deep:'#A83B6B', text:'#7A1E45', shape:'#E96FA0', shapeShadow:'#F2A8C6', symbol:'square', glyph:'A' },
+  'English Literature': { tint:'#FDE9F1', tint2:'#F6C2D8', deep:'#A83B6B', text:'#7A1E45', shape:'#E96FA0', shapeShadow:'#F2A8C6', symbol:'square', glyph:'A' },
+  'English Lit.':  { tint:'#FDE9F1', tint2:'#F6C2D8', deep:'#A83B6B', text:'#7A1E45', shape:'#E96FA0', shapeShadow:'#F2A8C6', symbol:'square', glyph:'A' },
+};
+
+// Any subject NOT curated above still gets a clean, subject-coloured card (built
+// from the enrolment's subjectColor) with a monogram glyph — so a student's real
+// subjects never fall back to the Maths ∫ card.
+const hexToTheme = (hex, subject) => {
+  const c = /^#[0-9a-f]{6}$/i.test(hex || '') ? hex : '#0F9D7F';
+  return {
+    tint: c + '14', tint2: c + '30', deep: c, text: c,
+    shape: c, shapeShadow: c + '80', symbol: 'circle',
+    glyph: (String(subject || '?').trim()[0] || '?').toUpperCase(),
+  };
 };
 
 const SubjectShape = ({ theme }) => {
@@ -177,7 +193,7 @@ const StudentOverview = ({ onNav }) => {
         scrollSnapType:'x mandatory', scrollbarWidth:'none', msOverflowStyle:'none',
       }}>
         {enrolments.map(s => {
-          const theme = subjectThemes[s.subject] || subjectThemes['Mathematics'];
+          const theme = subjectThemes[s.subject] || hexToTheme(s.subjectColor, s.subject);
           const latest = s.scores[s.scores.length-1];
           return (
             <div key={s.subject} style={{

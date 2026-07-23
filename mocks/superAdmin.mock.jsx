@@ -35,7 +35,7 @@ const saPalette = () => [DS.accent, ...SA_CHART_PALETTE];
 //  (SAMetrics.accountMRR), optionally reduced by a redeemed promo code.
 // ══════════════════════════════════════════════════════════════
 const SA_ACCOUNTS = [
-  { id: 'acc_brightminds', name: 'Bright Minds',       owner: 'Lisa Chen',        ownerEmail: 'lisa@brightminds.co.uk', planId: 'scale',   status: 'active',    country: 'UK', createdAt: 'Aug 2024', churnRisk: 'low',  trialEndsAt: null,
+  { id: 'acc_brightminds', name: 'Bright Minds',       owner: 'Taqqy',            ownerEmail: 'lisa@brightminds.co.uk', planId: 'scale',   status: 'active',    country: 'UK', createdAt: 'Aug 2024', churnRisk: 'low',  trialEndsAt: null,
     centres: [
       { id: 'ctr_bm_london', name: 'Bright Minds Tuition', city: 'London', country: 'UK', students: 142, teachers: 8, usage: 94 },
       { id: 'ctr_bm_leeds',  name: 'Bright Minds North',   city: 'Leeds',  country: 'UK', students: 58,  teachers: 4, usage: 79 },
@@ -178,7 +178,7 @@ const SA_AUDIT = [
   { id: 'aud_2', actor: 'Marcus Hale',   actorRole: 'superadmin', action: 'Toggled feature flag "reports_v2"',      type: 'flag',     target: 'Global',              ts: '2026-07-02T04:20:00Z', ip: '82.14.21.5'  },
   { id: 'aud_3', actor: 'System',        actorRole: 'system',     action: 'Auto-locked account after 12 failures',  type: 'security', target: 'faisal@elite.ae',     ts: '2026-07-02T01:05:00Z', ip: 'auto'        },
   { id: 'aud_4', actor: 'Marcus Hale',   actorRole: 'superadmin', action: 'Granted trial extension',                type: 'account',  target: 'BrightPath Learning', ts: '2026-07-01T15:40:00Z', ip: '82.14.21.5'  },
-  { id: 'aud_5', actor: 'Lisa Chen',     actorRole: 'admin',      action: 'Bulk-exported 142 student records',      type: 'export',   target: 'Bright Minds',        ts: '2026-07-01T11:12:00Z', ip: '92.40.118.3' },
+  { id: 'aud_5', actor: 'Taqqy',         actorRole: 'admin',      action: 'Bulk-exported 142 student records',      type: 'export',   target: 'Bright Minds',        ts: '2026-07-01T11:12:00Z', ip: '92.40.118.3' },
   { id: 'aud_6', actor: 'Marcus Hale',   actorRole: 'superadmin', action: 'Edited pricing plan "Growth"',           type: 'plan',     target: 'Plans',               ts: '2026-06-30T09:30:00Z', ip: '82.14.21.5'  },
   { id: 'aud_7', actor: 'Daniel Mehta',  actorRole: 'admin',      action: 'Invited 3 new teachers',                 type: 'user',     target: 'Apex Learning',       ts: '2026-06-30T08:00:00Z', ip: '203.0.45.9'  },
   { id: 'aud_8', actor: 'Grace Okonkwo', actorRole: 'admin',      action: 'Enabled SSO (Google Workspace)',         type: 'security', target: 'Scholar Hub',         ts: '2026-06-29T14:22:00Z', ip: '88.97.12.40' },

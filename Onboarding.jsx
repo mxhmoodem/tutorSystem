@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  TutorOS — Onboarding (centre setup · invites · provisioning · claim)
+//  Klasio — Onboarding (centre setup · invites · provisioning · claim)
 // ══════════════════════════════════════════════════════════════
 //
 //  Extends the existing admin flows additively. Accounts live in the shared
@@ -295,13 +295,17 @@ const downloadText = (filename, text, type = 'text/csv') => {
   } catch (e) { /* ignore */ }
 };
 
+// The slip window is document.write()n into about:blank, so relative asset paths
+// won't resolve — the logo needs an absolute URL.
+const LOGO_ICON_URL = new URL('assets/logo-icon.png', window.location.href).href;
+
 const printSlips = (centre, slips) => {
   const w = window.open('', '_blank', 'width=860,height=920');
   if (!w) return;
   const esc = s => (s || '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
   const cards = slips.map(s => `
     <div class="slip">
-      <div class="head"><span class="logo">T</span><span class="centre">${esc(centre)}</span><span class="tag">Account claim slip</span></div>
+      <div class="head"><img class="logo" src="${LOGO_ICON_URL}" alt=""><span class="centre">${esc(centre)}</span><span class="tag">Account claim slip</span></div>
       <div class="name">${esc(s.name)}</div>
       <div class="muted">${esc(s.year)}${s.underThirteen ? ' · Parent/guardian completes setup (under 13)' : ''}</div>
       <div class="grid">
@@ -320,7 +324,7 @@ const printSlips = (centre, slips) => {
       body{margin:0;padding:24px;background:#fff;color:#111827}
       .slip{border:1.5px dashed #9CA3AF;border-radius:12px;padding:18px 20px;margin:0 0 16px;page-break-inside:avoid}
       .head{display:flex;align-items:center;gap:8px;margin-bottom:12px}
-      .logo{width:22px;height:22px;border-radius:5px;background:#0F9D7F;color:#fff;font-weight:800;display:inline-flex;align-items:center;justify-content:center;font-size:12px}
+      .logo{width:22px;height:22px;display:inline-block}
       .centre{font-weight:700;font-size:14px}.tag{margin-left:auto;font-size:11px;color:#6B7280;text-transform:uppercase;letter-spacing:.05em}
       .name{font-size:20px;font-weight:700}.muted{color:#6B7280;font-size:12px}.small{font-size:11px}
       .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0}
@@ -1173,7 +1177,7 @@ const ClassRosterPage = () => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  6 · People & invites tracker  (route: admin/people)
+//  6 · People & Invites tracker  (route: admin/people)
 // ═══════════════════════════════════════════════════════════════════════════════
 const ManagePersonModal = ({ open, onClose, teacher, store, subjects }) => {
   const [emp, setEmp] = React.useState('');
@@ -1275,7 +1279,7 @@ const PeopleInvitesPage = () => {
 
   return (
     <div style={{ padding: '32px' }}>
-      <PageHeader title="People & invites" subtitle="Track and chase the whole onboarding pipeline at a glance."
+      <PageHeader title="People & Invites" subtitle="Track and chase the whole onboarding pipeline at a glance."
         actions={[<Btn key="t" variant="secondary" small icon="user" onClick={() => adminNav('invite_teachers')}>Invite teachers</Btn>,
           <Btn key="s" variant="primary" small icon="upload" onClick={() => adminNav('students_import')}>Add students</Btn>]} />
 
@@ -1396,10 +1400,7 @@ const SetupShell = ({ icon = 'graduation', accent = DS.accent, title, subtitle, 
   <div style={{ minHeight: '100vh', background: DS.surface, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '52px 20px' }}>
     <div style={{ width: '100%', maxWidth: 460 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, marginBottom: 22 }}>
-        <div style={{ width: 30, height: 30, borderRadius: 7, background: DS.accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <span style={{ color: '#fff', fontWeight: 800, fontSize: 14 }}>K</span>
-        </div>
-        <span style={{ fontSize: 16, fontWeight: 700, color: DS.text, letterSpacing: '-0.3px' }}>Klasio</span>
+        <KlasioLogo height={30} />
       </div>
       <div style={{ background: DS.card, border: `1px solid ${DS.cardBorder}`, boxShadow: DS.cardShadowHi, borderRadius: 16, overflow: 'hidden' }}>
         <div style={{ padding: '24px 26px 18px', borderBottom: `1px solid ${DS.border}`, background: `linear-gradient(180deg, ${accent}0C, transparent)` }}>

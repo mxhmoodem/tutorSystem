@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  TutorOS — Communications module
+//  Klasio — Communications module
 //
 //  Two primitives, one shared module:
 //   • Announcements — broadcast feed (one→many), scoped platform/centre/class,
@@ -107,14 +107,19 @@ const COMMS_PRESETS = {
 };
 const DEFAULT_CONFIG = () => ({
   preset: 'standard', ...COMMS_PRESETS.standard.values,
-  dslLeadId: null, dslDeputyId: null, retention: '3y',
+  dslLeadId: null, dslDeputyIds: [], retention: '3y',
   wordlist: ['address', 'meet up', 'whatsapp', 'snapchat', 'instagram', 'phone number', 'kik', 'secret'],
   announceAuthors: 'admins', approvalWorkflow: false,
 });
 // Resolve the active centre's config (falls back to Standard defaults).
 function commsConfig(store, centreId) {
   const c = (store && store.config && store.config[centreId]) || null;
-  return c ? { ...DEFAULT_CONFIG(), ...c } : DEFAULT_CONFIG();
+  const merged = c ? { ...DEFAULT_CONFIG(), ...c } : DEFAULT_CONFIG();
+  // Normalise the legacy single-deputy field into the multi-deputy array so older
+  // persisted blobs (and any seed still using dslDeputyId) keep working.
+  if (!Array.isArray(merged.dslDeputyIds)) merged.dslDeputyIds = merged.dslDeputyId ? [merged.dslDeputyId] : [];
+  delete merged.dslDeputyId;
+  return merged;
 }
 
 // ─── Quiet hours (HH:MM window, handles overnight wrap; uses UTC for determinism) ──
@@ -308,7 +313,7 @@ const threadVisible = (t, ctx) => {
 // A 1:1 student↔staff DM is DATA the active safety preset governs (§6): when 1:1
 // student↔staff messaging is off (Locked-down preset → dmEnabled=false), those
 // threads must not appear at all — the preset gates the DATA, not merely the
-// composer. Gating this dynamically also "repairs" the seed (the Sarah↔Oliver
+// composer. Gating this dynamically also "repairs" the seed (the Heebz↔Oliver
 // 1:1) without deleting it: the thread simply reappears if the preset re-allows.
 const dmIsStudentStaff = (t) => {
   if (!t || t.type !== 'dm' || (t.participants || []).length !== 2) return false;
@@ -1779,13 +1784,13 @@ const SafeguardingPage = ({ comms }) => {
   const PANE_H = 'calc(100vh - 360px)';
 
   const dslLead = userById(config.dslLeadId);
-  const dslDeputy = userById(config.dslDeputyId);
+  const dslDeputies = (config.dslDeputyIds || []).map(userById).filter(Boolean);
 
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
         <Chip icon="shield" color={DS.accent} bg={DS.accentLight}>DSL oversight</Chip>
-        {dslLead && <span style={{ fontSize: 12.5, color: DS.muted }}>Lead: <b style={{ color: DS.sub }}>{dslLead.name}</b>{dslDeputy ? ` · Deputy: ${dslDeputy.name}` : ''}</span>}
+        {dslLead && <span style={{ fontSize: 12.5, color: DS.muted }}>Lead: <b style={{ color: DS.sub }}>{dslLead.name}</b>{dslDeputies.length ? ` · ${dslDeputies.length === 1 ? 'Deputy' : 'Deputies'}: ${dslDeputies.map(d => d.name).join(', ')}` : ''}</span>}
       </div>
 
       {/* Stats */}
@@ -1901,7 +1906,11 @@ const CommunicationsPage = ({ role, section, comms }) => {
   if (sec === 'inbox') sec = 'messages';
   // Owner console has no Messages surface — fold any stale link back to Announcements.
   if (sec === 'messages' && role === 'superadmin') sec = 'announcements';
-  if (sec === 'safeguarding' && role !== 'admin') sec = 'announcements';
+  // A designated DSL Lead or Deputy can reach Safeguarding even if they aren't an
+  // admin — that's the point of a Deputy DSL (act on flags when the Lead is away).
+  const cfg = comms.config || {};
+  const iAmDsl = cfg.dslLeadId === ctx.userId || (cfg.dslDeputyIds || []).includes(ctx.userId);
+  if (sec === 'safeguarding' && role !== 'admin' && !iAmDsl) sec = 'announcements';
   if (sec === 'settings' && role !== 'admin') sec = 'announcements';
   const isSuper = role === 'superadmin';
   const meta = SECTION_META[sec] || SECTION_META.announcements;
@@ -2197,11 +2206,27 @@ const NotificationBell = ({ comms, onNavigate }) => {
 };
 
 // ─── Exports ────────────────────────────────────────────────────────────────────────
+// Read-only map of staff name (lowercased) → DSL role ('lead' | 'deputy') for a
+// centre. Reads the persisted comms store so other modules (Team / Roles & access)
+// can badge the designated safeguarding team without owning comms state. Assignment
+// still lives solely in Communications → Comms settings.
+function commsDslRoleByName(centreId) {
+  const cfg = commsConfig(cmLoad(), centreId);
+  const out = {};
+  const lead = userById(cfg.dslLeadId);
+  if (lead) out[lead.name.toLowerCase()] = 'lead';
+  (cfg.dslDeputyIds || []).forEach(id => {
+    const u = userById(id);
+    if (u && !out[u.name.toLowerCase()]) out[u.name.toLowerCase()] = 'deputy';
+  });
+  return out;
+}
+
 Object.assign(window, {
   useComms, commsContext, CommunicationsPage, NotificationBell,
   commsUnreadCount, canAnnounce, canMessage, commsRecipients,
   // Used by the Settings → Comms tab (Settings.jsx) to render the preset cards.
-  COMMS_PRESETS, commsUserById: userById,
+  COMMS_PRESETS, commsUserById: userById, commsDslRoleByName,
 });
 
 })();

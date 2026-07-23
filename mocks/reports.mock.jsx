@@ -221,8 +221,8 @@ const _ATTACH = [
 ];
 
 const _SUBJECTS = [
-  { name: 'Mathematics',   color: '#43b190', teacher: 'Ms. Sarah Clarke', folder: 'f_math', predicted: 'A*' },
-  { name: 'Further Maths', color: '#7C3AED', teacher: 'Ms. Sarah Clarke', folder: 'f_fm',   predicted: 'A'  },
+  { name: 'Mathematics',   color: '#43b190', teacher: 'Ms. Heebz A', folder: 'f_math', predicted: 'A*' },
+  { name: 'Further Maths', color: '#7C3AED', teacher: 'Ms. Heebz A', folder: 'f_fm',   predicted: 'A'  },
   { name: 'Physics',       color: '#0891B2', teacher: 'Mr. David Park',   folder: 'f_phys', predicted: 'A'  },
   { name: 'Chemistry',     color: '#D97706', teacher: 'Mr. David Park',   folder: 'f_chem', predicted: 'A'  },
 ];

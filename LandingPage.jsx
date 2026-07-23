@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  TutorOS — Landing / Marketing Page
+//  Klasio — Landing / Marketing Page
 // ══════════════════════════════════════════════════════════════
 
 const LandingPage = ({ onEnterApp, onGetStarted, onLogin }) => {
@@ -21,7 +21,7 @@ const LandingPage = ({ onEnterApp, onGetStarted, onLogin }) => {
       items: [
         'One-click attendance marking',
         'Homework set, track & auto-mark',
-        'AI-powered written feedback drafts',
+        'Structured student reports & feedback',
         'Per-student progress scoring',
         'Class schedule management',
       ],
@@ -48,7 +48,7 @@ const LandingPage = ({ onEnterApp, onGetStarted, onLogin }) => {
       colorBg: '#F0FDFA',
       items: [
         'Real-time homework result visibility',
-        'AI feedback parents can actually read',
+        'Clear written reports parents can actually read',
         'Direct messaging with teachers',
         'Session reminders & scheduling',
         'Predicted grade summaries',
@@ -83,7 +83,7 @@ const LandingPage = ({ onEnterApp, onGetStarted, onLogin }) => {
       items: [
         'Up to 200 students',
         'Unlimited teacher accounts',
-        'AI feedback engine',
+        'Student reports & teacher feedback',
         'Full parent messaging',
         'Advanced analytics & reports',
         'Priority support',
@@ -120,7 +120,7 @@ const LandingPage = ({ onEnterApp, onGetStarted, onLogin }) => {
       role: 'Principal, BrightPath Tuition',
     },
     {
-      quote: 'The AI feedback drafts have been a game changer. My teachers review and send — it takes seconds, not hours.',
+      quote: 'The report builder has been a game changer. My teachers draft, review and publish — it takes minutes, not hours.',
       name: 'Sarah Lin',
       role: 'Lead Teacher, Nova Study Hub',
     },
@@ -142,8 +142,7 @@ const LandingPage = ({ onEnterApp, onGetStarted, onLogin }) => {
           height: 60, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-            <KlasioMark size={28} />
-            <span style={{ fontSize: 18, fontWeight: 800, letterSpacing: '-0.5px' }}>Klasio</span>
+            <KlasioLogo height={30} />
           </div>
           <nav style={{ display: 'flex', gap: 4 }}>
             {navLinks.map(l => (
@@ -179,7 +178,7 @@ const LandingPage = ({ onEnterApp, onGetStarted, onLogin }) => {
           marginBottom: 28, letterSpacing: '0.02em',
         }}>
           <Icon name="zap" size={12} />
-          Now with AI homework feedback
+          Now with student reports & teacher feedback
         </div>
 
         <h1 style={{
@@ -235,7 +234,7 @@ const LandingPage = ({ onEnterApp, onGetStarted, onLogin }) => {
               background: DS.surface, border: `1px solid ${DS.border}`,
               display: 'flex', alignItems: 'center', paddingLeft: 10,
               fontSize: 11, color: DS.faint,
-            }}>app.tutoross.io/admin</div>
+            }}>app.klasio.app/admin</div>
           </div>
           {/* mini dashboard mockup */}
           <div style={{ display: 'flex', height: 260, background: DS.surface }}>
@@ -245,8 +244,7 @@ const LandingPage = ({ onEnterApp, onGetStarted, onLogin }) => {
               padding: '16px 12px', display: 'flex', flexDirection: 'column', gap: 4,
             }}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
-                <KlasioMark size={20} />
-                <span style={{ fontSize: 12, fontWeight: 700 }}>Klasio</span>
+                <KlasioLogo height={18} />
               </div>
               {['Dashboard','Students','Classes','Reports'].map((l, i) => (
                 <div key={l} style={{

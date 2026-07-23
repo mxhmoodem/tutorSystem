@@ -70,7 +70,7 @@ const SEED_INVOICES = [
     id:'INV-0284', number:'INV-0284', familyId:'f_chen', studentIds:['s2'],
     classes:['A-Level Mathematics','Further Maths'], issuedDate:invSeedDate(-40),
     payments:[
-      { id:'INV-0284-p1', dueDate:invSeedDate(-25), amount:160, paidAt:invSeedDate(-24), paidBy:'Lisa Chen', method:'card' },
+      { id:'INV-0284-p1', dueDate:invSeedDate(-25), amount:160, paidAt:invSeedDate(-24), paidBy:'Taqqy', method:'card' },
       { id:'INV-0284-p2', dueDate:invSeedDate(5),   amount:160, paidAt:null, paidBy:null, method:null },
     ],
   },
@@ -78,14 +78,14 @@ const SEED_INVOICES = [
     id:'INV-0283', number:'INV-0283', familyId:'f_thompson', studentIds:['s1'],
     classes:['GCSE Mathematics'], issuedDate:invSeedDate(-45),
     payments:[
-      { id:'INV-0283-p1', dueDate:invSeedDate(-30), amount:180, paidAt:invSeedDate(-28), paidBy:'Lisa Chen', method:'bank' },
+      { id:'INV-0283-p1', dueDate:invSeedDate(-30), amount:180, paidAt:invSeedDate(-28), paidBy:'Taqqy', method:'bank' },
     ],
   },
   {
     id:'INV-0282', number:'INV-0282', familyId:'f_patel', studentIds:['s3'],
     classes:['GCSE Mathematics'], issuedDate:invSeedDate(-45),
     payments:[
-      { id:'INV-0282-p1', dueDate:invSeedDate(-30), amount:180, paidAt:invSeedDate(-29), paidBy:'Lisa Chen', method:'cash' },
+      { id:'INV-0282-p1', dueDate:invSeedDate(-30), amount:180, paidAt:invSeedDate(-29), paidBy:'Taqqy', method:'cash' },
     ],
   },
   {
@@ -107,15 +107,15 @@ const SEED_INVOICES = [
     id:'INV-0279', number:'INV-0279', familyId:'f_martinez', studentIds:['s7'],
     classes:['A-Level Mathematics','Further Maths'], issuedDate:invSeedDate(-35),
     payments:[
-      { id:'INV-0279-p1', dueDate:invSeedDate(-20), amount:160, paidAt:invSeedDate(-18), paidBy:'Lisa Chen', method:'bank' },
-      { id:'INV-0279-p2', dueDate:invSeedDate(-5),  amount:160, paidAt:invSeedDate(-4),  paidBy:'Lisa Chen', method:'card' },
+      { id:'INV-0279-p1', dueDate:invSeedDate(-20), amount:160, paidAt:invSeedDate(-18), paidBy:'Taqqy', method:'bank' },
+      { id:'INV-0279-p2', dueDate:invSeedDate(-5),  amount:160, paidAt:invSeedDate(-4),  paidBy:'Taqqy', method:'card' },
     ],
   },
   {
     id:'INV-0278', number:'INV-0278', familyId:'f_huang', studentIds:['s8'],
     classes:['GCSE Mathematics','A-Level Physics'], issuedDate:invSeedDate(-35),
     payments:[
-      { id:'INV-0278-p1', dueDate:invSeedDate(-20), amount:120, paidAt:invSeedDate(-19), paidBy:'Lisa Chen', method:'card' },
+      { id:'INV-0278-p1', dueDate:invSeedDate(-20), amount:120, paidAt:invSeedDate(-19), paidBy:'Taqqy', method:'card' },
       { id:'INV-0278-p2', dueDate:invSeedDate(10),  amount:120, paidAt:null, paidBy:null, method:null },
       { id:'INV-0278-p3', dueDate:invSeedDate(40),  amount:120, paidAt:null, paidBy:null, method:null },
     ],
@@ -139,7 +139,7 @@ const SEED_INVOICES = [
     id:'INV-0286', number:'INV-0286', familyId:'f_hughes', studentIds:['s14'],
     classes:['A-Level Physics','Further Maths'], issuedDate:invSeedDate(-60),
     payments:[
-      { id:'INV-0286-p1', dueDate:invSeedDate(-45), amount:150, paidAt:invSeedDate(-44), paidBy:'Lisa Chen', method:'bank' },
+      { id:'INV-0286-p1', dueDate:invSeedDate(-45), amount:150, paidAt:invSeedDate(-44), paidBy:'Taqqy', method:'bank' },
       { id:'INV-0286-p2', dueDate:invSeedDate(-15), amount:150, paidAt:null, paidBy:null, method:null },
     ],
   },
@@ -158,26 +158,26 @@ const SEED_INVOICE_REMINDERS = [
 // { id, invoiceId, paymentId, action, actor, at, meta } — every state change is
 // recorded here: issuance, marking/un-marking payments, reminders, reconciliation.
 const SEED_INVOICE_AUDIT = [
-  { id:'a1',  invoiceId:'INV-0284', paymentId:null,         action:'issued',      actor:'Lisa Chen', at:invSeedStamp(-40), meta:{} },
-  { id:'a2',  invoiceId:'INV-0284', paymentId:'INV-0284-p1',action:'marked_paid', actor:'Lisa Chen', at:invSeedStamp(-24), meta:{ method:'card', amount:160 } },
-  { id:'a3',  invoiceId:'INV-0283', paymentId:null,         action:'issued',      actor:'Lisa Chen', at:invSeedStamp(-45), meta:{} },
-  { id:'a4',  invoiceId:'INV-0283', paymentId:'INV-0283-p1',action:'marked_paid', actor:'Lisa Chen', at:invSeedStamp(-28), meta:{ method:'bank', amount:180 } },
-  { id:'a5',  invoiceId:'INV-0282', paymentId:null,         action:'issued',      actor:'Lisa Chen', at:invSeedStamp(-45), meta:{} },
-  { id:'a6',  invoiceId:'INV-0282', paymentId:'INV-0282-p1',action:'marked_paid', actor:'Lisa Chen', at:invSeedStamp(-29), meta:{ method:'cash', amount:180 } },
-  { id:'a7',  invoiceId:'INV-0281', paymentId:null,         action:'issued',      actor:'Lisa Chen', at:invSeedStamp(-50), meta:{} },
-  { id:'a8',  invoiceId:'INV-0281', paymentId:null,         action:'reminder_sent',actor:'Lisa Chen',at:invSeedStamp(-3),  meta:{ toEmail:'d.roberts@email.com' } },
-  { id:'a9',  invoiceId:'INV-0280', paymentId:null,         action:'issued',      actor:'Lisa Chen', at:invSeedStamp(-50), meta:{} },
-  { id:'a10', invoiceId:'INV-0279', paymentId:null,         action:'issued',      actor:'Lisa Chen', at:invSeedStamp(-35), meta:{} },
-  { id:'a11', invoiceId:'INV-0279', paymentId:'INV-0279-p1',action:'marked_paid', actor:'Lisa Chen', at:invSeedStamp(-18), meta:{ method:'bank', amount:160 } },
-  { id:'a12', invoiceId:'INV-0279', paymentId:'INV-0279-p2',action:'marked_paid', actor:'Lisa Chen', at:invSeedStamp(-4),  meta:{ method:'card', amount:160 } },
-  { id:'a13', invoiceId:'INV-0278', paymentId:null,         action:'issued',      actor:'Lisa Chen', at:invSeedStamp(-35), meta:{} },
-  { id:'a14', invoiceId:'INV-0278', paymentId:'INV-0278-p1',action:'marked_paid', actor:'Lisa Chen', at:invSeedStamp(-19), meta:{ method:'card', amount:120 } },
-  { id:'a15', invoiceId:'INV-0278', paymentId:null,         action:'reminder_sent',actor:'Lisa Chen',at:invSeedStamp(-12), meta:{ toEmail:'l.huang@email.com' } },
-  { id:'a16', invoiceId:'INV-0277', paymentId:null,         action:'issued',      actor:'Lisa Chen', at:invSeedStamp(-10), meta:{} },
-  { id:'a17', invoiceId:'INV-0285', paymentId:null,         action:'issued',      actor:'Lisa Chen', at:invSeedStamp(-5),  meta:{} },
-  { id:'a18', invoiceId:'INV-0286', paymentId:null,         action:'issued',      actor:'Lisa Chen', at:invSeedStamp(-60), meta:{} },
-  { id:'a19', invoiceId:'INV-0286', paymentId:'INV-0286-p1',action:'marked_paid', actor:'Lisa Chen', at:invSeedStamp(-44), meta:{ method:'bank', amount:150 } },
-  { id:'a20', invoiceId:'INV-0286', paymentId:null,         action:'reminder_sent',actor:'Lisa Chen', at:invSeedStamp(-6),  meta:{ toEmail:'l.hughes@email.com' } },
+  { id:'a1',  invoiceId:'INV-0284', paymentId:null,         action:'issued',      actor:'Taqqy', at:invSeedStamp(-40), meta:{} },
+  { id:'a2',  invoiceId:'INV-0284', paymentId:'INV-0284-p1',action:'marked_paid', actor:'Taqqy', at:invSeedStamp(-24), meta:{ method:'card', amount:160 } },
+  { id:'a3',  invoiceId:'INV-0283', paymentId:null,         action:'issued',      actor:'Taqqy', at:invSeedStamp(-45), meta:{} },
+  { id:'a4',  invoiceId:'INV-0283', paymentId:'INV-0283-p1',action:'marked_paid', actor:'Taqqy', at:invSeedStamp(-28), meta:{ method:'bank', amount:180 } },
+  { id:'a5',  invoiceId:'INV-0282', paymentId:null,         action:'issued',      actor:'Taqqy', at:invSeedStamp(-45), meta:{} },
+  { id:'a6',  invoiceId:'INV-0282', paymentId:'INV-0282-p1',action:'marked_paid', actor:'Taqqy', at:invSeedStamp(-29), meta:{ method:'cash', amount:180 } },
+  { id:'a7',  invoiceId:'INV-0281', paymentId:null,         action:'issued',      actor:'Taqqy', at:invSeedStamp(-50), meta:{} },
+  { id:'a8',  invoiceId:'INV-0281', paymentId:null,         action:'reminder_sent',actor:'Taqqy',at:invSeedStamp(-3),  meta:{ toEmail:'d.roberts@email.com' } },
+  { id:'a9',  invoiceId:'INV-0280', paymentId:null,         action:'issued',      actor:'Taqqy', at:invSeedStamp(-50), meta:{} },
+  { id:'a10', invoiceId:'INV-0279', paymentId:null,         action:'issued',      actor:'Taqqy', at:invSeedStamp(-35), meta:{} },
+  { id:'a11', invoiceId:'INV-0279', paymentId:'INV-0279-p1',action:'marked_paid', actor:'Taqqy', at:invSeedStamp(-18), meta:{ method:'bank', amount:160 } },
+  { id:'a12', invoiceId:'INV-0279', paymentId:'INV-0279-p2',action:'marked_paid', actor:'Taqqy', at:invSeedStamp(-4),  meta:{ method:'card', amount:160 } },
+  { id:'a13', invoiceId:'INV-0278', paymentId:null,         action:'issued',      actor:'Taqqy', at:invSeedStamp(-35), meta:{} },
+  { id:'a14', invoiceId:'INV-0278', paymentId:'INV-0278-p1',action:'marked_paid', actor:'Taqqy', at:invSeedStamp(-19), meta:{ method:'card', amount:120 } },
+  { id:'a15', invoiceId:'INV-0278', paymentId:null,         action:'reminder_sent',actor:'Taqqy',at:invSeedStamp(-12), meta:{ toEmail:'l.huang@email.com' } },
+  { id:'a16', invoiceId:'INV-0277', paymentId:null,         action:'issued',      actor:'Taqqy', at:invSeedStamp(-10), meta:{} },
+  { id:'a17', invoiceId:'INV-0285', paymentId:null,         action:'issued',      actor:'Taqqy', at:invSeedStamp(-5),  meta:{} },
+  { id:'a18', invoiceId:'INV-0286', paymentId:null,         action:'issued',      actor:'Taqqy', at:invSeedStamp(-60), meta:{} },
+  { id:'a19', invoiceId:'INV-0286', paymentId:'INV-0286-p1',action:'marked_paid', actor:'Taqqy', at:invSeedStamp(-44), meta:{ method:'bank', amount:150 } },
+  { id:'a20', invoiceId:'INV-0286', paymentId:null,         action:'reminder_sent',actor:'Taqqy', at:invSeedStamp(-6),  meta:{ toEmail:'l.hughes@email.com' } },
 ];
 
 Object.assign(window, {

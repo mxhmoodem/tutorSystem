@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  TutorOS — Shared Design System & Components
+//  Klasio — Shared Design System & Components
 // ══════════════════════════════════════════════════════════════
 
 const DS = {
@@ -125,25 +125,20 @@ const Icon = ({ name, size = 16, color = 'currentColor', strokeWidth = 1.5 }) =>
 );
 
 // ─── Klasio brand mark ─────────────────────────────────────────────────────────
-// The product logo glyph: an open ring (a near-complete circle with a small gap
-// at the top), rendered in the live accent so it follows centre branding. Pairs
-// with the "Klasio" wordmark in the sidebar header.
-const KlasioMark = ({ size = 28, color }) => {
-  const c = color || DS.accent;
-  const r = 8.4, cx = 12, cy = 12;
-  const circ = 2 * Math.PI * r;
-  const gap = circ * 0.17;              // ~17% opening, rotated to the top
-  return React.createElement('svg', {
-    width: size, height: size, viewBox: '0 0 24 24', fill: 'none',
-    style: { flexShrink: 0, display: 'block' },
-  },
-    React.createElement('circle', {
-      cx, cy, r, fill: 'none', stroke: c, strokeWidth: 3.4, strokeLinecap: 'round',
-      strokeDasharray: `${(circ - gap).toFixed(2)} ${gap.toFixed(2)}`,
-      transform: `rotate(-100 ${cx} ${cy})`,
-    })
-  );
-};
+// The square icon mark on its own — for tight spots (collapsed sidebar, favicon-
+// sized chrome) and anywhere the wordmark is supplied separately (e.g. a dark
+// footer, where the lockup's navy wordmark would disappear).
+const KlasioMark = ({ size = 28 }) => (
+  <img src="assets/logo-icon.png" alt="Klasio" width={size} height={size}
+       style={{ flexShrink: 0, display: 'block' }} />
+);
+
+// The full horizontal lockup (icon + "klasio" wordmark + tagline). Sized by
+// height; width follows the artwork's 879×281 ratio.
+const KlasioLogo = ({ height = 30 }) => (
+  <img src="assets/logo.png" alt="Klasio" height={height}
+       style={{ height, width: 'auto', flexShrink: 0, display: 'block' }} />
+);
 
 // ─── Badge ─────────────────────────────────────────────────────────────────────
 const Badge = ({ variant = 'default', children, size = 'sm' }) => {
@@ -425,7 +420,7 @@ const NAV_CONFIG = {
         { id: 'team',              label: 'Roles & access', icon: 'shield' },
         { id: 'timesheets:review', label: 'Timesheets', icon: 'clock' },
       ] },
-      { id: 'people',    icon: 'send',     label: 'People & invites', section: 'People' },
+      { id: 'people',    icon: 'send',     label: 'People & Invites', section: 'People' },
       { id: 'classes',   icon: 'book',     label: 'Classes', section: 'Academic', sub: [
         { id: 'classes:classes',  label: 'Classes',  icon: 'grid' },
         { id: 'classes:subjects', label: 'Subjects', icon: 'book' },
@@ -840,10 +835,7 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
         marginBottom: 8,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-start', gap: 9, padding: collapsed ? 0 : '0 4px' }}>
-          <KlasioMark size={28} />
-          {!collapsed && (
-            <span style={{ fontSize: 19, fontWeight: 800, color: DS.text, letterSpacing: '-0.6px' }}>Klasio</span>
-          )}
+          {collapsed ? <KlasioMark size={28} /> : <KlasioLogo height={30} />}
         </div>
       </div>
 

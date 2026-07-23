@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  TutorOS — Team (Roles & access)
+//  Klasio — Team (Roles & access)
 //
 //  Admin surface to view staff and grant/revoke staff roles. Net-new
 //  functionality: the Teachers page is a teaching roster (register/attendance)
@@ -168,6 +168,12 @@ const AdminTeamPage = () => {
   const teacherCount = members.filter(m => m.roles.includes('teacher')).length;
   const transferTargets = admins.filter(m => !m.isOwner);
 
+  // Read-only DSL badge: the Designated Safeguarding Lead / Deputies are assigned in
+  // Communications → Comms settings (safeguarding is its own surface). We only mirror
+  // the designation here, matched by name, so Roles & access stays a complete view of
+  // what each person holds. Changing it happens in Communications, not here.
+  const dslMap = window.commsDslRoleByName ? window.commsDslRoleByName(centreId) : {};
+
   // ── Mutations (guardrails first, then persist + audit) ──────────────────────
   const doGrant = (target, role) => {
     if (!iCanManage) return flashMsg('err', 'You need Admin at this centre to manage roles.');
@@ -270,6 +276,7 @@ const AdminTeamPage = () => {
                   <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                     <span style={{ fontSize: 13.5, fontWeight: 600, color: DS.text }}>{m.name}</span>
                     {m.isOwner && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10.5, fontWeight: 700, color: DS.accent, background: DS.accentLight, border: `1px solid ${DS.accentBorder}`, borderRadius: 20, padding: '1px 7px' }}><Icon name="star" size={10} color={DS.accent} />Owner</span>}
+                    {dslMap[m.name.toLowerCase()] && <span title="Designated Safeguarding — assign in Communications → Comms settings" style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10.5, fontWeight: 700, color: DS.info, background: DS.infoBg, border: `1px solid ${DS.info}44`, borderRadius: 20, padding: '1px 7px' }}><Icon name="shield" size={10} color={DS.info} />{dslMap[m.name.toLowerCase()] === 'lead' ? 'DSL Lead' : 'Deputy DSL'}</span>}
                     {m.isMe && <span style={{ fontSize: 10.5, fontWeight: 600, color: DS.muted, background: DS.surface, border: `1px solid ${DS.border}`, borderRadius: 20, padding: '1px 7px' }}>You</span>}
                   </div>
                   {m.status === 'invited' && <div style={{ fontSize: 11, color: DS.faint, marginTop: 1 }}>Invited · not yet active</div>}
