@@ -321,10 +321,65 @@ const ClassBannerCustomiser = ({ value, onChange, color }) => {
   );
 };
 
+// ── Shared class-detail shell (D1) ───────────────────────────────────────────────
+// The ONE presentational chrome for a class workspace: back link, gradient banner
+// (dimension chips · name · meta line), an optional top-right slot and an optional
+// cover/notice strip, then the underline tab bar. Teacher and admin class pages both
+// render through this — they differ only in the tab SET, the banner slot and the tab
+// CONTENT they pass as children, never in layout or styling. Reused by AdminPages.jsx
+// (loaded before this file, resolves it via window at render time) and StudentDashboard.
+const ClassDetailShell = ({
+  onBack, backLabel = 'Back', color = DS.accent, bannerTheme = 'default',
+  chips = [], title, subtitle, bannerRight = null, preBanner = null,
+  tabs, activeTab, onTab, children, maxWidth = 1180,
+}) => {
+  const grad = classBannerGradient(bannerTheme, color);
+  return (
+    <div style={{ padding:'26px 32px', maxWidth, margin:'0 auto' }}>
+      {onBack && (
+        <button onClick={onBack} style={{ display:'inline-flex', alignItems:'center', gap:6, background:'none', border:'none', cursor:'pointer', color:DS.muted, fontSize:13, fontWeight:500, padding:0, marginBottom:14 }}>
+          <Icon name="chevron_l" size={15} color={DS.muted} /> {backLabel}
+        </button>
+      )}
+
+      {preBanner}
+
+      {/* Banner — outer wrapper is NOT clipped so a top-right popover can overflow;
+          the inner card clips its gradient + decorative rings to the rounded corners. */}
+      <div style={{ position:'relative', marginBottom:20 }}>
+        <div style={{ position:'relative', borderRadius:16, overflow:'hidden',
+          background:`linear-gradient(120deg, ${grad.from}, ${grad.to})`, minHeight:186,
+          display:'flex', flexDirection:'column', justifyContent:'flex-end', padding:'26px 30px', boxShadow:DS.cardShadow }}>
+          <svg width="320" height="320" viewBox="0 0 320 320" style={{ position:'absolute', top:-40, right:-20, opacity:0.16, pointerEvents:'none' }}>
+            <circle cx="220" cy="90" r="120" fill="none" stroke="#fff" strokeWidth="18" />
+            <circle cx="270" cy="150" r="70" fill="none" stroke="#fff" strokeWidth="14" />
+            <circle cx="150" cy="60" r="10" fill="#fff" />
+          </svg>
+          <div style={{ position:'relative', zIndex:2 }}>
+            <div style={{ display:'flex', gap:7, marginBottom:10, flexWrap:'wrap' }}>
+              {chips.filter(Boolean).map((t, i) => (
+                <span key={i} style={{ fontSize:11.5, fontWeight:600, color:'#fff', background:'rgba(255,255,255,0.22)', padding:'3px 10px', borderRadius:999 }}>{t}</span>
+              ))}
+            </div>
+            <div style={{ fontSize:30, fontWeight:800, color:'#fff', letterSpacing:'-0.6px', lineHeight:1.1 }}>{title}</div>
+            {subtitle && <div style={{ fontSize:14, color:'rgba(255,255,255,0.9)', marginTop:6 }}>{subtitle}</div>}
+          </div>
+        </div>
+        {bannerRight && (
+          <div style={{ position:'absolute', top:18, right:18, zIndex:5 }}>{bannerRight}</div>
+        )}
+      </div>
+
+      <ClassTabBar active={activeTab} onChange={onTab} color={color} tabs={tabs} />
+      {children}
+    </div>
+  );
+};
+
 // Share the class banner + tab chrome with the admin class detail (AdminPages.jsx,
 // loaded before this file — it resolves these via window at render time, same as
 // the AdminAttendancePage pattern).
-Object.assign(window, { ClassTabBar, ClassBannerCustomiser, classBannerGradient, classLS });
+Object.assign(window, { ClassTabBar, ClassBannerCustomiser, classBannerGradient, classLS, ClassDetailShell, classJoinCode });
 
 // ── Stream tab — announcement feed + class code / upcoming / about rail ──────────
 const ClassStreamTab = ({ cls, color, subject, level, stream, onPost, onDelete, classHw, principalName, code }) => {
@@ -860,7 +915,6 @@ const TeacherClassDetailPage = () => {
   const level   = /A-?level/i.test(cls.name) ? 'A-Level' : /GCSE/i.test(cls.name) ? 'GCSE' : null;
   const subject = cls.name.replace(/^(GCSE|A-?Level)\s+/i, '');
   const code    = classJoinCode(cls.id, cls.group);
-  const grad    = classBannerGradient(bannerTheme, color);
 
   // Homework set for this group — match homeworkFull rows by year number + group letter
   // ('Year 10 – Group A' ↔ 'Yr 10 Group A').
@@ -884,45 +938,14 @@ const TeacherClassDetailPage = () => {
   const deleteAnnouncement = (pid) => { const next = stream.filter(p => p.id !== pid); setStream(next); classLS.setStream(id, next); };
 
   return (
-    <div style={{ padding:'26px 32px', maxWidth:1180, margin:'0 auto' }}>
-      {/* Back link */}
-      <button onClick={backToClasses} style={{ display:'inline-flex', alignItems:'center', gap:6, background:'none', border:'none', cursor:'pointer', color:DS.muted, fontSize:13, fontWeight:500, padding:0, marginBottom:14 }}>
-        <Icon name="chevron_l" size={15} color={DS.muted} /> My Classes
-      </button>
-
-      {/* Banner — outer wrapper is NOT clipped so the Customise popover can overflow;
-          the inner card clips its gradient + decorative rings to the rounded corners. */}
-      <div style={{ position:'relative', marginBottom:20 }}>
-        <div style={{ position:'relative', borderRadius:16, overflow:'hidden',
-          background:`linear-gradient(120deg, ${grad.from}, ${grad.to})`, minHeight:186,
-          display:'flex', flexDirection:'column', justifyContent:'flex-end', padding:'26px 30px', boxShadow:DS.cardShadow }}>
-          {/* Decorative rings */}
-          <svg width="320" height="320" viewBox="0 0 320 320" style={{ position:'absolute', top:-40, right:-20, opacity:0.16, pointerEvents:'none' }}>
-            <circle cx="220" cy="90" r="120" fill="none" stroke="#fff" strokeWidth="18" />
-            <circle cx="270" cy="150" r="70" fill="none" stroke="#fff" strokeWidth="14" />
-            <circle cx="150" cy="60" r="10" fill="#fff" />
-          </svg>
-          {/* Title block */}
-          <div style={{ position:'relative', zIndex:2 }}>
-            <div style={{ display:'flex', gap:7, marginBottom:10, flexWrap:'wrap' }}>
-              {[subject, level, `${cls.students} students`].filter(Boolean).map((t, i) => (
-                <span key={i} style={{ fontSize:11.5, fontWeight:600, color:'#fff', background:'rgba(255,255,255,0.22)', padding:'3px 10px', borderRadius:999 }}>{t}</span>
-              ))}
-            </div>
-            <div style={{ fontSize:30, fontWeight:800, color:'#fff', letterSpacing:'-0.6px', lineHeight:1.1 }}>{cls.name}</div>
-            <div style={{ fontSize:14, color:'rgba(255,255,255,0.9)', marginTop:6 }}>{cls.group} · {cls.day} {cls.time} · {cls.room}</div>
-          </div>
-        </div>
-        {/* Customise — in the non-clipped wrapper so its popover isn't cut off */}
-        <div style={{ position:'absolute', top:18, right:18, zIndex:5 }}>
-          <ClassBannerCustomiser value={bannerTheme} onChange={setBannerTheme} color={color} />
-        </div>
-      </div>
-
-      {/* Tabs */}
-      <ClassTabBar active={activeTab} onChange={setActiveTab} color={color} />
-
-      {/* Tab content */}
+    <ClassDetailShell
+      onBack={backToClasses} backLabel="My Classes"
+      color={color} bannerTheme={bannerTheme}
+      chips={[subject, level, `${cls.students} students`]}
+      title={cls.name} subtitle={`${cls.group} · ${cls.day} ${cls.time} · ${cls.room}`}
+      bannerRight={<ClassBannerCustomiser value={bannerTheme} onChange={setBannerTheme} color={color} />}
+      tabs={CLASS_TABS} activeTab={activeTab} onTab={setActiveTab}
+    >
       {activeTab === 'stream'     && <ClassStreamTab cls={cls} color={color} subject={subject} level={level} stream={stream} onPost={postAnnouncement} onDelete={deleteAnnouncement} classHw={classHw} principalName={principalName} code={code} />}
       {activeTab === 'students'   && <ClassStudentsTab cls={cls} color={color} goProfile={goProfile} />}
       {activeTab === 'homework'   && <ClassHomeworkTab cls={cls} color={color} classHw={classHw} />}
@@ -931,7 +954,7 @@ const TeacherClassDetailPage = () => {
       {activeTab === 'progress'   && <ClassProgressTab cls={cls} color={color} />}
       {activeTab === 'analytics'  && <ClassAnalyticsTab cls={cls} color={color} classHw={classHw} />}
       {activeTab === 'settings'   && <ClassSettingsTab cls={cls} color={color} subject={subject} level={level} bannerTheme={bannerTheme} setBannerTheme={setBannerTheme} />}
-    </div>
+    </ClassDetailShell>
   );
 };
 

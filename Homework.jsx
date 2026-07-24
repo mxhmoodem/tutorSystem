@@ -2275,6 +2275,11 @@ const TeacherList = ({
   const [newFolderName, setNewFolderName] = React.useState('');
   const [renamingId, setRenamingId] = React.useState(null);
   const [renameValue, setRenameValue] = React.useState('');
+  // Cards vs list for the assignment grid — remembered across visits.
+  const [viewMode, setViewMode] = React.useState(() => {
+    try { return localStorage.getItem('klasio.homework.view') === 'list' ? 'list' : 'grid'; } catch (e) { return 'grid'; }
+  });
+  const setView = (v) => { setViewMode(v); try { localStorage.setItem('klasio.homework.view', v); } catch (e) {} };
 
   // Counts (computed across all assignments — independent of folder/tab filters)
   const counts = {
@@ -2369,39 +2374,47 @@ const TeacherList = ({
         </div>
       </div>
 
-      {/* Stats */}
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
-        {[
-          { label: 'Active', value: counts.active, icon: 'flame', tone: 'brand' },
-          { label: 'Awaiting marking', value: counts.marking, icon: 'clock', tone: 'amber' },
-          { label: 'Drafts', value: counts.draft, icon: 'pencil', tone: 'default' },
-          { label: 'Submission rate', value: `${submissionRate}%`, icon: 'sparkle', tone: 'success' },
-        ].map(s => {
-          const tones = {
-            brand: { bg: C.brandSoft, fg: C.brand },
-            amber: { bg: C.amberBg, fg: C.amber },
-            success: { bg: C.successBg, fg: C.success },
-            default: { bg: C.surface, fg: C.muted },
-          };
-          const t = tones[s.tone];
-          return (
-            <Card key={s.label} style={{ padding: 18 }}>
-              <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom: 10 }}>
-                <span style={{ fontSize: 12, fontWeight: 600, color: C.muted, textTransform:'uppercase', letterSpacing:'.05em' }}>{s.label}</span>
-                <span style={{ width: 32, height: 32, borderRadius: 8, background: t.bg, color: t.fg, display:'flex', alignItems:'center', justifyContent:'center' }}>
-                  <Ico name={s.icon} size={15} color={t.fg} />
-                </span>
-              </div>
-              <div style={{ fontFamily: F.head, fontSize: 26, fontWeight: 700, color: C.text }}>{s.value}</div>
-            </Card>
-          );
-        })}
-      </div>
-
-      {/* Two-column: folder rail + main */}
+      {/* Two-column: left rail (overview + folders) + main */}
       <div style={{ display:'grid', gridTemplateColumns: '220px 1fr', gap: 20, alignItems:'flex-start' }}>
+        {/* Left rail — overview stats then folders, stacked in one sticky column */}
+        <div style={{ display:'flex', flexDirection:'column', gap: 16, position:'sticky', top: 20 }}>
+
+        {/* Overview stats */}
+        <Card style={{ padding: 12 }}>
+          <div style={{
+            padding:'4px 6px 8px', borderBottom:`1px solid ${C.border}`, marginBottom: 8,
+          }}>
+            <span style={{ fontFamily: F.head, fontSize: 12, fontWeight: 700, color: C.muted, textTransform:'uppercase', letterSpacing:'.06em' }}>Overview</span>
+          </div>
+          <div style={{ display:'flex', flexDirection:'column', gap: 2 }}>
+            {[
+              { label: 'Active', value: counts.active, icon: 'flame', tone: 'brand' },
+              { label: 'Awaiting marking', value: counts.marking, icon: 'clock', tone: 'amber' },
+              { label: 'Drafts', value: counts.draft, icon: 'pencil', tone: 'default' },
+              { label: 'Submission rate', value: `${submissionRate}%`, icon: 'sparkle', tone: 'success' },
+            ].map(s => {
+              const tones = {
+                brand: { bg: C.brandSoft, fg: C.brand },
+                amber: { bg: C.amberBg, fg: C.amber },
+                success: { bg: C.successBg, fg: C.success },
+                default: { bg: C.surface, fg: C.muted },
+              };
+              const t = tones[s.tone];
+              return (
+                <div key={s.label} style={{ display:'flex', alignItems:'center', gap: 10, padding:'7px 8px', borderRadius: 8 }}>
+                  <span style={{ width: 30, height: 30, borderRadius: 8, flexShrink: 0, background: t.bg, color: t.fg, display:'flex', alignItems:'center', justifyContent:'center' }}>
+                    <Ico name={s.icon} size={14} color={t.fg} />
+                  </span>
+                  <span style={{ flex: 1, fontFamily: F.body, fontSize: 12.5, fontWeight: 500, color: C.sub, minWidth: 0 }}>{s.label}</span>
+                  <span style={{ fontFamily: F.head, fontSize: 17, fontWeight: 700, color: C.text }}>{s.value}</span>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+
         {/* Folder rail */}
-        <Card style={{ padding: 12, position:'sticky', top: 20 }}>
+        <Card style={{ padding: 12 }}>
           <div style={{
             display:'flex', alignItems:'center', justifyContent:'space-between',
             padding:'4px 6px 8px', borderBottom:`1px solid ${C.border}`, marginBottom: 8,
@@ -2475,6 +2488,7 @@ const TeacherList = ({
             )}
           </div>
         </Card>
+        </div>
 
         {/* Main panel */}
         <div>
@@ -2487,37 +2501,40 @@ const TeacherList = ({
               </div>
             </div>
 
-            <div style={{ display:'flex', gap: 4, padding: 4, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10 }}>
-              {[
-                ['all', 'All', inFolder.length],
-                ['active', 'Active', inFolder.filter(a => a.status === 'active').length],
-                ['marking', 'Marking', inFolder.filter(a => a.status === 'active' && Object.values(a.submissions).some(s => s.status === 'submitted')).length],
-                ['draft', 'Draft', inFolder.filter(a => a.status === 'draft').length],
-                ['closed', 'Closed', inFolder.filter(a => a.status === 'closed').length],
-              ].map(([id, lab, n]) => {
-                const on = tab === id;
-                return (
-                  <button key={id} onClick={() => setTab(id)} style={{
-                    padding: '7px 14px', border: 'none', cursor:'pointer',
-                    borderRadius: 7, background: on ? C.bg : 'transparent',
-                    boxShadow: on ? C.shadow : 'none',
-                    fontFamily: F.body, fontSize: 13, fontWeight: on ? 600 : 500,
-                    color: on ? C.text : C.muted, transition: T,
-                    display:'inline-flex', alignItems:'center', gap: 6,
-                  }}>
-                    {lab}
-                    <span style={{
-                      fontSize: 11, padding: '1px 7px', borderRadius: 999,
-                      background: on ? C.brandSoft : C.surface2,
-                      color: on ? C.brand : C.muted,
-                    }}>{n}</span>
-                  </button>
-                );
-              })}
+            <div style={{ display:'flex', alignItems:'center', gap: 10, flexWrap:'wrap' }}>
+              <div style={{ display:'flex', gap: 4, padding: 4, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10 }}>
+                {[
+                  ['all', 'All', inFolder.length],
+                  ['active', 'Active', inFolder.filter(a => a.status === 'active').length],
+                  ['marking', 'Marking', inFolder.filter(a => a.status === 'active' && Object.values(a.submissions).some(s => s.status === 'submitted')).length],
+                  ['draft', 'Draft', inFolder.filter(a => a.status === 'draft').length],
+                  ['closed', 'Closed', inFolder.filter(a => a.status === 'closed').length],
+                ].map(([id, lab, n]) => {
+                  const on = tab === id;
+                  return (
+                    <button key={id} onClick={() => setTab(id)} style={{
+                      padding: '7px 14px', border: 'none', cursor:'pointer',
+                      borderRadius: 7, background: on ? C.bg : 'transparent',
+                      boxShadow: on ? C.shadow : 'none',
+                      fontFamily: F.body, fontSize: 13, fontWeight: on ? 600 : 500,
+                      color: on ? C.text : C.muted, transition: T,
+                      display:'inline-flex', alignItems:'center', gap: 6,
+                    }}>
+                      {lab}
+                      <span style={{
+                        fontSize: 11, padding: '1px 7px', borderRadius: 999,
+                        background: on ? C.brandSoft : C.surface2,
+                        color: on ? C.brand : C.muted,
+                      }}>{n}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <HwViewToggle value={viewMode} onChange={setView} />
             </div>
           </div>
 
-          {/* Cards */}
+          {/* Assignments — cards or list */}
           {filtered.length === 0 ? (
             <Card style={{ padding: '60px 20px', textAlign:'center' }}>
               <div style={{ fontFamily: F.head, fontSize: 16, fontWeight: 600, color: C.text, marginBottom: 6 }}>
@@ -2530,6 +2547,12 @@ const TeacherList = ({
                 onClick={() => onNew(folderId !== 'all' && folderId !== 'unfiled' ? folderId : null)}>
                 New homework
               </Btn>
+            </Card>
+          ) : viewMode === 'list' ? (
+            <Card style={{ overflow:'hidden' }}>
+              {filtered.map((a, i) => (
+                <TeacherListRow key={a.id} a={a} folders={folders} onOpen={onOpen} last={i === filtered.length - 1} />
+              ))}
             </Card>
           ) : (
             <div style={{ display:'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
@@ -2617,7 +2640,10 @@ const FolderRailItem = ({
   );
 };
 
-const TeacherListCard = ({ a, folders = [], onOpen }) => {
+// Shared derivation for an assignment card/row — a single status indicator, the
+// submission tallies and the due-date text. Used by both TeacherListCard (grid)
+// and TeacherListRow (list) so the two presentations can never drift.
+const hwRowModel = (a, folders = []) => {
   const subc = subColor(a.subject);
   const submitted = Object.values(a.submissions).length;
   const graded = Object.values(a.submissions).filter(isGraded).length;
@@ -2628,7 +2654,6 @@ const TeacherListCard = ({ a, folders = [], onOpen }) => {
   const folder = a.folderId ? folders.find(f => f.id === a.folderId) : null;
   const overdue = a.status === 'active' && a.dueAt && dDays < 0;
 
-  // A single status indicator — the most relevant state, not a row of tags.
   let status;
   if (a.status === 'draft')                       status = { label: 'Draft',            tone: 'default', dot: C.faint };
   else if (a.status === 'closed')                 status = { label: 'Closed',           tone: 'default', dot: C.faint };
@@ -2641,6 +2666,89 @@ const TeacherListCard = ({ a, folders = [], onOpen }) => {
       : a.status === 'active' && dDays >= 0 ? `Due in ${dDays}d · ${fmtDate(a.dueAt)}`
       : `Due ${fmtDate(a.dueAt)}`)
     : 'No due date';
+
+  return { subc, submitted, graded, awaitingMark, total, pct, dDays, folder, overdue, status, dueText };
+};
+
+// Cards vs list switch — matches the tab-pill container so it sits beside the tabs.
+const HwViewToggle = ({ value, onChange }) => (
+  <div style={{ display:'flex', gap: 4, padding: 4, background: C.surface, border:`1px solid ${C.border}`, borderRadius: 10 }}>
+    {[{ id:'grid', icon:'grid', title:'Card view' }, { id:'list', icon:'list', title:'List view' }].map(o => {
+      const on = value === o.id;
+      return (
+        <button key={o.id} onClick={() => onChange(o.id)} title={o.title} aria-label={o.title} aria-pressed={on}
+          style={{
+            width: 34, height: 30, borderRadius: 7, border:'none', cursor:'pointer',
+            background: on ? C.bg : 'transparent', boxShadow: on ? C.shadow : 'none',
+            color: on ? C.brand : C.muted, display:'flex', alignItems:'center', justifyContent:'center', transition: T,
+          }}>
+          <Ico name={o.icon} size={15} color={on ? C.brand : C.muted} />
+        </button>
+      );
+    })}
+  </div>
+);
+
+// Row presentation of an assignment (the list view — see the view toggle).
+const TeacherListRow = ({ a, folders = [], onOpen, last }) => {
+  const m = hwRowModel(a, folders);
+  const [hov, setHov] = React.useState(false);
+  return (
+    <div
+      onClick={() => onOpen(a.id)}
+      onMouseEnter={() => setHov(true)}
+      onMouseLeave={() => setHov(false)}
+      style={{
+        display:'flex', alignItems:'center', gap: 14, padding: '13px 18px', cursor:'pointer',
+        borderBottom: last ? 'none' : `1px solid ${C.border}`,
+        background: hov ? C.surface : 'transparent', transition: T,
+      }}>
+      <span style={{
+        width: 38, height: 38, borderRadius: 9, flexShrink: 0,
+        background: m.subc.soft, color: m.subc.color,
+        display:'flex', alignItems:'center', justifyContent:'center',
+      }}>
+        <Ico name="book" size={17} color={m.subc.color} />
+      </span>
+
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontFamily: F.head, fontSize: 14, fontWeight: 700, color: C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{a.title}</div>
+        <div style={{ display:'flex', alignItems:'center', gap: 7, marginTop: 3, fontFamily: F.body, fontSize: 12, color: C.muted, flexWrap:'wrap' }}>
+          <span style={{ color: m.subc.color, fontWeight: 600 }}>{a.subject}</span>
+          {a.classLabel && <><span style={{ color: C.border }}>•</span><span>{a.classLabel}</span></>}
+          {m.folder && <><span style={{ color: C.border }}>•</span><span>{m.folder.name}</span></>}
+        </div>
+      </div>
+
+      {/* Facts */}
+      <div style={{ display:'flex', alignItems:'center', gap: 16, flexShrink: 0, fontFamily: F.body, fontSize: 12, color: C.sub }}>
+        <span style={{ display:'inline-flex', alignItems:'center', gap: 5 }}><Ico name="list" size={13} color={C.faint} />{a.questions.length}</span>
+        <span style={{ display:'inline-flex', alignItems:'center', gap: 5 }}><Ico name="target" size={13} color={C.faint} />{totalPoints(a)} pts</span>
+        <span style={{ display:'inline-flex', alignItems:'center', gap: 5, color: m.overdue ? C.danger : C.sub }}><Ico name="calendar" size={13} color={m.overdue ? C.danger : C.faint} />{m.dueText}</span>
+      </div>
+
+      {/* Submissions tally */}
+      <div style={{ width: 110, flexShrink: 0, textAlign:'right', fontFamily: F.body, fontSize: 12, color: C.muted }}>
+        <span style={{ fontWeight: 700, color: C.text }}>{m.submitted}</span> / {m.total}
+        {m.graded > 0 && <span style={{ color: C.success, fontWeight: 600, marginLeft: 6 }}>{m.graded} graded</span>}
+      </div>
+
+      {/* Status */}
+      <span style={{
+        flexShrink: 0, display:'inline-flex', alignItems:'center', gap: 6,
+        padding:'4px 10px', borderRadius: 999,
+        background: C.surface, border:`1px solid ${C.border}`,
+        fontFamily: F.body, fontSize: 11.5, fontWeight: 600, color: C.sub, whiteSpace:'nowrap',
+      }}>
+        <span style={{ width: 6, height: 6, borderRadius: '50%', background: m.status.dot }} />
+        {m.status.label}
+      </span>
+    </div>
+  );
+};
+
+const TeacherListCard = ({ a, folders = [], onOpen }) => {
+  const { subc, submitted, graded, total, pct, folder, overdue, status, dueText } = hwRowModel(a, folders);
 
   return (
     <Card hoverable onClick={() => onOpen(a.id)} style={{ overflow:'hidden' }}>

@@ -125,7 +125,8 @@ const build = () => {
     const att = Math.max(50, Math.min(100, Math.round(student.attendance != null ? student.attendance : 92)));
     const sessionsTotal = 50;
     return {
-      classId: c.id, subject, subjectColor: colorFor(subject),
+      classId: c.id, name: c.name || subject, group: c.group || '', day: c.day || '', time: c.time || '',
+      subject, subjectColor: colorFor(subject),
       teacherId: null, teacher: c.teacher || 'Centre staff', room: c.room || '—',
       yearGroup, qualification: level,
       predictedGrade: gradeFor(predictedPct, level),
@@ -136,6 +137,9 @@ const build = () => {
   });
 
   const initials = ((student.firstName || '?')[0] || '?') + ((student.lastName || '')[0] || '');
+  const centreId = student.centreId || 'bm';
+  let centreName = 'Your centre';
+  try { const p = window.getCentreProfile && window.getCentreProfile(centreId); if (p && p.name) centreName = p.name; else if (centreId === 'bm') centreName = 'Bright Minds Tuition'; } catch (e) { if (centreId === 'bm') centreName = 'Bright Minds Tuition'; }
   const currentStudent = {
     id: student.id,
     commsId: student.id === 's2' ? 'u_oliver' : 'u_' + student.id,
@@ -143,7 +147,9 @@ const build = () => {
     displayName: student.firstName || 'Student',
     email: student.email || (student.account && student.account.syntheticEmail) || '',
     avatarInitials: initials.toUpperCase(),
-    centreId: student.centreId || 'bm',
+    // A stable, human-readable student code for the identity card (JetBrains Mono).
+    code: (student.account && student.account.username ? student.account.username : student.id).toUpperCase(),
+    centreId, centreName,
     yearGroup, qualification: level,
   };
 
@@ -262,6 +268,24 @@ const dueState = (hw) => {
 };
 const dueLabel = (hw) => ({ overdue: 'Overdue', 'due-today': 'Due today', 'due-tomorrow': 'Due tomorrow', upcoming: 'Upcoming' }[dueState(hw)]);
 
+// Per-class (subject-scoped) homework, grouped by state — for the student class
+// detail Homework tab. Reads the SAME real homework store as the Homework page, so
+// the two never disagree. Returns { due, submitted, marked } arrays.
+const homeworkForSubject = (subject) => {
+  const id = getActiveId();
+  const mine = myAssignments().filter(a => a.subject === subject);
+  const out = { due: [], submitted: [], marked: [] };
+  mine.forEach(a => {
+    const state = hwStateFor(a, id);
+    const d = dueInfo(a);
+    const row = { id: a.id, title: a.title, subject: a.subject, due: d.due, overdue: d.overdue };
+    if (state === 'marked') out.marked.push({ ...row, score: scoreOf(a, id) });
+    else if (state === 'submitted') out.submitted.push(row);
+    else out.due.push(row);
+  });
+  return out;
+};
+
 const getContinueHomework = () => {
   const pending = metrics.homeworkSummary().pending;
   const rank = { overdue: 0, 'due-today': 1, 'due-tomorrow': 2, upcoming: 3 };
@@ -299,7 +323,7 @@ window.klasioStudent = {
   get enrolments() { return getEnrolments(); },
   get sessions() { return build().sessions; },
   getEnrolments, getSubjects, getEnrolment,
-  resolveTeacher, formatGrade, metrics,
+  resolveTeacher, formatGrade, metrics, homeworkForSubject,
   dueState, dueLabel, getContinueHomework,
   GradeChip,
   listStudents, getActiveId,

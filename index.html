@@ -734,7 +734,7 @@ const App = () => {
       return <TeacherDashboard />;
     }
     if (view === 'student') {
-      return <StudentDashboard page={parent} section={section} onNav={handleNav} />;
+      return <StudentDashboard page={parent} section={section} onNav={handleNav} comms={comms} />;
     }
     return null;
   };

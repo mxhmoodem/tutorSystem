@@ -72,7 +72,225 @@ const SubjectShape = ({ theme }) => {
   );
 };
 
-const StudentOverview = ({ onNav }) => {
+// Reflow helper — the dashboard right rail sits beside the main column, but drops
+// below it (same order) under ~1100px (D5). Inline styles can't do a media query, so
+// we track the breakpoint from the live viewport width.
+const useViewportNarrow = (bp = 1100) => {
+  const [narrow, setNarrow] = React.useState(() => (typeof window !== 'undefined' && window.innerWidth < bp));
+  React.useEffect(() => {
+    const on = () => setNarrow(window.innerWidth < bp);
+    on(); window.addEventListener('resize', on);
+    return () => window.removeEventListener('resize', on);
+  }, [bp]);
+  return narrow;
+};
+
+// ─── Reusable month calendar ─────────────────────────────────────────────────────
+// ONE month-grid implementation, used by both the full Sessions page (variant="full",
+// event chips in each cell) and the dashboard right-rail mini calendar
+// (variant="mini", dotted session days + day selection). Session dates, today and the
+// per-subject colour all come from the caller — the grid never invents a date.
+const MonthCalendar = ({
+  month, today, sessionsByDay = {}, subjColor = () => DS.accent,
+  variant = 'full', selectedDay = null, onSelectDay,
+  onPrev, onNext, onToday, legend, title,
+}) => {
+  const cells = [];
+  for (let i = 0; i < month.firstDow; i++) cells.push(null);
+  for (let d = 1; d <= month.days; d++) cells.push(d);
+  while (cells.length % 7 !== 0) cells.push(null);
+  const mini = variant === 'mini';
+  const navBtn = (label, onClick, rotate) => (
+    <button aria-label={label} onClick={onClick} style={{
+      width: mini ? 26 : 30, height: mini ? 26 : 30, borderRadius:7, border:`1px solid ${DS.border}`,
+      background:DS.bg, cursor:'pointer', display:'inline-flex', alignItems:'center', justifyContent:'center',
+    }}>
+      <span style={{ display:'inline-flex', transform: rotate ? 'rotate(180deg)' : 'none' }}>
+        <Icon name="chevron_r" size={13} color={DS.muted} strokeWidth={2} />
+      </span>
+    </button>
+  );
+  return (
+    <div>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom: mini ? 10 : 16 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          {!mini && <Icon name="calendar" size={16} color={DS.muted} />}
+          <div style={{ fontSize: mini ? 14 : 17, fontWeight:700, color:DS.text, letterSpacing:'-0.3px' }}>{title || month.name}</div>
+        </div>
+        <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+          {legend}
+          {onPrev && navBtn('Previous month', onPrev, true)}
+          {onToday && <button onClick={onToday} style={{ padding: mini ? '4px 9px' : '6px 12px', borderRadius:7, border:`1px solid ${DS.border}`, background:DS.bg, fontSize:12, fontWeight:500, color:DS.sub, cursor:'pointer' }}>Today</button>}
+          {onNext && navBtn('Next month', onNext, false)}
+        </div>
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(7, 1fr)', gap: mini ? 3 : 6, marginBottom: mini ? 3 : 6 }}>
+        {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(d => (
+          <div key={d} style={{ fontSize: mini ? 9 : 11, fontWeight:700, color:DS.muted, letterSpacing:'1px', textAlign:'center', padding: mini ? '2px 0' : '4px 0' }}>{d.toUpperCase()}</div>
+        ))}
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(7, 1fr)', gap: mini ? 3 : 6 }}>
+        {cells.map((d, i) => {
+          const isToday = d === today;
+          const items = (d && sessionsByDay[d]) || [];
+          const selected = d != null && d === selectedDay;
+          if (mini) {
+            const clickable = d != null;
+            return (
+              <button key={i} disabled={!clickable} onClick={() => clickable && onSelectDay && onSelectDay(d)} style={{
+                aspectRatio:'1 / 1', border: selected ? `1.5px solid ${DS.accent}` : isToday ? `1.5px solid ${DS.accentBorder}` : '1px solid transparent',
+                background: d == null ? 'transparent' : selected ? DS.accentLight : 'transparent',
+                borderRadius:8, cursor: clickable ? 'pointer' : 'default', padding:0, position:'relative',
+                display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:2,
+                opacity: d == null ? 0 : 1,
+              }}>
+                <span style={{ fontSize:11.5, fontWeight: isToday || selected ? 700 : 500, color: isToday ? DS.accent : DS.sub, lineHeight:1 }}>{d}</span>
+                <span style={{ display:'flex', gap:2, height:4 }}>
+                  {items.slice(0, 3).map((s, j) => (
+                    <span key={j} style={{ width:4, height:4, borderRadius:'50%', background: s.status === 'missed' ? DS.danger : subjColor(s.subject) }} />
+                  ))}
+                </span>
+              </button>
+            );
+          }
+          return (
+            <div key={i} style={{
+              minHeight:90, padding:'8px 8px 6px', borderRadius:9,
+              background: d == null ? 'transparent' : isToday ? DS.accentLight : DS.surface,
+              border: d == null ? 'none' : `1px solid ${isToday ? DS.accentBorder : DS.border}`,
+              opacity: d == null ? 0 : 1, display:'flex', flexDirection:'column', gap:4,
+            }}>
+              {d != null && (<>
+                <div style={{ fontSize:12, fontWeight: isToday ? 700 : 600, color: isToday ? DS.accent : DS.sub, marginBottom:2 }}>{d}</div>
+                {items.slice(0, 3).map((s, j) => {
+                  const color = subjColor(s.subject);
+                  const missed = s.status === 'missed';
+                  return (
+                    <div key={j} title={`${s.subject} · ${s.time}`} style={{
+                      fontSize:10.5, fontWeight:600, color: missed ? DS.danger : color,
+                      background: missed ? DS.dangerBg : color + '18', borderLeft:`2px solid ${missed ? DS.danger : color}`,
+                      padding:'3px 6px', borderRadius:4, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
+                      textDecoration: missed ? 'line-through' : 'none',
+                    }}>{s.time.split('–')[0]} {s.subject.split(' ')[0]}</div>
+                  );
+                })}
+                {items.length > 3 && <div style={{ fontSize:10, color:DS.muted }}>+{items.length - 3} more</div>}
+              </>)}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+// ─── Dashboard right rail (D5/D6) — identity · mini calendar · up next · announce ─
+const StudentOverviewRail = ({ K, cs, enrolments, pendingHw, latestReports, comms, onNav }) => {
+  const cal = K.activeTerm.calendar;
+  const [month] = React.useState({ name: cal.name, firstDow: cal.firstDow, days: cal.days });
+  const [selectedDay, setSelectedDay] = React.useState(cal.today);
+  const subjColor = (name) => { const e = K.getEnrolment(name); return e ? e.subjectColor : DS.accent; };
+
+  const sessionsByDay = {};
+  [...K.sessions.upcoming, ...K.sessions.history].forEach(s => { (sessionsByDay[s.day] = sessionsByDay[s.day] || []).push(s); });
+  const dayItems = sessionsByDay[selectedDay] || [];
+
+  // Up next — the next 3 items merged across upcoming sessions, homework due dates and
+  // newly published reports, ordered so the most pressing surfaces first.
+  const upNext = [];
+  K.sessions.upcoming.forEach(s => upNext.push({ type:'session', icon:'calendar', color:subjColor(s.subject), title:s.subject, meta:`${s.date} · ${s.time.split('–')[0]}`, sort: 20 + (s.day || 0), go:() => onNav('sessions') }));
+  pendingHw.forEach(h => { const rank = { overdue:0, 'due-today':1, 'due-tomorrow':2, upcoming:3 }[K.dueState(h)]; upNext.push({ type:'homework', icon:'clip', color: rank <= 1 ? DS.danger : DS.warning, title:h.title, meta:`${h.subject} · ${K.dueLabel(h)}`, sort: rank, go:() => onNav('homework') }); });
+  latestReports.forEach(r => upNext.push({ type:'report', icon:'file', color:DS.info, title:r.title, meta:`${r.subject} · report`, sort: 50, go:() => onNav('reports') }));
+  const upNextTop = upNext.sort((a, b) => a.sort - b.sort).slice(0, 3);
+
+  // Recent unread announcements — the class they belong to links into class detail.
+  const uid = comms && comms.ctx && comms.ctx.userId;
+  const unreadAnns = (comms ? comms.announcements : [])
+    .filter(a => uid && a.authorId !== uid && !a.reads[uid] && !(a.expiresAt && a.expiresAt < new Date().toISOString().slice(0, 10)))
+    .slice(0, 3)
+    .map(a => {
+      const enr = a.scope === 'class' ? enrolments.find(e => e.classId === a.classId) : null;
+      return { ...a, className: enr ? enr.name : (a.scope === 'centre' ? cs.centreName : 'Announcement'), enrClassId: enr ? enr.classId : null };
+    });
+  const openAnn = (a) => { if (a.enrClassId) { window.__studentClassId = a.enrClassId; onNav('classes:detail'); } else onNav('comms'); };
+
+  const cardWrap = { background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:12, overflow:'hidden' };
+  const cardHead = (title, action) => (
+    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'14px 16px 10px' }}>
+      <div style={{ fontSize:14, fontWeight:700, color:DS.text }}>{title}</div>
+      {action}
+    </div>
+  );
+
+  return (
+    <>
+      {/* Identity */}
+      <div style={cardWrap}>
+        <div style={{ padding:'18px 16px', display:'flex', flexDirection:'column', alignItems:'center', textAlign:'center', gap:4 }}>
+          <Avatar name={cs.fullName} size={56} color={DS.accent} />
+          <div style={{ fontSize:16, fontWeight:800, color:DS.text, marginTop:8, letterSpacing:'-0.3px' }}>{cs.fullName}</div>
+          <div style={{ fontSize:12, color:DS.muted }}>{cs.yearGroup} · {cs.qualification}</div>
+          <div style={{ fontFamily:"'JetBrains Mono', monospace", fontSize:12, fontWeight:600, color:DS.sub, background:DS.surface, border:`1px solid ${DS.border}`, borderRadius:7, padding:'3px 10px', marginTop:6, letterSpacing:'0.5px' }}>{cs.code}</div>
+          <div style={{ fontSize:11.5, color:DS.faint, marginTop:6 }}>{cs.centreName}</div>
+        </div>
+      </div>
+
+      {/* Mini calendar */}
+      <div style={cardWrap}>
+        <div style={{ padding:'14px 16px' }}>
+          <MonthCalendar
+            month={month} today={cal.today} sessionsByDay={sessionsByDay} subjColor={subjColor}
+            variant="mini" selectedDay={selectedDay} onSelectDay={setSelectedDay}
+            onPrev={() => {}} onNext={() => {}} title={month.name}
+          />
+          <div style={{ marginTop:10, borderTop:`1px solid ${DS.border}`, paddingTop:10 }}>
+            {dayItems.length ? dayItems.map((s, i) => (
+              <div key={i} style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 0' }}>
+                <span style={{ width:8, height:8, borderRadius:'50%', background: s.status === 'missed' ? DS.danger : subjColor(s.subject), flexShrink:0 }} />
+                <div style={{ flex:1, minWidth:0, fontSize:12, color:DS.text }}>{s.subject}</div>
+                <div style={{ fontSize:11, color:DS.muted }}>{s.time.split('–')[0]}</div>
+              </div>
+            )) : <div style={{ fontSize:12, color:DS.faint, padding:'4px 0' }}>Nothing on {cal.name.split(' ')[0]} {selectedDay}.</div>}
+          </div>
+        </div>
+      </div>
+
+      {/* Up next */}
+      <div style={cardWrap}>
+        {cardHead('Up next')}
+        {upNextTop.length ? upNextTop.map((it, i) => (
+          <button key={i} onClick={it.go} style={{ display:'flex', alignItems:'center', gap:11, width:'100%', textAlign:'left', padding:'11px 16px', border:'none', borderTop:`1px solid ${DS.border}`, background:'none', cursor:'pointer' }}>
+            <div style={{ width:30, height:30, borderRadius:8, background: it.color + '18', color: it.color, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}><Icon name={it.icon} size={15} /></div>
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ fontSize:12.5, fontWeight:600, color:DS.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{it.title}</div>
+              <div style={{ fontSize:11, color:DS.muted }}>{it.meta}</div>
+            </div>
+            <Icon name="chevron_r" size={14} color={DS.faint} />
+          </button>
+        )) : <div style={{ padding:'12px 16px 16px', fontSize:12.5, color:DS.faint }}>You're all caught up.</div>}
+      </div>
+
+      {/* Announcements */}
+      <div style={cardWrap}>
+        {cardHead('Announcements', <button onClick={() => onNav('comms')} style={{ background:'none', border:'none', color:DS.muted, fontSize:12, cursor:'pointer' }}>See all</button>)}
+        {unreadAnns.length ? unreadAnns.map((a, i) => (
+          <button key={a.id} onClick={() => openAnn(a)} style={{ display:'block', width:'100%', textAlign:'left', padding:'11px 16px', border:'none', borderTop:`1px solid ${DS.border}`, background:'none', cursor:'pointer' }}>
+            <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:3 }}>
+              <span style={{ width:6, height:6, borderRadius:'50%', background:DS.accent, flexShrink:0 }} />
+              <span style={{ fontSize:11, color:DS.accent, fontWeight:600 }}>{a.className}</span>
+            </div>
+            <div style={{ fontSize:12.5, fontWeight:600, color:DS.text, lineHeight:1.35 }}>{a.title}</div>
+            <div style={{ fontSize:11, color:DS.muted, marginTop:2 }}>{a.authorName} · {fmtAnnDate(a.createdAt)}</div>
+          </button>
+        )) : <div style={{ padding:'12px 16px 16px', fontSize:12.5, color:DS.faint }}>No new announcements.</div>}
+      </div>
+    </>
+  );
+};
+
+const StudentOverview = ({ onNav, comms }) => {
   // §1–§7: identity, subjects, grades, numbers and term all come from the one
   // student SoT — nothing on this screen is re-hardcoded.
   const K  = window.klasioStudent;
@@ -91,6 +309,11 @@ const StudentOverview = ({ onNav }) => {
     .filter(r => r.studentId === cs.id && r.status === 'published')
     .sort((a,b) => (b.datePublished||'').localeCompare(a.datePublished||''))
     .slice(0,3);
+
+  const narrow = useViewportNarrow(1100);
+  const rail = (
+    <StudentOverviewRail K={K} cs={cs} enrolments={enrolments} pendingHw={pendingHw} latestReports={latestReports} comms={comms} onNav={onNav} />
+  );
 
   // Single-row subjects carousel — scroll horizontally when subjects overflow
   const subjectsRef = React.useRef(null);
@@ -112,6 +335,8 @@ const StudentOverview = ({ onNav }) => {
 
   return (
     <div style={{ padding: '32px' }}>
+     <div style={{ display:'flex', gap:24, alignItems:'flex-start', flexDirection: narrow ? 'column' : 'row' }}>
+      <div style={{ flex:1, minWidth:0, width: narrow ? '100%' : 'auto' }}>
       {/* Purple gradient hero */}
       <div style={{
         position:'relative', overflow:'hidden',
@@ -136,7 +361,7 @@ const StudentOverview = ({ onNav }) => {
               Good morning, {cs.displayName}
             </h1>
             <div style={{ fontSize:15, color:'rgba(255,255,255,0.88)', lineHeight:1.5, marginBottom:22 }}>
-              You're <strong style={{ color:'#fff' }}>on track</strong> across your {enrolments.length} subjects this term. {pendingHw.length} piece{pendingHw.length === 1 ? '' : 's'} of homework due, {urgentCount} urgent.
+              You're <strong style={{ color:'#fff' }}>on track</strong> across your {enrolments.length} class{enrolments.length === 1 ? '' : 'es'} this term. {pendingHw.length} piece{pendingHw.length === 1 ? '' : 's'} of homework due, {urgentCount} urgent.
             </div>
             <div style={{ display:'flex', gap:10 }}>
               {/* §9: targets the most-urgent in-progress assignment (overdue → due
@@ -165,26 +390,24 @@ const StudentOverview = ({ onNav }) => {
         </div>
       </div>
 
-      {/* My subjects */}
+      {/* My classes — cards keyed by CLASS (a student with two classes in one subject
+          sees two cards). Card click opens the class detail. */}
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-end', marginBottom:14 }}>
         <div>
-          <h2 style={{ fontSize:20, fontWeight:800, color:DS.text, margin:'0 0 4px', letterSpacing:'-0.4px' }}>My subjects</h2>
+          <h2 style={{ fontSize:20, fontWeight:800, color:DS.text, margin:'0 0 4px', letterSpacing:'-0.4px' }}>My classes</h2>
           <div style={{ fontSize:13, color:DS.muted }}>Latest scores and predicted grades</div>
         </div>
         <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-          <button onClick={() => scrollSubjects(-1)} aria-label="Previous subjects" style={{
+          <button onClick={() => scrollSubjects(-1)} aria-label="Previous classes" style={{
             width:32, height:32, borderRadius:8, border:`1px solid ${DS.cardBorder}`,
             background:DS.bg, color:DS.muted, cursor:'pointer', display:'inline-flex',
             alignItems:'center', justifyContent:'center', fontSize:16, lineHeight:1,
           }}>‹</button>
-          <button onClick={() => scrollSubjects(1)} aria-label="Next subjects" style={{
+          <button onClick={() => scrollSubjects(1)} aria-label="Next classes" style={{
             width:32, height:32, borderRadius:8, border:`1px solid ${DS.cardBorder}`,
             background:DS.bg, color:DS.muted, cursor:'pointer', display:'inline-flex',
             alignItems:'center', justifyContent:'center', fontSize:16, lineHeight:1,
           }}>›</button>
-          <button onClick={() => onNav('progress')} style={{
-            background:'none', border:'none', color:DS.muted, fontSize:13, cursor:'pointer',
-          }}>View all →</button>
         </div>
       </div>
 
@@ -195,17 +418,20 @@ const StudentOverview = ({ onNav }) => {
         {enrolments.map(s => {
           const theme = subjectThemes[s.subject] || hexToTheme(s.subjectColor, s.subject);
           const latest = s.scores[s.scores.length-1];
+          const openClass = () => { window.__studentClassId = s.classId; onNav('classes:detail'); };
+          const nextForClass = K.sessions.upcoming.find(x => x.subject === s.subject);
           return (
-            <div key={s.subject} style={{
-              position:'relative', overflow:'hidden', flex:'1 0 280px', scrollSnapAlign:'start',
-              background: `linear-gradient(150deg, ${theme.tint} 0%, ${theme.tint2} 100%)`, borderRadius:18,
+            <button key={s.classId} onClick={openClass} style={{
+              position:'relative', overflow:'hidden', flex:'1 0 280px', scrollSnapAlign:'start', textAlign:'left',
+              background: `linear-gradient(150deg, ${theme.tint} 0%, ${theme.tint2} 100%)`, borderRadius:18, border:'none', cursor:'pointer',
               padding:'22px 24px 24px', minHeight:220,
               display:'flex', flexDirection:'column', justifyContent:'space-between',
             }}>
               <SubjectShape theme={theme} />
               <div style={{ position:'relative', zIndex:1 }}>
-                <div style={{ fontSize:11, fontWeight:700, color:theme.deep, letterSpacing:'1px', opacity:0.7 }}>SUBJECT</div>
-                <div style={{ fontSize:24, fontWeight:800, color:theme.text, marginTop:4, letterSpacing:'-0.5px' }}>{s.subject}</div>
+                <div style={{ display:'inline-flex', alignItems:'center', gap:6, fontSize:10.5, fontWeight:700, color:theme.deep, letterSpacing:'0.5px', opacity:0.85, background:'rgba(255,255,255,0.45)', padding:'2px 8px', borderRadius:999 }}>{s.subject}</div>
+                <div style={{ fontSize:22, fontWeight:800, color:theme.text, marginTop:8, letterSpacing:'-0.5px' }}>{s.name}</div>
+                <div style={{ fontSize:12, color:theme.deep, opacity:0.8, marginTop:4 }}>{s.teacher}{nextForClass ? ` · Next ${nextForClass.date}` : ''}</div>
               </div>
               <div style={{ position:'relative', zIndex:1, display:'flex', justifyContent:'space-between', alignItems:'flex-end' }}>
                 <div>
@@ -222,7 +448,7 @@ const StudentOverview = ({ onNav }) => {
                   <div style={{ fontSize:9, fontWeight:700, color:theme.deep, letterSpacing:'1px', marginTop:3, opacity:0.8 }}>PREDICTED</div>
                 </div>
               </div>
-            </div>
+            </button>
           );
         })}
       </div>
@@ -337,6 +563,16 @@ const StudentOverview = ({ onNav }) => {
           })}
         </div>
       </div>
+      </div>{/* /main column */}
+
+      <aside style={{
+        width: narrow ? '100%' : 320, flexShrink:0,
+        position: narrow ? 'static' : 'sticky', top: 0,
+        display:'flex', flexDirection:'column', gap:16,
+      }}>
+        {rail}
+      </aside>
+     </div>{/* /flex wrapper */}
     </div>
   );
 };
@@ -502,11 +738,6 @@ const StudentSessionsPage = () => {
     sessionsByDay[s.day].push(s);
   });
 
-  // Build 6×7 grid of day numbers (or null for padding)
-  const cells = [];
-  for (let i = 0; i < month.firstDow; i++) cells.push(null);
-  for (let d = 1; d <= month.days; d++) cells.push(d);
-  while (cells.length % 7 !== 0) cells.push(null);
   const today = cal.today; // demo "today" (single source: active term)
 
   const subjColor = (name) => {
@@ -545,18 +776,15 @@ const StudentSessionsPage = () => {
         <Btn key="cal" variant="secondary" icon="download" small onClick={exportICS}>Export to Calendar</Btn>
       ]} />
 
-      {/* Calendar */}
+      {/* Calendar — shared MonthCalendar (full variant) */}
       <div style={{
         background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:12,
         padding:'20px 22px', marginBottom:28,
       }}>
-        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
-          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-            <Icon name="calendar" size={16} color={DS.muted} />
-            <div style={{ fontSize:17, fontWeight:700, color:DS.text, letterSpacing:'-0.3px' }}>{month.name}</div>
-          </div>
-          <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-            {/* Legend */}
+        <MonthCalendar
+          month={month} today={today} sessionsByDay={sessionsByDay} subjColor={subjColor} variant="full"
+          onPrev={() => {}} onToday={() => {}} onNext={() => {}}
+          legend={
             <div style={{ display:'flex', alignItems:'center', gap:14, marginRight:14 }}>
               {K.getEnrolments().map(s => (
                 <div key={s.subject} style={{ display:'flex', alignItems:'center', gap:5 }}>
@@ -565,82 +793,8 @@ const StudentSessionsPage = () => {
                 </div>
               ))}
             </div>
-            <button aria-label="Previous month" style={{
-              width:30, height:30, borderRadius:7, border:`1px solid ${DS.border}`,
-              background:DS.bg, cursor:'pointer', display:'inline-flex', alignItems:'center', justifyContent:'center',
-            }}>
-              <span style={{ display:'inline-flex', transform:'rotate(180deg)' }}>
-                <Icon name="chevron_r" size={14} color={DS.muted} strokeWidth={2} />
-              </span>
-            </button>
-            <button style={{
-              padding:'6px 12px', borderRadius:7, border:`1px solid ${DS.border}`,
-              background:DS.bg, fontSize:12, fontWeight:500, color:DS.sub, cursor:'pointer',
-            }}>Today</button>
-            <button aria-label="Next month" style={{
-              width:30, height:30, borderRadius:7, border:`1px solid ${DS.border}`,
-              background:DS.bg, cursor:'pointer', display:'inline-flex', alignItems:'center', justifyContent:'center',
-            }}>
-              <Icon name="chevron_r" size={14} color={DS.muted} strokeWidth={2} />
-            </button>
-          </div>
-        </div>
-
-        {/* Day headers */}
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(7, 1fr)', gap:6, marginBottom:6 }}>
-          {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(d => (
-            <div key={d} style={{
-              fontSize:11, fontWeight:700, color:DS.muted, letterSpacing:'1px',
-              textAlign:'center', padding:'4px 0',
-            }}>{d.toUpperCase()}</div>
-          ))}
-        </div>
-
-        {/* Day cells */}
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(7, 1fr)', gap:6 }}>
-          {cells.map((d, i) => {
-            const isToday = d === today;
-            const items = (d && sessionsByDay[d]) || [];
-            return (
-              <div key={i} style={{
-                minHeight:90, padding:'8px 8px 6px',
-                borderRadius:9,
-                background: d == null ? 'transparent' : isToday ? DS.accentLight : DS.surface,
-                border: d == null ? 'none' : `1px solid ${isToday ? DS.accentBorder : DS.border}`,
-                opacity: d == null ? 0 : 1,
-                display:'flex', flexDirection:'column', gap:4,
-              }}>
-                {d != null && (
-                  <>
-                    <div style={{
-                      fontSize:12, fontWeight: isToday ? 700 : 600,
-                      color: isToday ? DS.accent : DS.sub, marginBottom:2,
-                    }}>{d}</div>
-                    {items.slice(0, 3).map((s, j) => {
-                      const color = subjColor(s.subject);
-                      const missed = s.status === 'missed';
-                      return (
-                        <div key={j} title={`${s.subject} · ${s.time}`} style={{
-                          fontSize:10.5, fontWeight:600, color: missed ? DS.danger : color,
-                          background: missed ? DS.dangerBg : color + '18',
-                          borderLeft:`2px solid ${missed ? DS.danger : color}`,
-                          padding:'3px 6px', borderRadius:4,
-                          whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
-                          textDecoration: missed ? 'line-through' : 'none',
-                        }}>
-                          {s.time.split('–')[0]} {s.subject.split(' ')[0]}
-                        </div>
-                      );
-                    })}
-                    {items.length > 3 && (
-                      <div style={{ fontSize:10, color:DS.muted }}>+{items.length - 3} more</div>
-                    )}
-                  </>
-                )}
-              </div>
-            );
-          })}
-        </div>
+          }
+        />
       </div>
 
       {/* Upcoming row */}
@@ -690,13 +844,352 @@ const StudentSessionsPage = () => {
   );
 };
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  Student — My Classes (list + detail). The one sanctioned pair of new student
+//  page ids (classes / classes:detail, D3). Enrolment is staff-only, so there is no
+//  join-a-class control anywhere here. All numbers derive from the student SoT
+//  (klasioStudent) + the lifted comms store — nothing is stored or hardcoded.
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Class-scoped announcements for the acting student, from the lifted comms store
+// (already tenant + visibility filtered). Marks each read via comms.markRead when the
+// student opens them (D8). Never a new/private channel — read-only here.
+const classAnnouncementsForStudent = (comms, classId) => {
+  if (!comms) return [];
+  const uid = comms.ctx && comms.ctx.userId;
+  return comms.announcements
+    .filter(a => a.scope === 'class' && (a.classId === classId || ((a.audience && a.audience.classIds) || []).includes(classId)))
+    .map(a => ({ ...a, unread: uid ? !a.reads[uid] : false, acked: uid ? !!(a.acks && a.acks[uid]) : false }));
+};
+
+// Files shared with a class the student can safely see: centre-visible library
+// resources for the class's subject, excluding mark schemes / answer keys (which
+// carry student_visible=false by type). Read-only. Reads the resources seed directly.
+const classResourcesForStudent = (subject) => {
+  const seed = (typeof RES_RESOURCES_SEED !== 'undefined' ? RES_RESOURCES_SEED : []);
+  const types = (typeof RES_TYPES !== 'undefined' ? RES_TYPES : []);
+  const label = (t) => (types.find(x => x.id === t) || {}).label || 'File';
+  const icon = (t) => (types.find(x => x.id === t) || {}).icon || 'file';
+  return seed
+    .filter(r => r.visibility === 'centre' && r.subject === subject && r.type !== 'mark_scheme')
+    .map(r => ({ id: r.id, title: r.title, typeLabel: label(r.type), icon: icon(r.type), size: r.size }));
+};
+
+const fmtBytes = (b) => b == null ? '' : b < 1024 ? b + ' B' : b < 1048576 ? Math.round(b / 1024) + ' KB' : (b / 1048576).toFixed(1) + ' MB';
+const fmtAnnDate = (iso) => { const d = new Date(iso); const mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return `${d.getDate()} ${mo[d.getMonth()]}`; };
+
+const StudentClassCard = ({ enr, nextSession, unread, hwDue, attendance, onOpen }) => (
+  <button onClick={onOpen} style={{
+    textAlign:'left', background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:14,
+    padding:0, cursor:'pointer', overflow:'hidden', display:'flex', flexDirection:'column',
+  }}>
+    <div style={{ height:6, background:enr.subjectColor }} />
+    <div style={{ padding:'16px 18px', display:'flex', flexDirection:'column', gap:12, flex:1 }}>
+      <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:10 }}>
+        <div style={{ minWidth:0 }}>
+          <div style={{ fontSize:15, fontWeight:700, color:DS.text, letterSpacing:'-0.2px' }}>{enr.name}</div>
+          <div style={{ display:'flex', alignItems:'center', gap:6, marginTop:5, flexWrap:'wrap' }}>
+            <span style={{ fontSize:11, fontWeight:600, color:enr.subjectColor, background:enr.subjectColor + '18', border:`1px solid ${enr.subjectColor}44`, padding:'2px 8px', borderRadius:999 }}>{enr.subject}</span>
+            <span style={{ fontSize:11.5, color:DS.muted }}>{enr.teacher}</span>
+          </div>
+        </div>
+        {unread > 0 && (
+          <span title={`${unread} unread announcement${unread === 1 ? '' : 's'}`} style={{ flexShrink:0, minWidth:20, height:20, borderRadius:999, background:DS.accent, color:'#fff', fontSize:11, fontWeight:700, display:'inline-flex', alignItems:'center', justifyContent:'center', padding:'0 6px' }}>{unread}</span>
+        )}
+      </div>
+      <div style={{ display:'flex', alignItems:'center', gap:8, fontSize:12, color:DS.muted }}>
+        <Icon name="calendar" size={13} color={DS.faint} />
+        {nextSession ? `${nextSession.date} · ${nextSession.time.split('–')[0]} · ${enr.room}` : 'No upcoming session'}
+      </div>
+      <div style={{ display:'flex', gap:16, marginTop:'auto', paddingTop:8, borderTop:`1px solid ${DS.border}` }}>
+        <div><div style={{ fontSize:15, fontWeight:800, color:DS.text }}>{hwDue}</div><div style={{ fontSize:10.5, color:DS.faint }}>Homework due</div></div>
+        <div><div style={{ fontSize:15, fontWeight:800, color: attendance >= 90 ? DS.success : DS.warning }}>{attendance}%</div><div style={{ fontSize:10.5, color:DS.faint }}>Attendance</div></div>
+      </div>
+    </div>
+  </button>
+);
+
+const StudentClassesList = ({ onNav, comms }) => {
+  const K = window.klasioStudent;
+  const enrolments = K.getEnrolments();
+  const nextFor = (subject) => K.sessions.upcoming.find(s => s.subject === subject);
+  const sorted = enrolments.slice().sort((a, b) => {
+    const da = (nextFor(a.subject) || {}).day || 99, db = (nextFor(b.subject) || {}).day || 99;
+    return da - db;
+  });
+  const open = (enr) => { window.__studentClassId = enr.classId; onNav('classes:detail'); };
+
+  return (
+    <div style={{ padding:'32px' }}>
+      <PageHeader title="My Classes" subtitle={`You're enrolled in ${enrolments.length} class${enrolments.length === 1 ? '' : 'es'}`} />
+      {enrolments.length === 0 ? (
+        <Card><div style={{ padding:'40px 20px' }}><EmptyState icon="book" title="No classes yet" message="You haven't been enrolled in any classes. Your centre adds you to classes." /></div></Card>
+      ) : (
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(280px, 1fr))', gap:16 }}>
+          {sorted.map(enr => {
+            const anns = classAnnouncementsForStudent(comms, enr.classId);
+            return (
+              <StudentClassCard key={enr.classId} enr={enr} nextSession={nextFor(enr.subject)}
+                unread={anns.filter(a => a.unread).length}
+                hwDue={K.homeworkForSubject(enr.subject).due.length}
+                attendance={K.metrics.attendanceForSubject(enr.subject)}
+                onOpen={() => open(enr)} />
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// A row in the class-detail announcements feed.
+const ClassAnnRow = ({ a, teacher, onMessage, onAck, first }) => (
+  <div style={{ padding:'15px 20px', borderTop: first ? 'none' : `1px solid ${DS.border}`, background: a.unread ? DS.accentLight : 'transparent' }}>
+    <div style={{ display:'flex', alignItems:'flex-start', gap:12 }}>
+      <Avatar name={a.authorName} size={36} color={DS.accent} />
+      <div style={{ flex:1, minWidth:0 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+          <span style={{ fontSize:13.5, fontWeight:700, color:DS.text }}>{a.title}</span>
+          {a.unread && <span style={{ fontSize:10, fontWeight:700, color:'#fff', background:DS.accent, padding:'1px 7px', borderRadius:999 }}>New</span>}
+          {a.priority === 'urgent' && <Badge variant="danger">Urgent</Badge>}
+        </div>
+        <div style={{ fontSize:11.5, color:DS.muted, marginTop:1 }}>{a.authorName} · {fmtAnnDate(a.createdAt)}</div>
+        <div style={{ fontSize:12.5, color:DS.sub, marginTop:8, lineHeight:1.55, whiteSpace:'pre-wrap' }}>{a.body}</div>
+        {a.requiresAck && (
+          <div style={{ marginTop:10 }}>
+            {a.acked
+              ? <span style={{ fontSize:12, fontWeight:600, color:DS.success, display:'inline-flex', alignItems:'center', gap:5 }}><Icon name="check" size={13} color={DS.success} /> Acknowledged</span>
+              : <Btn variant="secondary" small icon="check" onClick={() => onAck(a.id)}>Acknowledge</Btn>}
+          </div>
+        )}
+      </div>
+    </div>
+  </div>
+);
+
+const StudentClassDetail = ({ enr, onNav, onBack, comms }) => {
+  const K = window.klasioStudent;
+  const Shell = window.ClassDetailShell;
+  const [tab, setTab] = React.useState('overview');
+  const color = enr.subjectColor;
+  const anns = classAnnouncementsForStudent(comms, enr.classId);
+  const hw = K.homeworkForSubject(enr.subject);
+  const attendance = K.metrics.attendanceForSubject(enr.subject);
+  const upcoming = K.sessions.upcoming.filter(s => s.subject === enr.subject);
+  const history  = K.sessions.history.filter(s => s.subject === enr.subject);
+  const nextSession = upcoming[0];
+  const resources = classResourcesForStudent(enr.subject);
+  const totalHw = hw.due.length + hw.submitted.length + hw.marked.length;
+  const completion = totalHw ? Math.round(((hw.submitted.length + hw.marked.length) / totalHw) * 100) : 0;
+  // The student can only reach their teacher through the monitored comms surface
+  // (never a private channel). Opening Communications is that institutional record.
+  const messageTeacher = () => onNav('comms');
+
+  // Mark this class's unread announcements read on open (D8).
+  React.useEffect(() => {
+    if (!comms) return;
+    classAnnouncementsForStudent(comms, enr.classId).filter(a => a.unread).forEach(a => comms.markRead(a.id));
+  }, [enr.classId]);
+
+  const TABS = [
+    { id:'overview',      label:'Overview',      icon:'chart' },
+    { id:'announcements', label:'Announcements', icon:'megaphone' },
+    { id:'homework',      label:'Homework',      icon:'clip' },
+    { id:'sessions',      label:'Sessions',      icon:'calendar' },
+    { id:'resources',     label:'Resources',     icon:'folder' },
+  ];
+
+  const stat = (label, value, sub, vColor) => (
+    <div style={{ padding:'16px 18px' }}>
+      <div style={{ fontSize:11, fontWeight:600, color:DS.faint, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom:8 }}>{label}</div>
+      <div style={{ fontSize:24, fontWeight:800, color:vColor || DS.text, letterSpacing:'-0.5px', lineHeight:1 }}>{value}</div>
+      {sub && <div style={{ fontSize:12, color:DS.muted, marginTop:5 }}>{sub}</div>}
+    </div>
+  );
+
+  const overview = (
+    <div style={{ display:'grid', gridTemplateColumns:'1fr 320px', gap:20, alignItems:'start' }}>
+      <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+        <Card title="Next session" icon="calendar" accent={color}>
+          <div style={{ padding:'16px 20px' }}>
+            {nextSession ? (
+              <div style={{ display:'flex', alignItems:'center', gap:14 }}>
+                <div style={{ width:52, textAlign:'center', flexShrink:0, background:color+'14', borderRadius:10, padding:'8px 0' }}>
+                  <div style={{ fontSize:20, fontWeight:800, color, lineHeight:1 }}>{(nextSession.date.match(/(\d+)/) || [])[1]}</div>
+                  <div style={{ fontSize:10, fontWeight:700, color, letterSpacing:'1px', marginTop:2 }}>{(nextSession.date.match(/\d+\s+(\w+)/) || [])[1] ? (nextSession.date.match(/\d+\s+(\w+)/)[1]).toUpperCase() : ''}</div>
+                </div>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:14, fontWeight:700, color:DS.text }}>{nextSession.date} · {nextSession.time}</div>
+                  <div style={{ fontSize:12.5, color:DS.muted, marginTop:2 }}>{enr.room} · {enr.teacher}</div>
+                </div>
+              </div>
+            ) : <div style={{ fontSize:13, color:DS.faint }}>No upcoming sessions.</div>}
+          </div>
+        </Card>
+        <Card title="Latest announcement" icon="megaphone" accent={DS.accent}>
+          <div style={{ padding:'16px 20px' }}>
+            {anns.length ? (
+              <div>
+                <div style={{ fontSize:13.5, fontWeight:700, color:DS.text }}>{anns[0].title}</div>
+                <div style={{ fontSize:11.5, color:DS.muted, marginTop:2 }}>{anns[0].authorName} · {fmtAnnDate(anns[0].createdAt)}</div>
+                <div style={{ fontSize:12.5, color:DS.sub, marginTop:8, lineHeight:1.5, display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical', overflow:'hidden' }}>{anns[0].body}</div>
+                <button onClick={() => setTab('announcements')} style={{ marginTop:10, background:'none', border:'none', color:DS.accent, fontSize:12.5, fontWeight:600, cursor:'pointer', padding:0 }}>All announcements →</button>
+              </div>
+            ) : <div style={{ fontSize:13, color:DS.faint }}>No announcements yet.</div>}
+          </div>
+        </Card>
+      </div>
+      <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+        <Card>{stat('My attendance', attendance + '%', 'This class, this term', attendance >= 90 ? DS.success : DS.warning)}</Card>
+        <Card>{stat('Homework completion', completion + '%', `${hw.due.length} due now`, hw.due.length ? DS.warning : DS.success)}</Card>
+        <Card>
+          <div style={{ padding:'16px 18px' }}>
+            <div style={{ fontSize:11, fontWeight:600, color:DS.faint, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom:8 }}>Predicted grade</div>
+            <K.GradeChip value={enr.predictedGrade} qualification={enr.qualification} color={color} />
+            <div style={{ fontSize:12, color:DS.muted, marginTop:8 }}>Set by {enr.teacher}</div>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+
+  const hwGroup = (label, rows, tone) => rows.length ? (
+    <Card title={`${label} · ${rows.length}`} style={{ marginBottom:16 }}>
+      <div>
+        {rows.map((h, i) => (
+          <div key={h.id} onClick={() => onNav('homework')} style={{ display:'flex', alignItems:'center', gap:12, padding:'12px 18px', borderTop: i ? `1px solid ${DS.border}` : 'none', cursor:'pointer' }}>
+            <div style={{ width:3, alignSelf:'stretch', minHeight:28, borderRadius:2, background:tone }} />
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ fontSize:13, fontWeight:600, color:DS.text }}>{h.title}</div>
+              <div style={{ fontSize:11.5, color: h.overdue ? DS.danger : DS.muted }}>{h.due}</div>
+            </div>
+            {h.score != null && <ScorePill score={h.score} />}
+            <Icon name="chevron_r" size={14} color={DS.faint} />
+          </div>
+        ))}
+      </div>
+    </Card>
+  ) : null;
+
+  const homework = (
+    (hw.due.length + hw.submitted.length + hw.marked.length) === 0 ? (
+      <Card><div style={{ padding:'40px 20px' }}><EmptyState icon="clip" title="No homework" message="Nothing set for this class right now." /></div></Card>
+    ) : (
+      <div>
+        <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:14 }}>
+          <Btn variant="secondary" icon="clip" small onClick={() => onNav('homework')}>Open homework</Btn>
+        </div>
+        {hwGroup('Due', hw.due, DS.warning)}
+        {hwGroup('Submitted', hw.submitted, DS.info)}
+        {hwGroup('Marked', hw.marked, DS.success)}
+      </div>
+    )
+  );
+
+  const announcements = (
+    <Card title={`Announcements · ${anns.length}`} icon="megaphone" accent={DS.accent} actions={
+      <Btn variant="secondary" icon="message" small onClick={messageTeacher}>Message {enr.teacher.split(' ')[0]}</Btn>
+    }>
+      {anns.length === 0 ? (
+        <div style={{ padding:'40px 20px' }}><EmptyState icon="megaphone" title="No announcements" message="Your teacher hasn't posted to this class yet." /></div>
+      ) : anns.map((a, i) => (
+        <ClassAnnRow key={a.id} a={a} teacher={enr.teacher} onMessage={messageTeacher} onAck={(id) => comms && comms.acknowledge(id)} first={i === 0} />
+      ))}
+    </Card>
+  );
+
+  const sessions = (
+    <div>
+      <div style={{ display:'flex', gap:14, marginBottom:18, flexWrap:'wrap' }}>
+        <Card style={{ flex:1, minWidth:150 }}>{stat('My attendance', attendance + '%', null, attendance >= 90 ? DS.success : DS.warning)}</Card>
+        <Card style={{ flex:1, minWidth:150 }}>{stat('Upcoming', upcoming.length)}</Card>
+        <Card style={{ flex:1, minWidth:150 }}>{stat('Attended', history.filter(s => s.status === 'attended').length, `of ${history.length} recent`)}</Card>
+      </div>
+      {upcoming.length > 0 && (
+        <Card title="Upcoming" style={{ marginBottom:16 }}>
+          <div>
+            {upcoming.map((s, i) => (
+              <div key={i} style={{ display:'flex', alignItems:'center', gap:12, padding:'12px 18px', borderTop: i ? `1px solid ${DS.border}` : 'none' }}>
+                <Icon name="calendar" size={14} color={color} />
+                <div style={{ flex:1, minWidth:0, fontSize:13, color:DS.text }}>{s.date} · {s.time}</div>
+                <div style={{ fontSize:12, color:DS.muted }}>{s.room}</div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+      <Card title="History">
+        {history.length === 0 ? <div style={{ padding:'24px', fontSize:13, color:DS.muted, textAlign:'center' }}>No past sessions yet.</div> :
+          history.map((s, i) => (
+            <div key={i} style={{ display:'flex', alignItems:'center', gap:12, padding:'12px 18px', borderTop: i ? `1px solid ${DS.border}` : 'none' }}>
+              <div style={{ flex:1, minWidth:0, fontSize:13, color:DS.text }}>{s.date} · {s.time}</div>
+              <Badge variant={s.status === 'attended' ? 'success' : 'danger'}>{s.status === 'attended' ? 'Attended' : 'Missed'}</Badge>
+            </div>
+          ))}
+      </Card>
+    </div>
+  );
+
+  const resourcesTab = (
+    <Card title={`Class resources · ${resources.length}`} icon="folder" accent={color}>
+      {resources.length === 0 ? (
+        <div style={{ padding:'40px 20px' }}><EmptyState icon="folder" title="No resources shared" message="Files your teacher shares with this class will appear here." /></div>
+      ) : (
+        <div style={{ padding:'14px 18px', display:'flex', flexDirection:'column', gap:8 }}>
+          {resources.map(r => (
+            <div key={r.id} style={{ display:'flex', alignItems:'center', gap:12, padding:'11px 14px', border:`1px solid ${DS.border}`, borderRadius:10 }}>
+              <div style={{ width:34, height:34, borderRadius:8, background:color+'14', color, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}><Icon name={r.icon} size={16} /></div>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:13, fontWeight:600, color:DS.text }}>{r.title}</div>
+                <div style={{ fontSize:11.5, color:DS.muted }}>{r.typeLabel} · {fmtBytes(r.size)}</div>
+              </div>
+              <Btn variant="ghost" icon="eye" small onClick={() => {}}>Open</Btn>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+
+  const body = { overview, announcements, homework, sessions, resources: resourcesTab };
+
+  if (!Shell) return <div style={{ padding:32 }}><EmptyState icon="book" title="Class unavailable" message="Please reload." /></div>;
+  return (
+    <Shell
+      onBack={onBack} backLabel="My Classes"
+      color={color} bannerTheme="default"
+      chips={[enr.subject, enr.qualification, enr.teacher].filter(Boolean)}
+      title={enr.name} subtitle={`${enr.group} · ${enr.day} ${enr.time} · ${enr.room}`}
+      tabs={TABS} activeTab={tab} onTab={setTab}
+    >
+      {body[tab]}
+    </Shell>
+  );
+};
+
+const StudentClassesPage = ({ section, onNav, comms }) => {
+  const K = window.klasioStudent;
+  const enrolments = K.getEnrolments();
+  const enr = section === 'detail' ? enrolments.find(e => e.classId === window.__studentClassId) : null;
+  if (section === 'detail') {
+    if (!enr) return (
+      <div style={{ padding:'32px' }}>
+        <EmptyState icon="book" title="Class not found" message="This class may have changed." action={<Btn variant="primary" onClick={() => onNav('classes')}>Back to My Classes</Btn>} />
+      </div>
+    );
+    return <StudentClassDetail enr={enr} onNav={onNav} onBack={() => onNav('classes')} comms={comms} />;
+  }
+  return <StudentClassesList onNav={onNav} comms={comms} />;
+};
+
 // ─── Router ────────────────────────────────────────────────────────────────────
-const StudentDashboard = ({ page = 'dashboard', section, onNav }) => {
+const StudentDashboard = ({ page = 'dashboard', section, onNav, comms }) => {
   if (page === 'homework') return <StudentHomework section={section} onNav={onNav} />;
   if (page === 'progress') return <StudentProgressPage />;
   if (page === 'sessions') return <StudentSessionsPage />;
+  if (page === 'classes')  return <StudentClassesPage section={section} onNav={onNav} comms={comms} />;
   if (page === 'reports') return <StudentReports />;
-  return <StudentOverview onNav={onNav} />;
+  return <StudentOverview onNav={onNav} comms={comms} />;
 };
 
 Object.assign(window, { StudentDashboard });

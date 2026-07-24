@@ -2086,19 +2086,6 @@ const seededRand = seed => {
   return () => { h += 0x6D2B79F5; let t = h; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
 };
 
-// Synthesise a few homework assignments for a class (no real homework store link).
-const classHomework = cls => {
-  const rnd = seededRand(cls.id + 'hw');
-  const titles = ['Algebra — Quadratics', 'Practice Paper 2', 'Topic Review Quiz', 'Past Paper Qs', 'Consolidation Set'];
-  const n = 3 + Math.floor(rnd() * 3);
-  return Array.from({ length: n }, (_, i) => {
-    const submitted = Math.round((0.6 + rnd() * 0.4) * cls.students);
-    const avg = 52 + Math.floor(rnd() * 44);
-    const daysAgo = (i + 1) * (2 + Math.floor(rnd() * 4));
-    return { id: `${cls.id}-hw${i}`, title: titles[i % titles.length], submitted, total: cls.students, avg, status: i === 0 ? 'open' : 'marked', daysAgo };
-  });
-};
-
 // Assign / edit the cover teacher for a SINGLE class (the Class-detail entry point);
 // onApply wires to store.setCover. The multi-class, per-class flow that lets each of
 // an away teacher's classes get a different stand-in is TeacherCoverModal, below.
@@ -2263,14 +2250,56 @@ const TeacherCoverModal = ({ open, onClose, store, teacher, classes = [], prefil
   );
 };
 
-// Sections of the admin class detail — the same underline tab strip as the
-// student and teacher profiles, so all three detail pages share one layout.
-const CLASS_DETAIL_TABS = [
-  { id:'overview',   label:'Overview',   icon:'chart' },
-  { id:'students',   label:'Students',   icon:'users' },
-  { id:'homework',   label:'Homework',   icon:'clip' },
-  { id:'attendance', label:'Attendance', icon:'calendar' },
+// Admin class-detail tabs (D2 — read-mostly oversight). Same shared shell as the
+// teacher class workspace (window.ClassDetailShell); the admin differs only in the
+// tab SET, the banner actions and the tab CONTENT — never in layout or styling. The
+// admin can VIEW lesson plans / homework but not author them; its write actions are
+// the operational ones (edit details, assign teacher/cover, enrol/withdraw).
+const ADMIN_CLASS_TABS = [
+  { id:'overview',      label:'Overview',      icon:'chart' },
+  { id:'roster',        label:'Roster',        icon:'users' },
+  { id:'sessions',      label:'Sessions',      icon:'calendar' },
+  { id:'plans',         label:'Lesson plans',  icon:'book' },
+  { id:'homework',      label:'Homework',      icon:'clip' },
+  { id:'announcements', label:'Announcements', icon:'megaphone' },
 ];
+
+const DOW_INDEX = { Sunday:0, Monday:1, Tuesday:2, Wednesday:3, Thursday:4, Friday:5, Saturday:6 };
+const CLASS_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const fmtSessionDate = (d) => `${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()]} ${d.getDate()} ${CLASS_MONTHS[d.getMonth()]}`;
+
+// Materialise a session log for a class (no session store exists — the admin's real
+// concern here is which registers are still open). Occurrences are the class's weekday
+// stepped weekly around "today": past = delivered, future = scheduled. Register-taken
+// is DERIVED (every past register taken except the most recent delivered one — the live
+// gap the admin chases); a low-attendance class deterministically shows one older
+// cancelled session. Attribution follows the live cover window. Stable per class.
+const classSessionLog = (cls, cover, onCover, attendancePct = 100, past = 6, upcoming = 3) => {
+  const dow = DOW_INDEX[cls.day];
+  if (dow == null) return [];
+  const today = new Date(todayISO() + 'T00:00:00');
+  const anchor = new Date(today);
+  anchor.setDate(anchor.getDate() - ((anchor.getDay() - dow + 7) % 7)); // most recent occurrence ≤ today
+  const rnd = seededRand(cls.id + 'sessions');
+  const dates = [];
+  for (let i = past; i >= 1; i--) { const d = new Date(anchor); d.setDate(anchor.getDate() - i * 7); dates.push(d); }
+  for (let i = 0; i <= upcoming; i++) { const d = new Date(anchor); d.setDate(anchor.getDate() + i * 7); dates.push(d); }
+  const pastDates = dates.filter(d => d < today);
+  const lastDelivered = pastDates.length ? pastDates[pastDates.length - 1].getTime() : null;
+  return dates.map((d, i) => {
+    const iso = d.toISOString().slice(0, 10);
+    const inPast = d < today;
+    // one older session cancelled for lower-attendance classes (deterministic)
+    const cancelled = inPast && i === 0 && attendancePct < 85 && rnd() < 0.6;
+    const status = cancelled ? 'cancelled' : inPast ? 'delivered' : 'scheduled';
+    const registerTaken = status === 'delivered' ? d.getTime() !== lastDelivered : null;
+    const covered = onCover && cover && iso >= cover.from && (!cover.to || iso <= cover.to);
+    return {
+      iso, label: fmtSessionDate(d), time: cls.time, status, registerTaken,
+      teacher: covered ? cover.teacher : cls.teacher, covered: !!covered,
+    };
+  });
+};
 
 const ClassDetailPage = () => {
   const store = useAdminStore();
@@ -2279,10 +2308,11 @@ const ClassDetailPage = () => {
   const [modalOpen, setModalOpen] = React.useState(false);
   const [coverOpen, setCoverOpen] = React.useState(false);
   const [tab, setTab] = React.useState('overview');
+  const [sessionDetail, setSessionDetail] = React.useState(null);
 
   // Re-sync per-class state when the opened class changes (the page stays mounted
   // on class→class navigation, so useState initialisers alone wouldn't refresh).
-  React.useEffect(() => { setTab('overview'); }, [id]);
+  React.useEffect(() => { setTab('overview'); setSessionDetail(null); }, [id]);
 
   if (!cls) return (
     <div style={{ padding:'32px' }}>
@@ -2310,172 +2340,260 @@ const ClassDetailPage = () => {
   const teacherHoliday = teacher && (store.holidays[teacher.id] || []).find(h => !h.to || h.to >= todayISO());
   const coverPrefill = cover || (teacherHoliday ? { from: teacherHoliday.from, to: teacherHoliday.to, reason: teacherHoliday.reason } : null);
 
-  // Derived analytics (stable per class). Prefer real roster figures when present.
+  // ── Derived rollups — every number traces to ground-truth records ──
   const rnd = seededRand(cls.id);
-  const avgScore   = roster.length ? Math.round(roster.reduce((a, s) => a + (s.score || 0), 0) / roster.length) : 55 + Math.floor(rnd() * 35);
-  const avgHw      = roster.length ? Math.round(roster.reduce((a, s) => a + (s.hw || 0), 0) / roster.length)    : 60 + Math.floor(rnd() * 35);
-  const attendance = roster.length ? Math.round(roster.reduce((a, s) => a + (s.attendance || 0), 0) / roster.length) : 85 + Math.floor(rnd() * 13);
-  const homework = classHomework(cls);
+  const avgScore   = roster.length ? Math.round(roster.reduce((a, s) => a + (s.score || 0), 0) / roster.length) : 0;
+  const attendance = roster.length ? Math.round(roster.reduce((a, s) => a + (s.attendance || 0), 0) / roster.length) : 0;
+
+  // Homework set for this class — the SAME source the teacher class workspace reads
+  // (window.homeworkFull), matched by year number + group letter, so admin and teacher
+  // never disagree. Read-only: the admin views but never authors an assignment.
+  const yr  = (cls.group.match(/\d+/) || [])[0];
+  const grp = (cls.group.match(/Group\s+([A-Za-z])/i) || [])[1];
+  const classHw = (window.homeworkFull || []).filter(h => {
+    const hy = (h.class.match(/\d+/) || [])[0];
+    const hg = (h.class.match(/Group\s+([A-Za-z])/i) || [])[1];
+    return hy === yr && grp && hg === grp;
+  });
+  const hwSubmitted = classHw.reduce((a, h) => a + h.submitted, 0);
+  const hwTotal     = classHw.reduce((a, h) => a + h.total, 0);
+  const hwCompletion = hwTotal ? Math.round((hwSubmitted / hwTotal) * 100) : 0;
+
+  // Lesson plans recorded for this class — read straight from the plans store, keyed
+  // by class group. Read-only (D2). State derives from the plan date vs today.
+  const plans = Object.values(window.__lessonPlans || {})
+    .filter(p => p.group === cls.group)
+    .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+  // Session log (derived — no session store; see helper). Register-taken is the
+  // admin's real concern here.
+  const sessions = classSessionLog(cls, cover, onCover, attendance);
+  const delivered = sessions.filter(s => s.status === 'delivered').length;
+  const scheduled = sessions.filter(s => s.status === 'scheduled').length;
+  const openRegisters = sessions.filter(s => s.status === 'delivered' && s.registerTaken === false).length;
+
+  // Class-scoped announcements (read-only oversight — every class post, whatever role
+  // it targeted). Read count + reach derived at render (window.classAnnouncementsFor).
+  const centreId = 'bm';
+  const announcements = window.classAnnouncementsFor ? window.classAnnouncementsFor(centreId, cls.id) : [];
+
   const weeks = ['W1','W2','W3','W4','W5','W6','W7','W8'];
-  const attTrend   = weeks.map(() => 78 + Math.round(rnd() * 20));
-  const scoreTrend = weeks.map((_, i) => Math.max(40, Math.min(98, avgScore - 10 + i * 2 + Math.round((rnd() - 0.5) * 8))));
+  const scoreTrend = weeks.map((_, i) => Math.max(40, Math.min(98, (avgScore || 60) - 10 + i * 2 + Math.round((rnd() - 0.5) * 8))));
 
   const handleSave = data => store.updateClass(cls.id, data);
   const gridCols = { display:'grid', gridTemplateColumns:'minmax(0,1fr) minmax(0,1fr)', gap:18, alignItems:'start' };
   const span2 = { gridColumn:'1 / -1' };
+  const gradeLevel = level ? level.name : (/A-?level/i.test(cls.name) ? 'A-Level' : /GCSE/i.test(cls.name) ? 'GCSE' : undefined);
+  const fileSize = (b) => b == null ? '' : b < 1024 ? b + ' B' : b < 1048576 ? Math.round(b / 1024) + ' KB' : (b / 1048576).toFixed(1) + ' MB';
+  const planState = (iso) => (iso && iso < todayISO()) ? { label:'Delivered', tone:'positive' } : { label:'Planned', tone:'info' };
+  const nextSession = sessions.find(s => s.status === 'scheduled');
 
-  // ── Header — back + hero card (mirrors the student/teacher profiles) ──
-  const header = (
-    <>
-      <FlowHeader title={cls.name} subtitle={`${cls.group} · ${cls.day} ${cls.time} · ${cls.teacher}`} onBack={() => adminNav('classes')} />
+  const ClassDetailShell = window.ClassDetailShell;
 
-      {/* Cover banner — only while the substitute window is live */}
-      {onCover && (
-        <div style={{ display:'flex', gap:12, alignItems:'center', padding:'12px 16px', marginBottom:16, background:DS.warningBg, border:`1px solid ${DS.warningBorder}`, borderRadius:10 }}>
-          <Icon name="teacher" size={18} color={DS.warning} />
-          <div style={{ fontSize:13, color:DS.sub, lineHeight:1.5, flex:1 }}>
-            <strong style={{ color:DS.text }}>{cls.teacher} is away</strong> — <strong style={{ color:DS.text }}>{onCover.teacher}</strong> is covering this class until {fmtDay(onCover.to)}{onCover.reason ? ` (${onCover.reason})` : ''}.
-          </div>
-          <Btn variant="secondary" small icon="edit" onClick={() => setCoverOpen(true)}>Manage</Btn>
-        </div>
-      )}
+  // ── Attention chips (D — named, deterministic, admin-only; never a numeric risk
+  //    score or ranking, and never shown on a student surface) ──
+  const attentionChips = (s) => {
+    const out = [];
+    if ((s.attendance || 0) < 80) out.push('Attendance below threshold');
+    if ((s.hw || 0) < 50) out.push('Homework below threshold');
+    return out;
+  };
 
-      <Card style={{ marginBottom:16 }}>
-        <div style={{ padding:'22px 24px', display:'flex', alignItems:'center', gap:18 }}>
-          <div style={{ width:64, height:64, borderRadius:16, background:color+'18', color, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}><Icon name="book" size={28} /></div>
-          <div style={{ flex:1, minWidth:0 }}>
-            <div style={{ fontSize:20, fontWeight:700, color:DS.text }}>{cls.name}</div>
-            <div style={{ fontSize:13, color:DS.muted, marginTop:2 }}>{cls.group} · {cls.day} {cls.time} · {cls.room || 'No room'} · {cls.teacher}</div>
-            <div style={{ marginTop:8, display:'flex', gap:6, flexWrap:'wrap', alignItems:'center' }}>
-              <Badge variant={cls.status === 'paused' ? 'default' : 'success'}>{cls.status === 'paused' ? 'Paused' : 'Active'}</Badge>
-              {[subject && subject.name, level && level.name, examBoard && examBoard.name, `${cls.students} students`].filter(Boolean).map(t => (
-                <span key={t} style={{ fontSize:11.5, padding:'3px 9px', background:DS.surface, border:`1px solid ${DS.border}`, borderRadius:14, color:DS.sub }}>{t}</span>
-              ))}
-            </div>
-          </div>
-          <div style={{ display:'flex', gap:8 }}>
-            <Btn variant="secondary" icon="message" onClick={() => window.__navigate && window.__navigate('admin', 'comms')}>Message Class</Btn>
-            <Btn variant="primary" icon="edit" onClick={() => setModalOpen(true)}>Edit Class</Btn>
-          </div>
-        </div>
-      </Card>
-    </>
+  // Cover banner shown above the shell banner (operational, live only).
+  const coverBanner = onCover ? (
+    <div style={{ display:'flex', gap:12, alignItems:'center', padding:'12px 16px', marginBottom:16, background:DS.warningBg, border:`1px solid ${DS.warningBorder}`, borderRadius:10 }}>
+      <Icon name="teacher" size={18} color={DS.warning} />
+      <div style={{ fontSize:13, color:DS.sub, lineHeight:1.5, flex:1 }}>
+        <strong style={{ color:DS.text }}>{cls.teacher} is away</strong> — <strong style={{ color:DS.text }}>{onCover.teacher}</strong> is covering this class until {fmtDay(onCover.to)}{onCover.reason ? ` (${onCover.reason})` : ''}.
+      </div>
+      <Btn variant="secondary" small icon="edit" onClick={() => setCoverOpen(true)}>Manage</Btn>
+    </div>
+  ) : null;
+
+  const bannerActions = (
+    <div style={{ display:'flex', gap:8 }}>
+      <Btn variant="secondary" icon="message" small onClick={() => window.__navigate && window.__navigate('admin', 'comms')}>Message class</Btn>
+      <Btn variant="secondary" icon="edit" small onClick={() => setModalOpen(true)}>Edit class</Btn>
+    </div>
   );
 
-  // ── LEFT (fixed): class facts + teacher, kept to hand while the tabs scroll ──
-  const aside = (
-    <aside style={{ width:336, flexShrink:0, overflow:'auto', display:'flex', flexDirection:'column', gap:16, paddingTop:2, paddingRight:2, paddingBottom:24 }}>
-      <Card title="Class Details" icon="book" accent={color}>
-        <div style={{ padding:'4px 20px 12px' }}>
-          {profileFacts([
-            ['Subject', subject ? subject.name : cls.name.replace(/^(GCSE|A-Level)\s/, '')],
-            ['Year group', yearGroup ? yearGroup.name : cls.group],
-            level && ['Level', level.name],
-            examBoard && ['Exam board', examBoard.name],
-            ['Schedule', `${cls.day} · ${cls.time}`],
-            ['Room', cls.room || '—'],
-            ['Capacity', `${cls.students} / ${cls.capacity} (${fill}% full)`],
-            cls.description && ['Description', cls.description],
-          ])}
-        </div>
-      </Card>
-
-      <Card title="Teacher" icon="user" accent="#DB2777">
-        <div style={{ padding:'14px 20px 16px' }}>
-          {teacher ? (
-            <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
-              <div style={{ display:'flex', alignItems:'center', gap:12 }}>
-                <Avatar name={teacher.name} size={44} color={teacher.color} />
-                <div style={{ minWidth:0 }}>
-                  <div style={{ fontSize:14, fontWeight:700, color:DS.text }}>{teacher.name}</div>
-                  <div style={{ fontSize:12, color:DS.muted, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{teacher.email || '—'}</div>
-                </div>
-              </div>
-              <Btn variant="secondary" icon="user" onClick={() => adminNav('teacher_profile', teacher.id)}>View Teacher</Btn>
-            </div>
-          ) : <div style={{ fontSize:13, color:DS.faint }}>No teacher assigned.</div>}
-
-          {/* Cover / substitute teacher */}
-          <div style={{ marginTop:16, paddingTop:16, borderTop:`1px solid ${DS.border}` }}>
-            {cover ? (
-              <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
-                <div style={{ display:'flex', alignItems:'center', gap:11 }}>
-                  <Avatar name={cover.teacher} size={38} color={coverTeacher && coverTeacher.color} />
-                  <div style={{ minWidth:0, flex:1 }}>
-                    <div style={{ fontSize:10.5, color:DS.muted, textTransform:'uppercase', letterSpacing:0.5, fontWeight:600 }}>Cover teacher</div>
-                    <div style={{ fontSize:13.5, fontWeight:700, color:DS.text }}>{cover.teacher}</div>
-                    <div style={{ fontSize:12, color:DS.muted }}>{fmtRange(cover.from, cover.to)}</div>
-                  </div>
-                  <Badge variant={onCover ? 'warning' : 'default'}>{onCover ? 'Active' : 'Scheduled'}</Badge>
-                </div>
-                {cover.reason && <div style={{ fontSize:12, color:DS.muted }}>{cover.reason}</div>}
-                <div style={{ display:'flex', gap:8 }}>
-                  <Btn variant="secondary" icon="edit" small onClick={() => setCoverOpen(true)} style={{ flex:1 }}>Edit cover</Btn>
-                  <Btn variant="ghost" icon="x" small onClick={() => store.clearCover(cls.id)}>Remove</Btn>
-                </div>
-              </div>
-            ) : teacher ? (
-              <Btn variant="secondary" icon="teacher" onClick={() => setCoverOpen(true)} style={{ width:'100%' }}>Assign cover teacher</Btn>
-            ) : null}
-          </div>
-        </div>
-      </Card>
-    </aside>
-  );
-
-  // ── Tab 1 · Overview — headline stats + score trend + distribution ──
+  // ── Tab · Overview — KPI band + next session + recent activity + facts/teacher ──
   const tabOverview = (
     <div style={gridCols}>
       <Card title="Class performance" icon="chart" accent={DS.accent} style={span2}>
         <div style={{ padding:'16px 20px', display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(130px,1fr))', gap:12 }}>
-          {profileKpiTile('Enrolment', `${cls.students}/${cls.capacity}`)}
-          {profileKpiTile('Avg score', avgScore + '%', avgScore < 60 ? DS.danger : DS.success)}
-          {profileKpiTile('HW completion', avgHw + '%', avgHw < 50 ? DS.danger : DS.success)}
-          {profileKpiTile('Attendance', attendance + '%', attendance < 80 ? DS.danger : DS.success)}
+          {profileKpiTile('Enrolled', `${cls.students}/${cls.capacity}`)}
+          {profileKpiTile('Attendance', roster.length ? attendance + '%' : '—', attendance && attendance < 80 ? DS.danger : DS.success)}
+          {profileKpiTile('HW completion', classHw.length ? hwCompletion + '%' : '—', hwCompletion && hwCompletion < 50 ? DS.danger : DS.success)}
+          {profileKpiTile('Sessions', `${delivered}/${delivered + scheduled}`, undefined)}
         </div>
       </Card>
-      <Card title="Average Score Trend" icon="trending_up" accent={DS.info}>
-        <div style={{ padding:'16px 18px' }}>
-          <LineChart labels={weeks} series={[{ label:'Avg score %', data:scoreTrend, color:DS.accent }]} height={196} />
-        </div>
-      </Card>
-      <Card title="Score Distribution" icon="chart" accent={color}>
-        <div style={{ padding:'16px 18px' }}>
-          <BarChart
-            labels={['0–40','40–60','60–80','80–100']}
-            data={[
-              roster.filter(s => s.score < 40).length || (avgScore < 55 ? 2 : 1),
-              roster.filter(s => s.score >= 40 && s.score < 60).length || 2,
-              roster.filter(s => s.score >= 60 && s.score < 80).length || 3,
-              roster.filter(s => s.score >= 80).length || (avgScore > 75 ? 4 : 2),
-            ]}
-            color={color} height={196}
-          />
-        </div>
-      </Card>
+
+      <div style={{ display:'flex', flexDirection:'column', gap:18 }}>
+        <Card title="Next session" icon="calendar" accent={DS.info}>
+          <div style={{ padding:'16px 20px' }}>
+            {nextSession ? (
+              <div style={{ display:'flex', alignItems:'center', gap:14 }}>
+                <div style={{ width:52, textAlign:'center', flexShrink:0, background:color+'14', borderRadius:10, padding:'8px 0' }}>
+                  <div style={{ fontSize:20, fontWeight:800, color, lineHeight:1 }}>{nextSession.label.split(' ')[1]}</div>
+                  <div style={{ fontSize:10, fontWeight:700, color, letterSpacing:'1px', marginTop:2 }}>{nextSession.label.split(' ')[2].toUpperCase()}</div>
+                </div>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:14, fontWeight:700, color:DS.text }}>{nextSession.label} · {nextSession.time}</div>
+                  <div style={{ fontSize:12.5, color:DS.muted, marginTop:2 }}>{cls.room || 'No room'} · {nextSession.teacher}{nextSession.covered ? ' (cover)' : ''}</div>
+                </div>
+              </div>
+            ) : <div style={{ fontSize:13, color:DS.faint }}>No scheduled sessions.</div>}
+          </div>
+        </Card>
+
+        <Card title="Recent activity" icon="clock" accent={color}>
+          <div>
+            {(() => {
+              const acts = [];
+              sessions.filter(s => s.status === 'delivered').slice(-3).reverse().forEach(s => acts.push({ icon:'check', text:`Session delivered · ${s.label}`, meta: s.registerTaken ? 'Register taken' : 'Register not taken', tone: s.registerTaken ? DS.success : DS.warning }));
+              classHw.slice(0, 2).forEach(h => acts.push({ icon:'clip', text:`Homework: ${h.title}`, meta:`Set ${h.set} · ${h.submitted}/${h.total} in`, tone: DS.muted }));
+              announcements.slice(0, 2).forEach(a => acts.push({ icon:'megaphone', text:`Announcement: ${a.title}`, meta:`${a.authorName} · ${a.readCount}/${a.recipientCount} read`, tone: DS.muted }));
+              return acts.length ? acts.slice(0, 6).map((a, i) => (
+                <div key={i} style={{ display:'flex', alignItems:'center', gap:11, padding:'11px 20px', borderTop: i ? `1px solid ${DS.border}` : 'none' }}>
+                  <Icon name={a.icon} size={15} color={a.tone} />
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:12.5, fontWeight:600, color:DS.text }}>{a.text}</div>
+                    <div style={{ fontSize:11.5, color:a.tone === DS.warning ? DS.warning : DS.muted }}>{a.meta}</div>
+                  </div>
+                </div>
+              )) : <div style={{ padding:'20px', fontSize:13, color:DS.faint }}>No recent activity.</div>;
+            })()}
+          </div>
+        </Card>
+      </div>
+
+      <div style={{ display:'flex', flexDirection:'column', gap:18 }}>
+        <Card title="Class details" icon="book" accent={color}>
+          <div style={{ padding:'4px 20px 12px' }}>
+            {profileFacts([
+              ['Subject', subject ? subject.name : cls.name.replace(/^(GCSE|A-Level)\s/, '')],
+              ['Year group', yearGroup ? yearGroup.name : cls.group],
+              level && ['Level', level.name],
+              examBoard && ['Exam board', examBoard.name],
+              ['Schedule', `${cls.day} · ${cls.time}`],
+              ['Room', cls.room || '—'],
+              ['Capacity', `${cls.students} / ${cls.capacity} (${fill}% full)`],
+              cls.description && ['Description', cls.description],
+            ])}
+          </div>
+        </Card>
+
+        <Card title="Teacher" icon="user" accent="#DB2777">
+          <div style={{ padding:'14px 20px 16px' }}>
+            {teacher ? (
+              <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+                <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+                  <Avatar name={teacher.name} size={44} color={teacher.color} />
+                  <div style={{ minWidth:0 }}>
+                    <div style={{ fontSize:14, fontWeight:700, color:DS.text }}>{teacher.name}</div>
+                    <div style={{ fontSize:12, color:DS.muted, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{teacher.email || '—'}</div>
+                  </div>
+                </div>
+                <Btn variant="secondary" icon="user" onClick={() => adminNav('teacher_profile', teacher.id)}>View teacher</Btn>
+              </div>
+            ) : <div style={{ fontSize:13, color:DS.faint }}>No teacher assigned.</div>}
+
+            <div style={{ marginTop:16, paddingTop:16, borderTop:`1px solid ${DS.border}` }}>
+              {cover ? (
+                <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:11 }}>
+                    <Avatar name={cover.teacher} size={38} color={coverTeacher && coverTeacher.color} />
+                    <div style={{ minWidth:0, flex:1 }}>
+                      <div style={{ fontSize:10.5, color:DS.muted, textTransform:'uppercase', letterSpacing:0.5, fontWeight:600 }}>Cover teacher</div>
+                      <div style={{ fontSize:13.5, fontWeight:700, color:DS.text }}>{cover.teacher}</div>
+                      <div style={{ fontSize:12, color:DS.muted }}>{fmtRange(cover.from, cover.to)}</div>
+                    </div>
+                    <Badge variant={onCover ? 'warning' : 'default'}>{onCover ? 'Active' : 'Scheduled'}</Badge>
+                  </div>
+                  {cover.reason && <div style={{ fontSize:12, color:DS.muted }}>{cover.reason}</div>}
+                  <div style={{ display:'flex', gap:8 }}>
+                    <Btn variant="secondary" icon="edit" small onClick={() => setCoverOpen(true)} style={{ flex:1 }}>Edit cover</Btn>
+                    <Btn variant="ghost" icon="x" small onClick={() => store.clearCover(cls.id)}>Remove</Btn>
+                  </div>
+                </div>
+              ) : teacher ? (
+                <Btn variant="secondary" icon="teacher" onClick={() => setCoverOpen(true)} style={{ width:'100%' }}>Assign cover teacher</Btn>
+              ) : null}
+            </div>
+          </div>
+        </Card>
+      </div>
     </div>
   );
 
-  // ── Tab 2 · Students — enrolled roster ──
-  const tabStudents = (
-    <div style={gridCols}>
-      <Card title={`Enrolled Students · ${roster.length}`} icon="users" accent={DS.accent} style={span2} actions={
-        <Btn variant="secondary" icon="users" small onClick={() => adminNav('class_roster', cls.id)}>Manage roster</Btn>
-      }>
-        {roster.length === 0 ? (
-          <EmptyState icon="graduation" title="No students enrolled" message="Add already signed-up students from the class roster." action={<Btn variant="primary" icon="users" small onClick={() => adminNav('class_roster', cls.id)}>Manage roster</Btn>} />
-        ) : (
-          <Table
-            cols={['Student','Year','Attendance','HW %','Avg Score','']}
-            rows={roster.map(s => [
-              <button onClick={() => adminNav('student_profile', s.id)} style={{ background:'none', border:'none', padding:0, cursor:'pointer', textAlign:'left' }}>
-                <span style={{ fontSize:13, fontWeight:600, color:DS.accent }}>{studentName(s)}</span>
-              </button>,
-              <span style={{ fontSize:13, color:DS.muted }}>{s.year}</span>,
+  // ── Tab · Roster — enrolled students with attention chips + withdraw ──
+  const tabRoster = (
+    <Card title={`Enrolled students · ${roster.length}`} icon="users" accent={DS.accent} actions={
+      <Btn variant="secondary" icon="users" small onClick={() => adminNav('class_roster', cls.id)}>Manage roster</Btn>
+    }>
+      {roster.length === 0 ? (
+        <EmptyState icon="graduation" title="No students enrolled" message="Add already signed-up students from the class roster." action={<Btn variant="primary" icon="users" small onClick={() => adminNav('class_roster', cls.id)}>Manage roster</Btn>} />
+      ) : (
+        <Table
+          cols={['Student','Attendance','HW %','Grade','Guardian','']}
+          rows={roster.map(s => {
+            const chips = attentionChips(s);
+            const grade = window.klasioStudent ? window.klasioStudent.formatGrade(s.score, gradeLevel) : s.score;
+            return [
+              <div>
+                <button onClick={() => adminNav('student_profile', s.id)} style={{ background:'none', border:'none', padding:0, cursor:'pointer', textAlign:'left' }}>
+                  <span style={{ fontSize:13, fontWeight:600, color:DS.accent }}>{studentName(s)}</span>
+                </button>
+                <div style={{ fontSize:11, color:DS.muted }}>{s.year}</div>
+                {chips.length > 0 && (
+                  <div style={{ display:'flex', gap:5, flexWrap:'wrap', marginTop:4 }}>
+                    {chips.map(c => <span key={c} style={{ fontSize:10.5, fontWeight:600, color:DS.warning, background:DS.warningBg, border:`1px solid ${DS.warningBorder}`, padding:'1px 7px', borderRadius:999 }}>{c}</span>)}
+                  </div>
+                )}
+              </div>,
               <span style={{ fontSize:13, fontWeight:600, color: s.attendance < 80 ? DS.danger : DS.success }}>{s.attendance}%</span>,
               <span style={{ fontSize:13, fontWeight:600, color: s.hw < 50 ? DS.danger : DS.success }}>{s.hw}%</span>,
-              <ScorePill score={s.score} />,
-              <Btn variant="ghost" icon="eye" small onClick={() => adminNav('student_profile', s.id)}>Profile</Btn>,
+              <span style={{ fontSize:13, fontWeight:700, color:DS.text }}>{grade}</span>,
+              <div style={{ fontSize:12, color:DS.muted, lineHeight:1.4 }}>
+                <div style={{ color:DS.sub }}>{s.guardianName || '—'}</div>
+                <div>{s.guardianPhone || s.guardianEmail || ''}</div>
+              </div>,
+              <div style={{ display:'flex', gap:4, justifyContent:'flex-end' }}>
+                <Btn variant="ghost" icon="eye" small onClick={() => adminNav('student_profile', s.id)}>View</Btn>
+                <Btn variant="ghost" icon="x" small onClick={() => { if (window.confirm(`Withdraw ${studentName(s)} from ${cls.name}?`)) store.removeFromClass(cls.id, s.id); }}>Withdraw</Btn>
+              </div>,
+            ];
+          })}
+        />
+      )}
+    </Card>
+  );
+
+  // ── Tab · Sessions — derived log, register-taken is the admin's concern ──
+  const tabSessions = (
+    <div>
+      <div style={{ display:'flex', gap:14, marginBottom:18, flexWrap:'wrap' }}>
+        <Card style={{ flex:1, minWidth:150 }}><div style={{ padding:'14px 18px' }}>{profileKpiTile('Delivered', delivered)}</div></Card>
+        <Card style={{ flex:1, minWidth:150 }}><div style={{ padding:'14px 18px' }}>{profileKpiTile('Scheduled', scheduled)}</div></Card>
+        <Card style={{ flex:1, minWidth:150 }}><div style={{ padding:'14px 18px' }}>{profileKpiTile('Open registers', openRegisters, openRegisters ? DS.warning : DS.success)}</div></Card>
+      </div>
+      <Card title="Sessions" icon="calendar" accent={DS.info}>
+        {sessions.length === 0 ? (
+          <EmptyState icon="calendar" title="No sessions" message="This class has no scheduled day." />
+        ) : (
+          <Table
+            cols={['Date','Time','Teacher','Register','Status']}
+            rows={sessions.slice().reverse().map(s => [
+              <button onClick={() => setSessionDetail(s)} style={{ background:'none', border:'none', padding:0, cursor:'pointer', textAlign:'left' }}>
+                <span style={{ fontSize:13, fontWeight:600, color:DS.accent }}>{s.label}</span>
+              </button>,
+              <span style={{ fontSize:13, color:DS.muted }}>{s.time}</span>,
+              <span style={{ fontSize:13, color:DS.sub }}>{s.teacher}{s.covered ? <span style={{ color:DS.warning, fontWeight:600 }}> · cover</span> : ''}</span>,
+              s.registerTaken == null
+                ? <span style={{ fontSize:12.5, color:DS.faint }}>—</span>
+                : <StatusPill status={s.registerTaken ? 'Taken' : 'Not taken'} tone={s.registerTaken ? 'positive' : 'warning'} />,
+              <StatusPill status={s.status === 'delivered' ? 'Delivered' : s.status === 'cancelled' ? 'Cancelled' : 'Scheduled'} tone={s.status === 'delivered' ? 'positive' : s.status === 'cancelled' ? 'negative' : 'info'} />,
             ])}
           />
         )}
@@ -2483,60 +2601,146 @@ const ClassDetailPage = () => {
     </div>
   );
 
-  // ── Tab 3 · Homework ──
+  // ── Tab · Lesson plans (read-only oversight; no authoring — D2) ──
+  const tabPlans = (
+    <Card title={`Lesson plans · ${plans.length}`} icon="book" accent={color}>
+      {plans.length === 0 ? (
+        <EmptyState icon="book" title="No lesson plans recorded for this class yet" message="Lesson plans are authored by the class teacher; there is nothing to show here yet." />
+      ) : (
+        <div>
+          {plans.map((p, i) => {
+            const st = planState(p.date);
+            const res = (p.plan && p.plan.resources) || [];
+            return (
+              <div key={p.date + i} style={{ padding:'16px 20px', borderTop: i ? `1px solid ${DS.border}` : 'none', display:'flex', gap:16, alignItems:'flex-start' }}>
+                <div style={{ width:52, textAlign:'center', flexShrink:0 }}>
+                  <div style={{ fontSize:11, color:DS.muted, textTransform:'uppercase', fontWeight:600 }}>{CLASS_MONTHS[Number((p.date || '').slice(5, 7)) - 1] || ''}</div>
+                  <div style={{ fontSize:22, fontWeight:800, color, lineHeight:1 }}>{Number((p.date || '').slice(8, 10)) || ''}</div>
+                </div>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                    <div style={{ fontSize:14, fontWeight:700, color:DS.text }}>{p.plan.title}</div>
+                    <StatusPill status={st.label} tone={st.tone} />
+                  </div>
+                  <div style={{ fontSize:12, color:DS.muted, marginTop:2 }}>{p.plan.topic}{p.plan.duration ? ` · ${p.plan.duration} min` : ''}{p.owner ? ` · ${p.owner}` : ''}</div>
+                  {p.plan.objectives && <div style={{ fontSize:12.5, color:DS.sub, marginTop:8, lineHeight:1.5, display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical', overflow:'hidden' }}>{p.plan.objectives.replace(/•/g, '').replace(/\n/g, ' ').trim()}</div>}
+                  {res.length > 0 && (
+                    <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginTop:10 }}>
+                      {res.map(r => (
+                        <span key={r.id} style={{ display:'inline-flex', alignItems:'center', gap:6, fontSize:11.5, color:DS.sub, background:DS.surface, border:`1px solid ${DS.border}`, borderRadius:8, padding:'4px 9px' }}>
+                          <Icon name="file" size={12} color={DS.faint} />{r.name}<span style={{ color:DS.faint }}>· {fileSize(r.size)}</span>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
+  );
+
+  // ── Tab · Homework (read-only; routes into the homework surface, doesn't rebuild it) ──
   const tabHomework = (
-    <div style={gridCols}>
-      <Card title="Homework" icon="clip" accent="#0891B2" style={span2} actions={<Btn variant="secondary" icon="plus" small onClick={() => window.__navigate && window.__navigate('admin', 'classes')}>Assign</Btn>}>
+    <Card title={`Homework · ${classHw.length}`} icon="clip" accent="#0891B2">
+      {classHw.length === 0 ? (
+        <EmptyState icon="clip" title="No homework set for this class yet" message="Assignments are set by the class teacher on the Homework page." />
+      ) : (
         <Table
-          cols={['Assignment','Submitted','Avg Score','Set','Status']}
-          rows={homework.map(h => [
-            <span style={{ fontSize:13, fontWeight:600, color:DS.text }}>{h.title}</span>,
+          cols={['Assignment','Targets','Submitted','Marked','Avg','Due']}
+          rows={classHw.map(h => [
+            <button onClick={() => window.__navigate && window.__navigate('admin', 'reports')} style={{ background:'none', border:'none', padding:0, cursor:'pointer', textAlign:'left' }}>
+              <span style={{ fontSize:13, fontWeight:600, color:DS.text }}>{h.title}</span>
+            </button>,
+            <span style={{ fontSize:12.5, color:DS.muted }}>Whole class</span>,
             <div style={{ display:'flex', alignItems:'center', gap:8 }}>
               <div style={{ width:54, height:6, background:DS.surface, borderRadius:3, overflow:'hidden' }}>
                 <div style={{ width:`${h.total ? Math.round((h.submitted/h.total)*100) : 0}%`, height:'100%', background:DS.accent }} />
               </div>
               <span style={{ fontSize:12.5, color:DS.sub, fontVariantNumeric:'tabular-nums' }}>{h.submitted}/{h.total}</span>
             </div>,
-            <ScorePill score={h.avg} />,
-            <span style={{ fontSize:12.5, color:DS.muted }}>{h.daysAgo}d ago</span>,
-            <StatusPill status={h.status === 'open' ? 'Open' : 'Marked'} tone={h.status === 'open' ? 'warning' : 'positive'} />,
+            <span style={{ fontSize:12.5, color:DS.sub, fontVariantNumeric:'tabular-nums' }}>{h.marked}/{h.total}</span>,
+            h.avgScore != null ? <ScorePill score={h.avgScore} /> : <span style={{ fontSize:12.5, color:DS.faint }}>—</span>,
+            <span style={{ fontSize:12.5, color:DS.muted }}>{h.due}</span>,
           ])}
         />
-      </Card>
-    </div>
+      )}
+    </Card>
   );
 
-  // ── Tab 4 · Attendance ──
-  const tabAttendance = (
-    <div style={gridCols}>
-      <Card title="Attendance by Week" icon="calendar" accent={DS.success} style={span2} actions={<span style={{ fontSize:12, color:DS.muted }}>{attendance}% average</span>}>
-        <div style={{ padding:'16px 18px' }}>
-          <BarChart labels={weeks} data={attTrend} color={DS.success} height={220} />
+  // ── Tab · Announcements (class-scoped posts; author, sent date, read count) ──
+  const tabAnnouncements = (
+    <Card title={`Class announcements · ${announcements.length}`} icon="megaphone" accent={DS.accent}>
+      {announcements.length === 0 ? (
+        <EmptyState icon="megaphone" title="No class announcements" message="Announcements posted to this class will appear here." />
+      ) : (
+        <div>
+          {announcements.map((a, i) => (
+            <div key={a.id} style={{ padding:'15px 20px', borderTop: i ? `1px solid ${DS.border}` : 'none' }}>
+              <div style={{ display:'flex', alignItems:'flex-start', gap:12 }}>
+                <Avatar name={a.authorName} size={36} color={color} />
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+                    <span style={{ fontSize:13.5, fontWeight:700, color:DS.text }}>{a.title}</span>
+                    {a.pinned && <Badge variant="default">Pinned</Badge>}
+                    {a.requiresAck && <Badge variant="warning">Ack required</Badge>}
+                  </div>
+                  <div style={{ fontSize:11.5, color:DS.muted, marginTop:1 }}>{a.authorName} · {fmtDay(a.createdAt.slice(0, 10))}</div>
+                  <div style={{ fontSize:12.5, color:DS.sub, marginTop:8, lineHeight:1.5 }}>{a.body}</div>
+                </div>
+                <div style={{ textAlign:'right', flexShrink:0 }}>
+                  <div style={{ fontSize:16, fontWeight:800, color:DS.text, fontVariantNumeric:'tabular-nums' }}>{a.readCount}/{a.recipientCount}</div>
+                  <div style={{ fontSize:10.5, color:DS.faint, textTransform:'uppercase', letterSpacing:0.5 }}>Read</div>
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
-      </Card>
-    </div>
+      )}
+    </Card>
   );
 
-  const tabBody = { overview:tabOverview, students:tabStudents, homework:tabHomework, attendance:tabAttendance };
+  const tabBody = { overview:tabOverview, roster:tabRoster, sessions:tabSessions, plans:tabPlans, homework:tabHomework, announcements:tabAnnouncements };
 
-  // Fixed full-height shell: header stays put, the aside and tab panel scroll
-  // independently — identical chrome to the student profile.
   return (
-    <div style={{ height:'calc(100vh - 52px)', display:'flex', flexDirection:'column', overflow:'hidden' }}>
-      <div style={{ flexShrink:0, padding:'24px 28px 0' }}>{header}</div>
-      <div style={{ flex:1, display:'flex', gap:18, overflow:'hidden', minHeight:0, padding:'0 28px' }}>
-        {aside}
-        <main style={{ flex:1, minWidth:0, display:'flex', flexDirection:'column', overflow:'hidden' }}>
-          <ProfileTabStrip tabs={CLASS_DETAIL_TABS} active={tab} onChange={setTab} />
-          <div style={{ flex:1, overflow:'auto', paddingTop:16, paddingRight:2, paddingBottom:24 }}>
-            {tabBody[tab]}
-          </div>
-        </main>
-      </div>
+    <div style={{ height:'calc(100vh - 52px)', overflow:'auto' }}>
+      <ClassDetailShell
+        onBack={() => adminNav('classes')} backLabel="Classes"
+        color={color} bannerTheme="default"
+        chips={[subject && subject.name, level && level.name, examBoard && examBoard.name, cls.status === 'paused' ? 'Paused' : 'Active', `${cls.students}/${cls.capacity}`]}
+        title={cls.name} subtitle={`${cls.group} · ${cls.day} ${cls.time} · ${cls.room || 'No room'} · ${cls.teacher}`}
+        bannerRight={bannerActions} preBanner={coverBanner}
+        tabs={ADMIN_CLASS_TABS} activeTab={tab} onTab={setTab}
+      >
+        {tabBody[tab]}
+      </ClassDetailShell>
 
       <ClassFormModal open={modalOpen} onClose={() => setModalOpen(false)} onSave={handleSave} store={store} teachers={store.teachers} editing={cls} />
       <CoverModal open={coverOpen} onClose={() => setCoverOpen(false)} store={store} awayName={cls.teacher} classes={[cls]}
         prefill={coverPrefill} editing={!!cover} onApply={cv => store.setCover(cls.id, cv)} onClear={() => store.clearCover(cls.id)} />
+
+      <SlideOver open={!!sessionDetail} onClose={() => setSessionDetail(null)} title={sessionDetail ? sessionDetail.label : 'Session'} subtitle={cls.name} icon="calendar" iconColor={color}>
+        {sessionDetail && (
+          <div style={{ padding:'8px 4px', display:'flex', flexDirection:'column', gap:0 }}>
+            {profileFacts([
+              ['Class', cls.name],
+              ['Date', sessionDetail.label],
+              ['Time', sessionDetail.time],
+              ['Room', cls.room || '—'],
+              ['Teacher', sessionDetail.teacher + (sessionDetail.covered ? ' (cover)' : '')],
+              ['Status', sessionDetail.status.charAt(0).toUpperCase() + sessionDetail.status.slice(1)],
+              sessionDetail.registerTaken != null && ['Register', sessionDetail.registerTaken ? 'Taken' : 'Not taken'],
+            ])}
+            {sessionDetail.status === 'delivered' && sessionDetail.registerTaken === false && (
+              <div style={{ marginTop:14 }}>
+                <Btn variant="secondary" icon="check" onClick={() => { setSessionDetail(null); window.__navigate && window.__navigate('admin', 'attendance'); }}>Open attendance</Btn>
+              </div>
+            )}
+          </div>
+        )}
+      </SlideOver>
     </div>
   );
 };

@@ -23,12 +23,15 @@
 const RES_STORE_KEY = 'klasio.resources.v1';
 
 // ── Tone + type/visibility resolution (DS tokens only — no raw hex) ──────────────
-const resToneColor = (name) => ({
-  accent: DS.accent, success: DS.success, info: DS.info, warning: DS.warning,
-  danger: DS.danger, muted: DS.muted, violet: shadeColor(DS.accent, -32),
-}[name] || DS.muted);
 const resType = (id) => (window.RES_TYPES || []).find(t => t.id === id) || { id, label: id, icon: 'file', tone: 'muted', studentDefault: true };
 const resVis  = (id) => (window.RES_VISIBILITY || []).find(v => v.id === id) || { id, label: id, icon: 'file', desc: '' };
+
+// Level (key-stage band) is derived from the year group unless a resource carries
+// an explicit `level`. One resolver so the facet filter, the row meta and the add
+// form always agree. Seeds predate the field, so they resolve via the year group.
+const RES_LEVELS = ['GCSE', 'A-Level'];
+const resDeriveLevel = (year) => (year === 'Year 12' || year === 'Year 13') ? 'A-Level' : 'GCSE';
+const resLevel = (res) => (res && res.level) ? res.level : resDeriveLevel(res && res.year_group);
 
 // Human date — '18 Apr 2026' from an ISO yyyy-mm-dd.
 const resFmtDate = (iso) => {
@@ -56,6 +59,7 @@ const resSeed = () => ({
   links:     JSON.parse(JSON.stringify(window.RES_LINKS_SEED || [])),
   staff:     JSON.parse(JSON.stringify(window.RES_STAFF || [])),
   accessLog: [],            // D4 — admin opens of a private file
+  usage_events: [],         // Stage 5 — append-only attach history (survives detach)
   actingTeacherId: 't1',    // demo: which teacher the teacher-lens is acting as
 });
 const resRead = () => {
@@ -71,6 +75,7 @@ const resRead = () => {
         links:     p.links     || seed.links,
         staff:     p.staff     || seed.staff,
         accessLog: p.accessLog || [],
+        usage_events: p.usage_events || [],
         actingTeacherId: p.actingTeacherId || 't1',
       };
     }
@@ -121,6 +126,30 @@ const resUsedCount = (st, resourceId) => (st.links || []).filter(l => l.resource
 const resLinksForResource = (st, resourceId) => (st.links || []).filter(l => l.resource_id === resourceId);
 const resLinksForContext = (st, type, id) => (st.links || []).filter(l => l.context_type === type && l.context_id === id);
 
+// Active centre (multi-tenant stamp for usage events — the store itself is still
+// single-tenant, so this is captured for later, defensively). Returns null if unset.
+const resActiveCentre = () => { try { return localStorage.getItem('tutoros.activeCentre') || null; } catch (e) { return null; } };
+
+// Topic at attach time (Stage 5) — read from wherever the context already knows
+// what it's about. Lesson plans carry an explicit `topic`; homework may too. This
+// is where the lesson knows its subject, so retrofitting is avoided. Best-effort.
+const resTopicForContext = (contextType, contextId) => {
+  try {
+    if (contextType === 'lesson_plan') {
+      const p = (window.__lessonPlans || {})[contextId];
+      return (p && p.plan && p.plan.topic) ? p.plan.topic : '';
+    }
+    if (contextType === 'homework') {
+      const raw = localStorage.getItem('homework_store_v6');
+      if (!raw) return '';
+      const s = JSON.parse(raw);
+      const a = s.assignments && s.assignments[contextId];
+      return a ? (a.topic || '') : '';
+    }
+  } catch (e) {}
+  return '';
+};
+
 // Rows the viewer may browse.
 //   • admin  → every resource (private ones listed as metadata, D4)
 //   • teacher→ own + centre + shared-to-me + others' on_request (locked). Others'
@@ -170,6 +199,7 @@ const useResourcesStore = () => {
       type: fields.type || 'other',
       subject: fields.subject || '',
       year_group: fields.year_group || '',
+      level: fields.level || resDeriveLevel(fields.year_group),
       exam_board: fields.exam_board || 'None',
       created_by: fields.created_by,
       visibility: fields.visibility || 'centre',
@@ -218,14 +248,26 @@ const useResourcesStore = () => {
   });
 
   // Attach = create a pointer. `student_visible` / `visible_from` live on the row (D9).
+  // Stage 5: every attach also writes an append-only usage_event. The link is the
+  // live pointer (removed on detach); the event is history (never removed), so the
+  // day relevance ranking is wanted it has a real signal to rank on. Topic + centre
+  // are captured here, where the context already knows them.
   const attach = (resourceId, contextType, contextId, opts, attachedBy) => mutate(s => {
     if (s.links.some(l => l.resource_id === resourceId && l.context_type === contextType && l.context_id === contextId)) return s;
     const o = opts || {};
-    return { ...s, links: [...s.links, {
-      id: resNewId('lnk'), resource_id: resourceId, context_type: contextType, context_id: contextId,
-      student_visible: !!o.student_visible, visible_from: o.visible_from || null,
-      attached_by: attachedBy, attached_at: resTodayISO(),
-    }] };
+    const at = new Date().toISOString();
+    const event = {
+      id: resNewId('use'), resource_id: resourceId, user: attachedBy, centre: resActiveCentre(),
+      context_type: contextType, context_id: contextId, topic: resTopicForContext(contextType, contextId), at,
+    };
+    return { ...s,
+      links: [...s.links, {
+        id: resNewId('lnk'), resource_id: resourceId, context_type: contextType, context_id: contextId,
+        student_visible: !!o.student_visible, visible_from: o.visible_from || null,
+        attached_by: attachedBy, attached_at: resTodayISO(),
+      }],
+      usage_events: [event, ...(s.usage_events || [])].slice(0, 500),
+    };
   });
   const detach = (linkId) => mutate(s => ({ ...s, links: s.links.filter(l => l.id !== linkId) }));
   const updateLink = (linkId, patch) => mutate(s => ({ ...s, links: s.links.map(l => l.id === linkId ? { ...l, ...patch } : l) }));
@@ -253,15 +295,16 @@ const useResourcesStore = () => {
 };
 
 // ── Small presentational atoms ───────────────────────────────────────────────────
+// Greyscale tile (Stage 2): the glyph SHAPE carries the type; the background no
+// longer re-encodes it in colour. One accent is reserved for interaction only.
 const ResTypeGlyph = ({ type, locked, size = 34 }) => {
   const t = resType(type);
-  const col = locked ? DS.muted : resToneColor(t.tone);
   return (
     <div style={{
-      width: size, height: size, borderRadius: 9, flexShrink: 0,
-      background: locked ? DS.surface : col + '18', color: col,
+      width: size, height: size, borderRadius: 8, flexShrink: 0,
+      background: DS.surface, color: locked ? DS.faint : DS.sub,
       display: 'flex', alignItems: 'center', justifyContent: 'center',
-      border: locked ? `1px solid ${DS.border}` : 'none',
+      border: `1px solid ${DS.border}`,
     }}>
       <Icon name={locked ? 'lock' : t.icon} size={Math.round(size * 0.46)} />
     </div>
@@ -276,95 +319,124 @@ const ResMetaPill = ({ children }) => (
   }}>{children}</span>
 );
 
-// The visibility tag (own rows + admin lens).
+// The access chip. Colour discipline (Stage 2): centre-wide is the norm and gets
+// NO badge — colour is reserved for exceptions. On request = warning (amber),
+// Private = neutral grey. If nothing is coloured, the file is normal.
 const ResVisTag = ({ visibility }) => {
-  const v = resVis(visibility);
-  const tone = visibility === 'centre' ? 'neutral' : visibility === 'on_request' ? 'warning' : 'accent';
-  return <StatusPill status={v.label} tone={tone} />;
+  if (visibility === 'centre') return null;
+  const tone = visibility === 'on_request' ? 'warning' : 'neutral';
+  return <StatusPill status={resVis(visibility).label} tone={tone} />;
 };
 
-// ── Visibility picker (all three values with their plain-English descriptions) ────
-const ResVisibilityPicker = ({ value, onChange }) => (
-  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-    {(window.RES_VISIBILITY || []).map(v => {
-      const on = value === v.id;
-      return (
-        <button key={v.id} type="button" onClick={() => onChange(v.id)}
-          style={{
-            display: 'flex', alignItems: 'flex-start', gap: 11, textAlign: 'left', width: '100%',
-            padding: '11px 13px', borderRadius: 10, cursor: 'pointer',
-            border: `1px solid ${on ? DS.accent : DS.border}`,
-            background: on ? DS.accentLight : DS.bg,
-            boxShadow: on ? `0 0 0 3px ${DS.accentLight}` : 'none',
-          }}>
-          <div style={{ width: 30, height: 30, borderRadius: 8, flexShrink: 0, background: on ? DS.bg : DS.surface, color: on ? DS.accent : DS.muted, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <Icon name={v.icon} size={15} />
-          </div>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 13.5, fontWeight: 600, color: on ? DS.accent : DS.text }}>{v.label}</div>
-            <div style={{ fontSize: 12, color: DS.muted, marginTop: 2, lineHeight: 1.45 }}>{v.desc}</div>
-          </div>
-          {on && <Icon name="check" size={16} color={DS.accent} />}
-        </button>
-      );
-    })}
-  </div>
-);
-
 // ── Add resource modal ───────────────────────────────────────────────────────────
+// One file in, lots of things able to point at it. The visibility Select carries a
+// plain-English line under the footer; Level is captured explicitly (and defaults
+// off the chosen Year). The attach toggle is a signpost — attaching itself always
+// happens from a lesson or homework via AttachResourcesPanel (nothing is copied).
 const ResAddModal = ({ open, onClose, store, createdBy, prefill, onCreated }) => {
   const [title, setTitle] = React.useState('');
   const [description, setDescription] = React.useState('');
   const [type, setType] = React.useState('worksheet');
   const [subject, setSubject] = React.useState('');
   const [year, setYear] = React.useState('');
+  const [level, setLevel] = React.useState('GCSE');
   const [board, setBoard] = React.useState('None');
   const [visibility, setVisibility] = React.useState('centre'); // D2 default
   const [size, setSize] = React.useState(0);
+  const [fileName, setFileName] = React.useState('');
+  const [alsoAttach, setAlsoAttach] = React.useState(false);
   React.useEffect(() => {
     if (!open) return;
     setTitle((prefill && prefill.title) || '');
     setDescription(''); setType((prefill && prefill.type) || 'worksheet');
     setSubject((prefill && prefill.subject) || ''); setYear((prefill && prefill.year_group) || '');
+    setLevel(resDeriveLevel((prefill && prefill.year_group) || ''));
     setBoard('None'); setVisibility('centre'); setSize((prefill && prefill.size) || 0);
+    setFileName(''); setAlsoAttach(false);
   }, [open]);
-  const subjects = (window.RES_TYPES ? Array.from(new Set(((window.RES_RESOURCES_SEED) || []).map(r => r.subject))) : []);
+  const subjects = Array.from(new Set(((window.RES_RESOURCES_SEED) || []).map(r => r.subject))).filter(Boolean);
   const onFile = (e) => {
     const f = e.target.files && e.target.files[0];
     if (!f) return;
     // D10 — a required title is prefilled from the filename; only lightweight
     // metadata is kept (never the bytes) so we never blow the localStorage quota.
     if (!title) setTitle(f.name.replace(/\.[a-z0-9]+$/i, ''));
-    setSize(f.size || 0);
+    setSize(f.size || 0); setFileName(f.name);
     e.target.value = '';
   };
   const save = () => {
     if (!title.trim()) return;
-    const res = store.addResource({ title, description, type, subject, year_group: year, exam_board: board, visibility, size, created_by: createdBy });
+    const res = store.addResource({ title, description, type, subject, year_group: year, level, exam_board: board, visibility, size, created_by: createdBy });
     onCreated && onCreated(res);
     onClose();
   };
+  const ownerName = resStaffName(store, createdBy);
+  const twoCol = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 };
   return (
-    <Modal open={open} onClose={onClose} title="Add a resource" icon="upload" width={560}
-      subtitle="Files added here become part of your library, ready to reuse and attach anywhere."
-      footer={<><Btn variant="ghost" onClick={onClose}>Cancel</Btn><Btn variant="primary" icon="check" onClick={save} disabled={!title.trim()}>Add resource</Btn></>}>
-      <Field label="File">
-        <label style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 13px', border: `1px dashed ${DS.borderDark}`, borderRadius: 10, cursor: 'pointer', background: DS.surface }}>
-          <Icon name="upload" size={16} color={DS.accent} />
-          <span style={{ fontSize: 13, color: DS.sub }}>{size ? `Selected — ${resFmtBytes(size)}` : 'Choose a file (worksheet, slides, PDF, image…)'}</span>
-          <input type="file" onChange={onFile} style={{ display: 'none' }} />
-        </label>
-      </Field>
-      <Field label="Title" required><Input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Quadratic Equations — Worksheet" /></Field>
-      <Field label="Description"><Textarea value={description} onChange={e => setDescription(e.target.value)} placeholder="A line to help colleagues know what this is." style={{ minHeight: 60 }} /></Field>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+    <Modal open={open} onClose={onClose} title="Add to Resources" icon="cloud" width={560}
+      footer={
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: 12 }}>
+          <span style={{ fontSize: 12, color: DS.muted }}>{resVis(visibility).desc}</span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+            <Btn variant="primary" icon="cloud" onClick={save} disabled={!title.trim()}>Add to library</Btn>
+          </div>
+        </div>
+      }>
+      {/* Drop zone (simulated — only lightweight metadata is kept) */}
+      <label style={{
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        gap: 7, textAlign: 'center', padding: '26px 20px', marginBottom: 16, cursor: 'pointer',
+        border: `1.5px dashed ${size ? DS.accentBorder : DS.borderDark}`, borderRadius: 12,
+        background: size ? DS.accentLight : DS.surface,
+      }}>
+        <div style={{ width: 42, height: 42, borderRadius: 11, background: DS.bg, color: DS.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', border: `1px solid ${DS.accentBorder}` }}>
+          <Icon name={size ? 'check' : 'cloud'} size={21} color={DS.accent} />
+        </div>
+        <div style={{ fontSize: 14, fontWeight: 600, color: DS.text }}>{size ? (fileName || 'File selected') : 'Choose a file to add'}</div>
+        <div style={{ fontSize: 12, color: DS.muted }}>{size ? `Simulated upload — ${resFmtBytes(size)}` : 'Simulated upload — nothing leaves your browser'}</div>
+        <input type="file" onChange={onFile} style={{ display: 'none' }} />
+      </label>
+
+      <Field label="Title" required><Input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Quadratics — Mixed Practice" /></Field>
+      <Field label="Note"><Input value={description} onChange={e => setDescription(e.target.value)} placeholder="What's in it, how you use it" /></Field>
+
+      <div style={twoCol}>
         <Field label="Type"><Select value={type} onChange={e => setType(e.target.value)}>{(window.RES_TYPES || []).map(t => <option key={t.id} value={t.id}>{t.label}</option>)}</Select></Field>
-        <Field label="Subject"><Input value={subject} onChange={e => setSubject(e.target.value)} placeholder="e.g. Mathematics" list="res-subjects" />
-          <datalist id="res-subjects">{subjects.map(s => <option key={s} value={s} />)}</datalist></Field>
-        <Field label="Year group"><Select value={year} onChange={e => setYear(e.target.value)}><option value="">—</option>{(window.RES_YEAR_GROUPS || []).map(y => <option key={y} value={y}>{y}</option>)}</Select></Field>
-        <Field label="Exam board"><Select value={board} onChange={e => setBoard(e.target.value)}>{(window.RES_EXAM_BOARDS || []).map(b => <option key={b} value={b}>{b}</option>)}</Select></Field>
+        <Field label="Visibility"><Select value={visibility} onChange={e => setVisibility(e.target.value)}>{(window.RES_VISIBILITY || []).map(v => <option key={v.id} value={v.id}>{v.label}</option>)}</Select></Field>
       </div>
-      <Field label="Who can see this"><ResVisibilityPicker value={visibility} onChange={setVisibility} /></Field>
+      <div style={twoCol}>
+        <Field label="Subject">
+          <Select value={subject} onChange={e => setSubject(e.target.value)}>
+            <option value="">—</option>
+            {subjects.map(s => <option key={s} value={s}>{s}</option>)}
+          </Select>
+        </Field>
+        <Field label="Board"><Select value={board} onChange={e => setBoard(e.target.value)}>{(window.RES_EXAM_BOARDS || []).map(b => <option key={b} value={b}>{b}</option>)}</Select></Field>
+      </div>
+      <div style={twoCol}>
+        <Field label="Level"><Select value={level} onChange={e => setLevel(e.target.value)}>{RES_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}</Select></Field>
+        <Field label="Year"><Select value={year} onChange={e => setYear(e.target.value)}><option value="">—</option>{(window.RES_YEAR_GROUPS || []).map(y => <option key={y} value={y}>{y}</option>)}</Select></Field>
+      </div>
+
+      {/* Attach signpost — the actual pointer is created from a lesson/homework */}
+      <button type="button" onClick={() => setAlsoAttach(a => !a)}
+        style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', textAlign: 'left', padding: '11px 13px', borderRadius: 10, border: `1px solid ${DS.border}`, background: DS.surface, cursor: 'pointer', marginBottom: alsoAttach ? 10 : 14 }}>
+        <Icon name="link" size={16} color={DS.accent} />
+        <span style={{ flex: 1, fontSize: 13, color: DS.sub, fontWeight: 500 }}>Also attach to a lesson or homework</span>
+        <Toggle on={alsoAttach} />
+      </button>
+      {alsoAttach && (
+        <div style={{ fontSize: 12, color: DS.muted, lineHeight: 1.5, padding: '0 2px', marginBottom: 14 }}>
+          It lands in your library now. Open a lesson plan or a homework and use <b style={{ color: DS.sub }}>Attach a resource</b> to point to it — nothing gets copied.
+        </div>
+      )}
+
+      {/* Added-by chip */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '9px 12px', borderRadius: 10, background: DS.accentLight }}>
+        <Avatar name={ownerName} size={26} />
+        <span style={{ fontSize: 12.5, color: DS.sub }}>Added by <b style={{ color: DS.text }}>{ownerName}</b> on {resTodayISO()}</span>
+      </div>
     </Modal>
   );
 };
@@ -464,6 +536,234 @@ const ResWhereUsedDrawer = ({ open, onClose, store, resource }) => {
           })}
         </div>
       )}
+    </SlideOver>
+  );
+};
+
+// ── Resource detail panel ────────────────────────────────────────────────────────
+// The full record for one file with role/visibility-aware actions: open or download
+// (admins get a logged open on restricted files), request access inline, the owner's
+// visibility editor + who-can-open, shared-with/grant, pending access requests, and
+// the used-in pointers. Opening a row opens this.
+const ResDetailRow = ({ label, value }) => value == null || value === '' ? null : (
+  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '8px 0', borderBottom: `1px solid ${DS.border}` }}>
+    <span style={{ fontSize: 12.5, color: DS.muted }}>{label}</span>
+    <span style={{ fontSize: 13, color: DS.text, fontWeight: 500, textAlign: 'right' }}>{value}</span>
+  </div>
+);
+const ResSectionLabel = ({ children, action }) => (
+  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '20px 0 9px' }}>
+    <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: DS.faint }}>{children}</span>
+    {action}
+  </div>
+);
+// One visibility option (radio card). Editable only for the owner.
+const ResVisOption = ({ label, desc, selected, disabled, onSelect }) => (
+  <button type="button" disabled={disabled} onClick={onSelect}
+    style={{
+      display: 'flex', alignItems: 'flex-start', gap: 10, width: '100%', textAlign: 'left', padding: '10px 12px',
+      borderRadius: 10, cursor: disabled ? 'default' : 'pointer', marginBottom: 6,
+      border: `1px solid ${selected ? DS.accent : DS.border}`, background: selected ? DS.accentLight : DS.bg,
+    }}>
+    <span style={{ width: 16, height: 16, borderRadius: 999, flexShrink: 0, marginTop: 1, border: `2px solid ${selected ? DS.accent : DS.borderDark}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      {selected && <span style={{ width: 8, height: 8, borderRadius: 999, background: DS.accent }} />}
+    </span>
+    <span style={{ minWidth: 0 }}>
+      <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: selected ? DS.accent : DS.text }}>{label}</span>
+      <span style={{ display: 'block', fontSize: 12, color: DS.muted, marginTop: 1, lineHeight: 1.45 }}>{desc}</span>
+    </span>
+  </button>
+);
+const ResWhoRow = ({ name, sub, icon }) => (
+  <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0' }}>
+    {icon
+      ? <div style={{ width: 30, height: 30, borderRadius: 999, background: DS.surface, border: `1px solid ${DS.border}`, color: DS.sub, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={icon} size={14} /></div>
+      : <Avatar name={name} size={30} />}
+    <div style={{ minWidth: 0 }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>{name}</div>
+      {sub && <div style={{ fontSize: 11.5, color: DS.muted }}>{sub}</div>}
+    </div>
+  </div>
+);
+
+const ResourceDetail = ({ open, onClose, store, resource, viewerId, isAdmin, onShare, onDelete }) => {
+  const [opened, setOpened] = React.useState(false);   // simulated / logged open confirmation
+  const [note, setNote] = React.useState('');
+  React.useEffect(() => { setOpened(false); setNote(''); }, [resource && resource.id]);
+  if (!open || !resource) return null;
+  const res = resById(store, resource.id) || resource;
+  const t = resType(res.type);
+  const owner = resStaffName(store, res.created_by);
+  const ownerSubject = (resStaffById(store, res.created_by) || {}).subject || 'Staff';
+  const isOwner = res.created_by === viewerId;
+  const sharedToMe = !isOwner && resSharedTo(store, res.id, viewerId);
+  const openableFreely = isOwner || res.visibility === 'centre' || sharedToMe;
+  const adminLogged = !openableFreely && isAdmin;             // admin logged-open on restricted
+  const requestable = !openableFreely && !isAdmin && res.visibility === 'on_request'; // teacher, on-request
+  const requested = resPendingBy(store, res.id, viewerId);
+  const links = resLinksForResource(store, res.id);
+  const board = res.exam_board && res.exam_board !== 'None' ? res.exam_board : null;
+  const shares = (store.shares || []).filter(s => s.resource_id === res.id);
+  const pendingReqs = (store.requests || []).filter(r => r.resource_id === res.id && r.status === 'pending');
+  const activeTeachers = (store.staff || []).filter(s => s.role === 'teacher' && s.active).length;
+
+  const usedLabel = (l) => {
+    if (l.context_type === 'lesson_plan') { const p = String(l.context_id).split('__'); return { kind: 'Lesson', primary: p[0] || l.context_id, secondary: p[1] ? resFmtDate(p[1]) : '' }; }
+    if (l.context_type === 'homework') { const a = window.klasioResources && window.klasioResources.homeworkTitle ? window.klasioResources.homeworkTitle(l.context_id) : null; return { kind: 'Homework', primary: a || 'Homework assignment', secondary: '' }; }
+    return { kind: l.context_type, primary: l.context_id, secondary: '' };
+  };
+  const openFile = () => { if (adminLogged) store.logAccess(res.id, viewerId); setOpened(true); };
+  const sendRequest = () => { store.requestAccess(res.id, viewerId, note); setNote(''); };
+
+  // Who can open this file, derived from visibility.
+  const whoRows = res.visibility === 'centre'
+    ? [{ name: 'Everyone at the centre', sub: `${activeTeachers} teacher${activeTeachers === 1 ? '' : 's'}`, icon: 'users' }, { name: owner, sub: `Owner · ${ownerSubject}` }, { name: 'Centre admins', sub: 'Always, like everyone else', icon: 'shield' }]
+    : res.visibility === 'on_request'
+      ? [{ name: owner, sub: `Owner · ${ownerSubject}` }, { name: 'Centre admins', sub: 'Always — opening this is recorded', icon: 'shield' }, ...shares.map(s => ({ name: resStaffName(store, s.staff_id), sub: 'Granted access' })), { name: 'Anyone else, if the owner agrees', sub: 'They ask, the owner decides', icon: 'lock' }]
+      : [{ name: owner, sub: `Owner · ${ownerSubject}` }, { name: 'Centre admins', sub: 'Can see it exists — opening is recorded', icon: 'shield' }];
+
+  return (
+    <SlideOver open={open} onClose={onClose} title={res.title} icon={openableFreely ? t.icon : 'lock'} width={500}
+      subtitle={res.description || `${t.label}${res.subject ? ` · ${res.subject}` : ''}`}
+      footer={
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
+          {isOwner && (
+            <button type="button" onClick={() => { onClose(); onDelete && onDelete(res); }}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', padding: '6px 8px', cursor: 'pointer', color: DS.danger, fontSize: 13, fontWeight: 600 }}>
+              <Icon name="trash" size={14} color={DS.danger} /> Delete
+            </button>
+          )}
+          <div style={{ flex: 1 }} />
+          <Btn variant="ghost" onClick={onClose}>Close</Btn>
+        </div>
+      }>
+      {/* Type + visibility badges */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: DS.accent }}>{t.label}</span>
+        {res.visibility === 'centre'
+          ? <StatusPill status="Centre" tone="positive" dot />
+          : <ResVisTag visibility={res.visibility} />}
+        {sharedToMe && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, color: DS.muted }}><Icon name="check" size={12} color={DS.muted} /> Granted to you</span>}
+      </div>
+
+      {/* Owner */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 12, border: `1px solid ${DS.border}`, background: DS.surface, marginBottom: 16 }}>
+        <Avatar name={owner} size={34} />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 600, color: DS.text }}>{owner}</div>
+          <div style={{ fontSize: 11.5, color: DS.muted }}>{ownerSubject} · owner</div>
+        </div>
+      </div>
+
+      {/* Primary action — open / logged open / request */}
+      <div style={{ marginBottom: 4 }}>
+        {(openableFreely || adminLogged) ? (
+          opened ? (
+            <div style={{ padding: '11px 13px', borderRadius: 10, border: `1px solid ${adminLogged ? DS.successBorder : DS.border}`, background: adminLogged ? DS.successBg : DS.surface, fontSize: 12.5, color: adminLogged ? DS.success : DS.sub, lineHeight: 1.5 }}>
+              {adminLogged
+                ? <><b>Access recorded for this session.</b> The owner has been notified that an admin viewed this file.</>
+                : <>Opening <b style={{ color: DS.text }}>{res.title}</b> — preview is simulated in this prototype (files are referenced, not stored).</>}
+            </div>
+          ) : (
+            <>
+              <button type="button" onClick={openFile}
+                style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8, width: '100%', padding: '11px 14px', borderRadius: 10, border: 'none', cursor: 'pointer', fontSize: 13.5, fontWeight: 600, color: '#fff', background: adminLogged ? DS.text : DS.accent }}>
+                <Icon name={adminLogged ? 'eye' : 'download'} size={15} color="#fff" />
+                {adminLogged ? 'Open — this is recorded' : 'Open file'}
+              </button>
+              {adminLogged && <div style={{ fontSize: 12, color: DS.muted, marginTop: 8, lineHeight: 1.5 }}>You are seeing this as a centre admin. {owner} will see that you opened it, and when.</div>}
+            </>
+          )
+        ) : requestable ? (
+          requested ? (
+            <div style={{ padding: '11px 13px', borderRadius: 10, border: `1px solid ${DS.warningBorder}`, background: DS.warningBg, fontSize: 12.5, color: DS.warning }}><b>Request sent.</b> {owner} will decide and you'll get read access if approved.</div>
+          ) : (
+            <div style={{ padding: '12px 13px', borderRadius: 10, border: `1px solid ${DS.warningBorder}`, background: DS.warningBg }}>
+              <div style={{ fontSize: 12.5, color: DS.sub, lineHeight: 1.5, marginBottom: 9 }}>You can see this exists and who owns it. Ask <b style={{ color: DS.text }}>{owner}</b> to open it — add a note so they know why.</div>
+              <Textarea value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. Covering your Year 10 tomorrow — would help to have this." rows={2} style={{ marginBottom: 9 }} />
+              <Btn variant="primary" icon="send" onClick={sendRequest}>Send request</Btn>
+            </div>
+          )
+        ) : (
+          <div style={{ padding: '11px 13px', borderRadius: 10, border: `1px solid ${DS.border}`, background: DS.surface, fontSize: 12.5, color: DS.muted }}>Only the owner can open this file.</div>
+        )}
+      </div>
+
+      {/* Details */}
+      <ResSectionLabel>Details</ResSectionLabel>
+      <div>
+        <ResDetailRow label="Subject" value={board ? `${res.subject} · ${board}` : res.subject} />
+        <ResDetailRow label="Level" value={res.year_group ? `${resLevel(res)} · ${res.year_group}` : resLevel(res)} />
+        <ResDetailRow label="Type" value={t.label} />
+        <ResDetailRow label="Size" value={resFmtBytes(res.size)} />
+        <ResDetailRow label="Added" value={resFmtDate(res.created_at)} />
+      </div>
+
+      {/* Visibility — editable for the owner, read-only otherwise */}
+      <ResSectionLabel>Visibility</ResSectionLabel>
+      {(window.RES_VISIBILITY || []).map(v => (
+        <ResVisOption key={v.id}
+          label={v.id === 'centre' ? 'Anyone at the centre' : v.label}
+          desc={v.id === 'centre' ? 'Every teacher can find and open it.' : v.id === 'on_request' ? 'Colleagues see it exists and who owns it. They must ask the owner before they can open it.' : 'Nobody else sees it. Admins can see it exists — opening it is recorded.'}
+          selected={res.visibility === v.id}
+          disabled={!isOwner}
+          onSelect={() => isOwner && store.updateResource(res.id, { visibility: v.id })} />
+      ))}
+      {!isOwner && <div style={{ fontSize: 12, color: DS.faint }}>Only {owner} can change this.</div>}
+
+      {/* Who can open this */}
+      <ResSectionLabel>Who can open this</ResSectionLabel>
+      <div>{whoRows.map((w, i) => <ResWhoRow key={i} name={w.name} sub={w.sub} icon={w.icon} />)}</div>
+
+      {/* Shared with — grant for the owner */}
+      {(isOwner || shares.length > 0) && (
+        <>
+          <ResSectionLabel action={isOwner ? <button type="button" onClick={() => onShare(res)} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: DS.accent, fontSize: 12, fontWeight: 600 }}>+ Grant</button> : null}>Shared with</ResSectionLabel>
+          {shares.length === 0
+            ? <div style={{ fontSize: 12.5, color: DS.faint }}>Not shared with anyone directly. On-request access creates a share when the owner approves it.</div>
+            : <div>{shares.map(s => <ResWhoRow key={s.staff_id} name={resStaffName(store, s.staff_id)} sub="Granted access" />)}</div>}
+        </>
+      )}
+
+      {/* Access requests — the owner acts on pending requests here */}
+      {isOwner && (
+        <>
+          <ResSectionLabel>Access requests</ResSectionLabel>
+          {pendingReqs.length === 0
+            ? <div style={{ fontSize: 12.5, color: DS.faint }}>No pending requests for this file.</div>
+            : <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {pendingReqs.map(r => (
+                  <div key={r.id} style={{ padding: '10px 12px', borderRadius: 10, border: `1px solid ${DS.border}` }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>{resStaffName(store, r.requested_by)}</div>
+                    {r.note && <div style={{ fontSize: 12, color: DS.muted, margin: '2px 0 8px', lineHeight: 1.45 }}>“{r.note}”</div>}
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <Btn variant="secondary" small onClick={() => store.decideRequest(r.id, 'declined', viewerId)}>Decline</Btn>
+                      <Btn variant="primary" small icon="check" onClick={() => store.decideRequest(r.id, 'approved', viewerId)}>Approve</Btn>
+                    </div>
+                  </div>
+                ))}
+              </div>}
+        </>
+      )}
+
+      {/* Used in — pointers */}
+      <ResSectionLabel>Used in <span style={{ color: DS.muted }}>({links.length})</span></ResSectionLabel>
+      {links.length === 0 ? (
+        <div style={{ fontSize: 12.5, color: DS.faint }}>Not attached to any lesson or homework yet.</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {links.map(l => { const m = usedLabel(l); return (
+            <div key={l.id} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '9px 11px', borderRadius: 9, border: `1px solid ${DS.border}` }}>
+              <div style={{ width: 28, height: 28, borderRadius: 7, background: DS.surface, color: DS.sub, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={l.context_type === 'homework' ? 'clip' : 'edit'} size={14} /></div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>{m.primary}</div>
+                <div style={{ fontSize: 11.5, color: DS.muted }}>{m.kind}{m.secondary ? ` · ${m.secondary}` : ''}</div>
+              </div>
+            </div>
+          ); })}
+        </div>
+      )}
+      <div style={{ fontSize: 11.5, color: DS.faint, marginTop: 10, lineHeight: 1.5 }}>One file, many pointers — attaching never copies it.</div>
     </SlideOver>
   );
 };
@@ -591,77 +891,192 @@ const AttachResourcesPanel = ({ contextType, contextId, canEdit, actingId, compa
 };
 
 // ── One resource row ─────────────────────────────────────────────────────────────
-const ResourceRow = ({ store, res, viewerId, isAdmin, onWhereUsed, onShare, onRequest, onOverride, onOpenPrivate, last }) => {
+// Two-line ellipsis clamp for card titles / descriptions.
+const RES_CLAMP2 = { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' };
+
+// The trailing action for a resource. No kebab — per-file actions (Where used /
+// Share / Delete) live in the detail panel now. Only two live buttons remain:
+//   • teacher, another's ON-REQUEST file → Request access (Private is never
+//     requestable and never appears to non-owners, so it has no button).
+//   • admin, a file with a pending request → Override.
+// Private is never openable by anyone but its owner — there is no Open affordance.
+const ResourceActions = ({ store, res, viewerId, isAdmin, onRequest, onOverride }) => {
+  const canOpen = resCanOpen(store, res, viewerId, isAdmin);
+  const locked = !isAdmin && !canOpen;
+  const requested = resPendingBy(store, res.id, viewerId);
+  const hasPending = resHasPending(store, res.id);
+
+  if (locked) {
+    if (res.visibility !== 'on_request') return null; // private is not requestable
+    return requested
+      ? <Btn variant="secondary" small disabled>Requested</Btn>
+      : <Btn variant="secondary" small icon="lock" onClick={() => onRequest(res)}>Request access</Btn>;
+  }
+  if (isAdmin && hasPending) return <Btn variant="primary" small icon="shield" onClick={() => onOverride(res)}>Override</Btn>;
+  return null;
+};
+
+// List / cards switch — a small segmented pill of two icon buttons.
+const ResViewToggle = ({ value, onChange }) => (
+  <div style={{ display: 'flex', gap: 2, padding: 3, background: DS.surface, border: `1px solid ${DS.border}`, borderRadius: 9 }}>
+    {[{ id: 'grid', icon: 'grid', title: 'Card view' }, { id: 'list', icon: 'list', title: 'List view' }].map(o => {
+      const on = value === o.id;
+      return (
+        <button key={o.id} type="button" onClick={() => onChange(o.id)} title={o.title} aria-label={o.title} aria-pressed={on}
+          style={{
+            width: 30, height: 28, borderRadius: 6, border: 'none', cursor: 'pointer',
+            background: on ? DS.bg : 'transparent', boxShadow: on ? DS.cardShadow : 'none',
+            color: on ? DS.accent : DS.muted, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+          <Icon name={o.icon} size={15} />
+        </button>
+      );
+    })}
+  </div>
+);
+
+// Card presentation of a resource (the grid / "cards" view — see the view toggle).
+const ResourceCard = ({ store, res, viewerId, isAdmin, onOpenDetail, onWhereUsed, onShare, onRequest, onOverride, onOpenPrivate }) => {
   const t = resType(res.type);
   const owner = resStaffName(store, res.created_by);
   const isOwner = res.created_by === viewerId;
   const canOpen = resCanOpen(store, res, viewerId, isAdmin);
-  const locked = !isAdmin && !canOpen;             // teacher, others' on_request
+  const locked = !isAdmin && !canOpen;
   const sharedToMe = !isOwner && resSharedTo(store, res.id, viewerId);
   const used = resUsedCount(store, res.id);
-  const requested = resPendingBy(store, res.id, viewerId);
-  const hasPending = resHasPending(store, res.id);
-  const showVisTag = isOwner || isAdmin;
+  const showAccessRow = res.visibility !== 'centre' || sharedToMe;
 
   return (
     <div style={{
-      display: 'flex', alignItems: 'center', gap: 14, padding: '13px 18px',
-      borderBottom: last ? 'none' : `1px solid ${DS.border}`, opacity: locked ? 0.72 : 1,
+      display: 'flex', flexDirection: 'column', gap: 11, padding: 16, height: '100%',
+      border: `1px solid ${DS.border}`, borderRadius: 12, background: DS.bg, opacity: locked ? 0.72 : 1,
     }}>
-      <ResTypeGlyph type={res.type} locked={locked} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 14, fontWeight: 600, color: DS.text }}>{res.title}</span>
-          {showVisTag && <ResVisTag visibility={res.visibility} />}
-          {sharedToMe && <StatusPill status="Shared with you" tone="accent" />}
-        </div>
-        {res.description && (
-          <div style={{ fontSize: 12.5, color: DS.muted, marginTop: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 560 }}>{res.description}</div>
-        )}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 6, fontSize: 12, color: DS.faint, flexWrap: 'wrap' }}>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><Avatar name={owner} size={16} /> {owner}</span>
-          <span>{resFmtBytes(res.size)}</span>
-          <span>Updated {resFmtDate(res.updated_at)}</span>
-          {used > 0 && (
-            <button type="button" onClick={() => onWhereUsed(res)}
-              style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: DS.accent, fontWeight: 600, fontSize: 12 }}>
-              Used in {used} place{used === 1 ? '' : 's'}
-            </button>
-          )}
-        </div>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+        <ResTypeGlyph type={res.type} locked={locked} size={40} />
+        <ResourceActions store={store} res={res} viewerId={viewerId} isAdmin={isAdmin}
+          onRequest={onRequest} onOverride={onOverride} />
       </div>
 
-      {/* Right-aligned metadata pills */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+      <div>
+        <button type="button" onClick={() => onOpenDetail && onOpenDetail(res)}
+          style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 14, fontWeight: 600, color: DS.text, lineHeight: 1.35, ...RES_CLAMP2 }}>{res.title}</button>
+        {/* One access vocabulary (Stage 1): a single scope chip. "Granted" is a
+            derived unlocked fact (marked quietly), not a second state. */}
+        {showAccessRow && (
+        <div style={{ display: 'flex', gap: 6, marginTop: 7, flexWrap: 'wrap', alignItems: 'center' }}>
+          <ResVisTag visibility={res.visibility} />
+          {sharedToMe && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, color: DS.muted }}>
+              <Icon name="check" size={11} color={DS.muted} /> Granted to you
+            </span>
+          )}
+        </div>
+        )}
+        {res.description && (
+          <div style={{ fontSize: 12.5, color: DS.muted, marginTop: 7, lineHeight: 1.5, ...RES_CLAMP2 }}>{res.description}</div>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 'auto' }}>
         <ResMetaPill>{t.label}</ResMetaPill>
         {res.year_group && <ResMetaPill>{res.year_group}</ResMetaPill>}
         {res.exam_board && res.exam_board !== 'None' && <ResMetaPill>{res.exam_board}</ResMetaPill>}
       </div>
 
-      {/* Trailing action */}
-      <div style={{ flexShrink: 0, minWidth: 118, display: 'flex', justifyContent: 'flex-end' }}>
-        {locked ? (
-          requested
-            ? <Btn variant="secondary" small disabled>Requested</Btn>
-            : <Btn variant="secondary" small icon="lock" onClick={() => onRequest(res)}>Request access</Btn>
-        ) : isAdmin ? (
-          // Admin lens: Override only when a request is pending (D5); a logged Open
-          // for private files (D4); otherwise a quiet kebab.
-          hasPending
-            ? <Btn variant="primary" small icon="shield" onClick={() => onOverride(res)}>Override</Btn>
-            : res.visibility === 'private'
-              ? <Btn variant="secondary" small icon="eye" onClick={() => onOpenPrivate(res)}>Open</Btn>
-              : <RowActionsMenu items={[{ label: 'Where this is used', icon: 'link', onClick: () => onWhereUsed(res), disabled: used === 0 }]} />
-        ) : (
-          <RowActionsMenu items={[
-            { label: 'Where this is used', icon: 'link', onClick: () => onWhereUsed(res), disabled: used === 0 },
-            isOwner && { label: 'Share', icon: 'users', onClick: () => onShare(res) },
-          ].filter(Boolean)} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, paddingTop: 11, borderTop: `1px solid ${DS.border}`, fontSize: 12, color: DS.faint, flexWrap: 'wrap' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><Avatar name={owner} size={16} /> {owner}</span>
+        <span>{resFmtBytes(res.size)}</span>
+        <span>{resFmtDate(res.updated_at)}</span>
+        {used > 0 && (
+          <button type="button" onClick={() => onWhereUsed(res)}
+            style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: DS.accent, fontWeight: 600, fontSize: 12 }}>
+            Used in {used} place{used === 1 ? '' : 's'}
+          </button>
         )}
       </div>
     </div>
   );
 };
+
+// Fixed column widths so owner / usage / access / action line up down the list
+// (Stage 2 alignment). One grid, shared by the header strip and every row.
+const RES_COL = { select: 34, usage: 62, owner: 168, access: 116, action: 122 };
+
+// Dense ~40px single-line row (Stage 2 default). Left→right: select · type glyph ·
+// title · usage · owner · access exception · action. Description, subject, board,
+// level and year live in the detail panel — the row is a lookup line, not a card.
+const ResourceRow = ({ store, res, viewerId, isAdmin, selected, onToggleSelect, onOpenDetail, onWhereUsed, onShare, onRequest, onOverride, onOpenPrivate, last }) => {
+  const owner = resStaffName(store, res.created_by);
+  const canOpen = resCanOpen(store, res, viewerId, isAdmin);
+  const locked = !isAdmin && !canOpen;             // teacher, others' on_request
+  const used = resUsedCount(store, res.id);
+  const sharedToMe = res.created_by !== viewerId && resSharedTo(store, res.id, viewerId);
+  const [hov, setHov] = React.useState(false);
+
+  return (
+    <div
+      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 12, padding: '0 14px', height: 44,
+        borderBottom: last ? 'none' : `1px solid ${DS.border}`, opacity: locked ? 0.72 : 1,
+        background: selected ? DS.accentLight : hov ? DS.surface : 'transparent',
+      }}>
+      {/* Select */}
+      <div style={{ width: RES_COL.select, flexShrink: 0, display: 'flex', alignItems: 'center' }}
+        onClick={e => e.stopPropagation()}>
+        <Checkbox checked={!!selected} onChange={() => onToggleSelect(res.id)} />
+      </div>
+
+      <ResTypeGlyph type={res.type} locked={locked} size={26} />
+
+      {/* Title — the click target for the detail panel */}
+      <button type="button" onClick={() => onOpenDetail(res)}
+        style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' }}>
+        <span style={{ fontSize: 13.5, fontWeight: 600, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{res.title}</span>
+        {sharedToMe && <Icon name="check" size={12} color={DS.faint} title="Granted to you" />}
+      </button>
+
+      {/* Usage — greyscale, tabular; the key liveness signal, not a coloured link */}
+      <div style={{ width: RES_COL.usage, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4, fontSize: 12.5, color: used ? DS.sub : DS.faint, fontVariantNumeric: 'tabular-nums' }}>
+        <Icon name="link" size={12} color={used ? DS.muted : DS.faint} />
+        {used}
+      </div>
+
+      {/* Owner */}
+      <div style={{ width: RES_COL.owner, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+        <Avatar name={owner} size={24} />
+        <span style={{ fontSize: 12.5, color: DS.sub, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{owner}</span>
+      </div>
+
+      {/* Access — exception only (centre renders nothing) */}
+      <div style={{ width: RES_COL.access, flexShrink: 0, display: 'flex', alignItems: 'center' }}>
+        <ResVisTag visibility={res.visibility} />
+      </div>
+
+      {/* Trailing action */}
+      <div style={{ width: RES_COL.action, flexShrink: 0, display: 'flex', justifyContent: 'flex-end' }}
+        onClick={e => e.stopPropagation()}>
+        <ResourceActions store={store} res={res} viewerId={viewerId} isAdmin={isAdmin}
+          onRequest={onRequest} onOverride={onOverride} />
+      </div>
+    </div>
+  );
+};
+
+// Header strip above the dense list — column labels + select-all, on the same grid.
+const ResListHeader = ({ allSelected, someSelected, onToggleAll }) => (
+  <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '0 14px', height: 38, borderBottom: `1px solid ${DS.border}`, background: DS.surface }}>
+    <div style={{ width: RES_COL.select, flexShrink: 0, display: 'flex', alignItems: 'center' }}>
+      <Checkbox checked={allSelected} indeterminate={someSelected && !allSelected} onChange={onToggleAll} />
+    </div>
+    <div style={{ width: 26, flexShrink: 0 }} />
+    <div style={{ flex: 1, minWidth: 0, fontSize: 11, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: DS.faint }}>Name</div>
+    <div style={{ width: RES_COL.usage, flexShrink: 0, textAlign: 'right', fontSize: 11, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: DS.faint }}>Uses</div>
+    <div style={{ width: RES_COL.owner, flexShrink: 0, fontSize: 11, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: DS.faint }}>Owner</div>
+    <div style={{ width: RES_COL.access, flexShrink: 0, fontSize: 11, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: DS.faint }}>Access</div>
+    <div style={{ width: RES_COL.action, flexShrink: 0 }} />
+  </div>
+);
 
 // ── Requests panel (the Requests segment) ────────────────────────────────────────
 const ResRequestsPanel = ({ store, viewerId, isAdmin }) => {
@@ -708,8 +1123,133 @@ const ResRequestsPanel = ({ store, viewerId, isAdmin }) => {
   );
 };
 
+// ── Left filter rail (facets + MY VIEW) ──────────────────────────────────────────
+// A quiet uppercase section label used by both the MY VIEW group and every facet.
+const ResRailLabel = ({ children }) => (
+  <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase', color: DS.faint, margin: '0 0 8px' }}>{children}</div>
+);
+
+// One MY VIEW row (single-select: All resources / My uploads / Shared with me /
+// Requests). The active row lifts into the accent wash.
+const ResRailViewItem = ({ item, active, onClick }) => (
+  <button type="button" onClick={onClick}
+    onMouseEnter={e => { if (!active) e.currentTarget.style.background = SIDE_HOVER; }}
+    onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}
+    style={{
+      display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '7px 9px',
+      borderRadius: 8, border: 'none', cursor: 'pointer', textAlign: 'left',
+      background: active ? DS.accentLight : 'transparent', color: active ? DS.accent : DS.sub,
+    }}>
+    <Icon name={item.icon} size={15} color={active ? DS.accent : DS.muted} />
+    <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: active ? 600 : 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.label}</span>
+    {item.count > 0 && (
+      <span style={{
+        fontSize: 11, fontWeight: 700, minWidth: 18, textAlign: 'center', padding: '0 5px', borderRadius: 9,
+        background: item.badge ? DS.danger : (active ? DS.bg : DS.border),
+        color: item.badge ? '#fff' : (active ? DS.accent : DS.muted),
+      }}>{item.count}</span>
+    )}
+  </button>
+);
+
+// One multi-select facet group (checkbox rows with per-option counts).
+const ResFacetGroup = ({ title, options, selected, onToggle }) => {
+  if (!options || options.length === 0) return null;
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <ResRailLabel>{title}</ResRailLabel>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+        {options.map(o => {
+          const on = selected.includes(o.value);
+          return (
+            <label key={o.value}
+              onMouseEnter={e => { if (!on) e.currentTarget.style.background = SIDE_HOVER; }}
+              onMouseLeave={e => { if (!on) e.currentTarget.style.background = 'transparent'; }}
+              style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '5px 7px', borderRadius: 7, cursor: 'pointer', background: on ? DS.accentLight : 'transparent' }}>
+              <Checkbox checked={on} onChange={() => onToggle(o.value)} />
+              <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: on ? 600 : 400, color: on ? DS.accent : DS.sub, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{o.label}</span>
+              <span style={{ fontSize: 11.5, color: on ? DS.accent : DS.faint, fontVariantNumeric: 'tabular-nums' }}>{o.count}</span>
+            </label>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+const ResFilterRail = ({ isAdmin, viewItems, seg, onSeg, facetGroups, sel, onToggle, showFacets, activeFilterCount, onClear }) => (
+  <div style={{
+    position: 'sticky', top: 24, alignSelf: 'start',
+    maxHeight: 'calc(100vh - 48px)', overflowY: 'auto', paddingRight: 4,
+  }}>
+    <div style={{ marginBottom: 18 }}>
+      <ResRailLabel>My view</ResRailLabel>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+        {viewItems.map(it => <ResRailViewItem key={it.id} item={it} active={seg === it.id} onClick={() => onSeg(it.id)} />)}
+      </div>
+    </div>
+    {showFacets && facetGroups.map(g => (
+      <ResFacetGroup key={g.key} title={g.title} options={g.options} selected={sel[g.key]} onToggle={(v) => onToggle(g.key, v)} />
+    ))}
+    {showFacets && activeFilterCount > 0 && (
+      <button type="button" onClick={onClear}
+        style={{ background: 'none', border: 'none', padding: '2px 7px', cursor: 'pointer', color: DS.accent, fontSize: 12.5, fontWeight: 600, textDecoration: 'underline' }}>
+        Clear all filters
+      </button>
+    )}
+  </div>
+);
+
+// ── Search: fuzzy matching + synonyms (Stage 3) ──────────────────────────────────
+// At 300 files a near-miss ("quadratics" vs "Quadratic Equations") reads as absent
+// and someone re-uploads a duplicate. So: expand the query through a light synonym
+// map, and let each term match by substring OR small edit distance (typo tolerance).
+const RES_SYNONYMS = {
+  quadratics: ['quadratic'], quadratic: ['quadratics'],
+  simultaneous: ['simultaneous equations'], trig: ['trigonometry', 'sine', 'cosine'],
+  trigonometry: ['trig', 'sine', 'cosine'], calculus: ['differentiation', 'derivative', 'integration'],
+  differentiation: ['calculus', 'derivative'], surds: ['indices', 'roots'], indices: ['surds', 'powers'],
+  probability: ['chance', 'trees'], forces: ['motion', 'newton', 'dynamics'], motion: ['forces'],
+  waves: ['wave', 'oscillation'], rates: ['rate', 'kinetics', 'reaction'], titration: ['acid', 'base', 'neutralisation'],
+  organic: ['carbon', 'hydrocarbons'], macbeth: ['shakespeare', 'tragedy'], poetry: ['poem', 'poems', 'anthology', 'verse'],
+  ms: ['mark scheme', 'answers', 'solutions'], markscheme: ['mark scheme'], ws: ['worksheet'], revision: ['revise', 'recap'],
+};
+const resNorm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+// Bounded Levenshtein — returns true if edit distance(a,b) ≤ max.
+const resWithinEdits = (a, b, max) => {
+  if (Math.abs(a.length - b.length) > max) return false;
+  const dp = Array.from({ length: a.length + 1 }, (_, i) => i);
+  for (let j = 1; j <= b.length; j++) {
+    let prev = dp[0]; dp[0] = j; let best = dp[0];
+    for (let i = 1; i <= a.length; i++) {
+      const tmp = dp[i];
+      dp[i] = Math.min(dp[i] + 1, dp[i - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = tmp; best = Math.min(best, dp[i]);
+    }
+    if (best > max) return false; // whole row already over budget
+  }
+  return dp[a.length] <= max;
+};
+// Does one query term match a haystack (string + its word list)?
+const resTermMatches = (term, hay, words) => {
+  const cands = [term, ...(RES_SYNONYMS[term] || [])];
+  const tol = (t) => t.length <= 3 ? 0 : t.length <= 6 ? 1 : 2;
+  return cands.some(c => {
+    if (hay.includes(c)) return true;
+    if (c.includes(' ')) return false; // phrase synonyms: substring only
+    return words.some(w => resWithinEdits(w, c, tol(c)));
+  });
+};
+const resSearchMatch = (query, res, ownerName) => {
+  const terms = resNorm(query).split(' ').filter(Boolean);
+  if (!terms.length) return true;
+  const hay = resNorm([res.title, res.description, res.subject, resType(res.type).label, ownerName].filter(Boolean).join(' '));
+  const words = hay.split(' ').filter(Boolean);
+  return terms.every(t => resTermMatches(t, hay, words)); // AND across terms
+};
+
 // ── The Resources page (teacher lens + admin lens) ───────────────────────────────
-const FILTER_ALL = '__all__';
+const RES_EMPTY_SEL = { subject: [], type: [], year: [], level: [], board: [], vis: [], owner: [] };
 const ResourcesPage = ({ role }) => {
   const store = useResourcesStore();
   const isAdmin = role === 'admin';
@@ -717,60 +1257,171 @@ const ResourcesPage = ({ role }) => {
 
   const [seg, setSeg] = React.useState('all');
   const [q, setQ] = React.useState('');
-  const [fSubject, setFSubject] = React.useState(FILTER_ALL);
-  const [fYear, setFYear] = React.useState(FILTER_ALL);
-  const [fType, setFType] = React.useState(FILTER_ALL);
-  const [fBoard, setFBoard] = React.useState(FILTER_ALL);
+  const [sel, setSel] = React.useState(RES_EMPTY_SEL);        // multi-select facets → arrays
+  // Sort — persisted per user. Default 'used' (most-used, falling back to recently
+  // added where usage is zero — see the comparator).
+  const [sortMode, setSortMode] = React.useState(() => {
+    try { return localStorage.getItem('klasio.resources.sort') || 'used'; } catch (e) { return 'used'; }
+  });
+  const setSort = (v) => { setSortMode(v); try { localStorage.setItem('klasio.resources.sort', v); } catch (e) {} };
+  const [page, setPage] = React.useState(0);                  // pagination
   const [addOpen, setAddOpen] = React.useState(false);
   const [whereRes, setWhereRes] = React.useState(null);
   const [shareRes, setShareRes] = React.useState(null);
   const [reqRes, setReqRes] = React.useState(null);
-  const [privateNote, setPrivateNote] = React.useState(null);
+  const [confirmDelete, setConfirmDelete] = React.useState(null); // author delete confirm
+  const [detailRes, setDetailRes] = React.useState(null);   // Stage 2 — row → detail panel
+  const [selectedIds, setSelectedIds] = React.useState([]); // Stage 2 — bulk selection
+  // List vs cards — remembered across visits.
+  const [viewMode, setViewMode] = React.useState(() => {
+    try { return localStorage.getItem('klasio.resources.view') === 'grid' ? 'grid' : 'list'; } catch (e) { return 'list'; }
+  });
+  const setView = (v) => { setViewMode(v); try { localStorage.setItem('klasio.resources.view', v); } catch (e) {} };
+  // Onboarding banner — dismissible, remembered per user (Stage 4).
+  const [bannerOpen, setBannerOpen] = React.useState(() => { try { return localStorage.getItem('klasio.resources.bannerDismissed') !== '1'; } catch (e) { return true; } });
+  const dismissBanner = () => { setBannerOpen(false); try { localStorage.setItem('klasio.resources.bannerDismissed', '1'); } catch (e) {} };
 
-  React.useEffect(() => { if (isAdmin && (seg === 'mine' || seg === 'shared' || seg === 'requests')) setSeg('all'); }, [isAdmin]);
+  // Default the teacher's own subject as a pre-applied, visible, clearable subject
+  // facet (Stage 4) — a WHERE clause against data we already have, not a ranking.
+  // Re-applies when the acting teacher changes; a manual clear sticks until then.
+  const autoSubjectRef = React.useRef(null);
+  React.useEffect(() => {
+    if (isAdmin) { autoSubjectRef.current = null; return; }
+    if (autoSubjectRef.current === viewerId) return;
+    autoSubjectRef.current = viewerId;
+    const me = resStaffById(store, viewerId);
+    if (me && me.subject) setSel(prev => ({ ...prev, subject: [me.subject] }));
+  }, [viewerId, isAdmin]);
 
   const base = resBrowseVisible(store, viewerId, isAdmin);
   const pendingCount = resPendingForApprover(store, viewerId).length;
 
-  // Segment filter
+  // MY VIEW (segment) filter — the pool the facets, counts and results run over.
+  // Runs for both lenses now (admin gets the same All / My uploads / Shared with me /
+  // Requests views; for admin these key off the admin identity).
   const segFiltered = base.filter(r => {
-    if (isAdmin) return true;
     if (seg === 'mine') return r.created_by === viewerId;
     if (seg === 'shared') return r.created_by !== viewerId && resSharedTo(store, r.id, viewerId);
-    return true; // 'all'
+    return true; // 'all' / 'requests' (requests swaps the whole panel)
   });
 
-  // Search + dropdown filters
-  const ql = q.trim().toLowerCase();
+  // Facet toggles — empty array on a facet means "no constraint".
+  const toggleFacet = (key, val) => setSel(prev => {
+    const cur = prev[key] || [];
+    return { ...prev, [key]: cur.includes(val) ? cur.filter(x => x !== val) : [...cur, val] };
+  });
+  const activeFilterCount = Object.keys(sel).reduce((n, k) => n + sel[k].length, 0);
+  const clearFilters = () => setSel(RES_EMPTY_SEL);
+  const passFacet = (arr, val) => arr.length === 0 || arr.includes(val);
+  // Active-filter chips (Stage 4) — visible + individually removable in the main
+  // area, so what's applied is never hidden behind a scrolled sidebar.
+  const facetChipLabel = (key, val) => key === 'type' ? resType(val).label
+    : key === 'vis' ? (val === 'centre' ? 'Centre' : resVis(val).label)
+    : key === 'owner' ? resStaffName(store, val) : val;
+  const activeChips = [];
+  Object.keys(sel).forEach(k => (sel[k] || []).forEach(v => activeChips.push({ key: k, value: v, label: facetChipLabel(k, v) })));
+
   const filtered = segFiltered.filter(r => {
-    if (fSubject !== FILTER_ALL && r.subject !== fSubject) return false;
-    if (fYear !== FILTER_ALL && r.year_group !== fYear) return false;
-    if (fType !== FILTER_ALL && r.type !== fType) return false;
-    if (fBoard !== FILTER_ALL && r.exam_board !== fBoard) return false;
-    if (!ql) return true;
-    const hay = [r.title, r.description, r.subject, resType(r.type).label, resStaffName(store, r.created_by)].filter(Boolean).join(' ').toLowerCase();
-    return hay.includes(ql);
+    if (!passFacet(sel.subject, r.subject)) return false;
+    if (!passFacet(sel.type, r.type)) return false;
+    if (!passFacet(sel.year, r.year_group)) return false;
+    if (!passFacet(sel.level, resLevel(r))) return false;
+    if (!passFacet(sel.board, r.exam_board)) return false;
+    if (!passFacet(sel.vis, r.visibility)) return false;
+    if (!passFacet(sel.owner, r.created_by)) return false;
+    return resSearchMatch(q, r, resStaffName(store, r.created_by)); // fuzzy + synonyms
   });
 
-  // Group by subject
-  const groups = {};
-  filtered.forEach(r => { (groups[r.subject || 'Other'] = groups[r.subject || 'Other'] || []).push(r); });
-  const groupKeys = Object.keys(groups).sort();
+  // Sort (Stage 3). `last_used_at` and `created_at` are different signals — used is
+  // the better liveness indicator, added just means someone dropped a file in. The
+  // default is most-used, falling back to recently-added where usage ties (incl. 0).
+  const usedCountOf = (r) => resUsedCount(store, r.id);
+  const lastUsedOf = (r) => { const es = (store.usage_events || []).filter(e => e.resource_id === r.id); return es.length ? es.map(e => e.at).sort().slice(-1)[0] : ''; };
+  const addedKey = (r) => String(r.created_at || r.updated_at || '');
+  const cmp = (a, b) => {
+    if (sortMode === 'title') return (a.title || '').localeCompare(b.title || '');
+    if (sortMode === 'added') return addedKey(b).localeCompare(addedKey(a));
+    if (sortMode === 'recent_used') { const la = lastUsedOf(a), lb = lastUsedOf(b); if (la !== lb) return lb.localeCompare(la); return addedKey(b).localeCompare(addedKey(a)); }
+    const ua = usedCountOf(a), ub = usedCountOf(b);       // 'used' (default)
+    if (ub !== ua) return ub - ua;
+    return addedKey(b).localeCompare(addedKey(a));
+  };
+  const sorted = filtered.slice().sort(cmp);
 
-  const subjects = Array.from(new Set(base.map(r => r.subject).filter(Boolean))).sort();
+  // Flat list — all files in one list (per request), paginated. Pages, not infinite
+  // scroll, so links and returns work.
+  const RES_PAGE_SIZE = 50;
+  const pageCount = Math.max(1, Math.ceil(sorted.length / RES_PAGE_SIZE));
+  const safePage = Math.min(page, pageCount - 1);
+  const pageRows = sorted.slice(safePage * RES_PAGE_SIZE, safePage * RES_PAGE_SIZE + RES_PAGE_SIZE);
+  const pageRowIds = pageRows.map(r => r.id);
+  const pageRowSet = new Set(pageRowIds);
+  React.useEffect(() => { setPage(0); }, [seg, q, sortMode, JSON.stringify(sel)]);
 
-  const Dropdown = ({ value, onChange, allLabel, options }) => (
-    <Select value={value} onChange={e => onChange(e.target.value)} style={{ minWidth: 130 }}>
-      <option value={FILTER_ALL}>{allLabel}</option>
-      {options.map(o => <option key={o.id || o} value={o.id || o}>{o.label || o}</option>)}
-    </Select>
-  );
+  // Selection (Stage 2). Clears when the result set changes; select-all targets the
+  // rows visible on the current page.
+  React.useEffect(() => { setSelectedIds([]); }, [seg, q, sortMode, safePage, JSON.stringify(sel)]);
+  const toggleSelect = (id) => setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  const selectedVisible = selectedIds.filter(id => pageRowSet.has(id));
+  const allSelected = pageRowIds.length > 0 && selectedVisible.length === pageRowIds.length;
+  const someSelected = selectedVisible.length > 0;
+  const toggleAll = () => setSelectedIds(allSelected ? [] : pageRowIds);
+  // Bulk visibility change applies only to files the viewer owns (ownership is the
+  // model's authority on who can set access); non-owned selections are skipped.
+  const ownedSelected = selectedIds.filter(id => { const r = resById(store, id); return r && r.created_by === viewerId; });
+  const bulkSetVisibility = (v) => { ownedSelected.forEach(id => store.updateResource(id, { visibility: v })); setSelectedIds([]); };
 
-  const segments = [
-    { id: 'all', label: 'All' },
-    { id: 'mine', label: 'Mine' },
-    { id: 'shared', label: 'Shared with me' },
-    { id: 'requests', label: 'Requests', count: pendingCount || undefined },
+  // Facet counts reflect the CURRENT filter intersection (Stage 4). For facet K we
+  // count over items that pass every OTHER facet + the search — so selecting
+  // Mathematics really does drop "A-Level 3" to "A-Level 2". Static counts mislead.
+  const passAllExcept = (r, exceptKey) => {
+    if (exceptKey !== 'subject' && !passFacet(sel.subject, r.subject)) return false;
+    if (exceptKey !== 'type' && !passFacet(sel.type, r.type)) return false;
+    if (exceptKey !== 'year' && !passFacet(sel.year, r.year_group)) return false;
+    if (exceptKey !== 'level' && !passFacet(sel.level, resLevel(r))) return false;
+    if (exceptKey !== 'board' && !passFacet(sel.board, r.exam_board)) return false;
+    if (exceptKey !== 'vis' && !passFacet(sel.vis, r.visibility)) return false;
+    if (exceptKey !== 'owner' && !passFacet(sel.owner, r.created_by)) return false;
+    return resSearchMatch(q, r, resStaffName(store, r.created_by));
+  };
+  const countBy = (exceptKey, keyFn) => { const m = {}; segFiltered.forEach(r => { if (!passAllExcept(r, exceptKey)) return; const k = keyFn(r); if (k == null || k === '') return; m[k] = (m[k] || 0) + 1; }); return m; };
+  const cSubject = countBy('subject', r => r.subject), cType = countBy('type', r => r.type), cYear = countBy('year', r => r.year_group);
+  const cLevel = countBy('level', r => resLevel(r)), cBoard = countBy('board', r => r.exam_board), cVis = countBy('vis', r => r.visibility), cOwner = countBy('owner', r => r.created_by);
+  const opt = (value, label, count) => ({ value, label, count });
+  // Options include any value with a live count OR one that's currently selected
+  // (so a selection that intersects to zero is still visible to deselect).
+  const keep = (val, counts, key) => counts[val] || sel[key].includes(val);
+  const facetGroups = [
+    { key: 'subject', title: 'Subject',    options: Array.from(new Set([...Object.keys(cSubject), ...sel.subject])).sort().map(s => opt(s, s, cSubject[s] || 0)) },
+    { key: 'type',    title: 'Type',       options: (window.RES_TYPES || []).filter(t => keep(t.id, cType, 'type')).map(t => opt(t.id, t.label, cType[t.id] || 0)) },
+    { key: 'level',   title: 'Level',      options: RES_LEVELS.filter(l => keep(l, cLevel, 'level')).map(l => opt(l, l, cLevel[l] || 0)) },
+    { key: 'year',    title: 'Year',       options: (window.RES_YEAR_GROUPS || []).filter(y => keep(y, cYear, 'year')).map(y => opt(y, y, cYear[y] || 0)) },
+    { key: 'board',   title: 'Exam board', options: (window.RES_EXAM_BOARDS || []).filter(b => b !== 'None' && keep(b, cBoard, 'board')).map(b => opt(b, b, cBoard[b] || 0)) },
+    { key: 'vis',     title: 'Visibility', options: (window.RES_VISIBILITY || []).filter(v => keep(v.id, cVis, 'vis')).map(v => opt(v.id, v.id === 'centre' ? 'Centre' : v.label, cVis[v.id] || 0)) },
+    { key: 'owner',   title: 'Owner',      options: Array.from(new Set([...Object.keys(cOwner), ...sel.owner])).map(id => opt(id, resStaffName(store, id), cOwner[id] || 0)).sort((a, b) => b.count - a.count) },
+  ];
+
+  // MY VIEW rail items (teacher lens only). Requests carries the red pending badge.
+  const viewItems = [
+    { id: 'all',      label: 'All resources',  icon: 'folder', count: base.length },
+    { id: 'mine',     label: 'My uploads',     icon: 'upload', count: base.filter(r => r.created_by === viewerId).length },
+    { id: 'shared',   label: 'Shared with me', icon: 'users',  count: base.filter(r => r.created_by !== viewerId && resSharedTo(store, r.id, viewerId)).length },
+    { id: 'requests', label: 'Requests',       icon: 'lock',   count: pendingCount, badge: true },
+  ];
+
+  // Admin Override — approve a pending request on a file. (Private files are never
+  // openable by anyone but the owner, so there is no admin "open private" path.)
+  const onOverride = (res) => {
+    const req = (store.requests || []).find(x => x.resource_id === res.id && x.status === 'pending');
+    if (req) { store.decideRequest(req.id, 'approved', 'admin'); store.logAccess(res.id, 'admin'); }
+  };
+
+  const showRequests = seg === 'requests';
+  const sortOptions = [
+    { id: 'used', label: 'Most used' },
+    { id: 'recent_used', label: 'Recently used' },
+    { id: 'added', label: 'Recently added' },
+    { id: 'title', label: 'Title A–Z' },
   ];
 
   return (
@@ -779,81 +1430,166 @@ const ResourcesPage = ({ role }) => {
         <PageHeader
           title="Resources"
           subtitle={isAdmin ? 'Every file in the centre’s library — with owner, size and visibility.' : 'The centre’s shared library of teaching materials.'}
-          actions={<Btn variant="primary" icon="upload" onClick={() => setAddOpen(true)}>Add resource</Btn>}
+          actions={<Btn variant="primary" icon="cloud" onClick={() => setAddOpen(true)}>Add resource</Btn>}
         />
 
-        {/* Acting-teacher switcher (teacher lens only) — this prototype has one
-            teacher persona; the picker lets you act as any teacher so shares and
-            requests can be demonstrated end to end. */}
+        {/* Impersonation bar (teacher lens only) — this is role impersonation, NOT a
+            filter, so it gets a distinct thin bordered bar rather than a form
+            control. The prototype has one teacher persona; acting as any teacher
+            lets shares and requests be demonstrated end to end. */}
         {!isAdmin && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
-            <span style={{ fontSize: 12.5, color: DS.muted }}>Viewing as</span>
-            <Select value={store.actingTeacherId} onChange={e => store.setActing(e.target.value)} style={{ width: 200 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, padding: '8px 12px', border: `1px solid ${DS.borderDark}`, borderLeft: `3px solid ${DS.warning}`, borderRadius: 8, background: DS.surface }}>
+            <Icon name="eye" size={15} color={DS.warning} />
+            <span style={{ fontSize: 12.5, color: DS.sub }}>Viewing the library as</span>
+            <Select value={store.actingTeacherId} onChange={e => store.setActing(e.target.value)} style={{ width: 190 }}>
               {(store.staff || []).filter(s => s.role === 'teacher').map(s => <option key={s.id} value={s.id}>{s.name}{s.active ? '' : ' (deactivated)'}</option>)}
             </Select>
+            <span style={{ fontSize: 11.5, color: DS.faint }}>impersonation — for demo</span>
           </div>
         )}
 
-        {/* Standing note */}
-        <div style={{ display: 'flex', gap: 11, alignItems: 'flex-start', padding: '12px 15px', marginBottom: 18, background: DS.accentLight, border: `1px solid ${DS.accentBorder}`, borderRadius: 10 }}>
-          <Icon name={isAdmin ? 'shield' : 'folder'} size={17} color={DS.accent} />
-          <div style={{ fontSize: 12.5, color: DS.sub, lineHeight: 1.5 }}>
-            {isAdmin
-              ? <><strong style={{ color: DS.text }}>Private files are listed here for storage and offboarding.</strong> Only their owner can read the contents — opening one is recorded in the access log. Override appears on a file only while someone is waiting on a request for it.</>
-              : <><strong style={{ color: DS.text }}>Files land here automatically when you attach them to a lesson or homework.</strong> New files are centre-wide by default, so colleagues can reuse them. Lock a file to <em>On request</em> or <em>Private</em> when it shouldn’t be open to everyone.</>}
+        {/* Onboarding note — dismissible, remembered per user */}
+        {bannerOpen && (
+          <div style={{ display: 'flex', gap: 11, alignItems: 'flex-start', padding: '12px 15px', marginBottom: 18, background: DS.accentLight, border: `1px solid ${DS.accentBorder}`, borderRadius: 10 }}>
+            <Icon name={isAdmin ? 'shield' : 'folder'} size={17} color={DS.accent} />
+            <div style={{ flex: 1, fontSize: 12.5, color: DS.sub, lineHeight: 1.5 }}>
+              {isAdmin
+                ? <><strong style={{ color: DS.text }}>Private files are listed here for storage and offboarding.</strong> Only their owner can read the contents — opening one is recorded in the access log. Override appears on a file only while someone is waiting on a request for it.</>
+                : <><strong style={{ color: DS.text }}>Files land here automatically when you attach them to a lesson or homework.</strong> New files are centre-wide by default, so colleagues can reuse them. Lock a file to <em>On request</em> or <em>Private</em> when it shouldn’t be open to everyone.</>}
+            </div>
+            <button type="button" onClick={dismissBanner} title="Dismiss"
+              style={{ flexShrink: 0, width: 24, height: 24, borderRadius: 6, border: 'none', background: 'transparent', color: DS.muted, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Icon name="x" size={14} />
+            </button>
+          </div>
+        )}
+
+        {/* Two-column workspace: left filter rail + main results. */}
+        <div style={{ display: 'grid', gridTemplateColumns: '236px 1fr', gap: 24, alignItems: 'start' }}>
+          <ResFilterRail
+            isAdmin={isAdmin}
+            viewItems={viewItems} seg={seg} onSeg={setSeg}
+            facetGroups={facetGroups} sel={sel} onToggle={toggleFacet}
+            showFacets={!showRequests}
+            activeFilterCount={activeFilterCount} onClear={clearFilters}
+          />
+
+          <div style={{ minWidth: 0 }}>
+            {showRequests ? (
+              <ResRequestsPanel store={store} viewerId={viewerId} isAdmin={isAdmin} />
+            ) : (
+              <>
+                {/* Search + view toggle */}
+                <div style={{ display: 'flex', gap: 10, marginBottom: activeChips.length ? 10 : 14, alignItems: 'center' }}>
+                  <SearchInput value={q} onChange={e => setQ(e.target.value)} placeholder="Search by title, note, subject, owner…" style={{ flex: 1 }} />
+                  <ResViewToggle value={viewMode} onChange={setView} />
+                </div>
+
+                {/* Active-filter chips — individually + all removable */}
+                {activeChips.length > 0 && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', marginBottom: 14 }}>
+                    {activeChips.map(c => (
+                      <span key={`${c.key}:${c.value}`}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 6px 3px 10px', borderRadius: 999, background: DS.accentLight, border: `1px solid ${DS.accentBorder}`, fontSize: 12, fontWeight: 500, color: DS.accent }}>
+                        {c.label}
+                        <button type="button" onClick={() => toggleFacet(c.key, c.value)} title="Remove"
+                          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16, borderRadius: 999, border: 'none', background: 'transparent', color: DS.accent, cursor: 'pointer', padding: 0 }}>
+                          <Icon name="x" size={11} />
+                        </button>
+                      </span>
+                    ))}
+                    <button type="button" onClick={clearFilters}
+                      style={{ background: 'none', border: 'none', padding: '2px 4px', cursor: 'pointer', color: DS.muted, fontSize: 12, fontWeight: 600 }}>Clear all</button>
+                  </div>
+                )}
+
+                {/* Results toolbar — bulk actions when selecting, else a count only
+                    when it diverges from the pool (Showing 14 of 14 is noise). */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12, minHeight: 30, flexWrap: 'wrap' }}>
+                  {someSelected ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>{selectedVisible.length} selected</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                        <span style={{ fontSize: 12.5, color: DS.muted }}>Set access</span>
+                        <Select value="" onChange={e => e.target.value && bulkSetVisibility(e.target.value)} disabled={ownedSelected.length === 0} style={{ width: 150 }}>
+                          <option value="">{ownedSelected.length ? 'Choose…' : 'None you own'}</option>
+                          {(window.RES_VISIBILITY || []).map(v => <option key={v.id} value={v.id}>{v.id === 'centre' ? 'Centre-wide' : v.label}</option>)}
+                        </Select>
+                      </div>
+                      {ownedSelected.length !== selectedVisible.length && (
+                        <span style={{ fontSize: 11.5, color: DS.faint }}>{selectedVisible.length - ownedSelected.length} not yours — will be skipped</span>
+                      )}
+                      <button type="button" onClick={() => setSelectedIds([])} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: DS.accent, fontSize: 12.5, fontWeight: 600 }}>Clear</button>
+                    </div>
+                  ) : (
+                    <span style={{ fontSize: 13, color: DS.muted }}>
+                      {sorted.length !== segFiltered.length
+                        ? <><b style={{ color: DS.text }}>{sorted.length}</b> of {segFiltered.length}</>
+                        : <>{segFiltered.length} file{segFiltered.length === 1 ? '' : 's'}</>}
+                    </span>
+                  )}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 12.5, color: DS.faint }}>Sort</span>
+                    <Select value={sortMode} onChange={e => setSort(e.target.value)} style={{ width: 170 }}>
+                      {sortOptions.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+                    </Select>
+                  </div>
+                </div>
+
+                {sorted.length === 0 ? (
+                  <Card><EmptyState icon="search" title="No resources found" message="Try a different search or clear the filters." /></Card>
+                ) : viewMode === 'grid' ? (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(258px, 1fr))', gap: 14 }}>
+                    {pageRows.map(r => (
+                      <ResourceCard key={r.id} store={store} res={r} viewerId={viewerId} isAdmin={isAdmin}
+                        onOpenDetail={setDetailRes}
+                        onWhereUsed={setWhereRes} onShare={setShareRes} onRequest={setReqRes} onOverride={onOverride} />
+                    ))}
+                  </div>
+                ) : (
+                  <Card style={{ padding: 0, overflow: 'hidden' }}>
+                    <ResListHeader allSelected={allSelected} someSelected={someSelected} onToggleAll={toggleAll} />
+                    {pageRows.map((r, i) => (
+                      <ResourceRow key={r.id} store={store} res={r} viewerId={viewerId} isAdmin={isAdmin}
+                        last={i === pageRows.length - 1}
+                        selected={selectedIds.includes(r.id)} onToggleSelect={toggleSelect} onOpenDetail={setDetailRes}
+                        onWhereUsed={setWhereRes} onShare={setShareRes} onRequest={setReqRes} onOverride={onOverride} />
+                    ))}
+                    {pageCount > 1 && (
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, padding: '11px 16px', borderTop: `1px solid ${DS.border}` }}>
+                        <span style={{ fontSize: 12.5, color: DS.muted, fontVariantNumeric: 'tabular-nums' }}>
+                          {safePage * RES_PAGE_SIZE + 1}–{Math.min((safePage + 1) * RES_PAGE_SIZE, sorted.length)} of {sorted.length}
+                        </span>
+                        <div style={{ display: 'flex', gap: 4 }}>
+                          <PagerBtn icon="chevron_l" title="Previous page" disabled={safePage <= 0} onClick={() => setPage(safePage - 1)} />
+                          <span style={{ display: 'inline-flex', alignItems: 'center', padding: '0 10px', fontSize: 12.5, color: DS.sub }}>Page {safePage + 1} of {pageCount}</span>
+                          <PagerBtn icon="chevron_r" title="Next page" disabled={safePage >= pageCount - 1} onClick={() => setPage(safePage + 1)} />
+                        </div>
+                      </div>
+                    )}
+                  </Card>
+                )}
+              </>
+            )}
           </div>
         </div>
-
-        {/* Segments — teacher lens only */}
-        {!isAdmin && <div style={{ marginBottom: 16 }}><Segmented options={segments} value={seg} onChange={setSeg} /></div>}
-
-        {seg === 'requests' && !isAdmin ? (
-          <ResRequestsPanel store={store} viewerId={viewerId} isAdmin={isAdmin} />
-        ) : (
-          <>
-            {/* Search + filters */}
-            <div style={{ display: 'flex', gap: 10, marginBottom: 18, flexWrap: 'wrap', alignItems: 'center' }}>
-              <SearchInput value={q} onChange={e => setQ(e.target.value)} placeholder="Search title, description, subject, type or owner…" style={{ minWidth: 260, flex: 1 }} />
-              <Dropdown value={fSubject} onChange={setFSubject} allLabel="All subjects" options={subjects} />
-              <Dropdown value={fYear} onChange={setFYear} allLabel="All years" options={window.RES_YEAR_GROUPS || []} />
-              <Dropdown value={fType} onChange={setFType} allLabel="All types" options={window.RES_TYPES || []} />
-              <Dropdown value={fBoard} onChange={setFBoard} allLabel="All boards" options={(window.RES_EXAM_BOARDS || []).filter(b => b !== 'None')} />
-            </div>
-
-            {groupKeys.length === 0 ? (
-              <Card><EmptyState icon="search" title="No resources found" message="Try a different search or clear the filters." /></Card>
-            ) : groupKeys.map(subj => (
-              <div key={subj} style={{ marginBottom: 20 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 2px 8px' }}>
-                  <span style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: DS.muted }}>{subj}</span>
-                  <span style={{ fontSize: 11, color: DS.faint }}>{groups[subj].length}</span>
-                </div>
-                <Card>
-                  {groups[subj].map((r, i) => (
-                    <ResourceRow key={r.id} store={store} res={r} viewerId={viewerId} isAdmin={isAdmin}
-                      last={i === groups[subj].length - 1}
-                      onWhereUsed={setWhereRes} onShare={setShareRes} onRequest={setReqRes}
-                      onOverride={(res) => {
-                        const req = (store.requests || []).find(x => x.resource_id === res.id && x.status === 'pending');
-                        if (req) { store.decideRequest(req.id, 'approved', 'admin'); store.logAccess(res.id, 'admin'); }
-                      }}
-                      onOpenPrivate={(res) => { store.logAccess(res.id, 'admin'); setPrivateNote(res); }} />
-                  ))}
-                </Card>
-              </div>
-            ))}
-          </>
-        )}
       </div>
 
       <ResAddModal open={addOpen} onClose={() => setAddOpen(false)} store={store} createdBy={viewerId} />
+      <ResourceDetail open={!!detailRes} onClose={() => setDetailRes(null)} store={store} resource={detailRes}
+        viewerId={viewerId} isAdmin={isAdmin} onShare={setShareRes} onRequest={setReqRes} onDelete={setConfirmDelete} />
       <ResWhereUsedDrawer open={!!whereRes} onClose={() => setWhereRes(null)} store={store} resource={whereRes} />
       <ResShareModal open={!!shareRes} onClose={() => setShareRes(null)} store={store} resource={shareRes} actingId={viewerId} />
       <ResRequestModal open={!!reqRes} onClose={() => setReqRes(null)} store={store} resource={reqRes} actingId={viewerId} />
-      <Modal open={!!privateNote} onClose={() => setPrivateNote(null)} title="Access recorded" icon="eye" width={420}
-        footer={<Btn variant="primary" onClick={() => setPrivateNote(null)}>Close</Btn>}>
+      {/* Author delete — only the owner reaches this (button lives in the detail
+          panel). Removes the file and every pointer/share/request to it. */}
+      <Modal open={!!confirmDelete} onClose={() => setConfirmDelete(null)} title="Delete file" icon="trash" width={440}
+        footer={<>
+          <Btn variant="ghost" onClick={() => setConfirmDelete(null)}>Cancel</Btn>
+          <Btn variant="danger" icon="trash" onClick={() => { if (confirmDelete) { store.deleteResource(confirmDelete.id); setSelectedIds([]); } setConfirmDelete(null); }}>Delete file</Btn>
+        </>}>
         <div style={{ fontSize: 13.5, color: DS.sub, lineHeight: 1.6 }}>
-          Opening <b style={{ color: DS.text }}>{privateNote && privateNote.title}</b> has been written to the access log, attributed to you. The owner keeps ownership — this is for storage and offboarding oversight, not routine review.
+          Delete <b style={{ color: DS.text }}>{confirmDelete && confirmDelete.title}</b>? This removes it from the library and detaches it from any lesson or homework it was attached to{confirmDelete && resUsedCount(store, confirmDelete.id) > 0 ? ` (${resUsedCount(store, confirmDelete.id)} place${resUsedCount(store, confirmDelete.id) === 1 ? '' : 's'})` : ''}. This can't be undone.
         </div>
       </Modal>
     </div>
@@ -1068,6 +1804,10 @@ window.klasioResources = {
   // context — read from the live store (seed-or-stored), never a persisted rollup.
   usedCount: (resourceId) => resUsedCount(resRead(), resourceId),
   contextLinkCount: (type, id) => resLinksForContext(resRead(), type, id).length,
+  // Stage 5 — append-only usage history (attach events). Kept for a future
+  // relevance ranker / activity views; nothing consumes it yet by design.
+  usageEvents: (resourceId) => { const s = resRead(); return (s.usage_events || []).filter(e => !resourceId || e.resource_id === resourceId); },
+  lastUsedAt: (resourceId) => { const s = resRead(); const es = (s.usage_events || []).filter(e => e.resource_id === resourceId); return es.length ? es.map(e => e.at).sort().slice(-1)[0] : null; },
   // Homework helpers — bridge into the Homework store (homework_store_v6) so the
   // where-used drawer + session detail can label homework contexts. Kept defensive.
   homeworkTitle: (assignmentId) => {

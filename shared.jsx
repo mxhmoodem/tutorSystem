@@ -475,6 +475,7 @@ const NAV_CONFIG = {
     color: '#43b190',
     items: [
       { id: 'dashboard', icon: 'home',      label: 'Overview'   },
+      { id: 'classes',   icon: 'book',      label: 'My Classes' },
       { id: 'homework',  icon: 'clip',      label: 'Homework', sub: [
         { id: 'homework:assignments', label: 'Assignments', icon: 'clip' },
         { id: 'homework:submitted',   label: 'Submitted',   icon: 'upload' },

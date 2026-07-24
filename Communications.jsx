@@ -2222,9 +2222,28 @@ function commsDslRoleByName(centreId) {
   return out;
 }
 
+// Read-only oversight of the class-scoped announcements posted to one class, for the
+// admin class-detail Announcements tab. Reads the persisted comms store directly (no
+// role/visibility filter — admin oversight sees every class post regardless of the
+// audience role it was sent to) and DERIVES the read count + recipient reach at call
+// time. Never a stored rollup. Ordered pinned-first then newest.
+function classAnnouncementsFor(centreId, classId) {
+  const store = cmLoad();
+  return Object.values(store.announcements || {})
+    .filter(a => a.scope === 'class' && a.centreId === centreId &&
+      (a.classId === classId || ((a.audience && a.audience.classIds) || []).includes(classId)))
+    .map(a => ({
+      id: a.id, title: a.title, body: a.body, authorName: a.authorName, authorRole: a.authorRole,
+      createdAt: a.createdAt, requiresAck: !!a.requiresAck, pinned: !!a.pinned, priority: a.priority,
+      readCount: Object.keys(a.reads || {}).length,
+      recipientCount: commsRecipients('class', a.audience || { classIds: [classId], roles: 'all' }, centreId).length,
+    }))
+    .sort((x, y) => (y.pinned - x.pinned) || (y.createdAt > x.createdAt ? 1 : -1));
+}
+
 Object.assign(window, {
   useComms, commsContext, CommunicationsPage, NotificationBell,
-  commsUnreadCount, canAnnounce, canMessage, commsRecipients,
+  commsUnreadCount, canAnnounce, canMessage, commsRecipients, classAnnouncementsFor,
   // Used by the Settings → Comms tab (Settings.jsx) to render the preset cards.
   COMMS_PRESETS, commsUserById: userById, commsDslRoleByName,
 });

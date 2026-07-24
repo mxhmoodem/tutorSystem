@@ -57,7 +57,7 @@ const RES_TYPES = [
   { id: 'slides',      label: 'Slides',        icon: 'image',  tone: 'info',    studentDefault: true  },
   { id: 'notes',       label: 'Notes',         icon: 'edit',   tone: 'warning', studentDefault: true  },
   { id: 'past_paper',  label: 'Past paper',    icon: 'file',   tone: 'violet',  studentDefault: false },
-  { id: 'revision',    label: 'Revision pack', icon: 'star',   tone: 'accent',  studentDefault: true  },
+  { id: 'revision',    label: 'Revision pack', icon: 'book',   tone: 'accent',  studentDefault: true  },
   { id: 'video',       label: 'Video',         icon: 'video',  tone: 'danger',  studentDefault: true  },
   { id: 'link',        label: 'Link',          icon: 'link',   tone: 'muted',   studentDefault: true  },
   { id: 'other',       label: 'Other',         icon: 'file',   tone: 'muted',   studentDefault: true  },
