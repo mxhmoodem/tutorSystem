@@ -1521,7 +1521,7 @@ const ClassFormModal = ({ open, onClose, onSave, store, teachers, editing }) => 
         </Field>}
         <Field label="Day">
           <Select value={form.day} onChange={e => set('day', e.target.value)}>
-            {['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'].map(d => <option key={d}>{d}</option>)}
+            {['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'].map(d => <option key={d}>{d}</option>)}
           </Select>
         </Field>
         <Field label="Time" required error={touched && errs.time}>
@@ -2722,6 +2722,7 @@ const TeacherProfilePage = () => {
   const [tab, setTab] = React.useState('overview');
   const [holiday, setHoliday] = React.useState({ from:'', to:'', reason:'' });
   const [coverOpen, setCoverOpen] = React.useState(false);
+  const [offboardOpen, setOffboardOpen] = React.useState(false);
 
   React.useEffect(() => { if (teacher && !form) setForm({ ...teacher, subjects: teacherSubjects(teacher) }); }, [teacher]);
 
@@ -2785,10 +2786,37 @@ const TeacherProfilePage = () => {
           <div style={{ display:'flex', gap:8 }}>
             {editing
               ? <><Btn variant="ghost" onClick={cancel}>Cancel</Btn><Btn variant="primary" icon="check" onClick={save}>Save Changes</Btn></>
-              : <><Btn variant="secondary" icon="message" onClick={() => window.__navigate && window.__navigate('admin', 'comms')}>Message</Btn><Btn variant="primary" icon="edit" onClick={() => setEditing(true)}>Edit Details</Btn></>}
+              : <>
+                  {teacher.status === 'inactive'
+                    ? <Btn variant="secondary" icon="user" onClick={() => {
+                        store.updateTeacher(teacher.id, { status: 'active' });
+                        const rid = window.klasioResources && window.klasioResources.staffIdByName(teacher.name);
+                        if (rid && window.klasioResources.reactivate) window.klasioResources.reactivate(rid);
+                      }}>Reactivate</Btn>
+                    : <Btn variant="secondary" icon="logout" onClick={() => {
+                        store.updateTeacher(teacher.id, { status: 'inactive' });
+                        const rid = window.klasioResources && window.klasioResources.staffIdByName(teacher.name);
+                        if (rid && window.klasioResources.deactivate) window.klasioResources.deactivate(rid);
+                        setOffboardOpen(true);
+                      }}>Deactivate</Btn>}
+                  <Btn variant="secondary" icon="message" onClick={() => window.__navigate && window.__navigate('admin', 'comms')}>Message</Btn>
+                  <Btn variant="primary" icon="edit" onClick={() => setEditing(true)}>Edit Details</Btn>
+                </>}
           </div>
         </div>
       </Card>
+
+      {/* Offboarding — the leaver's resource counts split by visibility + a single
+          "Release restricted to the centre" action (§5.4). Ownership never transfers. */}
+      <Modal open={offboardOpen} onClose={() => setOffboardOpen(false)} title={`Offboarding — ${teacher.name}`} icon="logout" width={520}
+        subtitle="Their teaching continues to be attributed to them. Decide what happens to their files.">
+        {window.OffboardResourcesStep
+          ? <window.OffboardResourcesStep
+              staffId={window.klasioResources && window.klasioResources.staffIdByName(teacher.name)}
+              staffName={teacher.name}
+              onDone={() => setOffboardOpen(false)} />
+          : null}
+      </Modal>
     </>
   );
 
@@ -3138,10 +3166,33 @@ const timeMins = t => { const [h, m] = (t || '0:0').split(':').map(Number); retu
 // Centre-wide weekly timetable, derived entirely from the classes the admin has
 // created and assigned a teacher to (store.classes is the single source of truth).
 // Same data the teacher sees on their Timetable page — this is the whole-centre view.
+// Resolve the calendar date of a weekday within the week of the attendance
+// reference "now", so a click on the weekly grid opens that class's actual
+// occurrence (the session) and lines up with the seeded register/plan data.
+const scheduleWeekDate = (dayName) => {
+  const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+  const idx = days.indexOf(dayName);
+  if (idx < 0) return new Date().toISOString().slice(0, 10);
+  const base = new Date(window.getNow ? window.getNow() : Date.now());
+  const jsDow = base.getDay();                       // 0 = Sun … 6 = Sat
+  const monday = new Date(base);
+  monday.setDate(base.getDate() + (jsDow === 0 ? -6 : 1 - jsDow));
+  const target = new Date(monday);
+  target.setDate(monday.getDate() + idx);
+  return target.toISOString().slice(0, 10);
+};
+
 const AdminSchedulePage = () => {
   const store = useAdminStore();
   const [teacherFilter, setTeacherFilter] = React.useState('all');
-  const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+  // A single session (one class occurrence at a date) opens a read-only detail
+  // view within Schedule — no new page id (§4.4).
+  const [session, setSession] = React.useState(null);
+  const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+  if (session && window.ResourceSessionDetail) {
+    return <window.ResourceSessionDetail classId={session.classId} date={session.date} onBack={() => setSession(null)} />;
+  }
 
   const classes = store.classes.filter(c =>
     c.status !== 'paused' && (teacherFilter === 'all' || c.teacher === teacherFilter));
@@ -3195,7 +3246,7 @@ const AdminSchedulePage = () => {
 
       <Card>
         {/* Header row */}
-        <div style={{ display:'grid', gridTemplateColumns:'80px repeat(5,1fr)', borderBottom:`1px solid ${DS.border}`, background:DS.surface }}>
+        <div style={{ display:'grid', gridTemplateColumns:'80px repeat(7,1fr)', borderBottom:`1px solid ${DS.border}`, background:DS.surface }}>
           <div style={{ padding:'12px 14px', fontSize:12, fontWeight:600, color:DS.muted }}>Time</div>
           {days.map(d => (
             <div key={d} style={{ padding:'12px 14px', fontSize:13, fontWeight:600, color:DS.text, borderLeft:`1px solid ${DS.border}` }}>{d}</div>
@@ -3210,7 +3261,7 @@ const AdminSchedulePage = () => {
         )}
         {slots.map((time, ri) => (
           <div key={time} style={{
-            display:'grid', gridTemplateColumns:'80px repeat(5,1fr)',
+            display:'grid', gridTemplateColumns:'80px repeat(7,1fr)',
             borderBottom: ri < slots.length-1 ? `1px solid ${DS.border}` : 'none',
           }}>
             <div style={{ padding:'10px 14px', fontSize:12, color:DS.muted, fontVariantNumeric:'tabular-nums' }}>{time}</div>
@@ -3227,7 +3278,7 @@ const AdminSchedulePage = () => {
                     const shownTeacher = cv ? cv.teacher : c.teacher;
                     const teacher = store.teachers.find(t => t.name === shownTeacher);
                     return (
-                      <button key={c.id} onClick={() => adminNav('class_detail', c.id)} title={`${c.name} · ${c.group} · ${shownTeacher}${cv ? ` (covering ${c.teacher})` : ''} · ${c.room || 'No room'}`} style={{
+                      <button key={c.id} onClick={() => setSession({ classId: c.id, date: scheduleWeekDate(c.day) })} title={`${c.name} · ${c.group} · ${shownTeacher}${cv ? ` (covering ${c.teacher})` : ''} · ${c.room || 'No room'} — open session`} style={{
                         textAlign:'left', background:color+'12', border:`1px solid ${color}44`,
                         borderLeft:`3px solid ${color}`, borderRadius:6,
                         padding:'5px 8px', cursor:'pointer', width:'100%',

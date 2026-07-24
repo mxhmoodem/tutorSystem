@@ -1260,7 +1260,7 @@ const TeacherTimetablePage = () => {
   const store = useAdminStore();
   const tsStore = window.useTimesheetStore ? window.useTimesheetStore() : null;
   const me = store.teachers.find(t => t.name === 'Heebz A') || store.teachers[0];
-  const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+  const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
   const todayName = new Date().toLocaleDateString('en-GB', { weekday:'long' });
   const todayISO = window.tsTodayISO ? window.tsTodayISO() : new Date().toISOString().slice(0, 10);
   // A class is cancelled in the Today view if its session for today is in the cancelled set.
@@ -1334,7 +1334,7 @@ const TeacherTimetablePage = () => {
 
       {/* Weekly grid */}
       <Card title="This Week">
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)' }}>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(7,1fr)' }}>
           {days.map((day, di) => {
             const sessions = byTime(myClasses.filter(c => c.day === day));
             const isToday = day === todayName;
@@ -2016,7 +2016,11 @@ const formatDateShort = (iso) => {
 const SavedPlansBrowser = ({ onOpen, onNew, currentKey }) => {
   const [query, setQuery] = React.useState('');
   const [classFilter, setClassFilter] = React.useState('all');
+  // Every teacher can read every plan; the default view is their own.
+  const [scope, setScope] = React.useState('mine');
   const [, force] = React.useState(0);
+  const acting = window.teacherMetrics ? window.teacherMetrics.getPrincipal() : { id: 't1', name: 'Sarah Clarke' };
+  const planIsMine = (p) => !p.ownerId || p.ownerId === acting.id;
 
   const allPlans = React.useMemo(() => {
     const store = window.__lessonPlans || {};
@@ -2024,6 +2028,7 @@ const SavedPlansBrowser = ({ onOpen, onNew, currentKey }) => {
   }, [currentKey]);
 
   const filtered = allPlans.filter(p => {
+    if (scope === 'mine' && !planIsMine(p)) return false;
     if (classFilter !== 'all' && p.group !== classFilter) return false;
     if (!query.trim()) return true;
     const q = query.toLowerCase();
@@ -2045,6 +2050,9 @@ const SavedPlansBrowser = ({ onOpen, onNew, currentKey }) => {
         background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:12,
         padding:'18px 20px',
       }}>
+        <div style={{ marginBottom:14 }}>
+          <Segmented options={[{ id:'mine', label:'My classes' }, { id:'all', label:'All classes' }]} value={scope} onChange={setScope} />
+        </div>
         <div style={{ display:'grid', gridTemplateColumns:'1fr auto auto', gap:12, alignItems:'center' }}>
           <div style={{ position:'relative' }}>
             <div style={{ position:'absolute', left:12, top:'50%', transform:'translateY(-50%)', display:'flex' }}>
@@ -2135,7 +2143,10 @@ const SavedPlansBrowser = ({ onOpen, onNew, currentKey }) => {
                     <div style={{ fontSize:14, fontWeight:600, color:DS.text, lineHeight:1.35, marginBottom:3 }}>{title}</div>
                     <div style={{ fontSize:12, color:DS.muted }}>{p.group}</div>
                   </div>
-                  {isCurrent && <Badge variant="accent">Open</Badge>}
+                  <div style={{ display:'flex', flexDirection:'column', gap:4, alignItems:'flex-end' }}>
+                    {isCurrent && <Badge variant="accent">Open</Badge>}
+                    {!planIsMine(p) && <Badge variant="default">{p.owner || 'Another teacher'}</Badge>}
+                  </div>
                 </div>
 
                 {p.plan?.objectives && (
@@ -2307,10 +2318,32 @@ const LessonPlanEditor = ({
   plan, setPlan,
   mode, setMode,
   exists, savedAt, saved,
-  onSave, onDelete, onBack,
+  readOnly, ownerName, acting,
+  onSave, onDelete, onOpen, onBack,
 }) => {
-  const cls = teacherClasses.find(c => c.group === selectedGroup) || teacherClasses[0];
-  const isEdit = mode === 'edit';
+  // Fall back to a synthetic class descriptor for a group outside the principal's
+  // own teaching load (e.g. another teacher's plan opened read-only under All classes).
+  const cls = teacherClasses.find(c => c.group === selectedGroup) || { name: 'Lesson', group: selectedGroup, students: '', room: '', color: DS.accent };
+  const isEdit = mode === 'edit' && !readOnly;
+  const planContextId = planKey(selectedGroup, selectedDate);
+  const [dupOpen, setDupOpen] = React.useState(false);
+  const [dupGroup, setDupGroup] = React.useState('');
+
+  // D8 — Duplicate to another class: produces an INDEPENDENT plan (its own key) so
+  // post-lesson annotations on the two groups never collide.
+  const duplicateToClass = () => {
+    const target = dupGroup || teacherClasses.find(c => c.group !== selectedGroup)?.group;
+    if (!target) return;
+    const now = new Date().toLocaleString('en-GB', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' });
+    const newKey = planKey(target, selectedDate);
+    window.__lessonPlans[newKey] = {
+      plan: JSON.parse(JSON.stringify(plan)), savedAt: now, group: target, date: selectedDate,
+      owner: (acting && acting.name) || 'You', ownerId: (acting && acting.id) || 't1',
+    };
+    window.__saveLessonPlans && window.__saveLessonPlans();
+    setDupOpen(false);
+    onOpen && onOpen(target, selectedDate);
+  };
 
   const update = (field, value) => setPlan(p => ({ ...p, [field]: value }));
   const addFiles = (files) => setPlan(p => ({ ...p, resources: [...(p.resources || []), ...files] }));
@@ -2525,23 +2558,13 @@ const LessonPlanEditor = ({
             </div>
           </div>
 
-          {/* Resources / file uploads */}
+          {/* Attached resources — pulled from the shared library. Attaching creates
+              a pointer (nothing is copied); the file also lands in Resources. Owners
+              attach/detach; another teacher's plan is read-only. */}
           <div style={{ background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:12, padding:'18px 20px' }}>
-            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:14 }}>
-              <div style={{ fontSize:14, fontWeight:600, color:DS.text }}>Resources</div>
-              <Badge variant="default">{plan.resources?.length || 0}</Badge>
-            </div>
-            <FileDropZone
-              files={plan.resources || []}
-              onAdd={addFiles}
-              onRemove={removeFile}
-              disabled={!isEdit}
-            />
-            {!isEdit && (!plan.resources || plan.resources.length === 0) && (
-              <div style={{ fontSize:12, color:DS.faint, fontStyle:'italic', textAlign:'center', padding:'12px 0' }}>
-                No resources uploaded.
-              </div>
-            )}
+            {window.AttachResourcesPanel
+              ? <window.AttachResourcesPanel contextType="lesson_plan" contextId={planContextId} canEdit={!readOnly} />
+              : null}
           </div>
 
           {/* Action buttons */}
@@ -2550,7 +2573,11 @@ const LessonPlanEditor = ({
             padding:'14px 16px', display:'flex', flexDirection:'column', gap:8,
             position:'sticky', top:16,
           }}>
-            {isEdit ? (
+            {readOnly ? (
+              <div style={{ display:'flex', alignItems:'center', gap:8, fontSize:12.5, color:DS.muted, padding:'2px 2px 4px' }}>
+                <Icon name="eye" size={15} color={DS.muted} /> Read-only — owned by {ownerName}
+              </div>
+            ) : isEdit ? (
               <>
                 <Btn variant="primary" icon="check" onClick={onSave}>
                   {exists ? 'Update Plan' : 'Save Plan'}
@@ -2558,13 +2585,28 @@ const LessonPlanEditor = ({
                 {exists && <Btn variant="secondary" onClick={() => setMode('view')}>Cancel Edits</Btn>}
               </>
             ) : (
-              <Btn variant="primary" icon="edit" onClick={() => setMode('edit')}>Edit Plan</Btn>
+              <>
+                <Btn variant="primary" icon="edit" onClick={() => setMode('edit')}>Edit Plan</Btn>
+                {exists && <Btn variant="secondary" icon="copy" onClick={() => setDupOpen(true)}>Duplicate to another class</Btn>}
+              </>
             )}
             <Btn variant="ghost" icon="chevron_d" onClick={onBack}>Back to All Plans</Btn>
-            {exists && <Btn variant="ghost" icon="x" onClick={onDelete}>Delete Plan</Btn>}
+            {!readOnly && exists && <Btn variant="ghost" icon="x" onClick={onDelete}>Delete Plan</Btn>}
           </div>
         </div>
       </div>
+
+      {/* Duplicate-to-another-class picker (D8) */}
+      <Modal open={dupOpen} onClose={() => setDupOpen(false)} title="Duplicate to another class" icon="copy" width={440}
+        subtitle="Creates a separate copy for the chosen class on the same date. The two plans are independent — annotate each after its lesson without them colliding."
+        footer={<><Btn variant="ghost" onClick={() => setDupOpen(false)}>Cancel</Btn><Btn variant="primary" icon="copy" onClick={duplicateToClass}>Create copy</Btn></>}>
+        <Field label="Copy to class">
+          <Select value={dupGroup} onChange={e => setDupGroup(e.target.value)}>
+            <option value="">Choose a class…</option>
+            {teacherClasses.filter(c => c.group !== selectedGroup).map(c => <option key={c.id} value={c.group}>{c.group}</option>)}
+          </Select>
+        </Field>
+      </Modal>
     </>
   );
 };
@@ -2582,6 +2624,13 @@ const LessonPlannerPage = ({ initialGroup, initialDate, initialMode }) => {
   const key = planKey(selectedGroup, selectedDate);
   const exists = !!window.__lessonPlans[key];
 
+  // Acting teacher (the principal in this prototype). Every teacher can READ every
+  // plan; only the owner edits. A plan with no stored owner is a legacy/own plan.
+  const acting = window.teacherMetrics ? window.teacherMetrics.getPrincipal() : { id: 't1', name: 'Sarah Clarke' };
+  const storedPlan = window.__lessonPlans[key];
+  const planOwnerName = (storedPlan && storedPlan.owner) ? storedPlan.owner : acting.name;
+  const readOnly = !!(storedPlan && storedPlan.ownerId && storedPlan.ownerId !== acting.id);
+
   React.useEffect(() => {
     const stored = window.__lessonPlans[key];
     if (stored) {
@@ -2598,7 +2647,8 @@ const LessonPlannerPage = ({ initialGroup, initialDate, initialMode }) => {
 
   const handleSave = () => {
     const now = new Date().toLocaleString('en-GB', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' });
-    window.__lessonPlans[key] = { plan, savedAt: now, group: selectedGroup, date: selectedDate };
+    // Stamp ownership so "My classes / All classes" and read-only-for-others resolve.
+    window.__lessonPlans[key] = { plan, savedAt: now, group: selectedGroup, date: selectedDate, owner: acting.name, ownerId: acting.id };
     window.__saveLessonPlans && window.__saveLessonPlans();   // persist to localStorage
     setSavedAt(now);
     setSaved(true);
@@ -2669,8 +2719,12 @@ const LessonPlannerPage = ({ initialGroup, initialDate, initialMode }) => {
           exists={exists}
           savedAt={savedAt}
           saved={saved}
+          readOnly={readOnly}
+          ownerName={planOwnerName}
+          acting={acting}
           onSave={handleSave}
           onDelete={handleDelete}
+          onOpen={openExisting}
           onBack={() => setScreen('browse')}
         />
       )}

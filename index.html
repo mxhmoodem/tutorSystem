@@ -69,6 +69,10 @@
 <script type="text/babel" src="mocks/plans.mock.jsx"></script>
 <script type="text/babel" src="mocks/timesheets.mock.jsx"></script>
 <script type="text/babel" src="mocks/storage.mock.jsx"></script>
+<!-- Resources (Materials) seed — resources, shares, access requests, attachment
+     rows + the resources staff/taxonomy. Loads last with the other mocks; consumed
+     by Resources.jsx. -->
+<script type="text/babel" src="mocks/resources.mock.jsx"></script>
 
 <!-- Centralised role & permission helpers (hasRole / isAccountOwner / canManage*).
      Loads after the mocks (needs ONB_* globals) and before the page modules that
@@ -152,6 +156,11 @@
      the shared register drawer / session row / unlock chooser it exposes on window;
      dispatched by the AdminPages router as window.AdminAttendancePage. -->
 <script type="text/babel" src="AttendanceAdmin.jsx"></script>
+<!-- Resources (Materials) library + attach mechanism + admin session detail +
+     offboarding step. Loads after the data layers (reads them through window at
+     render time); exposes ResourcesPage / AttachResourcesPanel / ResourceSessionDetail
+     / OffboardResourcesStep + window.klasioResources for the pages that attach. -->
+<script type="text/babel" src="Resources.jsx"></script>
 <script type="text/babel" src="StudentDashboard.jsx"></script>
 <script type="text/babel" src="Homework.jsx"></script>
 
@@ -491,6 +500,9 @@ const AccountBillingPage = () => (
 const AccountStoragePage = () => (
   <AccountPageShell title="Storage" subtitle="Pooled cloud storage across every centre in your account.">
     {window.StorageAdminPanel ? <window.StorageAdminPanel /> : null}
+    {/* Per-teacher resources breakdown with restricted-file counts (§4.5). The
+        offboarding action itself lives on Staff → Deactivate (§5.4). */}
+    {window.ResStorageBreakdown ? <window.ResStorageBreakdown /> : null}
   </AccountPageShell>
 );
 
@@ -596,6 +608,23 @@ const App = () => {
   const commsCtx  = React.useMemo(() => window.commsContext ? window.commsContext(commsRole) : null, [commsRole]);
   const comms     = window.useComms ? window.useComms(commsCtx) : null;
 
+  // Resources — pending access-request count for the acting user, surfaced as a
+  // sidebar badge on the Resources item (D3). Re-derived live when a request is
+  // made or decided (the resources store dispatches a window event).
+  const [resTick, setResTick] = React.useState(0);
+  React.useEffect(() => {
+    const fn = () => setResTick(t => t + 1);
+    window.addEventListener('klasio-resources-changed', fn);
+    return () => window.removeEventListener('klasio-resources-changed', fn);
+  }, []);
+  const resReqCount = (window.resourceRequestCount && (view === 'admin' || view === 'teacher')) ? window.resourceRequestCount(view) : 0;
+  const sidebarBadges = React.useMemo(() => {
+    const b = {};
+    if (comms) b.comms = comms.unread.total;
+    if (resReqCount) b.resources = resReqCount;
+    return Object.keys(b).length ? b : null;
+  }, [comms && comms.unread.total, resReqCount, resTick]);
+
   React.useLayoutEffect(() => {
     if (window.DS) {
       window.DS.accent       = accent;
@@ -674,6 +703,8 @@ const App = () => {
       if (parent === 'plans')     return accountOwner ? <AccountBillingPage /> : <AccountLocked />;
       if (parent === 'storage')   return accountOwner ? <AccountStoragePage /> : <AccountLocked />;
       if (parent === 'reports')   return <AdminReportsConfig section={section} />;
+      // Resources (Materials) — admin lens of the same page (no Mine/Shared/Requests).
+      if (parent === 'resources') return <ResourcesPage role="admin" />;
       // Onboarding flows (Onboarding.jsx) — full-page admin routes reached via adminNav.
       // (The "Set up centre" checklist is now the Centres page's right-hand drawer;
       // admin/setup is rewritten to it in __navigate, so there's no standalone route.)
@@ -692,6 +723,7 @@ const App = () => {
       // Shared rich profile (AdminPages.jsx), read-only for teachers — no Fees/Account tabs.
       if (parent === 'student_profile') return <StudentProfilePage role="teacher" />;
       if (parent === 'timetable')      return <TeacherPages page="timetable" />;
+      if (parent === 'resources')      return <ResourcesPage role="teacher" />;
       if (parent === 'homework')       return <TeacherPages page="homework" section={section} />;
       if (parent === 'progress')       return <TeacherPages page="progress" />;
       if (parent === 'attendance')     return <TeacherPages page="attendance" />;
@@ -724,7 +756,7 @@ const App = () => {
             active={page}
             onNav={handleNav}
             onRoleSwitch={(role) => { setView(role); setPage('dashboard'); }}
-            badges={comms ? { comms: comms.unread.total } : null}
+            badges={sidebarBadges}
             accountOwner={accountOwner}
             collapsed={sidebarCollapsed}
             centre={centreNav ? centreNav.centre : null}
@@ -812,6 +844,7 @@ const App = () => {
             ['admin',    'class_roster',        'Admin — Class roster'],
             ['admin',    'students',   'Admin — Students'],
             ['admin',    'classes',    'Admin — Classes'],
+            ['admin',    'resources',  'Admin — Resources'],
             ['admin',    'teachers',   'Admin — Staff · Teachers'],
             ['admin',    'team',       'Admin — Staff · Roles & access'],
             ['admin',    'timesheets:review', 'Admin — Staff · Timesheets'],
@@ -824,6 +857,7 @@ const App = () => {
             ['teacher',  'classes',    'Teacher — My Classes'],
             ['teacher',  'timetable',  'Teacher — Timetable'],
             ['teacher',  'lesson_planner','Teacher — Lesson Planner'],
+            ['teacher',  'resources',  'Teacher — Resources'],
             ['teacher',  'homework',   'Teacher — Homework'],
             ['teacher',  'attendance', 'Teacher — Attendance'],
             ['teacher',  'timesheet',  'Teacher — Timesheet'],

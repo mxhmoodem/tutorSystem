@@ -3953,6 +3953,16 @@ const TeacherOverview = ({ a, users = {}, folders = [], onBack, onEdit, onReview
             </div>
           </Card>
 
+          {/* Attached resources — from the shared library (Materials). Attaching
+              points to a file; nothing is copied. Each attachment carries its own
+              student-visibility control: a mark scheme defaults off, a worksheet
+              defaults on from the set date. */}
+          <Card style={{ padding: 18 }}>
+            {window.AttachResourcesPanel
+              ? <window.AttachResourcesPanel contextType="homework" contextId={a.id} canEdit={a.status !== 'closed'} />
+              : null}
+          </Card>
+
           {/* Folder */}
           <Card style={{ padding: 18 }}>
             <div style={{ fontFamily: F.head, fontSize: 14, fontWeight: 700, marginBottom: 10 }}>Folder</div>

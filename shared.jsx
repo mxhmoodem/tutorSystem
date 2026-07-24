@@ -425,6 +425,7 @@ const NAV_CONFIG = {
         { id: 'classes:classes',  label: 'Classes',  icon: 'grid' },
         { id: 'classes:subjects', label: 'Subjects', icon: 'book' },
       ] },
+      { id: 'resources', icon: 'folder',   label: 'Resources', section: 'Academic' },
       { id: 'schedule',  icon: 'calendar', label: 'Schedule', section: 'Academic' },
       { id: 'attendance', icon: 'check',   label: 'Attendance', section: 'Academic' },
       { id: 'invoices',  icon: 'invoice',  label: 'Invoices', section: 'Operations' },
@@ -455,6 +456,7 @@ const NAV_CONFIG = {
       { id: 'students',        icon: 'users',     label: 'My Students', section: 'Teaching' },
       { id: 'timetable',       icon: 'calendar',  label: 'Timetable', section: 'Teaching' },
       { id: 'lesson_planner',  icon: 'edit',      label: 'Lesson Planner', section: 'Teaching' },
+      { id: 'resources',       icon: 'folder',    label: 'Resources', section: 'Teaching' },
       { id: 'homework',        icon: 'clip',      label: 'Homework', section: 'Work', sub: [
         { id: 'homework:assignments', label: 'Assignments', icon: 'clip' },
         { id: 'homework:analytics',   label: 'Analytics',   icon: 'chart' },

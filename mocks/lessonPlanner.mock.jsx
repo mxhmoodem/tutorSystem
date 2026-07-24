@@ -189,12 +189,57 @@ const LESSON_PLAN_SEED = [
       resources: [],
     },
   },
+  // ── Other teachers' plans (owner set) — every teacher can READ every plan, but
+  //    only the owner edits. These surface under "All classes" in the planner,
+  //    rendered read-only. Groups sit outside the principal's teacherClasses so
+  //    they read clearly as another teacher's lesson.
+  {
+    group: 'Year 10 – Group B', date: '2026-04-25', savedAt: '24 Apr, 09:12', owner: 'David Park', ownerId: 't_david',
+    plan: {
+      title: 'Forces & Motion — Newton\'s Laws',
+      topic: 'Physics · Forces',
+      duration: '60',
+      objectives:
+        '• State Newton\'s three laws of motion.\n' +
+        '• Distinguish weight from mass.\n' +
+        '• Apply F = ma to simple problems.',
+      agenda:
+        '0–10  Starter: forces around us\n' +
+        '10–30 Newton\'s laws with demos\n' +
+        '30–50 Practice: F = ma calculations\n' +
+        '50–60 Plenary + exit ticket',
+      homework: 'Forces worksheet Q1–8. Due 1 May.',
+      notes: 'Bring the dynamics trolley for the second law demo.',
+      resources: [],
+    },
+  },
+  {
+    group: 'Year 11 – Group A', date: '2026-04-24', savedAt: '23 Apr, 16:40', owner: 'Priya Nair', ownerId: 't_priya',
+    plan: {
+      title: 'Titration Calculations',
+      topic: 'Chemistry · Quantitative chemistry',
+      duration: '75',
+      objectives:
+        '• Carry out a titration calculation from a set of results.\n' +
+        '• Use concentration = moles ÷ volume confidently.',
+      agenda:
+        '0–15  Recap moles and concentration\n' +
+        '15–45 Worked titration calculations\n' +
+        '45–70 Independent practice\n' +
+        '70–75 Plenary',
+      homework: 'Titration calculation set. Due 30 Apr.',
+      notes: 'Watch unit conversions (cm³ → dm³).',
+      resources: [],
+    },
+  },
 ];
 
-LESSON_PLAN_SEED.forEach(({ group, date, savedAt, plan }) => {
-  const key = `${group}__${date}`;
+LESSON_PLAN_SEED.forEach((entry) => {
+  const key = `${entry.group}__${entry.date}`;
   if (!window.__lessonPlans[key]) {
-    window.__lessonPlans[key] = { plan, savedAt, group, date };
+    // Carry owner/ownerId (present on other-teachers' seeds) so the planner can
+    // resolve "mine vs read-only". Absent owner ⇒ the principal's own plan.
+    window.__lessonPlans[key] = { plan: entry.plan, savedAt: entry.savedAt, group: entry.group, date: entry.date, owner: entry.owner || null, ownerId: entry.ownerId || null };
   }
 });
 
