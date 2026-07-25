@@ -473,7 +473,7 @@ const AdminDashboard = () => {
   const dateStr = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 
   return (
-    <div style={{ padding: '32px' }}>
+    <div style={pageFrame()}>
       {/* ── Hero — title, alert chips, KPI stat band on one ink panel ── */}
       <section style={{ ...heroSurface(), marginBottom: 24 }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>

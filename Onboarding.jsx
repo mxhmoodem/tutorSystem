@@ -455,7 +455,7 @@ const CentreSetupPage = () => {
   const pct = Math.round((doneCount / steps.length) * 100);
 
   return (
-    <div style={{ padding: '32px', maxWidth: 880, margin: '0 auto' }}>
+    <div style={pageFrame({ narrow: true })}>
       <PageHeader
         title="Set up your centre"
         subtitle={`Welcome to ${centre.name}. Three steps to get up and running on the ${onb.plan.name} plan.`}
@@ -609,7 +609,7 @@ const InviteTeachersPage = () => {
 
   if (sent) {
     return (
-      <div style={{ padding: '32px', maxWidth: 720, margin: '0 auto' }}>
+      <div style={pageFrame({ narrow: true })}>
         <FlowHeader title="Invites sent" subtitle={`${sent.length} teacher${sent.length === 1 ? '' : 's'} invited to ${onb.centre.name}`} onBack={() => adminNav('setup')} />
         <Card>
           <div style={{ padding: '12px 0' }}>
@@ -643,7 +643,7 @@ const InviteTeachersPage = () => {
   }
 
   return (
-    <div style={{ padding: '32px', maxWidth: 820, margin: '0 auto' }}>
+    <div style={pageFrame({ narrow: true })}>
       <FlowHeader title="Invite teachers" subtitle="Each teacher gets a link to set up their own account." onBack={() => adminNav('setup')} />
 
       <div style={{ display: 'flex', gap: 16, marginBottom: 22 }}>
@@ -775,7 +775,7 @@ const BulkImportPage = () => {
   };
 
   return (
-    <div style={{ padding: '32px', maxWidth: 1000, margin: '0 auto' }}>
+    <div style={pageFrame()}>
       <FlowHeader title="Import students" subtitle="Upload your class list — we generate a username + claim slip for each student." onBack={() => adminNav('setup')} />
 
       {/* Format help */}
@@ -954,7 +954,7 @@ const AddSingleStudentPage = () => {
   };
 
   return (
-    <div style={{ padding: '32px', maxWidth: 820, margin: '0 auto' }}>
+    <div style={pageFrame({ narrow: true })}>
       <FlowHeader title="Add a student" subtitle="Creates one student account, ready to claim. This signs them up at the centre — assign classes separately." onBack={() => adminNav('students_import')} />
 
       <Card>
@@ -1036,7 +1036,7 @@ const ClaimSlipsPage = () => {
   }));
 
   return (
-    <div style={{ padding: '32px', maxWidth: 1000, margin: '0 auto' }}>
+    <div style={pageFrame()}>
       <FlowHeader title="Claim slips" subtitle="Hand these to students (or parents for under-13s) to set up sign-in." onBack={() => adminNav('people')} />
 
       {slipData.length === 0 ? (
@@ -1102,7 +1102,7 @@ const ClassRosterPage = () => {
   const full = cls ? roster.length >= cls.capacity : false;
 
   return (
-    <div style={{ padding: '32px', maxWidth: 980, margin: '0 auto' }}>
+    <div style={pageFrame()}>
       <FlowHeader title="Manage class roster" subtitle="Enrol already signed-up students into a class. Students can't enrol themselves." onBack={() => adminNav('classes')} />
 
       <Card style={{ marginBottom: 18 }}>
@@ -1278,7 +1278,7 @@ const PeopleInvitesPage = () => {
   const statusOpts = [{ id: 'all', label: 'All' }, { id: 'invited', label: 'Invited' }, { id: 'pending', label: 'Pending' }, { id: 'active', label: 'Active' }];
 
   return (
-    <div style={{ padding: '32px' }}>
+    <div style={pageFrame()}>
       <PageHeader title="People & Invites" subtitle="Track and chase the whole onboarding pipeline at a glance."
         actions={[<Btn key="t" variant="secondary" small icon="user" onClick={() => adminNav('invite_teachers')}>Invite teachers</Btn>,
           <Btn key="s" variant="primary" small icon="upload" onClick={() => adminNav('students_import')}>Add students</Btn>]} />

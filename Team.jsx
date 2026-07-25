@@ -214,7 +214,7 @@ const AdminTeamPage = () => {
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
-    <div style={{ padding: '32px' }}>
+    <div style={pageFrame()}>
       <PageHeader
         title="Roles & access"
         subtitle={multiCentre ? 'Manage who can do what across your centres.' : 'Manage who can do what at your centre.'}

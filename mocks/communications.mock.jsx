@@ -414,7 +414,7 @@ const COMMS_ACTIVITY_NOTIFICATIONS = [
   { id: 'adm-report-updated', roles: ['admin'], centreIds: ['bm'], icon: 'file', tone: 'info', page: 'reports',
     title: 'Year 11 progress reports updated', sub: 'Reports - David Park changed 6 drafts',
     time: _ago(36 * MIN), sig: 'adm-report-updated:y11:6' },
-  { id: 'adm-timesheet-submitted', roles: ['admin'], centreIds: ['bm'], icon: 'clock', tone: 'warning', page: 'timesheets:review',
+  { id: 'adm-timesheet-submitted', roles: ['admin'], centreIds: ['bm'], icon: 'clock', tone: 'warning', page: 'timesheets',
     title: '3 timesheets need approval', sub: 'Timesheets - due before payroll export',
     time: _ago(51 * MIN), sig: 'adm-timesheet-submitted:3' },
   { id: 'adm-invoice-paid', roles: ['admin'], centreIds: ['bm'], icon: 'invoice', tone: 'success', page: 'invoices',
@@ -422,7 +422,7 @@ const COMMS_ACTIVITY_NOTIFICATIONS = [
     time: _ago(2 * HOUR), sig: 'adm-invoice-paid:BM-1042' },
 
   // Teacher
-  { id: 't-submission-emma', userIds: ['u_sarah'], icon: 'clip', tone: 'success', page: 'homework',
+  { id: 't-submission-emma', userIds: ['u_sarah'], icon: 'notebook_pen', tone: 'success', page: 'homework',
     title: 'Emma submitted Worksheet 4B', sub: 'Homework - GCSE Maths Group B',
     time: _ago(9 * MIN), sig: 't-submission-emma:worksheet-4b' },
   { id: 't-lesson-updated', userIds: ['u_sarah'], icon: 'calendar', tone: 'info', page: 'timetable',

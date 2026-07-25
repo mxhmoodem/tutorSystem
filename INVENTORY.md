@@ -9,7 +9,7 @@
 - **Persistence = localStorage.** No backend. Every store is a versioned localStorage key seeded from a `mocks/*.mock.jsx` global. Comments throughout describe the intended future RLS/multi-tenant backend.
 - **Single tenant in practice.** Only centre `bm` (Bright Minds Tuition) carries a live roster; other centres resolve to empty rollups.
 
-Entry point / router: the `App` component in [index.html](index.html#L423) is a two-level state machine — `view` (role/landing/auth) × `page` (compound `<parent>:<section>` id). `renderContent()` ([index.html:561](index.html#L561)) dispatches on `view` then `parent`.
+Entry point / router: the `App` component in [index.html](index.html#L423) is a two-level state machine — `view` (role/auth) × `page` (compound `<parent>:<section>` id). There is no marketing/landing page: the app boots straight into `view: 'admin'`, and `login`/`signup` remain as public views. `renderContent()` ([index.html:561](index.html#L561)) dispatches on `view` then `parent`.
 
 ---
 
@@ -20,8 +20,8 @@ Roles are defined by `NAV_CONFIG` in [shared.jsx:395](shared.jsx#L395) (four UI 
 | Role | Where defined | Landing / default view | Nav items visible | Notable permissions / restrictions |
 |---|---|---|---|---|
 | **superadmin** ("Platform Owner", `#7C3AED`) | [shared.jsx:396](shared.jsx#L396); persona `Marcus Hale` (`u_marcus`) | `superadmin` / `dashboard` → `SuperAdminDashboard` | Overview, Centres, Users, Revenue, Engagement, Communications (Announcements+Support), Security & Audit, System Health, Platform Controls, Settings | Platform-wide. Can impersonate tenants ([SAImpersonationBanner](SuperAdmin.jsx#L1920), `tutoros.impersonation.v1`). No Messages surface. Edits plan catalogue + override codes. |
-| **admin** ("Centre Admin" / "Account Owner", `DS.accent`) | [shared.jsx:412](shared.jsx#L412); persona `Lisa Chen` (`lisa.chen@brightminds.co.uk`) | `admin` / `dashboard` → `AdminDashboard` | Dashboard; **Account tier (owner-only):** Centres, Plans & Billing, Storage; **Centre tier:** Students, Staff (Teachers/Roles & access/Timesheets), People & Invites, Classes (Classes/Subjects), Schedule, Invoices, Reports, Communications, Settings | Account-tier items gated by `isAccountOwner` ([permissions.jsx:95](permissions.jsx#L95)); non-owner admin sees `AccountLocked`. Owner label swaps to "Account Owner" in topbar. Can grant/revoke Admin+Teacher, transfer ownership. |
-| **teacher** ("Teacher", `#0891B2`) | [shared.jsx:452](shared.jsx#L452); persona `Heebz A` (`t1`, `s.clarke@centre.co.uk`) | `teacher` / `dashboard` → `TeacherDashboard` | Dashboard, My Classes, My Students, Timetable, Lesson Planner, Homework (Assignments/Analytics), Attendance, Timesheet, Progress, Tracking, Reports, Communications, Settings | Scoped to classes where assigned (the class-assignment JOIN in [teacherMetrics.jsx](teacherMetrics.jsx)). Read-only student profile (no Fees/Account tabs). |
+| **admin** ("Centre Admin" / "Account Owner", `DS.accent`) | [shared.jsx:412](shared.jsx#L412); persona `Lisa Chen` (`lisa.chen@brightminds.co.uk`) | `admin` / `dashboard` → `AdminDashboard` | Dashboard; **Account tier (owner-only):** Centres, Plans & Billing, Storage; **Centre tier:** People (Students, Staff, People & Invites), Academic (Classes, Subjects, Timetable, Attendance, Resources), Operations (Invoices, Timesheets, Reports, Safeguarding), Communication (Announcements, Messages), Settings | Account-tier items gated by `isAccountOwner` ([permissions.jsx:95](permissions.jsx#L95)); non-owner admin sees `AccountLocked`. Owner label swaps to "Account Owner" in topbar. Can grant/revoke Admin+Teacher, transfer ownership. |
+| **teacher** ("Teacher", `#0891B2`) | [shared.jsx:452](shared.jsx#L452); persona `Heebz A` (`t1`, `s.clarke@centre.co.uk`) | `teacher` / `dashboard` → `TeacherDashboard` | Dashboard, Teaching (Timetable, My Classes, My Students, Lesson Planner, Resources), Student work (Attendance, Homework [Assignments/Analytics], Progress, Tracking, Reports, Timesheets), Communication (Announcements, Messages), Settings | Scoped to classes where assigned (the class-assignment JOIN in [teacherMetrics.jsx](teacherMetrics.jsx)). Read-only student profile (no Fees/Account tabs). |
 | **student** ("Student", `#43b190`) | [shared.jsx:474](shared.jsx#L474); persona `Oliver Chen` (`s_oliver`/`s2`/`u_oliver`) | `student` / `dashboard` → `StudentDashboard` | Overview, Homework (Assignments/Submitted/Results), My Progress, Sessions, Reports, Communications, Settings | Read-only own data. No account-tier concepts. Reads everything through `window.klasioStudent`. |
 | **parent / guardian** | Referenced only: `SA_ROLE_COUNTS.parent: 70` ([superAdmin.mock](mocks/superAdmin.mock.jsx#L85)); guardian fields on students; under-13 consent flow in Onboarding; `parentNotification`/`parentPortal` flags | — | **NONE** | **Referenced but not implemented as a view.** `design_extract/tuition-system/project/ParentPortal.jsx` exists but is NOT loaded by [index.html](index.html). Parent notifications marked "Coming soon" ([Reports.jsx:2577](Reports.jsx#L2577)). |
 
@@ -31,12 +31,11 @@ Roles are defined by `NAV_CONFIG` in [shared.jsx:395](shared.jsx#L395) (four UI 
 
 ## 2. Pages / Views / Routes
 
-The page id is `<parent>:<section>` for dropdown sub-sections (e.g. `reports:browse`) or `<id>_<detail>` for sub-pages (e.g. `students_add`); `navParentId` ([shared.jsx:496](shared.jsx#L496)) folds both back to the parent. `normalizePage` ([index.html:520](index.html#L520)) auto-expands a bare id to its first sub-section. The complete navigable set is enumerated in the Tweaks panel ([index.html:694-747](index.html#L694)).
+The page id is `<parent>:<section>` for dropdown sub-sections (e.g. `reports:browse`) or `<id>_<detail>` for sub-pages (e.g. `students_add`); `navParentId` ([shared.jsx:496](shared.jsx#L496)) folds both back to the parent. `normalizePage` ([index.html:520](index.html#L520)) auto-expands a bare id to its first sub-section and rewrites retired ids via `PAGE_ALIASES` (`classes:subjects`→`subjects`, `timesheets:review`→`timesheets`, `comms:settings`→`settings:comms`). The complete navigable set is enumerated in the Tweaks panel ([index.html:694-747](index.html#L694)).
 
 ### Public / pre-auth
 | Page ID | Component | Roles | Purpose | Status |
 |---|---|---|---|---|
-| `landing` | `LandingPage` ([LandingPage.jsx](LandingPage.jsx)) | public | Marketing site | complete |
 | `login` | `LoginPage` ([Auth.jsx](Auth.jsx)) | public | Staff/Student login toggle, centre switcher, centre-code+username | complete |
 | `signup` | `SignupPage` ([Auth.jsx](Auth.jsx)) | public (admin) | Admin-only signup, issues centre code | complete |
 | `claim` (`__openClaim(id)`) | `ClaimPage` ([Onboarding.jsx:1599](Onboarding.jsx#L1599)) | public invitee | Teacher/student/under-13 parent-consent account claim | complete |
@@ -65,7 +64,7 @@ The page id is `<parent>:<section>` for dropdown sub-sections (e.g. `reports:bro
 | `students` | `AdminStudentsPage` ([AdminPages.jsx:256](AdminPages.jsx#L256)) | Roster table | complete |
 | `students_add` | `EnrolStudentPage` ([:403](AdminPages.jsx#L403)) | Enrol/create student | complete |
 | `student_profile` | `StudentProfilePage` ([:1244](AdminPages.jsx#L1244)) | Full per-student analytics + edit | complete (shared w/ teacher, read-only) |
-| `classes` (`:classes`/`:subjects`) | `AdminClassesPage` ([:1793](AdminPages.jsx#L1793)) | Classes + Subjects | complete |
+| `classes` / `subjects` | `AdminClassesPage` ([:1793](AdminPages.jsx#L1793)) | Classes + Subjects (two nav items, one page; `subjects` pins `section="subjects"`) | complete |
 | `classes_add` | `AddClassPage` ([:1893](AdminPages.jsx#L1893)) | 3-step create-class | complete |
 | `class_detail` | `ClassDetailPage` ([:2260](AdminPages.jsx#L2260)) | Banner + tabs (Overview/Students/Homework/Analytics) mirroring the teacher class workspace; roster, cover teacher | complete |
 | `subject_detail` | `SubjectDetailPage` ([:1669](AdminPages.jsx#L1669)) | Subject rollup | complete |
@@ -73,13 +72,13 @@ The page id is `<parent>:<section>` for dropdown sub-sections (e.g. `reports:bro
 | `teachers_add` | `AddTeacherPage` ([:2562](AdminPages.jsx#L2562)) | Add teacher | complete |
 | `teacher_profile` | `TeacherProfilePage` ([:2714](AdminPages.jsx#L2714)) | Teacher detail, assign cover | complete |
 | `team` | `AdminTeamPage` ([Team.jsx:93](Team.jsx#L93)) | Roles & access grants, ownership transfer | complete |
-| `timesheets` (`:review`) | `AdminTimesheetsPage` ([Timesheets.jsx:800](Timesheets.jsx#L800)) | Review/approve/export timesheets | complete |
+| `timesheets` | `AdminTimesheetsPage` ([Timesheets.jsx:800](Timesheets.jsx#L800)) | Review/approve/export timesheets | complete |
 | `timesheet_detail` | `AdminTimesheetDetailPage` ([Timesheets.jsx:924](Timesheets.jsx#L924)) | Per-teacher timesheet detail | complete |
-| `schedule` | `AdminSchedulePage` ([:3032](AdminPages.jsx#L3032)) | Weekly timetable grid | complete |
+| `schedule` (nav label "Timetable") | `AdminSchedulePage` ([:3032](AdminPages.jsx#L3032)) | Weekly timetable grid | complete |
 | `invoices` | `AdminInvoicesPage` ([Invoices.jsx:1174](Invoices.jsx#L1174)) | Ledger, drawer, reminders, CSV, analytics | complete |
 | `reports` (`:overview/:browse/:generate/:settings`) | `AdminReportsConfig` ([Reports.jsx](Reports.jsx)) | Reporting rules/config | complete |
-| `comms` (`:announcements/:messages/:safeguarding/:settings`) | `CommunicationsPage` | Comms + DSL oversight | complete |
-| `settings` (`:centre/:notifications/:appearance/:account`) | `SettingsPage role="admin"` | Centre settings tabs | complete |
+| `comms:announcements` / `comms:messages` / `comms:safeguarding` | `CommunicationsPage` | Comms + DSL oversight. Top-level nav items (no `comms` parent for admin/teacher); Safeguarding is grouped under Operations | complete |
+| `settings` (`:centre/:comms/:notifications/:appearance/:account`) | `SettingsPage role="admin"` | Centre settings tabs — `:comms` is the old Comms settings section (`CommsTab`), moved here | complete |
 | **Onboarding routes** `people`, `invite_teachers`, `students_import`, `students_provision`, `claim_slips`, `class_roster` | `PeopleInvitesPage`, `InviteTeachersPage`, `BulkImportPage`, `AddSingleStudentPage`, `ClaimSlipsPage`, `ClassRosterPage` ([Onboarding.jsx](Onboarding.jsx)) | Provisioning flows | complete |
 | `setup` | (rewritten in `__navigate` → `centres` drawer) | Legacy setup checklist | **rewired away**; `CentreSetupPage` ([Onboarding.jsx:418](Onboarding.jsx#L418)) marked **DEPRECATED / no longer routed** |
 
@@ -99,7 +98,7 @@ The page id is `<parent>:<section>` for dropdown sub-sections (e.g. `reports:bro
 | `progress` | `TeacherProgressPage` ([:508](TeacherPages.jsx#L508)) | complete |
 | `tracking` | `TeacherTrackingPage` ([:2265](TeacherPages.jsx#L2265)) | complete |
 | `reports` | `TeacherReports` (from Reports.jsx) | complete |
-| `comms`, `settings` | shared | complete |
+| `comms:announcements` / `comms:messages`, `settings` | shared (top-level nav items, no `comms` parent) | complete |
 
 ### Student (`StudentDashboard` router [StudentDashboard.jsx:679](StudentDashboard.jsx#L679))
 | Page ID | Component | Status |
@@ -194,7 +193,7 @@ Full shared export at [shared.jsx:1945](shared.jsx#L1945): `DS, Icon, Badge, Sta
 - **Missing:** no student/parent-facing invoice view (student `REPORTS_INVOICES` is a separate mock, see §7).
 
 ### Communications
-- **Today:** Announcements + Messages + Safeguarding/DSL + comms settings; client-side keyword flagging, presets, multi-tenant isolation, live bell/badges lifted into `App`. Store `tutoros.comms.v2` (+ pins `.pins.v1`, dismissed `.notifs.dismissed.v1`).
+- **Today:** Announcements + Messages + Safeguarding/DSL; client-side keyword flagging, presets, multi-tenant isolation, live bell/badges lifted into `App`. Comms settings (safety preset, wordlist, DSL) is now the admin Settings → Communications tab (`CommsTab`), which receives the same lifted `comms` object. Store `tutoros.comms.v2` (+ pins `.pins.v1`, dismissed `.notifs.dismissed.v1`).
 - **Pages:** `CommunicationsPage`, `SafeguardingPage`, `SACommsPage`.
 - **Roles:** all; admin gets Safeguarding, superadmin gets Support (no Messages).
 - **Missing:** parent recipients (notifications "coming soon").
@@ -222,7 +221,7 @@ Full shared export at [shared.jsx:1945](shared.jsx#L1945): `DS, Icon, Badge, Sta
 - **Roles:** admin/owner.
 
 ### Centres & Subscription / Plans & Billing
-- **Today:** Plan-aware multi-centre mgmt (`CentresPage`, `useSubscriptionStore`, `tutoros.subscription.v2`), superadmin-editable plan catalogue (`tutoros.plans.v1`) + price-override codes (`tutoros.plancodes.v1`), admin Billing tab.
+- **Today:** Plan-aware multi-centre mgmt (`CentresPage`, `useSubscriptionStore`, `tutoros.subscription.v2`), superadmin-editable plan catalogue (`tutoros.plans.v1`) + price-override codes (`tutoros.plancodes.v1`) + a global free trial (`tutoros.trial.v1`, Platform Controls → signup/billing), admin Billing tab.
 - **Roles:** owner-admin (centres/billing), superadmin (catalogue/codes).
 
 ### Onboarding / Auth
@@ -249,9 +248,10 @@ Full shared export at [shared.jsx:1945](shared.jsx#L1945): `DS, Icon, Badge, Sta
 | Hook / writer | File | Key | Writes |
 |---|---|---|---|
 | `useAdminStore` | AdminPages.jsx | `admin_store_v4` | teachers/classes/students/subjects/dimensions CRUD |
-| `useSubscriptionStore` | Centres.jsx | `tutoros.subscription.v2` | centres CRUD, plan, billing, redeemedCode, ownership |
+| `useSubscriptionStore` | Centres.jsx | `tutoros.subscription.v2` | centres CRUD, plan, billing, redeemedCode, trial stamp, ownership |
 | `useOnboardingStore` | Onboarding.jsx | `tutoros.onboarding.v2::<centreId>` | steps, memberships, grantRole/revokeRole, roleLog, importDraft, provisioning |
 | `usePlansStore` / plan codes | Plans.jsx | `tutoros.plans.v1` / `tutoros.plancodes.v1` | catalogue + override-code CRUD/redeem |
+| `usePlatformTrialStore` | Plans.jsx | `tutoros.trial.v1` | global free trial (enabled/days/planId/requireCard/onEnd) |
 | `useReportsStore` | Reports.jsx | `reports_store_v2` | report CRUD, config, templates |
 | `useSettingsStore` | Settings.jsx | `settings_store_v1` | per-role settings, centre terms |
 | `useComms` | Communications.jsx | `tutoros.comms.v2` (+pins/dismissed) | announcements/messages/flags/config |
@@ -297,6 +297,7 @@ Entities live as `mocks/*.mock.jsx` globals (seed) → localStorage store (live)
 | **Membership (role grant)** | `{email, centreId, role}` — a person = many rows | `ONB_MEMBERSHIPS` [:92](mocks/onboarding.mock.jsx#L92) | permissions, Team | onboarding store | `tutoros.onboarding.v2::<c>` |
 | **Plan** | `id, name, price, maxCentres, studentSeats, teacherSeats, storageGb, features[], order, archived` | `PLAN_CATALOG_SEED` [plans.mock:19](mocks/plans.mock.jsx#L19) + `PLANS` [onboarding.mock:36](mocks/onboarding.mock.jsx#L36) | Plans, Centres, seat/quota calc | plans store | `tutoros.plans.v1` |
 | **Override code** | `code, kind(free_trial/percent_off/fixed_price), value, durationMonths, planId?, maxRedemptions?, redemptions[], status, note, createdAt` | `PLAN_CODES_SEED` [:39](mocks/plans.mock.jsx#L39) | SAControls, Billing | codes store | `tutoros.plancodes.v1` |
+| **Global trial** | `enabled, days, planId?, requireCard, onEnd(bill/downgrade/suspend), updatedAt` — stamped onto a new subscription as `trial{days,planId,startedAt,endsAt,onEnd}` | `PLAN_TRIAL_SEED` [plans.mock](mocks/plans.mock.jsx) | SAControls, Signup, Billing, Centres | trial store | `tutoros.trial.v1` |
 | **Invoice** | `id, number, familyId(→Family), studentIds[], classes[], issuedDate, payments[]{id,dueDate,amount,paidAt,paidBy,method}` (total **derived**) | `SEED_INVOICES` [invoices.mock:68](mocks/invoices.mock.jsx#L68) | Invoices, centreMetrics | invoices store | `tutoros.invoices.v1` |
 | **Family** | `id, name, parent, email, phone, studentIds[]` | `SEED_FAMILIES` [:35](mocks/invoices.mock.jsx#L35) | Invoices | | seed |
 | **Invoice reminder / audit** | `{id,invoiceId,sentAt,toEmail}` / audit rows | `SEED_INVOICE_REMINDERS`/`_AUDIT` | Invoices | invoices store | `tutoros.invoices.v1` |

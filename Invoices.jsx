@@ -1237,7 +1237,7 @@ const AdminInvoicesPage = () => {
     ...(counts.void ? [['void','Void']] : [])];
 
   return (
-    <div style={{ padding:'32px' }}>
+    <div style={pageFrame()}>
       <PageHeader title="Invoices" subtitle="A ledger over payments made elsewhere — bank transfer, card machine or cash" actions={[
         <Btn key="exp" variant="secondary" icon="download" small onClick={exportCSV}>Export CSV</Btn>,
         <Btn key="rec" variant="secondary" icon="upload" small onClick={() => setShowImport(true)}>Reconcile</Btn>,

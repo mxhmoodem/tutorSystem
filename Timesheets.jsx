@@ -711,7 +711,7 @@ const TeacherTimesheetPage = () => {
   const submitAll = () => { if (submittable.length) store.submitEntries(submittable.map(e => e.id)); };
 
   return (
-    <div style={{ padding: '32px' }}>
+    <div style={pageFrame()}>
       <PageHeader title="My Timesheet" subtitle="Your teaching and non-teaching hours — captured from the register, submitted for approval"
         actions={[
           <Btn key="add" variant="secondary" icon="plus" small onClick={() => setAdding(true)}>Add entry</Btn>,
@@ -858,7 +858,7 @@ const AdminTimesheetsPage = () => {
   const eligiblePay = tsPaySummary(inPeriod, resolve).eligiblePay;
 
   return (
-    <div style={{ padding: '32px' }}>
+    <div style={pageFrame()}>
       <PageHeader title="Staff Timesheets" subtitle="Review and approve your teachers' working hours — open a teacher to see their sessions" />
 
       {/* Submission policy — admin-set, centre-wide. Sets the cadence teachers submit
@@ -1025,18 +1025,18 @@ const AdminTimesheetDetailPage = () => {
 
   if (!teacherId || !teacher) {
     return (
-      <div style={{ padding: '32px' }}>
+      <div style={pageFrame()}>
         <EmptyState icon="user" title="Teacher not found" message="Pick a teacher from the timesheets overview."
-          action={<Btn variant="primary" onClick={() => adminNav('timesheets:review')}>Back to Timesheets</Btn>} />
+          action={<Btn variant="primary" onClick={() => adminNav('timesheets')}>Back to Timesheets</Btn>} />
       </div>
     );
   }
 
   return (
-    <div style={{ padding: '32px' }}>
+    <div style={pageFrame()}>
       {/* Back + title + export actions */}
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14, marginBottom: 22 }}>
-        <button onClick={() => adminNav('timesheets:review')} title="Back to timesheets" style={{
+        <button onClick={() => adminNav('timesheets')} title="Back to timesheets" style={{
           background: 'none', border: `1px solid ${DS.border}`, borderRadius: 8, cursor: 'pointer',
           color: DS.muted, width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
         }}>

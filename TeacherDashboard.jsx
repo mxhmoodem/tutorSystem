@@ -254,7 +254,7 @@ const TeacherDashboard = () => {
     { icon: 'edit',    count: toMarkCount,        label: 'to mark',           tone: 'accent',  onClick: () => go('homework') },
     { icon: 'file',    count: reportsToReview,    label: 'feedback to review', tone: 'warning', onClick: () => go('reports') },
     { icon: 'check',   count: attendanceToDo,     label: 'attendance to take', tone: 'info',    onClick: () => go('attendance') },
-    { icon: 'message', count: unreadMessages,     label: 'unread messages',    tone: 'danger',  onClick: () => go('comms') },
+    { icon: 'message', count: unreadMessages,     label: 'unread messages',    tone: 'danger',  onClick: () => go('comms:messages') },
   ];
 
   // ── KPIs (4) — read from the ONE teacher metrics layer (F2) ────────
@@ -318,7 +318,7 @@ const TeacherDashboard = () => {
   const hwPct = hwHasDueToday ? Math.round((hwDueToday.submitted / hwDueToday.total) * 100) : 0;
 
   return (
-    <div style={{ padding: '32px' }}>
+    <div style={pageFrame()}>
       {/* Pulse for the "Live now" dot in the hero. */}
       <style>{`@keyframes tosPulseDot {
         0% { box-shadow: 0 0 0 0 rgba(74,222,128,0.45); }
@@ -535,10 +535,10 @@ const TeacherDashboard = () => {
           ]}>
             {recentSubmissions.length === 0 ? (
               <EmptyState
-                icon="clip"
+                icon="notebook_pen"
                 title="No recent submissions to show"
                 message="The latest homework submissions will appear here once the homework store is connected."
-                action={<Btn variant="secondary" icon="clip" small onClick={() => go('homework')}>Open homework</Btn>}
+                action={<Btn variant="secondary" icon="notebook_pen" small onClick={() => go('homework')}>Open homework</Btn>}
               />
             ) : (
               <>

@@ -293,7 +293,7 @@ const AdminStudentsPage = () => {
   };
 
   return (
-    <div style={{ padding:'32px' }}>
+    <div style={pageFrame()}>
       <PageHeader
         title="Students"
         subtitle={`${students.length} students · ${atRiskCount} at risk`}
@@ -439,7 +439,7 @@ const EnrolStudentPage = () => {
   };
 
   return (
-    <div style={{ padding:'32px', maxWidth:920, margin:'0 auto' }}>
+    <div style={pageFrame({ narrow: true })}>
       <FlowHeader title="Enrol New Student" subtitle="Complete all sections to register a new student" onBack={back} />
       <StepTabs steps={STUDENT_STEPS} current={step} onJump={setStep} />
 
@@ -1021,7 +1021,7 @@ const StudentAnalyticsView = ({ student, enrolledClasses, role = 'admin' }) => {
   // ── Tab 3 · Homework ──
   const tabHomework = (
     <div style={gridCols}>
-      <Card title="Homework Submissions" icon="clip" accent="#0891B2" style={span2} actions={<span style={{ fontSize:12, color:DS.muted }}>{student.hw}% completion</span>}>
+      <Card title="Homework Submissions" icon="notebook_pen" accent="#0891B2" style={span2} actions={<span style={{ fontSize:12, color:DS.muted }}>{student.hw}% completion</span>}>
         <Table cols={['Assignment','Subject','Set','Status','Score']}
           rows={A.homework.map(h => [
             <span style={{ fontSize:13, fontWeight:500, color:DS.text }}>{h.title}</span>,
@@ -1243,7 +1243,7 @@ const StudentAnalyticsView = ({ student, enrolledClasses, role = 'admin' }) => {
 
   return (
     <>
-      <div style={{ flex:1, display:'flex', gap:18, overflow:'hidden', minHeight:0, padding:'0 28px' }}>
+      <div style={{ flex:1, display:'flex', gap:18, overflow:'hidden', minHeight:0, padding:`0 ${LAYOUT.gutter}px` }}>
         {aside}
         {main}
       </div>
@@ -1263,7 +1263,7 @@ const StudentProfilePage = ({ role = 'admin' } = {}) => {
   React.useEffect(() => { if (student && !form) setForm({ ...student, subjects: student.subjects || [], classIds: student.classIds || [] }); }, [student]);
 
   if (!student) return (
-    <div style={{ padding:'32px' }}>
+    <div style={pageFrame()}>
       <EmptyState icon="user" title="Student not found" message="This student may have been removed." action={<Btn variant="primary" onClick={() => adminNav('students')}>Back to Students</Btn>} />
     </div>
   );
@@ -1298,7 +1298,7 @@ const StudentProfilePage = ({ role = 'admin' } = {}) => {
           <div style={{ display:'flex', gap:8 }}>
             {editing
               ? <><Btn variant="ghost" onClick={cancel}>Cancel</Btn><Btn variant="primary" icon="check" onClick={save}>Save Changes</Btn></>
-              : <><Btn variant="secondary" icon="print" onClick={() => window.print()}>Print</Btn><Btn variant="secondary" icon="message" onClick={() => window.__navigate && window.__navigate(role, 'comms')}>Message</Btn>{!isTeacher && <Btn variant="primary" icon="edit" onClick={() => setEditing(true)}>Edit Profile</Btn>}</>}
+              : <><Btn variant="secondary" icon="print" onClick={() => window.print()}>Print</Btn><Btn variant="secondary" icon="message" onClick={() => window.__navigate && window.__navigate(role, 'comms:messages')}>Message</Btn>{!isTeacher && <Btn variant="primary" icon="edit" onClick={() => setEditing(true)}>Edit Profile</Btn>}</>}
           </div>
         </div>
       </Card>
@@ -1309,15 +1309,15 @@ const StudentProfilePage = ({ role = 'admin' } = {}) => {
   // the right-hand tabs scroll on their own. Edit mode keeps the narrow form below.
   if (!editing) {
     return (
-      <div style={{ height:'calc(100vh - 52px)', display:'flex', flexDirection:'column', overflow:'hidden' }}>
-        <div style={{ flexShrink:0, padding:'24px 28px 0' }}>{header}</div>
+      <div style={{ ...pageFrame({ flush: true }), height:'calc(100vh - 52px)', display:'flex', flexDirection:'column', overflow:'hidden' }}>
+        <div style={{ flexShrink:0, padding:`24px ${LAYOUT.gutter}px 0` }}>{header}</div>
         <StudentAnalyticsView key={student.id} student={student} enrolledClasses={enrolledClasses} role={role} />
       </div>
     );
   }
 
   return (
-    <div style={{ padding:'32px', maxWidth:1040, margin:'0 auto' }}>
+    <div style={pageFrame({ narrow: true })}>
       {header}
       {(<>
       <Card title="Personal Details" style={{ marginBottom:20 }}>
@@ -1684,8 +1684,8 @@ const SubjectDetailPage = () => {
   const [modalOpen, setModalOpen] = React.useState(false);
 
   if (!sub) return (
-    <div style={{ padding:'32px' }}>
-      <EmptyState icon="book" title="Subject not found" message="This subject may have been removed." action={<Btn variant="primary" onClick={() => adminNav('classes')}>Back to Classes</Btn>} />
+    <div style={pageFrame()}>
+      <EmptyState icon="book" title="Subject not found" message="This subject may have been removed." action={<Btn variant="primary" onClick={() => adminNav('subjects')}>Back to Subjects</Btn>} />
     </div>
   );
 
@@ -1704,8 +1704,8 @@ const SubjectDetailPage = () => {
   const handleSave = data => store.updateSubject(sub.id, data);
 
   return (
-    <div style={{ padding:'32px', maxWidth:1040, margin:'0 auto' }}>
-      <FlowHeader title={sub.name} subtitle={sub.level} onBack={() => adminNav('classes')} />
+    <div style={pageFrame()}>
+      <FlowHeader title={sub.name} subtitle={sub.level} onBack={() => adminNav('subjects')} />
 
       {/* Hero */}
       <Card style={{ marginBottom:20 }}>
@@ -1803,7 +1803,8 @@ const SubjectDetailPage = () => {
 // ─── Admin Classes Page ─────────────────────────────────────────────────────────
 const AdminClassesPage = ({ section }) => {
   const store = useAdminStore();
-  // The Classes/Subjects split is driven by the sidebar dropdown (`classes:<section>`),
+  // The Classes/Subjects split is driven by which nav item you came in on —
+  // `classes` vs `subjects` (the router pins section="subjects" for the latter),
   // not an in-page toggle. Default to Classes when no section is supplied.
   const view = section === 'subjects' ? 'subjects' : 'classes';
   const [search, setSearch] = React.useState('');
@@ -1823,7 +1824,7 @@ const AdminClassesPage = ({ section }) => {
   const handleSave = data => { if (editing) store.updateClass(editing.id, data); };
 
   return (
-    <div style={{ padding:'32px' }}>
+    <div style={pageFrame()}>
       <PageHeader
         title={view === 'subjects' ? 'Subjects' : 'Classes'}
         subtitle={`${classes.length} classes · ${store.subjects.length} subjects · ${filledSeats} enrolments · ${avgFill}% avg capacity`}
@@ -1967,7 +1968,7 @@ const AddClassPage = () => {
   const studentMatches = store.students.filter(s => !q || studentName(s).toLowerCase().includes(q) || (s.year || '').toLowerCase().includes(q));
 
   return (
-    <div style={{ padding:'32px', maxWidth:820, margin:'0 auto' }}>
+    <div style={pageFrame({ narrow: true })}>
       <FlowHeader title="Create New Class" subtitle="Set up a new class group" onBack={back} />
       <StepTabs steps={CLASS_STEPS} current={step} onJump={setStep} />
 
@@ -2315,7 +2316,7 @@ const ClassDetailPage = () => {
   React.useEffect(() => { setTab('overview'); setSessionDetail(null); }, [id]);
 
   if (!cls) return (
-    <div style={{ padding:'32px' }}>
+    <div style={pageFrame()}>
       <EmptyState icon="book" title="Class not found" message="This class may have been removed." action={<Btn variant="primary" onClick={() => adminNav('classes')}>Back to Classes</Btn>} />
     </div>
   );
@@ -2412,7 +2413,7 @@ const ClassDetailPage = () => {
 
   const bannerActions = (
     <div style={{ display:'flex', gap:8 }}>
-      <Btn variant="secondary" icon="message" small onClick={() => window.__navigate && window.__navigate('admin', 'comms')}>Message class</Btn>
+      <Btn variant="secondary" icon="message" small onClick={() => window.__navigate && window.__navigate('admin', 'comms:messages')}>Message class</Btn>
       <Btn variant="secondary" icon="edit" small onClick={() => setModalOpen(true)}>Edit class</Btn>
     </div>
   );
@@ -2644,9 +2645,9 @@ const ClassDetailPage = () => {
 
   // ── Tab · Homework (read-only; routes into the homework surface, doesn't rebuild it) ──
   const tabHomework = (
-    <Card title={`Homework · ${classHw.length}`} icon="clip" accent="#0891B2">
+    <Card title={`Homework · ${classHw.length}`} icon="notebook_pen" accent="#0891B2">
       {classHw.length === 0 ? (
-        <EmptyState icon="clip" title="No homework set for this class yet" message="Assignments are set by the class teacher on the Homework page." />
+        <EmptyState icon="notebook_pen" title="No homework set for this class yet" message="Assignments are set by the class teacher on the Homework page." />
       ) : (
         <Table
           cols={['Assignment','Targets','Submitted','Marked','Avg','Due']}
@@ -2705,7 +2706,7 @@ const ClassDetailPage = () => {
   const tabBody = { overview:tabOverview, roster:tabRoster, sessions:tabSessions, plans:tabPlans, homework:tabHomework, announcements:tabAnnouncements };
 
   return (
-    <div style={{ height:'calc(100vh - 52px)', overflow:'auto' }}>
+    <div style={{ ...pageFrame({ flush: true }), height:'calc(100vh - 52px)', overflow:'auto' }}>
       <ClassDetailShell
         onBack={() => adminNav('classes')} backLabel="Classes"
         color={color} bannerTheme="default"
@@ -2795,7 +2796,7 @@ const AddTeacherPage = () => {
   };
 
   return (
-    <div style={{ padding:'32px', maxWidth:860, margin:'0 auto' }}>
+    <div style={pageFrame({ narrow: true })}>
       <FlowHeader title="Register New Teacher" subtitle="Complete all sections to onboard a new teacher" onBack={back} />
       <StepTabs steps={TEACHER_STEPS} current={step} onJump={setStep} />
 
@@ -2931,7 +2932,7 @@ const TeacherProfilePage = () => {
   React.useEffect(() => { if (teacher && !form) setForm({ ...teacher, subjects: teacherSubjects(teacher) }); }, [teacher]);
 
   if (!teacher) return (
-    <div style={{ padding:'32px' }}>
+    <div style={pageFrame()}>
       <EmptyState icon="user" title="Teacher not found" action={<Btn variant="primary" onClick={() => adminNav('teachers')}>Back to Teachers</Btn>} />
     </div>
   );
@@ -3003,7 +3004,7 @@ const TeacherProfilePage = () => {
                         if (rid && window.klasioResources.deactivate) window.klasioResources.deactivate(rid);
                         setOffboardOpen(true);
                       }}>Deactivate</Btn>}
-                  <Btn variant="secondary" icon="message" onClick={() => window.__navigate && window.__navigate('admin', 'comms')}>Message</Btn>
+                  <Btn variant="secondary" icon="message" onClick={() => window.__navigate && window.__navigate('admin', 'comms:messages')}>Message</Btn>
                   <Btn variant="primary" icon="edit" onClick={() => setEditing(true)}>Edit Details</Btn>
                 </>}
           </div>
@@ -3215,9 +3216,9 @@ const TeacherProfilePage = () => {
   // the right-hand tabs scroll on their own (mirrors the student profile).
   if (!editing) {
     return (
-      <div style={{ height:'calc(100vh - 52px)', display:'flex', flexDirection:'column', overflow:'hidden' }}>
-        <div style={{ flexShrink:0, padding:'24px 28px 0' }}>{header}</div>
-        <div style={{ flex:1, display:'flex', gap:18, overflow:'hidden', minHeight:0, padding:'0 28px' }}>
+      <div style={{ ...pageFrame({ flush: true }), height:'calc(100vh - 52px)', display:'flex', flexDirection:'column', overflow:'hidden' }}>
+        <div style={{ flexShrink:0, padding:`24px ${LAYOUT.gutter}px 0` }}>{header}</div>
+        <div style={{ flex:1, display:'flex', gap:18, overflow:'hidden', minHeight:0, padding:`0 ${LAYOUT.gutter}px` }}>
           {aside}
           <main style={{ flex:1, minWidth:0, display:'flex', flexDirection:'column', overflow:'hidden' }}>
             <ProfileTabStrip tabs={TEACHER_PROFILE_TABS} active={tab} onChange={setTab} />
@@ -3235,7 +3236,7 @@ const TeacherProfilePage = () => {
 
   // Edit mode — the focused scrolling form (mirrors the student profile edit mode).
   return (
-    <div style={{ padding:'32px', maxWidth:1040, margin:'0 auto' }}>
+    <div style={pageFrame({ narrow: true })}>
       {header}
       <Card title="Details" style={{ marginBottom:20 }}>
         <div style={{ padding:'20px 24px' }}>
@@ -3298,7 +3299,7 @@ const AdminTeachersPage = () => {
   const setToday = (id, val) => store.setAttendance(id, today, val);
 
   return (
-    <div style={{ padding:'32px' }}>
+    <div style={pageFrame()}>
       <PageHeader
         title="Teachers"
         subtitle={`${activeT.length} active teachers · ${totalEnrolments} enrolments across ${totalClasses} classes`}
@@ -3418,7 +3419,7 @@ const AdminSchedulePage = () => {
   const teachers = [...new Set(store.classes.map(c => c.teacher).filter(Boolean))].sort();
 
   return (
-    <div style={{ padding:'32px' }}>
+    <div style={pageFrame()}>
       <PageHeader title="Schedule" subtitle="Centre-wide weekly timetable — built from your classes" actions={[
         <Btn key="exp" variant="secondary" icon="download" small>Export</Btn>,
         <Btn key="new" variant="primary"   icon="plus"     small onClick={() => adminNav('classes_add')}>Add Session</Btn>,
@@ -3523,6 +3524,9 @@ const AdminPages = ({ page, section }) => {
   if (page === 'student_profile') return <StudentProfilePage />;
   if (page === 'reports')         return <AdminReportsPage />;
   if (page === 'classes')         return <AdminClassesPage section={section} />;
+  // Subjects is its own nav item (Academic › Subjects) but the same page in its
+  // subjects view — no fork, just the section pinned.
+  if (page === 'subjects')        return <AdminClassesPage section="subjects" />;
   if (page === 'classes_add')     return <AddClassPage />;
   if (page === 'class_detail')    return <ClassDetailPage />;
   if (page === 'subject_detail')  return <SubjectDetailPage />;

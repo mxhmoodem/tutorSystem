@@ -2344,7 +2344,7 @@ const TeacherList = ({
 
   if (view === 'analytics') {
     return (
-      <div style={{ padding: '32px 32px 64px', fontFamily: F.body, color: C.text }}>
+      <div style={{ ...pageFrame(), fontFamily: F.body, color: C.text }}>
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom: 22, gap: 20 }}>
           <div>
             <h1 style={{ fontFamily: F.head, fontSize: 26, fontWeight: 700, margin: 0, letterSpacing: '-0.4px' }}>Homework</h1>
@@ -2357,7 +2357,7 @@ const TeacherList = ({
   }
 
   return (
-    <div style={{ padding: '32px 32px 64px', fontFamily: F.body, color: C.text }}>
+    <div style={{ ...pageFrame(), fontFamily: F.body, color: C.text }}>
       {/* Header */}
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom: 28, gap: 20 }}>
         <div>
@@ -3353,7 +3353,7 @@ const TeacherBuilder = ({ assignment, students, folders = [], classes = [], defa
   };
 
   return (
-    <div style={{ padding: '24px 32px 80px', fontFamily: F.body, color: C.text }}>
+    <div style={{ ...pageFrame(), fontFamily: F.body, color: C.text }}>
       {/* Top bar */}
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: 20, gap: 12 }}>
         <div style={{ display:'flex', alignItems:'center', gap: 10 }}>
@@ -3954,7 +3954,7 @@ const TeacherOverview = ({ a, users = {}, folders = [], onBack, onEdit, onReview
   );
 
   return (
-    <div style={{ padding: '24px 32px 80px', fontFamily: F.body, color: C.text }}>
+    <div style={{ ...pageFrame(), fontFamily: F.body, color: C.text }}>
       {/* Top bar */}
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: 12, marginBottom: 20 }}>
         <Btn variant="ghost" small icon={<Ico name="arrowL" size={13} />} onClick={onBack}>Back to list</Btn>
@@ -4243,7 +4243,7 @@ const TeacherReview = ({ assignment, users, onClose, onUpdateSubmission }) => {
 
   if (allStudents.length === 0) {
     return (
-      <div style={{ padding: 32, fontFamily: F.body }}>
+      <div style={{ ...pageFrame(), fontFamily: F.body }}>
         <div style={{ marginBottom: 20 }}>
           <Btn variant="ghost" small icon={<Ico name="arrowL" size={13} />} onClick={onClose}>Back to list</Btn>
         </div>
@@ -4921,7 +4921,7 @@ const HwHome = ({ store, me, section, setSection, assignments, onOpen, onOpenSub
     `${marked.length} marked`;
 
   return (
-    <div style={{ padding: '32px 32px 64px', fontFamily: F.body, color: C.text, maxWidth: 1080, margin: '0 auto' }}>
+    <div style={{ ...pageFrame(), fontFamily: F.body, color: C.text }}>
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 18, flexWrap: 'wrap' }}>
         <div>
@@ -5168,7 +5168,7 @@ const HwDetail = ({ a, store, draft, onBack, onStart }) => {
   );
 
   return (
-    <div style={{ padding: '32px 32px 64px', fontFamily: F.body, color: C.text, maxWidth: 920, margin: '0 auto' }}>
+    <div style={{ ...pageFrame({ narrow: true }), fontFamily: F.body, color: C.text }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 24 }}>
         <BackBtn onClick={onBack} />
         <div>
@@ -5264,7 +5264,7 @@ const HwAttempt = ({ a, draft, onUpdateDraft, onBack, onSubmit }) => {
   const answered = a.questions.filter(hasAnswer).length;
 
   return (
-    <div style={{ padding: '28px 32px 64px', fontFamily: F.body, color: C.text, maxWidth: 880, margin: '0 auto' }}>
+    <div style={{ ...pageFrame({ narrow: true }), fontFamily: F.body, color: C.text }}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
         <BackBtn onClick={onBack} />
@@ -5435,7 +5435,7 @@ const HwSubmissionReview = ({ a, me, store, onBack }) => {
   const sub = a.submissions[me.id];
   const showAuto = !!(a.settings && a.settings.showAutoImmediately);
   return (
-    <div style={{ padding: '32px 32px 64px', fontFamily: F.body, color: C.text, maxWidth: 880, margin: '0 auto' }}>
+    <div style={{ ...pageFrame({ narrow: true }), fontFamily: F.body, color: C.text }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 18 }}>
         <BackBtn onClick={onBack} />
         <div style={{ flex: 1 }}>
@@ -5549,7 +5549,7 @@ const HwResultReview = ({ a, me, store, onBack }) => {
   };
 
   return (
-    <div style={{ padding: '32px 32px 64px', fontFamily: F.body, color: C.text, maxWidth: 880, margin: '0 auto' }}>
+    <div style={{ ...pageFrame({ narrow: true }), fontFamily: F.body, color: C.text }}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 22 }}>
         <BackBtn onClick={onBack} />

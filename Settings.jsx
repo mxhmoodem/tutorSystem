@@ -444,6 +444,10 @@ const AppearanceTab = ({ data, set, role, wide }) => {
 // which handles feature flags / plans / roles). This is org-level configuration.
 const PlatformTab = ({ data, set, wide }) => {
   const p = data.platform || {};
+  // Trial length is NOT editable here — there is one global free trial, owned by
+  // Platform Controls (Plans.jsx trial store). Show it live and link across, so the
+  // signup promise can never drift from what this screen claims.
+  const trial = (typeof window.getPlatformTrial === 'function') ? window.getPlatformTrial() : { enabled: true, days: 14 };
   const defaults = (
     <SettingsSection title="New-centre defaults" subtitle="Applied automatically when a centre is created" icon="book">
       <SetGrid>
@@ -454,8 +458,16 @@ const PlatformTab = ({ data, set, wide }) => {
             <option value="scale">Scale</option>
           </Select>
         </Field>
-        <Field label="Trial length (days)">
-          <Input type="number" value={p.trialDays ?? 14} onChange={e => set('platform', 'trialDays', +e.target.value)} />
+        <Field label="Free trial" hint="Set once, platform-wide, in Platform Controls.">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 38 }}>
+            <Badge variant={trial.enabled ? 'success' : 'default'}>
+              {trial.enabled ? `${trial.days} day${trial.days === 1 ? '' : 's'}` : 'Off'}
+            </Badge>
+            <button onClick={() => window.__navigate && window.__navigate('superadmin', 'controls')}
+              style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 12.5, color: DS.accent, textDecoration: 'underline' }}>
+              Change in Platform Controls
+            </button>
+          </div>
         </Field>
         <Field label="Seats included">
           <Input type="number" value={p.defaultSeats ?? 10} onChange={e => set('platform', 'defaultSeats', +e.target.value)} />
@@ -770,7 +782,7 @@ const CentreTab = ({ data, set, wide }) => {
 const TeachingTab = ({ data, set, wide }) => {
   const t = data.teaching || {};
   const homework = (
-    <SettingsSection title="Homework defaults" subtitle="Pre-filled when you create a new assignment" icon="clip">
+    <SettingsSection title="Homework defaults" subtitle="Pre-filled when you create a new assignment" icon="notebook_pen">
       <SetGrid>
         <Field label="Default attempts allowed">
           <Input type="number" value={t.attempts ?? 1} onChange={e => set('teaching', 'attempts', Math.max(1, +e.target.value || 1))} />
@@ -851,7 +863,7 @@ const LearningTab = ({ data, set, wide }) => {
     </SettingsSection>
   );
   const reminders = (
-    <SettingsSection title="Homework reminders" subtitle="When we nudge you" icon="clip">
+    <SettingsSection title="Homework reminders" subtitle="When we nudge you" icon="notebook_pen">
       <SettingRow
         title="Remind me before a deadline"
         control={
@@ -1064,6 +1076,9 @@ const BillingTab = () => {
   const plans = plansStore.plans.filter(p => !p.archived);
   const plan = sub.plan;
   const ov = sub.override || {};
+  // Free trial stamped on this account at signup (from the platform's global offer).
+  const tr = sub.trialStatus || { active: false, expired: false };
+  const endAction = (window.planTrialEndAction && sub.trial) ? window.planTrialEndAction(sub.trial.onEnd) : null;
   const ownedCentres = (sub.centres || []).length;
   const overCap = plan.maxCentres < ownedCentres;
   const b = sub.billing || {};
@@ -1078,7 +1093,7 @@ const BillingTab = () => {
   };
 
   // Synthesised billing history — the last 9 monthly invoices for the current plan.
-  // The current month reflects any active override (free trial → £0).
+  // The current month reflects an active override or a running free trial (→ £0).
   const history = React.useMemo(() => {
     const rows = []; const now = new Date();
     for (let i = 0; i < 9; i++) {
@@ -1086,13 +1101,13 @@ const BillingTab = () => {
       rows.push({
         id: i,
         label: `${plan.name} Plan — ${d.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })}`,
-        amount: (i === 0 && ov.active) ? sub.effectivePrice : plan.price,
+        amount: (i === 0 && (ov.active || tr.active)) ? sub.effectivePrice : plan.price,
         date: d,
         status: (i === 2 || i === 6) ? 'declined' : 'paid',
       });
     }
     return rows;
-  }, [plan.name, plan.price, sub.effectivePrice, ov.active]);
+  }, [plan.name, plan.price, sub.effectivePrice, ov.active, tr.active]);
   const filteredHist = history.filter(h => h.label.toLowerCase().includes(histSearch.toLowerCase()));
 
   const downloadText = (filename, text, type = 'text/plain') => {
@@ -1108,8 +1123,31 @@ const BillingTab = () => {
   const downloadAll = () => downloadText('tutoros-billing-history.csv',
     'Invoice,Amount,Date,Status\n' + history.map(h => `"${h.label}",£${h.amount},${fmtDate(h.date)},${h.status === 'paid' ? 'Paid' : 'Declined'}`).join('\n'), 'text/csv');
 
+  // Free-trial strip — while the trial runs the account pays £0, so say so plainly
+  // and show exactly what happens on the day it ends.
+  const trialStrip = (tr.active || tr.expired) && (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 14, marginBottom: 20, padding: '14px 18px', borderRadius: 12,
+      background: tr.active ? DS.successBg : DS.surface, border: `1px solid ${tr.active ? DS.successBorder : DS.border}`,
+    }}>
+      <div style={{ width: 34, height: 34, borderRadius: 9, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: tr.active ? DS.success + '1F' : DS.bg, color: tr.active ? DS.success : DS.muted }}>
+        <Icon name="zap" size={17} />
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 700, color: tr.active ? DS.success : DS.text }}>{tr.label}</div>
+        <div style={{ fontSize: 12.5, color: DS.muted, marginTop: 2 }}>
+          {tr.active
+            ? <>You’re on £0 until {fmtDate(tr.endsAt)}. Then {endAction ? endAction.tenant : 'billing starts'} — £{plan.price}/mo on {plan.name}.</>
+            : <>Ended {fmtDate(tr.endsAt)} — you’re now billed £{sub.effectivePrice}/mo on {plan.name}.</>}
+        </div>
+      </div>
+      {tr.active && <Btn variant="secondary" small onClick={sub.endTrial}>Start paying now</Btn>}
+    </div>
+  );
+
   return (
     <div>
+      {trialStrip}
       {/* Plan picker — selectable cards (current plan is checked) */}
       <SettingsSection title="Your plan" subtitle="Pick the plan for your centre group — switches immediately" icon="invoice">
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, padding: '10px 0 4px' }}>
@@ -1145,7 +1183,9 @@ const BillingTab = () => {
                 </div>
                 {sel && (
                   <div style={{ marginTop: 'auto', paddingTop: 4 }}>
-                    <Badge variant={ov.active ? 'warning' : 'accent'}>{ov.active ? 'Limited time price' : 'Current plan'}</Badge>
+                    <Badge variant={ov.active ? 'warning' : tr.active ? 'success' : 'accent'}>
+                      {ov.active ? 'Limited time price' : tr.active ? 'Free trial' : 'Current plan'}
+                    </Badge>
                   </div>
                 )}
               </div>
@@ -1268,7 +1308,7 @@ const ROLE_TABS = {
 // The active tab is driven by the sidebar "Settings" dropdown via the `section` prop
 // (settings:centre, settings:notifications, …). Tab order here mirrors SETTINGS_SUB
 // in shared.jsx so the dropdown and the page stay aligned.
-const SettingsPage = ({ role = 'admin', section }) => {
+const SettingsPage = ({ role = 'admin', section, comms }) => {
   const { data, set, reset } = useSettingsStore(role);
   const roleMeta = ROLE_TABS[role] || ROLE_TABS.admin;
   const [saved, setSaved] = React.useState(false);
@@ -1307,6 +1347,10 @@ const SettingsPage = ({ role = 'admin', section }) => {
     // their own ACCOUNT-tier routes (owner-only) — they are account-wide, not
     // centre-scoped or personal. The superadmin platform view keeps its Storage tab.
     ...(role === 'superadmin' ? [{ id: 'storage', label: 'Storage', icon: 'cloud', render: () => <StorageOwner /> }] : []),
+    // Comms settings (safety preset, wordlist, DSL) used to be a section of the
+    // Communications page. It's a centre-wide configuration, not a comms surface,
+    // so it now lives here — reached as settings:comms.
+    ...(role === 'admin' ? [{ id: 'comms', label: 'Communications', icon: 'message', render: () => <CommsTab comms={comms} /> }] : []),
     { id: 'notifications', label: 'Notifications', icon: 'bell', render: () => <NotificationsTab data={data} set={set} wide={wide} /> },
     { id: 'appearance',    label: 'Appearance',    icon: 'star', render: () => <AppearanceTab data={data} set={set} role={role} wide={wide} /> },
     { id: 'account',       label: 'Account',       icon: 'user', render: () => <AccountTab data={data} set={set} roleLabel={roleMeta.label} viewRoles={viewRoles} currentRole={role} onSwitchView={r => window.__navigate && window.__navigate(r, 'dashboard')} wide={wide} /> },
@@ -1323,10 +1367,8 @@ const SettingsPage = ({ role = 'admin', section }) => {
   const onSave = () => { setSaved(true); setTimeout(() => setSaved(false), 1800); };
 
   return (
-    // Full-bleed padded gutter; the inner column is full width until it hits the
-    // max, then caps and centres on large screens.
-    <div style={{ padding: 32 }}>
-      <div ref={wrapRef} style={{ maxWidth: 1240, margin: '0 auto' }}>
+    <div style={pageFrame()}>
+      <div ref={wrapRef}>
         <PageHeader
           title="Settings"
           subtitle={`Manage your ${roleMeta.label.toLowerCase()} account and preferences`}
@@ -1349,9 +1391,12 @@ const SettingsPage = ({ role = 'admin', section }) => {
 
 // Platform new-centre defaults, read by the owner console's Onboard-Centre
 // wizard (SuperAdmin.jsx) so account provisioning matches the tenant path.
+// Trial length/on-off are NOT stored here — they come from the one global free
+// trial the platform owner sets in Platform Controls (Plans.jsx trial store).
 function saPlatformDefaults() {
   const p = ((setLoad().superadmin || {}).platform) || {};
-  return { planId: p.defaultPlan || 'growth', trialDays: p.trialDays ?? 14, seats: p.defaultSeats ?? 10, currency: p.currency || 'GBP', autoSuspend: !!p.autoSuspend, retention: p.retention || '90d' };
+  const t = (typeof window.getPlatformTrial === 'function') ? window.getPlatformTrial() : { enabled: true, days: 14 };
+  return { planId: p.defaultPlan || 'growth', trialDays: t.days ?? 14, trialEnabled: !!t.enabled, seats: p.defaultSeats ?? 10, currency: p.currency || 'GBP', autoSuspend: !!p.autoSuspend, retention: p.retention || '90d' };
 }
 
 Object.assign(window, {

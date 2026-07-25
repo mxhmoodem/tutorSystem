@@ -1006,7 +1006,7 @@ const ReportEditor = ({ report, store, onBack, onSaved }) => {
               collecting the same completion field */}
           {secOn('homework') && !secOn('academic') && <Card>
             <div style={{ padding: '18px 20px' }}>
-              <SectionTitle icon="clip" color={acc}>{RPT_SECTION_LABELS.homework}</SectionTitle>
+              <SectionTitle icon="notebook_pen" color={acc}>{RPT_SECTION_LABELS.homework}</SectionTitle>
               <Field label="Homework completion"><Input value={r.academic.homeworkCompletion} onChange={e => setAcad({ homeworkCompletion: e.target.value })} placeholder="e.g. 11 of 12 tasks" /></Field>
             </div>
           </Card>}
@@ -1318,7 +1318,7 @@ const TeacherReports = () => {
 
   if (view === 'editor' && editing) {
     return (
-      <div style={{ padding: '0 32px 40px' }}>
+      <div style={pageFrame()}>
         <ReportEditor report={editing} store={store} onBack={() => { setView('list'); setEditing(null); }}
           onSaved={(s) => { setView('list'); setEditing(null); flash(s === 'published' ? 'Report published — now visible to the student.' : s === 'duplicated' ? 'Report duplicated.' : 'Draft saved.'); }} />
       </div>
@@ -1346,7 +1346,7 @@ const TeacherReports = () => {
   );
 
   return (
-    <div style={{ padding: '32px' }}>
+    <div style={pageFrame()}>
       <PageHeader title="Reports" subtitle="Create, organise and publish progress reports for students and parents" actions={[
         (config.defaultRule || {}).requirement === 'OFF' && (config.reportRules || []).every(r => r.requirement === 'OFF')
           ? <Badge key="d" variant="warning">Reports turned off by admin</Badge>
@@ -1611,7 +1611,7 @@ const StudentReports = () => {
   if (open) {
     const r = store.store.reports[open.id] || open;
     return (
-      <div style={{ padding: '28px 32px 48px' }}>
+      <div style={pageFrame()}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18, maxWidth: 820, margin: '0 auto 18px' }}>
           <button onClick={() => setOpen(null)} style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', cursor: 'pointer', color: DS.muted, fontSize: 13 }}>← Back to reports</button>
           <div style={{ flex: 1 }} />
@@ -1643,7 +1643,7 @@ const StudentReports = () => {
   }
 
   return (
-    <div style={{ padding: '32px' }}>
+    <div style={pageFrame()}>
       <PageHeader title="My Reports" subtitle="Progress reports your teachers have shared with you" actions={[
         <Badge key="c" variant="accent">{mine.length} report{mine.length !== 1 ? 's' : ''}</Badge>
       ]} />
@@ -2004,7 +2004,7 @@ const UpcomingReportsPage = ({ config, store, teacherName, showTeacher = false, 
   })();
 
   return (
-    <div style={{ padding: '32px' }}>
+    <div style={pageFrame()}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
         <button onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', cursor: 'pointer', color: DS.muted, fontSize: 13 }}>
           ← Back to reports
@@ -2705,7 +2705,7 @@ const AdminReportsSettings = ({ store, onEditTemplate, savedToast, tab, setTab }
   };
 
   return (
-    <div style={{ maxWidth: 1120, margin: '0 auto' }}>
+    <div>
       {/* Tab bar with the transient "Saved" badge overlaid on its right edge */}
       <div style={{ position: 'relative' }}>
         <TabNav tabs={RPT_SETTINGS_TABS} value={tab} onChange={setTab} />
@@ -2871,7 +2871,7 @@ const AdminReportsSettings = ({ store, onEditTemplate, savedToast, tab, setTab }
 const ADMIN_REPORT_TYPES = [
   { id: 'progress',   label: 'Student Progress Report', icon: 'chart', desc: 'Whole-cohort table of scores, attendance and at-risk status — internal staff overview (not for parents).' },
   { id: 'attendance', label: 'Attendance Summary',      icon: 'check', desc: 'Attendance breakdown by student and year group.' },
-  { id: 'homework',   label: 'Homework Completion',     icon: 'clip',  desc: 'Submission rates and average scores per student.' },
+  { id: 'homework',   label: 'Homework Completion',     icon: 'notebook_pen',  desc: 'Submission rates and average scores per student.' },
   { id: 'reporting',  label: 'Reporting Activity',      icon: 'file',  desc: 'How many progress reports are drafted, published and acknowledged.' },
   { id: 'financial',  label: 'Financial Overview',      icon: 'invoice', desc: 'Revenue, outstanding and overdue invoices across the whole centre.' },
 ];
@@ -3296,7 +3296,7 @@ const AdminReportsConfig = ({ section }) => {
   };
 
   return (
-    <div style={{ padding: '32px' }}>
+    <div style={pageFrame()}>
       <PageHeader title="Reports" subtitle={titles[tab] || titles.overview} />
 
       {tab === 'overview' && <AdminReportsOverview store={store} onGenerate={goGenerate} onBrowse={() => goTab('browse')} onViewDue={() => setDueOpen(true)} />}

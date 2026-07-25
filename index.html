@@ -30,10 +30,31 @@
     html, body { margin: 0; padding: 0; height: 100%; background: #F9FAFB; }
     body { font-family: 'Plus Jakarta Sans', sans-serif; -webkit-font-smoothing: antialiased; }
     #root { height: 100%; }
-    ::-webkit-scrollbar { width: 6px; height: 6px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: #D1D5DB; border-radius: 3px; }
-    ::-webkit-scrollbar-thumb:hover { background: #9CA3AF; }
+    /* Scrollbars — a quiet hairline pill, not a rail. The track is never painted
+       and the thumb rests at ~4% ink, close enough to DS.border that a scrollable
+       panel reads as plain content; it firms up under the cursor and while
+       dragging. An 8px box with a 2px transparent border + background-clip leaves
+       a 4px pill with breathing room either side.
+       (Reveal-on-container-hover — `.scroller:hover::-webkit-scrollbar-thumb` —
+       is deliberately NOT used: Chrome doesn't restyle a custom scrollbar from
+       the scroller's hover state, so it silently never fires.) */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+    /* Windows Chrome otherwise paints Fluent stepper arrows above/below the thumb. */
+    ::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(17,24,39,0.10); border-radius: 999px;
+      border: 2px solid transparent; background-clip: content-box;
+    }
+    ::-webkit-scrollbar-thumb:hover  { background: rgba(17,24,39,0.28); background-clip: content-box; }
+    ::-webkit-scrollbar-thumb:active { background: rgba(17,24,39,0.42); background-clip: content-box; }
+    /* Firefox has no ::-webkit-scrollbar and needs the standard properties — but
+       specifying scrollbar-width/-color in Chrome makes it DISCARD every rule
+       above and fall back to its native Fluent bar (steppers and all). So scope
+       these to engines that lack the pseudo-element. */
+    @supports not selector(::-webkit-scrollbar) {
+      * { scrollbar-width: thin; scrollbar-color: rgba(17,24,39,0.16) transparent; }
+    }
     * { text-wrap: pretty; }
     input, textarea, button { font-family: inherit; }
     @keyframes tos-fade { from { opacity: 0; } to { opacity: 1; } }
@@ -112,7 +133,6 @@
 <!-- Communications module (announcements + messages; consumes communications.mock + SuperAdmin's SACommsPage) -->
 <script type="text/babel" src="Communications.jsx"></script>
 
-<script type="text/babel" src="LandingPage.jsx"></script>
 <script type="text/babel" src="SuperAdmin.jsx"></script>
 <script type="text/babel" src="AdminDashboard.jsx"></script>
 <script type="text/babel" src="AdminPages.jsx"></script>
@@ -292,7 +312,7 @@ const HeaderUserMenu = ({ role, name, roleLabel, color, onNavigate }) => {
             </div>
           </div>
           {menuItem('settings', 'Settings', () => onNavigate(role, 'settings'))}
-          {menuItem('logout', 'Log out', () => window.__navigate && window.__navigate('landing'), true)}
+          {menuItem('logout', 'Log out', () => window.__navigate && window.__navigate('login'), true)}
         </div>
       )}
     </div>
@@ -410,19 +430,8 @@ const TopBar = ({ view, page, comms, onNavigate, collapsed, onToggleSidebar, ide
         ))}
       </nav>
 
-      {/* Active-centre chip (§1/§8) — the centre every centre-scoped screen is
-          bound to, read from the single centreProfile record. The app accent
-          follows this centre (window.__setAccent on switch), so switching is
-          visibly obvious. Staff views only. */}
-      {(view === 'admin' || view === 'teacher') && window.centreMetrics && (() => {
-        const c = window.centreMetrics.getActiveCentre();
-        return (
-          <div title={`Active centre — ${c.name}`} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '3px 11px 3px 4px', border: `1px solid ${DS.border}`, borderRadius: 999, marginRight: 4 }}>
-            <div style={{ width: 20, height: 20, borderRadius: 6, background: DS.accent, color: '#fff', fontSize: 9.5, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center', letterSpacing: '-0.3px' }}>{(c.logo || c.name || 'C').slice(0, 2).toUpperCase()}</div>
-            <span style={{ fontSize: 12, fontWeight: 600, color: DS.sub, whiteSpace: 'nowrap', maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.name}</span>
-          </div>
-        );
-      })()}
+      {/* The active-centre chip used to sit here. The centre is now named only at
+          the foot of the sidebar (CentreSwitcher), so the header doesn't repeat it. */}
 
       {/* Term indicator — the term running today (auto-resolved from the centre's
           term schedule); status colours the dot, date range shows on hover. */}
@@ -474,8 +483,8 @@ const TopBar = ({ view, page, comms, onNavigate, collapsed, onToggleSidebar, ide
 // (window.BillingTab / window.StorageAdminPanel) inside a padded page shell —
 // nothing is forked.
 const AccountPageShell = ({ title, subtitle, children }) => (
-  <div style={{ padding: 32 }}>
-    <div style={{ maxWidth: 1240, margin: '0 auto' }}>
+  <div style={pageFrame()}>
+    <div>
       {/* Account-tier band so the owner always knows an action here is account-wide,
           not scoped to one centre (§8). */}
       <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 10, padding: '3px 10px', borderRadius: 999, background: DS.accentLight, color: DS.accent, fontSize: 11, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
@@ -508,13 +517,15 @@ const AccountStoragePage = () => (
 
 const App = () => {
   const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
-  const [view, setView]     = React.useState('landing');
+  // There is no marketing/landing page — the app boots straight into the admin
+  // dashboard. Login/Signup are still reachable as public views (log out, deep link).
+  const [view, setView]     = React.useState('admin');
   const [page, setPage]     = React.useState('dashboard');
   const [plannerArgs, setPlannerArgs] = React.useState(null);
   const [renderKey, setRenderKey] = React.useState(0);
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
   // Public account-claim link (teacher/student invite). When set, the claim page
-  // is shown full-screen over the app/landing. `''` is a valid (not-found) id, so
+  // is shown full-screen over the app. `''` is a valid (not-found) id, so
   // we gate on `!== null`. window.__openClaim(id) is the entry point.
   const [claimId, setClaimId] = React.useState(null);
 
@@ -586,6 +597,13 @@ const App = () => {
       ? window.isAccountOwner(window.ONB_SESSION, sub) : false,
     [view, sub && sub.ownerUserId]);
   const centreNav = React.useMemo(() => {
+    // Students are linked to exactly one centre, so their sidebar dock names it
+    // read-only (no `centres` list, nothing to open) — see Sidebar's centreReadOnly.
+    if (view === 'student') {
+      const cs = window.klasioStudent && window.klasioStudent.currentStudent;
+      if (!cs || !cs.centreName) return null;
+      return { centre: { id: cs.centreId || 'centre', name: cs.centreName }, centres: null, planUsage: null };
+    }
     if (!sub || (view !== 'admin' && view !== 'teacher') || !window.ONB_SESSION) return null;
     // The Centres page (subscription store) is the single source of truth for the
     // account's owned centres; the switcher lists the active (non-archived) ones so
@@ -596,15 +614,15 @@ const App = () => {
     const activeId = centres.some(c => c.id === activeCentre) ? activeCentre : centres[0].id;
     const active = centres.find(c => c.id === activeId) || centres[0];
     return { centre: { id: activeId, name: active.name }, centres, planUsage: { used: (sub.centres || []).length, max: sub.plan.maxCentres } };
-  }, [sub && sub.centres, sub && sub.planId, view, activeCentre]);
+  }, [sub && sub.centres, sub && sub.planId, view, activeCentre, activeStudent]);
 
   // Communications state is lifted here (localStorage isn't reactive) so the
   // notification bell + sidebar badges update live across the page, topbar and
   // sidebar. The context is the active role's demo identity (see COMMS_SELF).
   // Public, full-screen, unauthenticated views — gated ahead of the app shell
-  // (no sidebar/topbar), like the landing & claim pages.
+  // (no sidebar/topbar), like the claim page.
   const isAuth = view === 'login' || view === 'signup';
-  const commsRole = (view === 'landing' || isAuth) ? 'admin' : view;
+  const commsRole = isAuth ? 'admin' : view;
   const commsCtx  = React.useMemo(() => window.commsContext ? window.commsContext(commsRole) : null, [commsRole]);
   const comms     = window.useComms ? window.useComms(commsCtx) : null;
 
@@ -620,10 +638,18 @@ const App = () => {
   const resReqCount = (window.resourceRequestCount && (view === 'admin' || view === 'teacher')) ? window.resourceRequestCount(view) : 0;
   const sidebarBadges = React.useMemo(() => {
     const b = {};
-    if (comms) b.comms = comms.unread.total;
+    if (comms) {
+      // Roles that still nest Communications under one dropdown (superadmin,
+      // student) badge the parent; admin + teacher now show Announcements and
+      // Messages as separate items, so each carries its own count. Keys that
+      // aren't in the active role's nav are simply never read.
+      b.comms = comms.unread.total;
+      b['comms:announcements'] = comms.unread.announcements;
+      b['comms:messages']      = comms.unread.messages;
+    }
     if (resReqCount) b.resources = resReqCount;
     return Object.keys(b).length ? b : null;
-  }, [comms && comms.unread.total, resReqCount, resTick]);
+  }, [comms && comms.unread.announcements, comms && comms.unread.messages, resReqCount, resTick]);
 
   React.useLayoutEffect(() => {
     if (window.DS) {
@@ -635,11 +661,26 @@ const App = () => {
     setRenderKey(k => k + 1);
   }, [accent]);
 
-  // Expand a bare nav id (e.g. "reports") to its first sub-section ("reports:overview")
+  // Page ids retired by the admin/teacher nav regroup, kept working so older links
+// (dashboard CTAs, notification targets, exported decks) still land somewhere real.
+// Applied inside normalizePage, so every navigation path picks them up.
+const PAGE_ALIASES = {
+  'classes:subjects':  'subjects',        // Subjects is its own item now
+  'classes:classes':   'classes',
+  'timesheets:review': 'timesheets',      // Staff dropdown gone; Timesheets is top-level
+  'comms:settings':    'settings:comms',  // Comms settings became a Settings tab
+  'comms:inbox':       'comms:messages',
+  // No role has a bare `comms` parent item any more (every role's Announcements /
+  // Messages are top-level nav items), so pin the landing section explicitly.
+  'comms':             'comms:announcements',
+};
+
+// Expand a bare nav id (e.g. "reports") to its first sub-section ("reports:overview")
   // when that item has a dropdown, so the active section is always canonical — this
   // keeps the sidebar dropdown + sub-item highlighting consistent no matter the entry
   // point (sidebar click, PPTX export, Tweaks panel).
   const normalizePage = (role, pg) => {
+    pg = PAGE_ALIASES[pg] || pg;
     if (!pg || pg.includes(':')) return pg || 'dashboard';
     const cfg = window.NAV_CONFIG[role];
     if (!cfg) return pg;
@@ -647,15 +688,13 @@ const App = () => {
     return item && item.sub && item.sub.length ? item.sub[0].id : pg;
   };
 
-  const enterApp = (role, pg) => { setView(role || 'admin'); setPage(normalizePage(role || 'admin', pg || 'dashboard')); };
-
   // Expose navigation for PPTX export
   React.useEffect(() => {
     window.__navigate = (role, pg) => {
       setClaimId(null);   // leaving a claim link returns to the app
-      if (role === 'landing') { setView('landing'); setPage('dashboard'); }
       // Public auth views aren't role nav — don't normalize against NAV_CONFIG.
-      else if (role === 'login' || role === 'signup') { setView(role); setPage('dashboard'); }
+      // ('landing' is gone; anything asking for it lands on Log in instead.)
+      if (role === 'login' || role === 'signup' || role === 'landing') { setView(role === 'landing' ? 'login' : role); setPage('dashboard'); }
       // The standalone "Set up centre" page is gone — setup is now a right-hand drawer
       // on the Centres page. Rewrite any admin/setup navigation to open it for the
       // active centre (covers the dashboard banner, signup CTA and sub-flow back links).
@@ -678,7 +717,6 @@ const App = () => {
     };
   }, []);
   const handleNav = (p)   => { setPlannerArgs(null); setPage(normalizePage(view, p)); };
-  const isApp = view !== 'landing' && !isAuth;
 
   const renderContent = () => {
     // Nav items with sub-sections route on a `<parent>:<section>` id (e.g.
@@ -687,7 +725,10 @@ const App = () => {
     const parent  = page.split(':')[0];
     const section = page.includes(':') ? page.split(':')[1] : null;
 
-    if (parent === 'settings') return <SettingsPage role={view} section={section} />;
+    // `comms` is threaded in for the admin Settings → Communications tab (the old
+    // Comms settings section), so it edits the same lifted config the bell and
+    // Announcements/Messages read.
+    if (parent === 'settings') return <SettingsPage role={view} section={section} comms={comms} />;
     // Communications is shared across all roles (announcements + messages),
     // backed by the lifted comms state. Superadmin's view is platform-scoped.
     if (parent === 'comms' && comms) return <CommunicationsPage role={view} section={section} comms={comms} />;
@@ -743,13 +784,13 @@ const App = () => {
     <div key={renderKey} style={{ height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       {claimId !== null ? (
         <div style={{ flex: 1, overflow: 'auto' }}>
-          <ClaimPage identifier={claimId} onExit={() => { setClaimId(null); setView('landing'); setPage('dashboard'); }} />
+          <ClaimPage identifier={claimId} onExit={() => { setClaimId(null); setView('login'); setPage('dashboard'); }} />
         </div>
       ) : isAuth ? (
         <div style={{ flex: 1, overflow: 'auto' }}>
           {view === 'signup' ? <SignupPage /> : <LoginPage />}
         </div>
-      ) : isApp ? (
+      ) : (
         <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
           <Sidebar
             role={view}
@@ -773,7 +814,7 @@ const App = () => {
             })() : null}
             identityName={view === 'teacher'
               ? (window.teacherMetrics ? window.teacherMetrics.getPrincipal().name : 'Heebz A')
-              : (centreNav ? window.ONB_SESSION.name : null)}
+              : (view === 'admin' && centreNav ? window.ONB_SESSION.name : null)}
             onSwitchCentre={(id) => {
               window.__setCentre && window.__setCentre(id);
               // Follow the centre's branding accent (null → platform default).
@@ -794,21 +835,13 @@ const App = () => {
                 comms={comms} onNavigate={(role, pg) => window.__navigate(role, pg)}
                 identityName={view === 'teacher'
               ? (window.teacherMetrics ? window.teacherMetrics.getPrincipal().name : 'Heebz A')
-              : (centreNav ? window.ONB_SESSION.name : null)}
+              : (view === 'admin' && centreNav ? window.ONB_SESSION.name : null)}
                 accountOwner={accountOwner}
                 activeStudent={activeStudent}
                 collapsed={sidebarCollapsed} onToggleSidebar={() => setSidebarCollapsed(c => !c)} />
               {renderContent()}
             </div>
           </div>
-        </div>
-      ) : (
-        <div style={{ flex: 1, overflow: 'auto' }}>
-          <LandingPage
-            onEnterApp={() => enterApp('admin')}
-            onLogin={() => { setView('login'); setPage('dashboard'); }}
-            onGetStarted={() => { setView('signup'); setPage('dashboard'); }}
-          />
         </div>
       )}
 
@@ -818,7 +851,6 @@ const App = () => {
         <TweakSection label="Navigate to" />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           {[
-            ['landing',     null,           'Marketing site'],
             ['login',       'login',        'Public — Log in'],
             ['signup',      'signup',       'Public — Sign up'],
             ['superadmin',  'dashboard',    'SuperAdmin — Overview'],
@@ -827,7 +859,8 @@ const App = () => {
             ['superadmin',  'revenue',      'SuperAdmin — Revenue'],
             ['superadmin',  'engagement',   'SuperAdmin — Engagement'],
             ['superadmin',  'system',       'SuperAdmin — System Health'],
-            ['superadmin',  'comms',        'SuperAdmin — Communications'],
+            ['superadmin',  'comms:announcements', 'SuperAdmin — Announcements'],
+            ['superadmin',  'comms:support',       'SuperAdmin — Support'],
             ['superadmin',  'security',     'SuperAdmin — Security & Audit'],
             ['superadmin',  'controls',     'SuperAdmin — Platform Controls'],
             ['superadmin',  'settings',     'SuperAdmin — Settings'],
@@ -843,44 +876,50 @@ const App = () => {
             ['admin',    'claim_slips',         'Admin — Claim slips'],
             ['admin',    'class_roster',        'Admin — Class roster'],
             ['admin',    'students',   'Admin — Students'],
+            ['admin',    'teachers',   'Admin — Staff'],
             ['admin',    'classes',    'Admin — Classes'],
+            ['admin',    'subjects',   'Admin — Subjects'],
+            ['admin',    'schedule',   'Admin — Timetable'],
+            ['admin',    'attendance', 'Admin — Attendance'],
             ['admin',    'resources',  'Admin — Resources'],
-            ['admin',    'teachers',   'Admin — Staff · Teachers'],
-            ['admin',    'team',       'Admin — Staff · Roles & access'],
-            ['admin',    'timesheets:review', 'Admin — Staff · Timesheets'],
-            ['admin',    'schedule',   'Admin — Schedule'],
             ['admin',    'invoices',   'Admin — Invoices'],
+            ['admin',    'timesheets', 'Admin — Timesheets'],
             ['admin',    'reports',    'Admin — Reports'],
-            ['admin',    'comms',      'Admin — Communications'],
+            ['admin',    'comms:safeguarding', 'Admin — Safeguarding'],
+            ['admin',    'comms:announcements', 'Admin — Announcements'],
+            ['admin',    'comms:messages',      'Admin — Messages'],
+            ['admin',    'team',       'Admin — Roles & access'],
             ['admin',    'settings',   'Admin — Settings'],
             ['teacher',  'dashboard',  'Teacher — Dashboard'],
-            ['teacher',  'classes',    'Teacher — My Classes'],
             ['teacher',  'timetable',  'Teacher — Timetable'],
+            ['teacher',  'classes',    'Teacher — My Classes'],
+            ['teacher',  'students',   'Teacher — My Students'],
             ['teacher',  'lesson_planner','Teacher — Lesson Planner'],
             ['teacher',  'resources',  'Teacher — Resources'],
-            ['teacher',  'homework',   'Teacher — Homework'],
             ['teacher',  'attendance', 'Teacher — Attendance'],
-            ['teacher',  'timesheet',  'Teacher — Timesheet'],
+            ['teacher',  'homework',   'Teacher — Homework'],
             ['teacher',  'progress',   'Teacher — Progress'],
             ['teacher',  'tracking',   'Teacher — Tracking'],
             ['teacher',  'reports',    'Teacher — Reports'],
-            ['teacher',  'comms',      'Teacher — Communications'],
+            ['teacher',  'timesheet',  'Teacher — Timesheets'],
+            ['teacher',  'comms:announcements', 'Teacher — Announcements'],
+            ['teacher',  'comms:messages',      'Teacher — Messages'],
             ['teacher',  'settings',   'Teacher — Settings'],
             ['student',  'dashboard',  'Student — Overview'],
             ['student',  'homework',   'Student — Homework'],
             ['student',  'progress',   'Student — Progress'],
             ['student',  'sessions',   'Student — Sessions'],
             ['student',  'reports',    'Student — Reports'],
-            ['student',  'comms',      'Student — Communications'],
+            ['student',  'comms:announcements', 'Student — Announcements'],
+            ['student',  'comms:messages',      'Student — Messages'],
             ['student',  'settings',   'Student — Settings'],
           ].map(([role, pg, label]) => {
-            const isActive = pg === null ? view === 'landing' : view === role && page.split(':')[0] === pg;
+            // Compound targets (comms:messages) match exactly; bare ones match any
+            // section of that page (reports → reports:browse).
+            const isActive = view === role && (pg.includes(':') ? page === pg : page.split(':')[0] === pg);
             return (
               <button key={label}
-                onClick={() => {
-                  if (pg === null) { setView('landing'); }
-                  else { setView(role); setPage(normalizePage(role, pg)); }
-                }}
+                onClick={() => { setView(role); setPage(normalizePage(role, pg)); }}
                 style={{
                   padding: '6px 10px', borderRadius: 6,
                   border: `1px solid ${isActive ? (tweaks.accent + '55') : '#E5E7EB'}`,

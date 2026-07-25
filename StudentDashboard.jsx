@@ -334,7 +334,7 @@ const StudentOverview = ({ onNav, comms }) => {
   );
 
   return (
-    <div style={{ padding: '32px' }}>
+    <div style={pageFrame()}>
      <div style={{ display:'flex', gap:24, alignItems:'flex-start', flexDirection: narrow ? 'column' : 'row' }}>
       <div style={{ flex:1, minWidth:0, width: narrow ? '100%' : 'auto' }}>
       {/* Purple gradient hero */}
@@ -596,7 +596,7 @@ const StudentProgressPage = () => {
   const scoreLabels = K.activeTerm.assessmentLabels;
 
   return (
-    <div style={{ padding:'32px' }}>
+    <div style={pageFrame()}>
       <PageHeader title="My Progress" subtitle="Track your score trends and predicted grades across subjects" />
 
       {/* Subject tabs */}
@@ -771,7 +771,7 @@ const StudentSessionsPage = () => {
   };
 
   return (
-    <div style={{ padding:'32px' }}>
+    <div style={pageFrame()}>
       <PageHeader title="My Sessions" subtitle="Your upcoming and past tutoring sessions" actions={[
         <Btn key="cal" variant="secondary" icon="download" small onClick={exportICS}>Export to Calendar</Btn>
       ]} />
@@ -878,36 +878,214 @@ const classResourcesForStudent = (subject) => {
 const fmtBytes = (b) => b == null ? '' : b < 1024 ? b + ' B' : b < 1048576 ? Math.round(b / 1024) + ' KB' : (b / 1048576).toFixed(1) + ' MB';
 const fmtAnnDate = (iso) => { const d = new Date(iso); const mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return `${d.getDate()} ${mo[d.getMonth()]}`; };
 
-const StudentClassCard = ({ enr, nextSession, unread, hwDue, attendance, onOpen }) => (
-  <button onClick={onOpen} style={{
-    textAlign:'left', background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:14,
-    padding:0, cursor:'pointer', overflow:'hidden', display:'flex', flexDirection:'column',
+// ── Class card visual language ────────────────────────────────────────────────
+// A course card reads as three bands: a coloured cover (identity), a white body
+// (what's happening next) and a hairline stat band (how I'm doing). Nothing here
+// is decorative-only — every band answers a question the student actually has.
+
+// "Computer Science" → "CS", "Mathematics" → "MA". Two letters, always.
+const subjectMonogram = (subject) => {
+  const words = String(subject || '').trim().split(/\s+/).filter(Boolean);
+  if (words.length >= 2) return ((words[0][0] || '') + (words[1][0] || '')).toUpperCase();
+  return (words[0] || '?').slice(0, 2).toUpperCase();
+};
+
+// Stable 0..n picker so a subject always draws the SAME cover motif.
+const motifIndex = (subject, n) => {
+  let h = 0;
+  for (let i = 0; i < String(subject).length; i++) h = (h * 31 + String(subject).charCodeAt(i)) >>> 0;
+  return h % n;
+};
+
+// Cover artwork. The prototype ships no image assets, so the "illustration" is
+// inline SVG in white alpha over the subject gradient — three compositions, picked
+// deterministically per subject so a student's cards are visually distinguishable
+// at a glance without depending on colour alone.
+const ClassCoverArt = ({ subject, hov }) => {
+  const v = motifIndex(subject, 3);
+  const W = 'rgba(255,255,255,';
+  const wrap = {
+    position:'absolute', inset:0, opacity: hov ? 1 : 0.85,
+    transform: hov ? 'scale(1.04)' : 'none',
+    transition:'opacity .22s ease, transform .35s cubic-bezier(.2,.7,.3,1)',
+  };
+  return (
+    <svg width="100%" height="100%" viewBox="0 0 320 108" preserveAspectRatio="xMaxYMid slice" style={wrap} aria-hidden="true" focusable="false">
+      {v === 0 && (
+        <g>
+          <circle cx="268" cy="18" r="62" fill={W + '0.07)'} />
+          <circle cx="268" cy="18" r="42" fill={W + '0.08)'} />
+          <circle cx="268" cy="18" r="22" fill={W + '0.10)'} />
+          <circle cx="196" cy="96" r="30" fill={W + '0.05)'} />
+        </g>
+      )}
+      {v === 1 && (
+        <g fill="none" stroke={W + '0.16)'} strokeWidth="1.25" strokeLinecap="round">
+          <path d="M132 118 C 176 78, 208 92, 244 48 S 300 6, 342 18" />
+          <path d="M150 122 C 196 84, 226 98, 262 54 S 316 12, 356 24" stroke={W + '0.11)'} />
+          <path d="M168 126 C 216 90, 244 104, 280 60 S 332 18, 370 30" stroke={W + '0.08)'} />
+          <circle cx="286" cy="30" r="44" fill={W + '0.06)'} stroke="none" />
+        </g>
+      )}
+      {v === 2 && (
+        <g>
+          <circle cx="290" cy="82" r="58" fill={W + '0.06)'} />
+          {[0,1,2,3,4].map(r => [0,1,2,3,4,5].map(cx => (
+            <circle key={r + '-' + cx} cx={200 + cx * 22} cy={14 + r * 20} r="1.8" fill={W + '0.28)'} />
+          )))}
+        </g>
+      )}
+    </svg>
+  );
+};
+
+// One micro-stat in the card's footer band.
+const ClassStatCell = ({ label, children, first }) => (
+  <div style={{
+    flex:1, minWidth:0, padding:'11px 4px 12px', textAlign:'center',
+    borderLeft: first ? 'none' : `1px solid ${DS.border}`,
   }}>
-    <div style={{ height:6, background:enr.subjectColor }} />
-    <div style={{ padding:'16px 18px', display:'flex', flexDirection:'column', gap:12, flex:1 }}>
-      <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:10 }}>
+    <div style={{ fontSize:15, fontWeight:800, letterSpacing:'-0.3px', lineHeight:1.1, fontVariantNumeric:'tabular-nums' }}>{children}</div>
+    <div style={{ fontSize:10, fontWeight:600, color:DS.faint, letterSpacing:'0.07em', textTransform:'uppercase', marginTop:5 }}>{label}</div>
+  </div>
+);
+
+const StudentClassCard = ({ enr, nextSession, unread, hwDue, attendance, onOpen }) => {
+  const [hov, setHov] = React.useState(false);
+  const K = window.klasioStudent;
+  const c = enr.subjectColor;
+  const attColor = attendance >= 90 ? DS.success : attendance >= 80 ? DS.warning : DS.danger;
+  const dayNum = nextSession ? (nextSession.date.match(/(\d+)/) || [])[1] : null;
+  const monTxt = nextSession ? ((nextSession.date.match(/\d+\s+(\w+)/) || [])[1] || '').toUpperCase() : '';
+  const dowTxt = nextSession ? (nextSession.date.split(' ')[0] || '') : '';
+
+  return (
+    <button
+      onClick={onOpen}
+      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+      style={{
+        textAlign:'left', font:'inherit', background:DS.card, borderRadius:16, padding:0,
+        border:`1px solid ${hov ? c + '66' : DS.cardBorder}`,
+        boxShadow: hov ? `${DS.cardShadowHi}, 0 12px 28px ${c}1F` : DS.cardShadow,
+        transform: hov ? 'translateY(-3px)' : 'none',
+        transition:'transform .2s cubic-bezier(.2,.7,.3,1), box-shadow .2s ease, border-color .2s ease',
+        cursor:'pointer', overflow:'hidden', display:'flex', flexDirection:'column',
+      }}
+    >
+      {/* ── Cover: subject identity ─────────────────────────────────────────── */}
+      <div style={{
+        position:'relative', height:100, overflow:'hidden',
+        padding:'13px 15px', display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:10,
+        background:`linear-gradient(135deg, ${shadeColor(c, 10)} 0%, ${c} 42%, ${shadeColor(c, -30)} 100%)`,
+      }}>
+        <ClassCoverArt subject={enr.subject} hov={hov} />
+        <span style={{
+          position:'relative', display:'inline-flex', alignItems:'center', gap:6, maxWidth:'70%',
+          padding:'4px 10px', borderRadius:999, background:'rgba(255,255,255,0.18)',
+          border:'1px solid rgba(255,255,255,0.28)', backdropFilter:'blur(6px)',
+          color:'#fff', fontSize:10.5, fontWeight:700, letterSpacing:'0.06em', textTransform:'uppercase',
+          whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
+        }}>{enr.qualification || enr.subject}</span>
+
+        {unread > 0 && (
+          <span title={`${unread} unread announcement${unread === 1 ? '' : 's'}`} style={{
+            position:'relative', flexShrink:0, display:'inline-flex', alignItems:'center', gap:5,
+            padding:'4px 9px 4px 7px', borderRadius:999, background:'#fff', color:shadeColor(c, -32),
+            fontSize:10.5, fontWeight:800, letterSpacing:'0.04em', boxShadow:'0 2px 6px rgba(16,24,40,0.18)',
+          }}>
+            <span style={{ width:5, height:5, borderRadius:'50%', background:DS.danger }} />
+            {unread} NEW
+          </span>
+        )}
+
+        {/* Circular open affordance — fills on hover. */}
+        <span style={{
+          position:'absolute', right:15, bottom:14, width:34, height:34, borderRadius:'50%',
+          display:'inline-flex', alignItems:'center', justifyContent:'center',
+          background: hov ? '#fff' : 'rgba(255,255,255,0.18)',
+          border:`1px solid rgba(255,255,255,${hov ? 0.9 : 0.32})`,
+          backdropFilter:'blur(6px)', transition:'background .18s ease, transform .18s ease',
+          transform: hov ? 'translateX(2px)' : 'none',
+        }}>
+          <Icon name="chevron_r" size={15} color={hov ? shadeColor(c, -22) : '#fff'} />
+        </span>
+      </div>
+
+      {/* Monogram tile straddles the cover / body seam. */}
+      <div style={{ position:'relative', height:0 }}>
+        <div style={{
+          position:'absolute', left:16, top:-26, width:52, height:52, borderRadius:15,
+          background:`linear-gradient(150deg, ${shadeColor(c, -12)}, ${shadeColor(c, -34)})`,
+          border:'3px solid #fff', boxShadow:'0 4px 12px rgba(16,24,40,0.16)',
+          display:'flex', alignItems:'center', justifyContent:'center',
+          color:'#fff', fontSize:16, fontWeight:800, letterSpacing:'0.02em',
+        }}>{subjectMonogram(enr.subject)}</div>
+      </div>
+
+      {/* ── Body: identity + what happens next ──────────────────────────────── */}
+      <div style={{ padding:'34px 16px 14px', display:'flex', flexDirection:'column', gap:12, flex:1 }}>
         <div style={{ minWidth:0 }}>
-          <div style={{ fontSize:15, fontWeight:700, color:DS.text, letterSpacing:'-0.2px' }}>{enr.name}</div>
-          <div style={{ display:'flex', alignItems:'center', gap:6, marginTop:5, flexWrap:'wrap' }}>
-            <span style={{ fontSize:11, fontWeight:600, color:enr.subjectColor, background:enr.subjectColor + '18', border:`1px solid ${enr.subjectColor}44`, padding:'2px 8px', borderRadius:999 }}>{enr.subject}</span>
-            <span style={{ fontSize:11.5, color:DS.muted }}>{enr.teacher}</span>
+          <div style={{ fontSize:10, fontWeight:700, color:c, letterSpacing:'0.09em', textTransform:'uppercase', marginBottom:4 }}>
+            {enr.group || enr.subject}
+          </div>
+          <div style={{
+            fontSize:16.5, fontWeight:700, color:DS.text, letterSpacing:'-0.35px', lineHeight:1.25,
+            display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical', overflow:'hidden',
+          }}>{enr.name}</div>
+          <div style={{ display:'flex', alignItems:'center', gap:7, marginTop:8 }}>
+            <Avatar name={enr.teacher} size={20} />
+            <span style={{ fontSize:12, color:DS.muted, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{enr.teacher}</span>
           </div>
         </div>
-        {unread > 0 && (
-          <span title={`${unread} unread announcement${unread === 1 ? '' : 's'}`} style={{ flexShrink:0, minWidth:20, height:20, borderRadius:999, background:DS.accent, color:'#fff', fontSize:11, fontWeight:700, display:'inline-flex', alignItems:'center', justifyContent:'center', padding:'0 6px' }}>{unread}</span>
-        )}
+
+        <div style={{
+          marginTop:'auto', display:'flex', alignItems:'center', gap:11, padding:'9px 11px',
+          borderRadius:12, background: nextSession ? c + '0E' : DS.surface,
+          border:`1px solid ${nextSession ? c + '26' : DS.border}`,
+        }}>
+          {nextSession ? (
+            <React.Fragment>
+              <div style={{
+                width:40, flexShrink:0, textAlign:'center', borderRadius:9, padding:'5px 0',
+                background:'#fff', border:`1px solid ${c}2E`,
+              }}>
+                <div style={{ fontSize:15, fontWeight:800, color:c, lineHeight:1 }}>{dayNum}</div>
+                <div style={{ fontSize:8.5, fontWeight:700, color:c, letterSpacing:'0.09em', marginTop:2 }}>{monTxt}</div>
+              </div>
+              <div style={{ minWidth:0 }}>
+                <div style={{ fontSize:9.5, fontWeight:700, color:DS.faint, letterSpacing:'0.08em', textTransform:'uppercase' }}>Next session</div>
+                <div style={{ fontSize:12.5, fontWeight:600, color:DS.text, marginTop:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                  {dowTxt} {nextSession.time}
+                </div>
+                <div style={{ fontSize:11.5, color:DS.muted, marginTop:1 }}>{enr.room}</div>
+              </div>
+            </React.Fragment>
+          ) : (
+            <React.Fragment>
+              <Icon name="calendar" size={15} color={DS.faint} />
+              <span style={{ fontSize:12.5, color:DS.muted }}>No upcoming session scheduled</span>
+            </React.Fragment>
+          )}
+        </div>
       </div>
-      <div style={{ display:'flex', alignItems:'center', gap:8, fontSize:12, color:DS.muted }}>
-        <Icon name="calendar" size={13} color={DS.faint} />
-        {nextSession ? `${nextSession.date} · ${nextSession.time.split('–')[0]} · ${enr.room}` : 'No upcoming session'}
+
+      {/* ── Stat band: how I'm doing in this class ──────────────────────────── */}
+      <div style={{ display:'flex', borderTop:`1px solid ${DS.border}`, background:DS.surface }}>
+        <ClassStatCell label="Homework" first>
+          <span style={{ color: hwDue > 0 ? DS.warning : DS.text }}>{hwDue}</span>
+        </ClassStatCell>
+        <ClassStatCell label="Attendance">
+          <span style={{ color:attColor }}>{attendance}%</span>
+        </ClassStatCell>
+        <ClassStatCell label="Predicted">
+          {K && K.GradeChip
+            ? <K.GradeChip value={enr.predictedGrade} qualification={enr.qualification} color={c} variant="bare" />
+            : <span style={{ color:c }}>{enr.predictedGrade}</span>}
+        </ClassStatCell>
       </div>
-      <div style={{ display:'flex', gap:16, marginTop:'auto', paddingTop:8, borderTop:`1px solid ${DS.border}` }}>
-        <div><div style={{ fontSize:15, fontWeight:800, color:DS.text }}>{hwDue}</div><div style={{ fontSize:10.5, color:DS.faint }}>Homework due</div></div>
-        <div><div style={{ fontSize:15, fontWeight:800, color: attendance >= 90 ? DS.success : DS.warning }}>{attendance}%</div><div style={{ fontSize:10.5, color:DS.faint }}>Attendance</div></div>
-      </div>
-    </div>
-  </button>
-);
+    </button>
+  );
+};
 
 const StudentClassesList = ({ onNav, comms }) => {
   const K = window.klasioStudent;
@@ -920,12 +1098,12 @@ const StudentClassesList = ({ onNav, comms }) => {
   const open = (enr) => { window.__studentClassId = enr.classId; onNav('classes:detail'); };
 
   return (
-    <div style={{ padding:'32px' }}>
+    <div style={pageFrame()}>
       <PageHeader title="My Classes" subtitle={`You're enrolled in ${enrolments.length} class${enrolments.length === 1 ? '' : 'es'}`} />
       {enrolments.length === 0 ? (
         <Card><div style={{ padding:'40px 20px' }}><EmptyState icon="book" title="No classes yet" message="You haven't been enrolled in any classes. Your centre adds you to classes." /></div></Card>
       ) : (
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(280px, 1fr))', gap:16 }}>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(304px, 1fr))', gap:18, alignItems:'stretch' }}>
           {sorted.map(enr => {
             const anns = classAnnouncementsForStudent(comms, enr.classId);
             return (
@@ -983,7 +1161,7 @@ const StudentClassDetail = ({ enr, onNav, onBack, comms }) => {
   const completion = totalHw ? Math.round(((hw.submitted.length + hw.marked.length) / totalHw) * 100) : 0;
   // The student can only reach their teacher through the monitored comms surface
   // (never a private channel). Opening Communications is that institutional record.
-  const messageTeacher = () => onNav('comms');
+  const messageTeacher = () => onNav('comms:messages');
 
   // Mark this class's unread announcements read on open (D8).
   React.useEffect(() => {
@@ -1073,11 +1251,11 @@ const StudentClassDetail = ({ enr, onNav, onBack, comms }) => {
 
   const homework = (
     (hw.due.length + hw.submitted.length + hw.marked.length) === 0 ? (
-      <Card><div style={{ padding:'40px 20px' }}><EmptyState icon="clip" title="No homework" message="Nothing set for this class right now." /></div></Card>
+      <Card><div style={{ padding:'40px 20px' }}><EmptyState icon="notebook_pen" title="No homework" message="Nothing set for this class right now." /></div></Card>
     ) : (
       <div>
         <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:14 }}>
-          <Btn variant="secondary" icon="clip" small onClick={() => onNav('homework')}>Open homework</Btn>
+          <Btn variant="secondary" icon="notebook_pen" small onClick={() => onNav('homework')}>Open homework</Btn>
         </div>
         {hwGroup('Due', hw.due, DS.warning)}
         {hwGroup('Submitted', hw.submitted, DS.info)}
@@ -1153,7 +1331,7 @@ const StudentClassDetail = ({ enr, onNav, onBack, comms }) => {
 
   const body = { overview, announcements, homework, sessions, resources: resourcesTab };
 
-  if (!Shell) return <div style={{ padding:32 }}><EmptyState icon="book" title="Class unavailable" message="Please reload." /></div>;
+  if (!Shell) return <div style={pageFrame()}><EmptyState icon="book" title="Class unavailable" message="Please reload." /></div>;
   return (
     <Shell
       onBack={onBack} backLabel="My Classes"
@@ -1173,7 +1351,7 @@ const StudentClassesPage = ({ section, onNav, comms }) => {
   const enr = section === 'detail' ? enrolments.find(e => e.classId === window.__studentClassId) : null;
   if (section === 'detail') {
     if (!enr) return (
-      <div style={{ padding:'32px' }}>
+      <div style={pageFrame()}>
         <EmptyState icon="book" title="Class not found" message="This class may have changed." action={<Btn variant="primary" onClick={() => onNav('classes')}>Back to My Classes</Btn>} />
       </div>
     );

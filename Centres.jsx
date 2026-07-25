@@ -73,7 +73,21 @@ const useSubscriptionStore = () => {
   const removeCode = () => writeSub({ ...state, redeemedCode: null });
   // Derived effective price (base price modified by an active override code).
   const override = window.planOverrideStatus ? window.planOverrideStatus(state.redeemedCode, plan.price) : { active: false, effectivePrice: plan.price, until: null, label: '' };
-  const effectivePrice = override.effectivePrice;
+
+  // Global free trial (Platform Controls → Plans.jsx). `state.trial` is the stamp
+  // taken at signup — the offer as it stood THEN, so later platform edits never move
+  // a live centre's end date. A running trial is £0, ahead of any override code.
+  const trialStatus = window.planTrialStatus ? window.planTrialStatus(state.trial) : { active: false, expired: false, daysLeft: 0, endsAt: null, label: '' };
+  const startTrial = (pickedPlanId = state.planId) => {
+    if (!window.planStartTrial) return null;
+    const stamp = window.planStartTrial(pickedPlanId);        // null when trials are off
+    if (!stamp) return null;
+    writeSub({ ...state, trial: stamp });
+    return stamp;
+  };
+  // Convert to a paying subscription early ("start paying now" / trial dismissed).
+  const endTrial = () => writeSub({ ...state, trial: null });
+  const effectivePrice = trialStatus.active ? 0 : override.effectivePrice;
   const addCentre = (fields = {}) => {
     if (state.centres.length >= plan.maxCentres) return null;   // plan cap
     const nm = (fields.name || '').trim();
@@ -101,8 +115,9 @@ const useSubscriptionStore = () => {
   // Primary centre can't be removed — guard at UI level too.
   const removeCentre = id => writeSub({ ...state, centres: state.centres.filter(c => !(c.id === id && !c.isPrimary)) });
 
+  // `trial` (spread from state) is the raw stamp; `trialStatus` is it resolved against today.
   return { ...state, plan, setPlan, addCentre, updateCentre, completeStep, setPrimary, removeCentre, setOwner,
-    setBilling, applyCode, removeCode, override, effectivePrice };
+    setBilling, applyCode, removeCode, override, effectivePrice, trialStatus, startTrial, endTrial };
 };
 
 // ─── Setup model + helpers ───────────────────────────────────────────────────────
@@ -447,7 +462,7 @@ const CentresPage = () => {
   const storagePool = window.centreMetrics ? window.centreMetrics.getStoragePool() : null;
 
   return (
-    <div style={{ padding: 32, maxWidth: 980, margin: '0 auto' }}>
+    <div style={pageFrame()}>
       <PageHeader
         title="Centres"
         subtitle="Manage the centres included in your subscription — switch between them, configure each, or add a new one."
@@ -467,8 +482,11 @@ const CentresPage = () => {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ fontSize: 16, fontWeight: 700, color: DS.text }}>{plan.name} plan</span>
                 <Badge variant="accent">£{plan.price}/mo</Badge>
+                {store.trialStatus.active && <Badge variant="success">{store.trialStatus.daysLeft}d trial left</Badge>}
               </div>
-              <div style={{ fontSize: 12.5, color: DS.muted, marginTop: 2 }}>Your current subscription allowance</div>
+              <div style={{ fontSize: 12.5, color: DS.muted, marginTop: 2 }}>
+                {store.trialStatus.active ? 'Free trial — full allowance, billed when it ends' : 'Your current subscription allowance'}
+              </div>
             </div>
           </div>
           <div style={{ flex: 1, minWidth: 200 }}>

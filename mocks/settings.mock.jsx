@@ -27,8 +27,10 @@ const SETTINGS_SEED = {
     },
     notifications: { ...SET_NOTIF_DEFAULTS, channel: 'both' },
     appearance:    { ...SET_APPEARANCE_DEFAULTS },
+    // NOTE: no trialDays here — the free trial is one global setting owned by
+    // Platform Controls (PLAN_TRIAL_SEED / tutoros.trial.v1), read via getPlatformTrial().
     platform: {
-      defaultPlan: 'growth', trialDays: 14, defaultSeats: 10, currency: 'GBP',
+      defaultPlan: 'growth', defaultSeats: 10, currency: 'GBP',
       billingEmail: 'billing@tutoros.io', autoSuspend: true, retention: '90d',
       supportAccess: true, maintenanceNotices: true,
     },

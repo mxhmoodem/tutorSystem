@@ -70,7 +70,7 @@ const AdminAttendancePage = () => {
   );
 
   return (
-    <div style={{ padding:'32px' }}>
+    <div style={pageFrame()}>
       <PageHeader title="Attendance"
         subtitle="Every register across the centre — spot missing registers and reopen them for your teachers"
         actions={[<Btn key="exp" variant="secondary" icon="download" small>Export</Btn>]} />

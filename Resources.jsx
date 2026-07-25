@@ -20,7 +20,9 @@
 //  load-bearing.
 // ══════════════════════════════════════════════════════════════════════════════
 
-const RES_STORE_KEY = 'klasio.resources.v1';
+// v2 — the seed library grew from a dozen rows to ~120 files across every subject
+// (plus seeded usage history). Bumped so an existing v1 store doesn't mask it.
+const RES_STORE_KEY = 'klasio.resources.v2';
 
 // ── Tone + type/visibility resolution (DS tokens only — no raw hex) ──────────────
 const resType = (id) => (window.RES_TYPES || []).find(t => t.id === id) || { id, label: id, icon: 'file', tone: 'muted', studentDefault: true };
@@ -42,7 +44,7 @@ const resFmtDate = (iso) => {
   return `${p[2]} ${M[p[1] - 1]} ${p[0]}`;
 };
 const resFmtBytes = (n) => {
-  if (!n && n !== 0) return '—';
+  if (!n) return '—';   // unknown, or a `link` file whose contents are a URL, not bytes
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
@@ -59,7 +61,9 @@ const resSeed = () => ({
   links:     JSON.parse(JSON.stringify(window.RES_LINKS_SEED || [])),
   staff:     JSON.parse(JSON.stringify(window.RES_STAFF || [])),
   accessLog: [],            // D4 — admin opens of a private file
-  usage_events: [],         // Stage 5 — append-only attach history (survives detach)
+  // Stage 5 — append-only attach history (survives detach). Seeded so the
+  // "Recently used" sort has signal before anyone attaches anything.
+  usage_events: JSON.parse(JSON.stringify(window.RES_USAGE_SEED || [])),
   actingTeacherId: 't1',    // demo: which teacher the teacher-lens is acting as
 });
 const resRead = () => {
@@ -75,7 +79,7 @@ const resRead = () => {
         links:     p.links     || seed.links,
         staff:     p.staff     || seed.staff,
         accessLog: p.accessLog || [],
-        usage_events: p.usage_events || [],
+        usage_events: p.usage_events || seed.usage_events,
         actingTeacherId: p.actingTeacherId || 't1',
       };
     }
@@ -511,7 +515,7 @@ const ResWhereUsedDrawer = ({ open, onClose, store, resource }) => {
     }
     if (l.context_type === 'homework') {
       const a = window.klasioResources && window.klasioResources.homeworkTitle ? window.klasioResources.homeworkTitle(l.context_id) : null;
-      return { kind: 'Homework', icon: 'clip', primary: a || 'Homework assignment', secondary: '' };
+      return { kind: 'Homework', icon: 'notebook_pen', primary: a || 'Homework assignment', secondary: '' };
     }
     return { kind: l.context_type, icon: 'file', primary: l.context_id, secondary: '' };
   };
@@ -612,7 +616,14 @@ const ResourceDetail = ({ open, onClose, store, resource, viewerId, isAdmin, onS
     if (l.context_type === 'homework') { const a = window.klasioResources && window.klasioResources.homeworkTitle ? window.klasioResources.homeworkTitle(l.context_id) : null; return { kind: 'Homework', primary: a || 'Homework assignment', secondary: '' }; }
     return { kind: l.context_type, primary: l.context_id, secondary: '' };
   };
-  const openFile = () => { if (adminLogged) store.logAccess(res.id, viewerId); setOpened(true); };
+  // A `link` file's contents ARE a URL, so opening one really opens it. Every other
+  // type is a reference (no bytes stored), so opening is simulated.
+  const isLink = res.type === 'link' && !!res.url;
+  const openFile = () => {
+    if (adminLogged) store.logAccess(res.id, viewerId);
+    if (isLink) { try { window.open(res.url, '_blank', 'noopener'); } catch (e) {} }
+    setOpened(true);
+  };
   const sendRequest = () => { store.requestAccess(res.id, viewerId, note); setNote(''); };
 
   // Who can open this file, derived from visibility.
@@ -662,14 +673,16 @@ const ResourceDetail = ({ open, onClose, store, resource, viewerId, isAdmin, onS
             <div style={{ padding: '11px 13px', borderRadius: 10, border: `1px solid ${adminLogged ? DS.successBorder : DS.border}`, background: adminLogged ? DS.successBg : DS.surface, fontSize: 12.5, color: adminLogged ? DS.success : DS.sub, lineHeight: 1.5 }}>
               {adminLogged
                 ? <><b>Access recorded for this session.</b> The owner has been notified that an admin viewed this file.</>
-                : <>Opening <b style={{ color: DS.text }}>{res.title}</b> — preview is simulated in this prototype (files are referenced, not stored).</>}
+                : isLink
+                  ? <>Opened <b style={{ color: DS.text }}>{res.url}</b> in a new tab.</>
+                  : <>Opening <b style={{ color: DS.text }}>{res.title}</b> — preview is simulated in this prototype (files are referenced, not stored).</>}
             </div>
           ) : (
             <>
               <button type="button" onClick={openFile}
                 style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8, width: '100%', padding: '11px 14px', borderRadius: 10, border: 'none', cursor: 'pointer', fontSize: 13.5, fontWeight: 600, color: '#fff', background: adminLogged ? DS.text : DS.accent }}>
-                <Icon name={adminLogged ? 'eye' : 'download'} size={15} color="#fff" />
-                {adminLogged ? 'Open — this is recorded' : 'Open file'}
+                <Icon name={adminLogged ? 'eye' : isLink ? 'link' : 'download'} size={15} color="#fff" />
+                {adminLogged ? 'Open — this is recorded' : isLink ? 'Open link' : 'Open file'}
               </button>
               {adminLogged && <div style={{ fontSize: 12, color: DS.muted, marginTop: 8, lineHeight: 1.5 }}>You are seeing this as a centre admin. {owner} will see that you opened it, and when.</div>}
             </>
@@ -695,7 +708,9 @@ const ResourceDetail = ({ open, onClose, store, resource, viewerId, isAdmin, onS
         <ResDetailRow label="Subject" value={board ? `${res.subject} · ${board}` : res.subject} />
         <ResDetailRow label="Level" value={res.year_group ? `${resLevel(res)} · ${res.year_group}` : resLevel(res)} />
         <ResDetailRow label="Type" value={t.label} />
-        <ResDetailRow label="Size" value={resFmtBytes(res.size)} />
+        {isLink
+          ? <ResDetailRow label="Link" value={<a href={res.url} target="_blank" rel="noopener noreferrer" style={{ color: DS.accent, fontWeight: 600, wordBreak: 'break-all' }}>{res.url}</a>} />
+          : <ResDetailRow label="Size" value={resFmtBytes(res.size)} />}
         <ResDetailRow label="Added" value={resFmtDate(res.created_at)} />
       </div>
 
@@ -1425,8 +1440,8 @@ const ResourcesPage = ({ role }) => {
   ];
 
   return (
-    <div style={{ padding: 32 }}>
-      <div style={{ maxWidth: 1240, margin: '0 auto' }}>
+    <div style={pageFrame()}>
+      <div>
         <PageHeader
           title="Resources"
           subtitle={isAdmin ? 'Every file in the centre’s library — with owner, size and visibility.' : 'The centre’s shared library of teaching materials.'}
@@ -1604,7 +1619,7 @@ const ResourceSessionDetail = ({ classId, date, onBack }) => {
   const admin = window.useAdminStore ? window.useAdminStore() : null;
   const cls = admin ? (admin.classes || []).find(c => c.id === classId) : null;
   if (!cls) return (
-    <div style={{ padding: 32 }}>
+    <div style={pageFrame()}>
       <Btn variant="secondary" icon="chevron_l" small onClick={onBack}>Back to schedule</Btn>
       <div style={{ marginTop: 20 }}><EmptyState icon="calendar" title="Session not found" /></div>
     </div>
@@ -1633,8 +1648,8 @@ const ResourceSessionDetail = ({ classId, date, onBack }) => {
   );
 
   return (
-    <div style={{ padding: 32 }}>
-      <div style={{ maxWidth: 960, margin: '0 auto' }}>
+    <div style={pageFrame()}>
+      <div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <Btn variant="secondary" icon="chevron_l" small onClick={onBack}>Back to schedule</Btn>
           <Btn variant="secondary" icon="book" small onClick={() => { window.__adminParam = classId; window.__navigate && window.__navigate('admin', 'class_detail'); }}>View class record</Btn>
@@ -1678,7 +1693,7 @@ const ResourceSessionDetail = ({ classId, date, onBack }) => {
           ) : <div style={{ fontSize: 13, color: DS.muted }}>No lesson plan recorded for this occurrence.</div>}
         </Section>
 
-        <Section icon="clip" title="Homework set">
+        <Section icon="notebook_pen" title="Homework set">
           {hwStore.length === 0 ? <div style={{ fontSize: 13, color: DS.muted }}>No homework linked to this class.</div> : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {hwStore.slice(0, 6).map(h => (

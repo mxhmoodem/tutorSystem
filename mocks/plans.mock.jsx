@@ -42,4 +42,17 @@ const PLAN_CODES_SEED = [
   { code: 'SCALE99',    kind: 'fixed_price', value: 99, durationMonths: 6, planId: 'scale', maxRedemptions: 5,    redemptions: [], status: 'disabled', note: 'Negotiated enterprise rate', createdAt: '2026-04-15' },
 ];
 
-Object.assign(window, { PLAN_CATALOG_SEED, PLAN_CODES_SEED });
+// The GLOBAL free trial — one platform-wide offer every new centre gets automatically
+// (no code needed). The platform owner edits it in Platform Controls; it seeds
+// `tutoros.trial.v1` (Plans.jsx) and drives the signup page, the marketing site copy,
+// the admin Billing tab and the owner console's onboard-account wizard.
+//   enabled     — off means new centres are billed from day one
+//   days        — trial length
+//   planId      — pin the trial to one plan, or null = whichever plan they pick
+//   requireCard — ask for a card up front (changes the signup promise)
+//   onEnd       — bill | downgrade | suspend  (what happens the day it expires)
+const PLAN_TRIAL_SEED = {
+  enabled: true, days: 14, planId: null, requireCard: false, onEnd: 'bill', updatedAt: '2026-07-01',
+};
+
+Object.assign(window, { PLAN_CATALOG_SEED, PLAN_CODES_SEED, PLAN_TRIAL_SEED });

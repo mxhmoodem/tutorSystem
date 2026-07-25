@@ -1911,7 +1911,10 @@ const CommunicationsPage = ({ role, section, comms }) => {
   const cfg = comms.config || {};
   const iAmDsl = cfg.dslLeadId === ctx.userId || (cfg.dslDeputyIds || []).includes(ctx.userId);
   if (sec === 'safeguarding' && role !== 'admin' && !iAmDsl) sec = 'announcements';
-  if (sec === 'settings' && role !== 'admin') sec = 'announcements';
+  // Comms settings moved to Settings → Communications (PAGE_ALIASES rewrites
+  // `comms:settings` → `settings:comms`); anything still asking for it here is a
+  // stale link, so land on Announcements.
+  if (sec === 'settings') sec = 'announcements';
   const isSuper = role === 'superadmin';
   const meta = SECTION_META[sec] || SECTION_META.announcements;
   const onNavigate = (r, p) => window.__navigate && window.__navigate(r, p);
@@ -1924,20 +1927,19 @@ const CommunicationsPage = ({ role, section, comms }) => {
   // around the contacts + conversation cards so they nearly fill the content area.
   if (sec === 'messages') {
     return (
-      <div style={{ height: 'calc(100vh - 52px)', padding: 10, boxSizing: 'border-box' }}>
+      <div style={{ ...pageFrame({ flush: true }), height: 'calc(100vh - 52px)', padding: 10 }}>
         <Inbox comms={comms} />
       </div>
     );
   }
 
   return (
-    <div style={{ padding: '32px' }}>
+    <div style={pageFrame()}>
       <PageHeader title={meta.title} subtitle={subtitle} />
 
       {sec === 'announcements' && <AnnouncementsSection comms={comms} onNavigate={onNavigate} />}
       {sec === 'safeguarding' && <SafeguardingPage comms={comms} />}
       {sec === 'support' && isSuper && <SupportSection />}
-      {sec === 'settings' && window.CommsTab && <window.CommsTab comms={comms} />}
     </div>
   );
 };
@@ -1999,7 +2001,7 @@ function activityItems(ctx) {
   const badges = (typeof window !== 'undefined' && window.getHomeworkBadges) ? window.getHomeworkBadges() : null;
   if (badges && ctx.role === 'teacher' && badges.teacherToMark > 0) {
     const n = badges.teacherToMark;
-    out.push({ kind: 'hw', id: 'hw-mark', sig: 'hw-mark:' + n, icon: 'clip', page: 'homework', tone: 'success',
+    out.push({ kind: 'hw', id: 'hw-mark', sig: 'hw-mark:' + n, icon: 'notebook_pen', page: 'homework', tone: 'success',
       title: `${n} submission${n === 1 ? '' : 's'} awaiting marking`, sub: 'Homework · needs your review' });
   }
   if (badges && ctx.role === 'student' && badges.studentUnreadFeedback > 0) {

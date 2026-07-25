@@ -51,7 +51,7 @@ const TeacherClassesPage = () => {
   };
 
   return (
-    <div style={{ padding:'32px' }}>
+    <div style={pageFrame()}>
       <PageHeader
         title="My Classes"
         subtitle={`${list.length} active class${list.length===1?'':'es'} · ${totalEnrolments} enrolments`}
@@ -331,11 +331,11 @@ const ClassBannerCustomiser = ({ value, onChange, color }) => {
 const ClassDetailShell = ({
   onBack, backLabel = 'Back', color = DS.accent, bannerTheme = 'default',
   chips = [], title, subtitle, bannerRight = null, preBanner = null,
-  tabs, activeTab, onTab, children, maxWidth = 1180,
+  tabs, activeTab, onTab, children,
 }) => {
   const grad = classBannerGradient(bannerTheme, color);
   return (
-    <div style={{ padding:'26px 32px', maxWidth, margin:'0 auto' }}>
+    <div style={pageFrame()}>
       {onBack && (
         <button onClick={onBack} style={{ display:'inline-flex', alignItems:'center', gap:6, background:'none', border:'none', cursor:'pointer', color:DS.muted, fontSize:13, fontWeight:500, padding:0, marginBottom:14 }}>
           <Icon name="chevron_l" size={15} color={DS.muted} /> {backLabel}
@@ -506,7 +506,7 @@ const ClassStudentsTab = ({ cls, color, goProfile }) => {
             style={{ width:'100%', padding:'8px 12px 8px 34px', borderRadius:8, border:`1px solid ${DS.border}`, fontSize:13, outline:'none', boxSizing:'border-box' }} />
         </div>
         <div style={{ flex:1 }} />
-        <Btn variant="secondary" icon="message" small onClick={() => window.__navigate && window.__navigate('teacher', 'comms')}>Message class</Btn>
+        <Btn variant="secondary" icon="message" small onClick={() => window.__navigate && window.__navigate('teacher', 'comms:messages')}>Message class</Btn>
         <Btn variant="secondary" icon="users" small onClick={() => window.__navigate && window.__navigate('teacher', 'students')}>All students</Btn>
       </div>
       <Card title={`${cls.studentList.length} student${cls.studentList.length === 1 ? '' : 's'}`}>
@@ -543,7 +543,7 @@ const ClassHomeworkTab = ({ cls, color, classHw }) => {
         <Btn variant="primary" icon="plus" small onClick={goHw}>Set homework</Btn>
       </div>
       <div style={{ display:'flex', gap:14, marginBottom:20, flexWrap:'wrap' }}>
-        <Card style={{ flex:1, minWidth:150 }}><ClassStat label="Assignments" value={classHw.length} icon="clip" /></Card>
+        <Card style={{ flex:1, minWidth:150 }}><ClassStat label="Assignments" value={classHw.length} icon="notebook_pen" /></Card>
         <Card style={{ flex:1, minWidth:150 }}><ClassStat label="Active" value={active} color={active ? DS.success : DS.text} icon="folder_open" /></Card>
         <Card style={{ flex:1, minWidth:150 }}><ClassStat label="To mark" value={toMark} color={toMark ? DS.warning : DS.text} icon="edit" /></Card>
         <Card style={{ flex:1, minWidth:150 }}><ClassStat label="Submission rate" value={rate + '%'} color={color} icon="check" /></Card>
@@ -564,7 +564,7 @@ const ClassHomeworkTab = ({ cls, color, classHw }) => {
           </div>
         </Card>
       ) : (
-        <Card><div style={{ padding:'40px 20px' }}><EmptyState icon="clip" title="No homework set" message="Set the first assignment for this class." action={<Btn variant="primary" icon="plus" onClick={goHw}>Set homework</Btn>} /></div></Card>
+        <Card><div style={{ padding:'40px 20px' }}><EmptyState icon="notebook_pen" title="No homework set" message="Set the first assignment for this class." action={<Btn variant="primary" icon="plus" onClick={goHw}>Set homework</Btn>} /></div></Card>
       )}
     </div>
   );
@@ -904,7 +904,7 @@ const TeacherClassDetailPage = () => {
   }, [id]);
 
   if (!cls) return (
-    <div style={{ padding:'32px' }}>
+    <div style={pageFrame()}>
       <EmptyState icon="book" title="Class not found"
         message="This class may have been removed or you no longer teach it."
         action={<Btn variant="primary" onClick={backToClasses}>Back to My Classes</Btn>} />
@@ -994,7 +994,7 @@ const TeacherHomeworkPage = () => {
     DS.accent;
 
   return (
-    <div style={{ padding:'32px' }}>
+    <div style={pageFrame()}>
       <div style={{ fontSize:11, fontWeight:700, color:DS.muted, letterSpacing:'0.08em', textTransform:'uppercase', marginBottom:6 }}>
         Spring Term · Week 8
       </div>
@@ -1173,7 +1173,7 @@ const TeacherProgressPage = () => {
   const labels = ['4 Mar','11 Mar','18 Mar','25 Mar','1 Apr','8 Apr','15 Apr','22 Apr'];
 
   return (
-    <div style={{ padding:'32px' }}>
+    <div style={pageFrame()}>
       <PageHeader title="Student Progress" subtitle="Track score trends and identify students who need support" actions={[
         <Btn key="r" variant="secondary" icon="download" small>Export Report</Btn>
       ]} />
@@ -1307,7 +1307,7 @@ const TeacherTimetablePage = () => {
   };
 
   return (
-    <div style={{ padding:'32px' }}>
+    <div style={pageFrame()}>
       <PageHeader title="My Timetable" subtitle={`${myClasses.length} weekly sessions · assigned by your centre admin`} actions={[
         <Btn key="att" variant="secondary" icon="check" small onClick={() => window.__navigate && window.__navigate('teacher', 'attendance')}>Attendance</Btn>,
       ]} />
@@ -1855,7 +1855,7 @@ const TeacherAttendancePage = () => {
   const allRecordedToday = daySessions.length > 0 && daySessions.every(s => s.derived.state === 'recorded' || s.derived.state === 'cancelled');
 
   return (
-    <div style={{ padding:'32px' }}>
+    <div style={pageFrame()}>
       <PageHeader title="Attendance"
         subtitle="Take and review the register for each of your sessions"
         actions={[
@@ -2703,7 +2703,7 @@ const LessonPlannerPage = ({ initialGroup, initialDate, initialMode }) => {
   };
 
   return (
-    <div style={{ padding:'32px', maxWidth:1280, margin:'0 auto' }}>
+    <div style={pageFrame()}>
       <PageHeader
         title="Lesson Planner"
         subtitle={screen === 'browse'
@@ -3860,7 +3860,7 @@ const TeacherTrackingPage = () => {
   const showDetail = view === 'detail' && active;
 
   return (
-    <div style={{ padding: '32px' }}>
+    <div style={pageFrame()}>
       {!showDetail && (
         <PageHeader title="Tracking" subtitle="Custom trackers for homework, tests, behaviour — anything you log per student" />
       )}
@@ -3959,7 +3959,7 @@ const TeacherStudentsPage = () => {
 
   if (!myStudents.length) {
     return (
-      <div style={{ padding:'32px' }}>
+      <div style={pageFrame()}>
         <PageHeader title="My Students" subtitle="Students enrolled in your classes" />
         <Card>
           <EmptyState icon="users" title="No students yet"
@@ -3970,7 +3970,7 @@ const TeacherStudentsPage = () => {
   }
 
   return (
-    <div style={{ padding:'32px' }}>
+    <div style={pageFrame()}>
       <PageHeader
         title="My Students"
         subtitle={`${myStudents.length} across your ${myClasses.length} class${myClasses.length===1?'':'es'} · ${myStudents.filter(atRisk).length} at risk`}
@@ -4043,7 +4043,7 @@ const TeacherStudentsPage = () => {
 
               <div style={{ marginTop:16, display:'flex', flexDirection:'column', gap:8 }}>
                 <Btn variant="primary" icon="user" onClick={() => { window.__adminParam = sel.id; window.__navigate && window.__navigate('teacher', 'student_profile'); }}>View full profile</Btn>
-                <Btn variant="secondary" icon="message" onClick={() => window.__navigate && window.__navigate('teacher', 'comms')}>Message</Btn>
+                <Btn variant="secondary" icon="message" onClick={() => window.__navigate && window.__navigate('teacher', 'comms:messages')}>Message</Btn>
               </div>
             </div>
           </Card>

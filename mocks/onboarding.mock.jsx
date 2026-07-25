@@ -70,6 +70,11 @@ const ONB_SUBSCRIPTION = {
   // blobs via readSub's spread (Centres.jsx).
   billing: { company: 'Bright Minds Tuition Ltd', email: 'accounts@brightminds.co.uk', vat: 'GB 432 1098 76', address: '14 Kingsway, London WC2B 6LH', cardName: 'Taqqy', cardBrand: 'Visa', cardLast4: '4242', cardExpiry: '08/27' },
   redeemedCode: null,
+  // Free-trial stamp, written ONCE at signup from the global offer in Platform
+  // Controls (planStartTrial → {days,planId,startedAt,endsAt,onEnd}). null here because
+  // Bright Minds is an established paying account — a later change to the platform-wide
+  // trial must never retro-apply to a live subscription.
+  trial: null,
   // NB: storage usage is NOT stored here — it is derived live from file records
   // (mocks/storage.mock.jsx + Storage.jsx) so a running total can never drift.
   centres: [

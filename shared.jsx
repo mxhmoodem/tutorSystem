@@ -2,6 +2,36 @@
 //  Klasio — Shared Design System & Components
 // ══════════════════════════════════════════════════════════════
 
+// ─── Layout ────────────────────────────────────────────────────────────────────
+// The single source of truth for the main content area's width, gutter and
+// vertical rhythm. The app shell (index.html) wraps every routed page in one
+// container built from these tokens, so pages must NOT set their own root
+// padding or `maxWidth … margin:'0 auto'` — that's what made widths drift
+// page-to-page. A page only opts *in* to a narrower measure via LAYOUT.narrow.
+//
+//   sidebar 232px + content
+//   1664 viewport → content 1432px (uncapped — reads as full width)
+//   1920 viewport → content 1600px (44px each side)
+//   2560 viewport → content 1600px (centred, 464px each side)
+const LAYOUT = {
+  max:     1600,  // cap for standard pages — centres on large monitors
+  narrow:   900,  // forms, wizards and editors that want a readable measure
+  gutter:    32,  // horizontal padding, both sides
+  top:       32,  // space between the sticky header and the first element
+  bottom:    64,  // trailing space so the last card clears the viewport edge
+};
+
+// Root style for the shell's content container. `narrow` pulls a page in to the
+// form measure; `flush` drops the gutter/rhythm for pages that own their whole
+// viewport (full-height split panes, print sheets).
+const pageFrame = ({ narrow = false, flush = false } = {}) => ({
+  width: '100%',
+  maxWidth: narrow ? LAYOUT.narrow : LAYOUT.max,
+  margin: '0 auto',
+  padding: flush ? 0 : `${LAYOUT.top}px ${LAYOUT.gutter}px ${LAYOUT.bottom}px`,
+  boxSizing: 'border-box',
+});
+
 const DS = {
   accent:       '#4F46E5',
   accentHover:  '#4338CA',
@@ -105,10 +135,17 @@ const PATHS = {
   sidebar:     'M4 5a1 1 0 011-1h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5z M9 4v16',
   shield:      'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z',
   lock:        'M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z',
+  lock_keyhole:'M6 21h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z M8 11V7a4 4 0 018 0v4 M14 16a2 2 0 11-4 0 2 2 0 014 0z',
   video:       'M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z',
   mic:         'M19 11a7 7 0 01-14 0m7 7v4m0-4a3 3 0 01-3-3V5a3 3 0 016 0v6a3 3 0 01-3 3z',
   image:       'M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z',
   cloud:       'M2.25 15a4.5 4.5 0 004.5 4.5H18a3.75 3.75 0 001.332-7.257 3 3 0 00-3.758-3.848 5.25 5.25 0 00-10.233 2.33A4.502 4.502 0 002.25 15z',
+  // Teaching board on a stand — the "a class is being taught" mark (vs `book`,
+  // which now reads strictly as a subject/curriculum).
+  presentation:'M3 4h18 M4 4v9a2 2 0 002 2h12a2 2 0 002-2V4 M12 15v3 M9 21l3-3 3 3',
+  // Ruled notebook with a pen over it — the homework mark (work that is set,
+  // done and marked), as opposed to `clip`, which reads as a generic attachment.
+  notebook_pen:'M13.4 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2v-7.4 M2 6h4 M2 10h4 M2 14h4 M2 18h4 M21.378 5.626a1 1 0 10-3.004-3.004l-5.01 5.012a2 2 0 00-.506.854l-.837 2.87a.5.5 0 00.62.62l2.87-.837a2 2 0 00.854-.506z',
 };
 
 const Icon = ({ name, size = 16, color = 'currentColor', strokeWidth = 1.5 }) => (
@@ -368,14 +405,16 @@ const COMMS_BASE = [
   { id: 'comms:announcements', label: 'Announcements', icon: 'megaphone' },
   { id: 'comms:messages',      label: 'Messages',      icon: 'mail' },
 ];
-const commsSub = (role) => {
-  if (role === 'admin')      return [...COMMS_BASE, { id: 'comms:safeguarding', label: 'Safeguarding', icon: 'shield' }, { id: 'comms:settings', label: 'Comms settings', icon: 'settings' }];
-  // Owner console has no Messages surface (platform owners don't DM tenants) —
-  // its Communications is Announcements + Support only. Messages stays for
-  // admin/teacher/student, where Inbox + Safeguarding depend on it.
-  if (role === 'superadmin') return [COMMS_BASE[0], { id: 'comms:support', label: 'Support', icon: 'message' }];
-  return COMMS_BASE;
-};
+// Owner console has no Messages surface (platform owners don't DM tenants) —
+// its Communications is Announcements + Support instead.
+const COMMS_OWNER = [COMMS_BASE[0], { id: 'comms:support', label: 'Support', icon: 'message' }];
+// No role nests Communications under one dropdown any more — its sections are
+// top-level nav items (admin/teacher group them under a `Communication` section;
+// admin's Safeguarding sits under Operations, and Comms settings became a
+// Settings tab). They keep their `comms:<section>` page ids, so routing is
+// unchanged; only the nav shape moved. Pass `section: undefined` for the flat
+// student bar, which has no section labels.
+const commsFlat = (section, items = COMMS_BASE) => items.map(s => ({ id: s.id, icon: s.icon, label: s.label, section }));
 
 // Items are grouped under quiet uppercase section labels via an optional
 // `section` field — items sharing a section are contiguous, and the Sidebar
@@ -397,7 +436,7 @@ const NAV_CONFIG = {
       { id: 'users',         icon: 'users',       label: 'Users',            section: 'Platform' },
       { id: 'revenue',       icon: 'invoice',     label: 'Revenue',          section: 'Business' },
       { id: 'engagement',    icon: 'chart',       label: 'Engagement',       section: 'Business' },
-      { id: 'comms',         icon: 'message',     label: 'Communications',   section: 'Trust & Safety', sub: commsSub('superadmin') },
+      ...commsFlat('Trust & Safety', COMMS_OWNER),
       { id: 'security',      icon: 'alert',       label: 'Security & Audit', section: 'Trust & Safety' },
       { id: 'system',        icon: 'zap',         label: 'System Health',    section: 'System' },
       { id: 'controls',      icon: 'settings',    label: 'Platform Controls',section: 'System' },
@@ -410,38 +449,42 @@ const NAV_CONFIG = {
     items: [
       { id: 'dashboard', icon: 'dashboard', label: 'Dashboard' },
       // ── CENTRE tier — scoped to the active centre; visible to any centre admin.
-      { id: 'students',  icon: 'users',    label: 'Students', section: 'People' },
-      // Staff grouping — operational staff admin (Teachers + Timesheets) under one
-      // dropdown. Subs keep their own page ids (`teachers`, `timesheets:review`) which
-      // don't share the parent id, so the sidebar/breadcrumb resolve a group by
-      // matching the active page against its subs (see subMatches in Sidebar).
-      { id: 'staff', icon: 'users', label: 'Staff', section: 'People', sub: [
-        { id: 'teachers',          label: 'Teachers',   icon: 'teacher' },
-        { id: 'team',              label: 'Roles & access', icon: 'shield' },
-        { id: 'timesheets:review', label: 'Timesheets', icon: 'clock' },
-      ] },
+      { id: 'students',  icon: 'graduation', label: 'Students', section: 'People' },
+      // "Staff" is the Teachers page (id `teachers`), so `teacher_profile` /
+      // `teachers_add` fold onto it via the `<parent>s` rule in navParentId.
+      // Roles & access moved to the Account section; Timesheets to Operations.
+      { id: 'teachers',  icon: 'users',    label: 'Staff', section: 'People' },
       { id: 'people',    icon: 'send',     label: 'People & Invites', section: 'People' },
-      { id: 'classes',   icon: 'book',     label: 'Classes', section: 'Academic', sub: [
-        { id: 'classes:classes',  label: 'Classes',  icon: 'grid' },
-        { id: 'classes:subjects', label: 'Subjects', icon: 'book' },
-      ] },
-      { id: 'resources', icon: 'folder',   label: 'Resources', section: 'Academic' },
-      { id: 'schedule',  icon: 'calendar', label: 'Schedule', section: 'Academic' },
+      // Classes/Subjects are two sibling items rather than one dropdown. Subjects
+      // routes on its own `subjects` page id (AdminPages hands it to
+      // AdminClassesPage with section="subjects"), which also lets `subject_detail`
+      // fold onto it.
+      { id: 'classes',   icon: 'presentation', label: 'Classes', section: 'Academic' },
+      { id: 'subjects',  icon: 'book',     label: 'Subjects', section: 'Academic' },
+      { id: 'schedule',  icon: 'calendar', label: 'Timetable', section: 'Academic' },
       { id: 'attendance', icon: 'check',   label: 'Attendance', section: 'Academic' },
+      { id: 'resources', icon: 'folder',   label: 'Resources', section: 'Academic' },
       { id: 'invoices',  icon: 'invoice',  label: 'Invoices', section: 'Operations' },
+      { id: 'timesheets', icon: 'clock',   label: 'Timesheets', section: 'Operations' },
       { id: 'reports',   icon: 'chart',    label: 'Reports', section: 'Operations', sub: [
         { id: 'reports:overview', label: 'Overview',    icon: 'dashboard' },
         { id: 'reports:browse',   label: 'All Reports', icon: 'list' },
         { id: 'reports:generate', label: 'Generate',    icon: 'plus' },
         { id: 'reports:settings', label: 'Settings',    icon: 'settings' },
       ] },
-      { id: 'comms',     icon: 'message',  label: 'Communications', sub: commsSub('admin') },
+      // Safeguarding is a Communications *section* by route (comms:safeguarding)
+      // but an Operations concern by product grouping — the DSL oversight desk.
+      { id: 'comms:safeguarding', icon: 'shield', label: 'Safeguarding', section: 'Operations' },
+      ...commsFlat('Communication'),
       // ── ACCOUNT tier (§3) — the account-wide surface. Rendered ONLY for the
       //    single account owner (isAccountOwner); a plain centre admin sees none
       //    of it. These are the only screens where data crosses centre lines
       //    (centres CRUD, the pooled plan/seat/storage entitlement). Kept at the
       //    bottom of the list so day-to-day centre operations lead.
+      //    Roles & access is the exception: it grants/revokes memberships at the
+      //    active centre, so every centre admin keeps it (no `tier: 'account'`).
       { id: 'centres',   icon: 'grid',     label: 'Centres',         section: 'Account', tier: 'account' },
+      { id: 'team',      icon: 'lock_keyhole', label: 'Roles & access',  section: 'Account' },
       { id: 'plans',     icon: 'invoice',  label: 'Plans & Billing', section: 'Account', tier: 'account' },
       { id: 'storage',   icon: 'cloud',    label: 'Storage',         section: 'Account', tier: 'account' },
     ],
@@ -452,21 +495,26 @@ const NAV_CONFIG = {
     color: '#0891B2',
     items: [
       { id: 'dashboard',       icon: 'dashboard', label: 'Dashboard' },
-      { id: 'classes',         icon: 'book',      label: 'My Classes', section: 'Teaching' },
-      { id: 'students',        icon: 'users',     label: 'My Students', section: 'Teaching' },
+      // Teaching — what the teacher delivers. Timetable leads: it's the "where do
+      // I need to be" screen most sessions start from.
       { id: 'timetable',       icon: 'calendar',  label: 'Timetable', section: 'Teaching' },
+      { id: 'classes',         icon: 'presentation', label: 'My Classes', section: 'Teaching' },
+      { id: 'students',        icon: 'graduation',   label: 'My Students', section: 'Teaching' },
       { id: 'lesson_planner',  icon: 'edit',      label: 'Lesson Planner', section: 'Teaching' },
       { id: 'resources',       icon: 'folder',    label: 'Resources', section: 'Teaching' },
-      { id: 'homework',        icon: 'clip',      label: 'Homework', section: 'Work', sub: [
-        { id: 'homework:assignments', label: 'Assignments', icon: 'clip' },
+      // Student work — everything recorded *about* a cohort after teaching it.
+      // (The old Work/Progress split put attendance and progress in separate
+      // groups even though they're the same follow-up loop.)
+      { id: 'attendance',      icon: 'check',     label: 'Attendance', section: 'Student work' },
+      { id: 'homework',        icon: 'notebook_pen', label: 'Homework', section: 'Student work', sub: [
+        { id: 'homework:assignments', label: 'Assignments', icon: 'notebook_pen' },
         { id: 'homework:analytics',   label: 'Analytics',   icon: 'chart' },
       ] },
-      { id: 'attendance',      icon: 'check',     label: 'Attendance', section: 'Work' },
-      { id: 'timesheet',       icon: 'clock',     label: 'Timesheet', section: 'Work' },
-      { id: 'progress',        icon: 'chart',     label: 'Progress', section: 'Progress' },
-      { id: 'tracking',        icon: 'star',      label: 'Tracking', section: 'Progress' },
-      { id: 'reports',         icon: 'file',      label: 'Reports', section: 'Progress' },
-      { id: 'comms',           icon: 'message',   label: 'Communications', sub: commsSub('teacher') },
+      { id: 'progress',        icon: 'chart',     label: 'Progress', section: 'Student work' },
+      { id: 'tracking',        icon: 'star',      label: 'Tracking', section: 'Student work' },
+      { id: 'reports',         icon: 'file',      label: 'Reports', section: 'Student work' },
+      { id: 'timesheet',       icon: 'clock',     label: 'Timesheets', section: 'Student work' },
+      ...commsFlat('Communication'),
     ],
     bottom: [{ id: 'settings', icon: 'settings', label: 'Settings', chevron: true }],
   },
@@ -475,16 +523,16 @@ const NAV_CONFIG = {
     color: '#43b190',
     items: [
       { id: 'dashboard', icon: 'home',      label: 'Overview'   },
-      { id: 'classes',   icon: 'book',      label: 'My Classes' },
-      { id: 'homework',  icon: 'clip',      label: 'Homework', sub: [
-        { id: 'homework:assignments', label: 'Assignments', icon: 'clip' },
+      { id: 'classes',   icon: 'presentation', label: 'My Classes' },
+      { id: 'homework',  icon: 'notebook_pen', label: 'Homework', sub: [
+        { id: 'homework:assignments', label: 'Assignments', icon: 'notebook_pen' },
         { id: 'homework:submitted',   label: 'Submitted',   icon: 'upload' },
         { id: 'homework:results',     label: 'Results',     icon: 'eye' },
       ] },
       { id: 'progress',  icon: 'chart',     label: 'My Progress'},
       { id: 'sessions',  icon: 'calendar',  label: 'Sessions'   },
       { id: 'reports',   icon: 'file',      label: 'Reports'},
-      { id: 'comms',     icon: 'message',   label: 'Communications', sub: commsSub('student') },
+      ...commsFlat(),
     ],
     bottom: [{ id: 'settings', icon: 'settings', label: 'Settings', chevron: true }],
   },
@@ -506,7 +554,9 @@ const SIDE_HOVER = 'rgba(17,24,39,0.045)';
 // opens a dropdown to switch between them or start a new one. Module-scoped (not
 // nested in Sidebar) so its open/dropdown state survives parent re-renders. The
 // open/close + click-away mirror NotificationBell (Communications.jsx).
-const CentreSwitcher = ({ collapsed, centre, centres, onSwitchCentre, onAddCentre, roleLabel, planUsage, dropUp }) => {
+// `readOnly` renders the same tile as a static, non-interactive card — students
+// belong to exactly one centre, so there is nothing to switch to or open.
+const CentreSwitcher = ({ collapsed, centre, centres, onSwitchCentre, onAddCentre, roleLabel, planUsage, dropUp, readOnly = false }) => {
   const [open, setOpen] = React.useState(false);
   const ref = React.useRef(null);
   React.useEffect(() => {
@@ -527,6 +577,30 @@ const CentreSwitcher = ({ collapsed, centre, centres, onSwitchCentre, onAddCentr
       <span style={{ color: '#fff', fontSize: 14, fontWeight: 800, letterSpacing: '-0.5px' }}>{(name || 'C').slice(0, 1).toUpperCase()}</span>
     </div>
   );
+
+  // Single-centre identity card (students): same visual tile, but a plain div —
+  // no hover wash, no chevron, no dropdown, and it isn't focusable.
+  if (readOnly) {
+    return (
+      <div
+        title={collapsed ? centre.name : undefined}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 10, width: '100%',
+          justifyContent: collapsed ? 'center' : 'flex-start',
+          background: DS.surface, border: `1px solid ${DS.border}`,
+          borderRadius: 10, padding: collapsed ? '7px 0' : '7px 8px',
+          cursor: 'default', textAlign: 'left',
+        }}>
+        {tile(centre.name, true)}
+        {!collapsed && (
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: DS.text, letterSpacing: '-0.2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{centre.name}</div>
+            <div style={{ fontSize: 10.5, color: DS.muted, marginTop: 1 }}>{roleLabel}</div>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div ref={ref} style={{ position: 'relative' }}>
@@ -635,8 +709,8 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
   // (e.g. reports:browse) OR a "whole page" sub (e.g. Teachers) whose page-parent
   // folds onto it — `teacher_profile` → `teacher` → `teachers`. Compound sub ids
   // contain ':' so the folding clauses can never false-match them.
-  // The last clause folds a drill-in page onto a compound sub: `timesheet_detail`
-  // → `timesheet` → `timesheets` matches the Staff sub `timesheets:review`.
+  // The last clause folds a drill-in page onto a compound sub: `report_detail`
+  // → `report` → `reports` matches the Reports sub `reports:browse`.
   const subMatches = (sub) => active === sub.id || navParentId(active) === sub.id || navParentId(active) + 's' === sub.id || navParentId(active) + 's' === sub.id.split(':')[0];
   const itemIsActive = (item) => {
     const base = navParentId(active);
@@ -814,8 +888,11 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
   };
 
   // Centre switcher (now docked at the bottom of the bar) shows for staff
-  // identities whose account resolves to one or more centres.
-  const switcherOn = !!(centre && centres && centres.length);
+  // identities whose account resolves to one or more centres. A student is
+  // linked to exactly one centre, so theirs renders read-only (no `centres`
+  // list needed) — it names the centre but doesn't open anything.
+  const centreReadOnly = role === 'student';
+  const switcherOn = !!(centre && (centreReadOnly || (centres && centres.length)));
 
   return (
     <div style={{
@@ -863,7 +940,14 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
           emitted before the first item of each contiguous `section` run; items
           with no section (and the whole student nav) render flat. Labels are
           hidden in the icon-only collapsed bar. */}
-      <nav style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2, overflow: collapsed ? 'visible' : 'auto' }}>
+      <nav style={{
+        flex: 1, display: 'flex', flexDirection: 'column', gap: 2,
+        // Collapsed the bar is icon-only and flyouts must escape it, so nothing clips.
+        // Expanded it scrolls vertically only — a stray horizontal bar under a long
+        // label would sit right on the content edge.
+        overflowY: collapsed ? 'visible' : 'auto',
+        overflowX: collapsed ? 'visible' : 'hidden',
+      }}>
         {navItems.map((item, i) => {
           const prev = navItems[i - 1];
           const showLabel = !collapsed && item.section && (!prev || prev.section !== item.section);
@@ -920,16 +1004,35 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
           })()}
 
           {/* Tuition-centre switcher — docked at the foot of the bar; its menu
-              opens upward (dropUp) so it doesn't run off the bottom of the screen. */}
+              opens upward (dropUp) so it doesn't run off the bottom of the screen.
+              For students it's a static card naming their one centre. */}
           {switcherOn && (
             <CentreSwitcher collapsed={collapsed} centre={centre} centres={centres} planUsage={planUsage}
-              onSwitchCentre={onSwitchCentre} onAddCentre={onAddCentre}
-              roleLabel={role === 'admin' && accountOwner ? 'Account Owner' : cfg.label} dropUp />
+              onSwitchCentre={onSwitchCentre} onAddCentre={onAddCentre} readOnly={centreReadOnly}
+              roleLabel={centreReadOnly ? 'Your tuition centre' : (role === 'admin' && accountOwner ? 'Account Owner' : cfg.label)} dropUp />
           )}
         </div>
       )}
     </div>
   );
+};
+
+// ─── Page ──────────────────────────────────────────────────────────────────────
+// The one container that defines the main content area — same width, gutter and
+// vertical rhythm on every screen, capped and centred on large monitors. Every
+// routed page's root element should be a <Page>; nothing else should set root
+// padding or `maxWidth … margin:'0 auto'`. Variants:
+//
+//   <Page>         standard — LAYOUT.max (1600), full gutter
+//   <Page narrow>  forms, wizards, editors — LAYOUT.narrow (900)
+//   <Page flush>   page owns its own viewport (full-height split panes, print
+//                  sheets) — capped and centred, but no gutter or rhythm
+//
+// Props are read off `props` rather than destructured with a rest element:
+// Babel-standalone silently mis-compiles object rest in this file's pipeline.
+const Page = (props) => {
+  const style = { ...pageFrame({ narrow: !!props.narrow, flush: !!props.flush }), ...(props.style || {}) };
+  return <div className={props.className} style={style}>{props.children}</div>;
 };
 
 // ─── Page Header ───────────────────────────────────────────────────────────────
@@ -2247,7 +2350,8 @@ const Combobox = ({
 
 // ─── Export ────────────────────────────────────────────────────────────────────
 Object.assign(window, {
-  DS, Icon, Badge, StatusPill, Avatar, KPICard, StatCard, shadeColor, Sidebar, PageHeader, Btn, Card,
+  DS, LAYOUT, pageFrame, Page,
+  Icon, Badge, StatusPill, Avatar, KPICard, StatCard, shadeColor, Sidebar, PageHeader, Btn, Card,
   HERO_TXT, heroSurface, HeroSolidBtn, HeroGhostBtn, HoverRow,
   Table, TableRow, RowActionsMenu, Checkbox, Sparkline, LineChart, BarChart, ScorePill, Divider, NAV_CONFIG, navParentId,
   Modal, Field, Input, Textarea, Select, Segmented, TabNav, TabBtn, SearchInput, EmptyState,

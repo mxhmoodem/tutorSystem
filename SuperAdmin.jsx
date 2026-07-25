@@ -337,7 +337,7 @@ const SuperAdminDashboard = () => {
   };
 
   return (
-    <div style={{ padding: '32px', overflow: 'auto' }}>
+    <div style={{ ...pageFrame(), overflow: 'auto' }}>
       <PageHeader
         title="Platform Overview"
         subtitle={`Thursday, 2 July 2026 · ${BRAND.name} Platform`}
@@ -587,7 +587,7 @@ const SACentresPage = () => {
   };
 
   return (
-    <div style={{ padding: '32px' }}>
+    <div style={pageFrame()}>
       <PageHeader
         title="Centres"
         subtitle={`${accounts.length} accounts · ${totalCentres} centres · ${atRiskCount} at risk`}
@@ -765,11 +765,14 @@ const SAConfirm = ({ confirm, onClose }) => (
 
 // Onboard-account wizard (plan · trial · seats · currency), defaults from
 // Settings → Platform Defaults (SETTINGS_STORE) so it matches the tenant path.
+// Trial length/on-off default to the GLOBAL free trial (Platform Controls) — hand-
+// onboarded accounts get the same offer as a self-serve signup unless overridden here.
 const OnboardAccountWizard = ({ open, plans, onClose, onCreate }) => {
-  const defaults = (typeof window.saPlatformDefaults === 'function') ? window.saPlatformDefaults() : { planId: 'starter', trialDays: 14, currency: 'GBP' };
+  const defaults = (typeof window.saPlatformDefaults === 'function') ? window.saPlatformDefaults() : { planId: 'starter', trialDays: 14, trialEnabled: true, currency: 'GBP' };
+  const blankAcc = () => ({ name: '', owner: '', ownerEmail: '', country: 'UK', planId: defaults.planId, trial: defaults.trialEnabled !== false, trialDays: defaults.trialDays, currency: defaults.currency });
   const [step, setStep] = React.useState(0);
-  const [d, setD] = React.useState({ name: '', owner: '', ownerEmail: '', country: 'UK', planId: defaults.planId, trial: true, trialDays: defaults.trialDays, currency: defaults.currency });
-  React.useEffect(() => { if (open) { setStep(0); setD({ name: '', owner: '', ownerEmail: '', country: 'UK', planId: defaults.planId, trial: true, trialDays: defaults.trialDays, currency: defaults.currency }); } }, [open]);
+  const [d, setD] = React.useState(blankAcc);
+  React.useEffect(() => { if (open) { setStep(0); setD(blankAcc()); } }, [open]);
   const upd = (k, v) => setD(s => ({ ...s, [k]: v }));
   const canNext = step === 0 ? (d.name.trim() && d.owner.trim()) : true;
 
@@ -808,12 +811,15 @@ const OnboardAccountWizard = ({ open, plans, onClose, onCreate }) => {
           <Field label="Plan" hint="Seats & centre limit come from the plan catalog.">
             <Select value={d.planId} onChange={e => upd('planId', e.target.value)}>{plans.map(p => <option key={p.id} value={p.id}>{p.name} — £{p.price}/mo · {p.studentSeats} students · {p.maxCentres} centre{p.maxCentres !== 1 ? 's' : ''}</option>)}</Select>
           </Field>
-          <Field label="Start as trial">
+          <Field label="Start as trial" hint={defaults.trialEnabled === false
+            ? 'The global free trial is off — this account would be billed immediately.'
+            : `Defaults to the global ${defaults.trialDays}-day free trial (Platform Controls).`}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <button onClick={() => upd('trial', !d.trial)} style={{ width: 40, height: 22, borderRadius: 11, border: 'none', background: d.trial ? DS.accent : DS.borderDark, position: 'relative', cursor: 'pointer' }}>
                 <span style={{ position: 'absolute', top: 2, left: d.trial ? 20 : 2, width: 18, height: 18, borderRadius: '50%', background: '#fff', transition: 'left .15s' }} />
               </button>
-              <span style={{ fontSize: 13, color: DS.sub }}>{d.trial ? `${d.trialDays}-day trial, then billed` : 'Bill immediately'}</span>
+              <Input type="number" min="1" max="365" value={d.trialDays} onChange={e => upd('trialDays', Math.max(1, Math.min(365, +e.target.value || 1)))} disabled={!d.trial} style={{ width: 74 }} />
+              <span style={{ fontSize: 13, color: DS.sub }}>{d.trial ? `days free, then billed` : 'Bill immediately'}</span>
             </div>
           </Field>
         </div>
@@ -879,7 +885,7 @@ const SAUsersPage = () => {
   ];
 
   return (
-    <div style={{ padding: '32px' }}>
+    <div style={pageFrame()}>
       <PageHeader
         title="Users & Accounts"
         subtitle="Across all accounts on the platform"
@@ -1072,7 +1078,7 @@ const SARevenuePage = () => {
   const dun = (row, action, note) => { setFailed(list => list.map(f => f.accountId === row.accountId ? { ...f, state: action } : f).filter(f => action !== 'resolved' || f.accountId !== row.accountId)); saAudit(note); setFlash(note.action); };
 
   return (
-    <div style={{ padding: '32px' }}>
+    <div style={pageFrame()}>
       <PageHeader
         title="Revenue & Subscriptions"
         subtitle="Monetisation across all accounts"
@@ -1240,7 +1246,7 @@ const SAEngagementPage = () => {
   const SAMPLE = <Badge variant="warning">Sample data — needs analytics events (phase 2)</Badge>;
 
   return (
-    <div style={{ padding: '32px' }}>
+    <div style={pageFrame()}>
       <PageHeader
         title="Platform Engagement"
         subtitle={`How people actually use ${BRAND.name}`}
@@ -1400,7 +1406,7 @@ const SASystemPage = () => {
   const retryJob = (q) => { setJobs(list => list.map(j => j.queue === q ? { ...j, failed: 0, pending: j.pending + 0 } : j)); saAudit({ action: `Retried failed jobs in "${q}" queue`, type: 'system', target: q }); setFlash(`${q} — failed jobs retried`); };
 
   return (
-    <div style={{ padding: '32px' }}>
+    <div style={pageFrame()}>
       <PageHeader
         title="System Health"
         subtitle="Real-time platform status"
@@ -1503,7 +1509,7 @@ const SACommsPage = ({ embedded }) => {
   const setStatus = (id, status, verb) => { setTickets(list => list.map(t => t.id === id ? { ...t, status } : t)); saAudit({ action: `${verb} support ticket ${id}`, type: 'support', target: id }); setFlash(`${id} ${verb.toLowerCase()}`); };
 
   return (
-    <div style={{ padding: embedded ? 0 : '32px' }}>
+    <div style={embedded ? undefined : pageFrame()}>
       {!embedded && (
         <PageHeader title="Support" subtitle="Support tickets and email activity across all accounts" />
       )}
@@ -1605,7 +1611,7 @@ const SASecurityPage = () => {
   const openDeadlines = dsar.filter(d => d.status !== 'fulfilled').length;
 
   return (
-    <div style={{ padding: '32px' }}>
+    <div style={pageFrame()}>
       <PageHeader
         title="Security & Audit"
         subtitle="Compliance, access controls, and the audit trail"
@@ -1739,9 +1745,11 @@ const SAControlsPage = () => {
 
   const plansStore = usePlansStore();
   const codesStore = usePlanCodesStore();
+  const trialStore = usePlatformTrialStore();
   const [planModal, setPlanModal] = React.useState({ open: false, plan: null });
   const [deletePlanTarget, setDeletePlanTarget] = React.useState(null);
   const [codeModal, setCodeModal] = React.useState({ open: false, code: null });
+  const [trialModal, setTrialModal] = React.useState(false);
   const [copied, setCopied] = React.useState('');
   const copyCode = c => { try { navigator.clipboard.writeText(c); } catch (e) {} setCopied(c); setTimeout(() => setCopied(''), 1400); };
 
@@ -1754,7 +1762,7 @@ const SAControlsPage = () => {
   );
 
   return (
-    <div style={{ padding: '32px' }}>
+    <div style={pageFrame()}>
       <PageHeader title="Platform Controls" subtitle="Feature flags, plans, roles, and global settings"
         actions={[<Btn key="save" variant="primary" icon="check" small onClick={() => { saAudit({ action: 'Saved platform control changes', type: 'system', target: 'Platform Controls' }); setFlash('Changes saved'); }}>Save Changes</Btn>]} />
 
@@ -1835,6 +1843,61 @@ const SAControlsPage = () => {
         </div>
       </Card>
 
+      {/* Global free trial — the platform-wide offer every new centre gets. Distinct
+          from the override codes below (those are handed to ONE centre by hand). */}
+      {(() => {
+        const t = trialStore.trial;
+        const pinned = t.planId ? getPlan(t.planId) : null;
+        const endAction = planTrialEndAction(t.onEnd);
+        const facts = [
+          { label: 'Trial length', value: t.enabled ? `${t.days} day${t.days === 1 ? '' : 's'}` : '—' },
+          { label: 'Runs on', value: pinned ? pinned.name : 'Plan they choose' },
+          { label: 'Card up front', value: t.requireCard ? 'Required' : 'Not required' },
+          { label: 'When it ends', value: endAction.label },
+        ];
+        return (
+          <Card title="Global free trial" subtitle="Applied automatically to every new centre at signup — no code needed"
+            actions={[<Btn key="edit" variant="ghost" icon="edit" small onClick={() => setTrialModal(true)}>Edit trial</Btn>]}
+            style={{ marginBottom: 20 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 20, padding: '18px 20px', background: t.enabled ? DS.accent + '08' : 'transparent', borderBottom: `1px solid ${DS.border}` }}>
+              <div style={{ minWidth: 132 }}>
+                <div style={{ fontSize: 30, fontWeight: 800, color: t.enabled ? DS.text : DS.faint, letterSpacing: '-0.6px', lineHeight: 1.1 }}>
+                  {t.enabled ? t.days : 'Off'}
+                  {t.enabled && <span style={{ fontSize: 14, fontWeight: 600, color: DS.muted }}> day{t.days === 1 ? '' : 's'}</span>}
+                </div>
+                <div style={{ fontSize: 12, color: DS.muted, marginTop: 3 }}>
+                  {t.enabled ? 'free, then billed' : 'billed from day one'}
+                </div>
+              </div>
+              <div style={{ flex: 1, fontSize: 13, color: DS.sub, lineHeight: 1.6 }}>
+                {t.enabled
+                  ? <>New centres see “<b>{planTrialPitch(t)}</b>” at signup
+                    {pinned ? <>, trialling the <b>{pinned.name}</b> plan</> : <>, on whichever plan they pick</>}.
+                    Day {t.days + 1}: {endAction.desc}</>
+                  : <>No trial is offered. Signup asks for payment straight away — issue an override code below to give an individual centre free time.</>}
+                {t.updatedAt && <div style={{ fontSize: 11, color: DS.faint, marginTop: 4 }}>Last changed {new Date(t.updatedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</div>}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+                <Badge variant={t.enabled ? 'success' : 'default'}>{t.enabled ? 'Live' : 'Disabled'}</Badge>
+                <Switch on={!!t.enabled} onChange={() => {
+                  const next = trialStore.updateTrial({ enabled: !t.enabled });
+                  saAudit({ action: next.enabled ? `Enabled the global ${next.days}-day free trial` : 'Disabled the global free trial', type: 'billing', target: 'Global trial' });
+                  setFlash(next.enabled ? `Global free trial on — ${next.days} days` : 'Global free trial off');
+                }} />
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 0 }}>
+              {facts.map((f, i) => (
+                <div key={f.label} style={{ padding: '14px 20px', borderLeft: i ? `1px solid ${DS.border}` : 'none', opacity: t.enabled ? 1 : 0.6 }}>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, color: DS.faint, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{f.label}</div>
+                  <div style={{ fontSize: 13, color: DS.text, marginTop: 4 }}>{f.value}</div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        );
+      })()}
+
       {/* Promo & override codes — with guardrails */}
       <Card title="Promo & override codes" subtitle="Give a centre a free trial or discounted price. Every redemption is audited."
         actions={[<Btn key="add" variant="ghost" icon="plus" small onClick={() => setCodeModal({ open: true, code: null })}>New code</Btn>]} style={{ marginBottom: 20 }}>
@@ -1885,6 +1948,14 @@ const SAControlsPage = () => {
           This permanently removes the <b>{deletePlanTarget ? deletePlanTarget.name : ''}</b> plan from the catalogue platform-wide. Accounts already on this plan keep their current price, but it can no longer be selected. This can’t be undone — to hide it instead, use <b>Archive</b>.
         </p>
       </Modal>
+
+      <PlanTrialModal open={trialModal} trial={trialStore.trial} plans={plansStore.plans.filter(p => !p.archived)}
+        onClose={() => setTrialModal(false)}
+        onSave={draft => {
+          const next = trialStore.updateTrial(draft);
+          saAudit({ action: next.enabled ? `Set the global free trial to ${next.days} days` : 'Disabled the global free trial', type: 'billing', target: 'Global trial' });
+          setFlash(next.enabled ? `Global free trial saved — ${next.days} days` : 'Global free trial off');
+        }} />
 
       <PlanCodeModal open={codeModal.open} code={codeModal.code} plans={plansStore.plans} onClose={() => setCodeModal({ open: false, code: null })}
         onSave={draft => {

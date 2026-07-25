@@ -176,9 +176,8 @@ const StaffLogin = ({ mode, setMode, store, onb }) => {
         <Btn variant="primary" icon="chevron_r" style={{ width: '100%', justifyContent: 'center' }} onClick={submit}>
           {method === 'password' ? 'Sign in' : method === 'otp' ? 'Send me a code' : 'Email me a link'}
         </Btn>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ textAlign: 'center' }}>
           <AuthLink onClick={() => window.__navigate('signup')}>Create your centre</AuthLink>
-          <AuthLink onClick={() => window.__navigate('landing')}>Back to site</AuthLink>
         </div>
       </div>}>
       <AuthToggle mode={mode} setMode={setMode} />
@@ -315,7 +314,6 @@ const StudentLogin = ({ mode, setMode, store, onb }) => {
     <SetupShell icon="graduation" accent={DS.accent} title="Student sign in" subtitle="Find your centre, then your username"
       footer={<div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <Btn variant="primary" icon="chevron_r" style={{ width: '100%', justifyContent: 'center' }} onClick={identify}>Continue</Btn>
-        <div style={{ textAlign: 'center' }}><AuthLink onClick={() => window.__navigate('landing')}>Back to site</AuthLink></div>
       </div>}>
       <AuthToggle mode={mode} setMode={setMode} />
       {useRemembered ? (
@@ -375,9 +373,14 @@ const SIGNUP_PLANS = [
 
 const SignupPage = () => {
   const onb = useOnboardingStore();
+  // The global free trial the platform owner set in Platform Controls (Plans.jsx).
+  // Read live so the promise made here is never stale, and stamped onto the new
+  // subscription at submit — Centres.jsx loads after this file, hence window.*.
+  const trial = window.getPlatformTrial ? window.getPlatformTrial() : null;
+  const sub = window.useSubscriptionStore ? window.useSubscriptionStore() : null;
   const [form, setForm] = React.useState({ centre: '', name: '', email: '', pw: '', pw2: '', plan: 'Growth' });
   const [touched, setTouched] = React.useState(false);
-  const [done, setDone] = React.useState(null); // { code, name }
+  const [done, setDone] = React.useState(null); // { code, name, trial }
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
   const errs = {
@@ -395,18 +398,32 @@ const SignupPage = () => {
     const code = genCentreCode(form.centre);
     const plan = SIGNUP_PLANS.find(p => p.id === form.plan);
     onb.recordSignup({ name: form.centre.trim(), code, plan: { name: plan.id, teacherSeats: plan.teacherSeats, studentSeats: plan.studentSeats }, adminName: form.name.trim(), adminEmail: form.email.trim() });
-    setDone({ code, name: form.centre.trim() });
+    // Start the global free trial on the new subscription (no-op when it's switched
+    // off — the centre is then billed from day one). Catalogue ids are lowercase.
+    const stamp = sub && sub.startTrial ? sub.startTrial(plan.id.toLowerCase()) : null;
+    setDone({ code, name: form.centre.trim(), trial: stamp });
   };
+  const fmtDay = d => d ? new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
 
   // ── Success: surface the centre code + hand off to the setup checklist ──
   if (done) {
     return (
-      <SetupShell icon="check" accent={DS.success} title="Your centre is live 🎉" subtitle={`${done.name} is ready to set up`}
+      <SetupShell icon="check" accent={DS.success} title="Your centre is live 🎉"
+        subtitle={done.trial ? `${done.name} — ${done.trial.days}-day free trial started` : `${done.name} is ready to set up`}
         footer={<div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <Btn variant="primary" icon="chevron_r" style={{ width: '100%', justifyContent: 'center' }} onClick={() => window.__navigate('admin', 'setup')}>Set up your centre</Btn>
           <div style={{ textAlign: 'center' }}><AuthLink onClick={() => window.__navigate('login')}>Go to sign in</AuthLink></div>
         </div>}>
         <div style={{ padding: '4px 0 2px' }}>
+          {done.trial && (
+            <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start', padding: '10px 12px', background: DS.successBg, border: `1px solid ${DS.successBorder}`, borderRadius: 9, marginBottom: 16 }}>
+              <Icon name="zap" size={15} color={DS.success} />
+              <span style={{ fontSize: 12, color: DS.sub, lineHeight: 1.5 }}>
+                Your <b>{done.trial.days}-day free trial</b> runs until <b>{fmtDay(done.trial.endsAt)}</b>
+                {done.trial.requireCard ? '' : ' — no card needed'}. Manage it any time in Settings → Plans & Billing.
+              </span>
+            </div>
+          )}
           <div style={{ fontSize: 10.5, fontWeight: 700, color: DS.faint, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Your centre code</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', background: `linear-gradient(135deg, ${DS.accent}12, transparent)`, border: `1px solid ${DS.accentBorder}`, borderRadius: 12, marginBottom: 18 }}>
             <span style={{ flex: 1, fontFamily: "'JetBrains Mono', monospace", fontSize: 26, fontWeight: 700, letterSpacing: '2px', color: DS.text }}>{done.code}</span>
@@ -428,13 +445,15 @@ const SignupPage = () => {
   }
 
   return (
-    <SetupShell icon="zap" accent={DS.accent} title="Create your centre" subtitle="Start your 14-day free trial — no card required"
+    <SetupShell icon="zap" accent={DS.accent} title="Create your centre"
+      subtitle={trial && trial.enabled
+        ? `Start your ${window.planTrialPitch ? window.planTrialPitch(trial) : trial.days + '-day free trial'}`
+        : 'Up and running in a couple of minutes'}
       badge={<div style={{ marginBottom: 4 }}><Badge variant="success">Centre owner · admin</Badge></div>}
       footer={<div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <Btn variant="primary" icon="check" style={{ width: '100%', justifyContent: 'center' }} onClick={submit}>Create centre</Btn>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ textAlign: 'center' }}>
           <span style={{ fontSize: 12.5, color: DS.muted }}>Already have an account? <AuthLink onClick={() => window.__navigate('login')}>Sign in</AuthLink></span>
-          <AuthLink onClick={() => window.__navigate('landing')}>Back to site</AuthLink>
         </div>
       </div>}>
       <div style={{ marginBottom: 16, padding: '10px 12px', background: DS.infoBg, border: '1px solid #BAE6FD', borderRadius: 9, display: 'flex', gap: 9, alignItems: 'flex-start' }}>
@@ -458,7 +477,11 @@ const SignupPage = () => {
           <Input type="password" value={form.pw2} onChange={e => set('pw2', e.target.value)} invalid={touched && !!errs.pw2} placeholder="Re-enter" />
         </Field>
       </div>
-      <Field label="Plan" hint="You can change this anytime — seats are demo caps">
+      <Field label="Plan" hint={trial && trial.enabled
+        ? (trial.planId
+          ? `Free for your first ${trial.days} days on the trial plan — switch any time`
+          : `Free for your first ${trial.days} days — you can change plan any time`)
+        : 'You can change this anytime — seats are demo caps'}>
         <Select value={form.plan} onChange={e => set('plan', e.target.value)}>
           {SIGNUP_PLANS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
         </Select>
