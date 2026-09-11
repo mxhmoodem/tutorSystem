@@ -1245,13 +1245,14 @@ const AdminInvoicesPage = () => {
         <Btn key="new" variant="primary" icon="plus" small onClick={() => setShowNew(true)}>New invoice</Btn>,
       ]} />
 
-      {/* Dashboard cards — all live off the schedule, never stored flags */}
-      <div style={{ display:'flex', gap:16, marginBottom:24, flexWrap:'wrap' }}>
-        <KPICard label="Outstanding"     value={invMoney(agg.outstanding)}   sub={`${nonPaidCount} open invoice${nonPaidCount === 1 ? '' : 's'}`} icon="invoice" iconBg={DS.warningBg} accent={DS.warning} />
-        <KPICard label="Overdue"         value={invMoney(agg.overdue)}       sub={`${counts.overdue} invoice${counts.overdue === 1 ? '' : 's'}`} icon="alert" iconBg={DS.dangerBg} accent={DS.danger} trendDir={agg.overdue ? 'down' : undefined} trend={agg.overdue ? 'Action needed' : undefined} />
-        <KPICard label="Paid this month" value={invMoney(agg.paidThisMonth)}  sub={`${counts.paid} fully paid`} icon="check" iconBg={DS.successBg} accent={DS.success} trendDir="up" trend="Collected" />
-        <KPICard label="Total billed"    value={invMoney(agg.billed)}         sub="This cycle" icon="chart" iconBg={DS.accentLight} accent={DS.accent} />
-      </div>
+      {/* Headline figures — all live off the schedule, never stored flags. Colour
+          appears only on overdue, the one number that means something is wrong. */}
+      <StatBand style={{ marginBottom: 24 }} stats={[
+        { label: 'Outstanding',     value: invMoney(agg.outstanding),  sub: `${nonPaidCount} open invoice${nonPaidCount === 1 ? '' : 's'}` },
+        { label: 'Overdue',         value: invMoney(agg.overdue),      sub: `${counts.overdue} invoice${counts.overdue === 1 ? '' : 's'}`, tone: agg.overdue ? DS.danger : undefined },
+        { label: 'Paid this month', value: invMoney(agg.paidThisMonth), sub: `${counts.paid} fully paid` },
+        { label: 'Total billed',    value: invMoney(agg.billed),        sub: 'this cycle' },
+      ]} />
 
       <InvAnalyticsStrip agg={agg} aging={aging} />
 

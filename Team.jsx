@@ -250,12 +250,11 @@ const AdminTeamPage = () => {
         </div>
       )}
 
-      {/* Summary */}
-      <div style={{ display: 'flex', gap: 16, marginBottom: 22, flexWrap: 'wrap' }}>
-        <KPICard label="Staff" value={members.length} sub={`at ${centre.name}`} icon="users" iconBg={DS.accentLight} accent={DS.accent} />
-        <KPICard label="Admins" value={admins.length} sub="full centre access" icon="shield" iconBg={DS.accentLight} accent={DS.accent} />
-        <KPICard label="Teachers" value={teacherCount} sub="teaching access" icon="teacher" iconBg={DS.infoBg} accent={DS.info} />
-      </div>
+      <StatBand style={{ marginBottom: 22 }} stats={[
+        { label: 'Staff',    value: members.length,  sub: `at ${centre.name}` },
+        { label: 'Admins',   value: admins.length,   sub: 'full centre access' },
+        { label: 'Teachers', value: teacherCount,    sub: 'teaching access' },
+      ]} />
 
       {!iCanManage && (
         <div style={{ padding: '11px 14px', marginBottom: 18, borderRadius: 10, background: DS.warningBg, border: `1px solid ${DS.warningBorder}`, color: DS.warning, fontSize: 13 }}>

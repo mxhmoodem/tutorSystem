@@ -53,18 +53,6 @@ const teacherClasses = [
   },
 ];
 
-const homeworkFull = [
-  { id:1, title:'Algebra: Simultaneous Equations',   class:'Yr 10 Group A', subject:'GCSE Maths', set:'18 Apr', due:'22 Apr', submitted:8, total:8, marked:5, avgScore:81, status:'marking'  },
-  { id:2, title:'Calculus: Differentiation Basics',  class:'Yr 12 Group A', subject:'A-Level',    set:'20 Apr', due:'24 Apr', submitted:4, total:5, marked:0, avgScore:null,status:'marking'  },
-  { id:3, title:'Trigonometry: Sine & Cosine Rules', class:'Yr 11 Group B', subject:'GCSE Maths', set:'22 Apr', due:'27 Apr', submitted:2, total:7, marked:0, avgScore:null,status:'open'     },
-  { id:4, title:'Statistics: Probability Trees',     class:'Yr 10 Group A', subject:'GCSE Maths', set:'22 Apr', due:'29 Apr', submitted:0, total:8, marked:0, avgScore:null,status:'open'     },
-  { id:5, title:'Integration: Reverse Chain Rule',   class:'Yr 12 Group A', subject:'A-Level',    set:'15 Apr', due:'20 Apr', submitted:5, total:5, marked:5, avgScore:84,  status:'complete' },
-  { id:6, title:'Quadratics: Completing the Square', class:'Yr 11 Group B', subject:'GCSE Maths', set:'14 Apr', due:'17 Apr', submitted:7, total:7, marked:7, avgScore:73,  status:'complete' },
-  { id:7, title:'Vectors: Magnitude & Direction',    class:'Yr 13 Group A', subject:'A-Level',    set:'21 Apr', due:'30 Apr', submitted:1, total:4, marked:0, avgScore:null,status:'open'     },
-  { id:8, title:'Number: Surds & Indices',           class:'Yr 9 Group C',  subject:'GCSE Maths', set:'22 Apr', due:'02 May', submitted:0, total:9, marked:0, avgScore:null,status:'open'     },
-  { id:9, title:'Geometry: Circle Theorems',         class:'Yr 11 Group B', subject:'GCSE Maths', set:'10 Apr', due:'15 Apr', submitted:7, total:7, marked:7, avgScore:69,  status:'complete' },
-  { id:10,title:'Differential Equations: Modelling', class:'Yr 13 Group A', subject:'A-Level',    set:'08 Apr', due:'14 Apr', submitted:4, total:4, marked:4, avgScore:87,  status:'complete' },
-];
 
 const teacherAllClasses = [
   { group:'Year 10 – Group A', subject:'GCSE Mathematics', students:['Emma Thompson','Oliver Chen','Sophia Patel','James Wilson','Aiden Foster','Mia Okonkwo','Liam Thornton','Zoe Patterson'] },
@@ -215,4 +203,4 @@ const DEFAULT_TRACKERS = [
 // Expose on window so the teacher-metrics selector layer (teacherMetrics.jsx) can
 // read them (Babel-standalone top-level consts are lexical globals, NOT window
 // properties — same pattern as SEED_* in adminPages.mock). Additive.
-Object.assign(window, { teacherClasses, homeworkFull, teacherAllClasses, DEFAULT_TRACKERS });
+Object.assign(window, { teacherClasses, teacherAllClasses, DEFAULT_TRACKERS });

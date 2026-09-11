@@ -884,7 +884,17 @@ const RailCard = ({ children, accent }) => (
   }}>{children}</div>
 );
 
-const AnnouncementCompose = ({ comms, onPublished }) => {
+// A prefill handed in from elsewhere in the app — an admin who hit "Post
+// announcement" on a class lands in the composer with that class already chosen,
+// rather than being dropped on an empty form and asked to find it again. Consumed
+// once (the caller clears it), so a later visit to Announcements starts clean.
+const commsTakePrefill = () => {
+  const p = window.__commsPrefill || null;
+  window.__commsPrefill = null;
+  return p;
+};
+
+const AnnouncementCompose = ({ comms, onPublished, prefill }) => {
   const { ctx } = comms;
   const user = ctx.user;
   // Owner console targets at the PLATFORM level only — All centres / specific
@@ -894,11 +904,13 @@ const AnnouncementCompose = ({ comms, onPublished }) => {
     ? AUDIENCE_CARDS.filter(c => c.mode === 'platform' || c.mode === 'role')
     : AUDIENCE_CARDS.filter(c => c.mode === 'platform' ? false : canAnnounce(user, c.scope));
 
-  const [mode, setMode] = React.useState((cards[0] || {}).mode || 'centre');
+  const pre = prefill || {};
+  const preMode = pre.mode && cards.some(c => c.mode === pre.mode) ? pre.mode : null;
+  const [mode, setMode] = React.useState(preMode || (cards[0] || {}).mode || 'centre');
   const [title, setTitle] = React.useState('');
   const [body, setBody] = React.useState('');
   const [roles, setRoles] = React.useState(['student', 'teacher', 'admin']);
-  const [classIds, setClassIds] = React.useState([]);
+  const [classIds, setClassIds] = React.useState(pre.classIds || []);
   const [years, setYears] = React.useState([]);
   const [subjects, setSubjects] = React.useState([]);
   const [centreIds, setCentreIds] = React.useState('all');
@@ -1078,19 +1090,15 @@ const AnnouncementCompose = ({ comms, onPublished }) => {
 // a Back link). Non-authors only ever see the inbox.
 const AnnouncementsSection = ({ comms, onNavigate }) => {
   const author = canCompose(comms.ctx.user);
-  const [composing, setComposing] = React.useState(false);
+  const [prefill] = React.useState(() => commsTakePrefill());
+  const [composing, setComposing] = React.useState(() => !!prefill);
+  usePageTrail(author && composing ? [{ label: 'New announcement' }] : []);
 
   if (author && composing) {
     return (
       <div>
-        <button type="button" onClick={() => setComposing(false)} style={{
-          display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 16, padding: '6px 10px',
-          borderRadius: 8, border: `1px solid ${DS.border}`, background: DS.bg, color: DS.sub,
-          fontSize: 13, fontWeight: 500, cursor: 'pointer',
-        }}>
-          <Icon name="chevron_l" size={14} color={DS.muted} /> Back to inbox
-        </button>
-        <AnnouncementCompose comms={comms} onPublished={() => setComposing(false)} />
+        <BackLink onClick={() => setComposing(false)} label="Inbox" />
+        <AnnouncementCompose comms={comms} prefill={prefill} onPublished={() => setComposing(false)} />
       </div>
     );
   }

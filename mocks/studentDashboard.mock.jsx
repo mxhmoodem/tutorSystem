@@ -14,22 +14,6 @@ const studentSelf = {
   ],
 };
 
-const studentHomework = [
-  { id:1, title: 'Calculus: Integration by Parts',    subject:'Mathematics',   teacher:'Ms. A', due:'Today, 11:59 PM',  status:'pending',   urgent:true,  desc:'Complete questions 1–8 from Chapter 12. Show all working.' },
-  { id:2, title: 'Optics: Refraction & Snell\'s Law', subject:'Physics',       teacher:'Mr. Park',   due:'Tomorrow, 11:59 PM',status:'pending',   urgent:false, desc:'Answer the 5 questions on the worksheet. Include ray diagrams where applicable.' },
-  { id:3, title: 'Vectors: Cross Products',           subject:'Further Maths', teacher:'Ms. A', due:'Wed 30 Apr',        status:'pending',   urgent:false, desc:'Worksheet Section B, Q1–6.' },
-  { id:4, title: 'Algebra: Simultaneous Equations',   subject:'Mathematics',   teacher:'Ms. A', due:'22 Apr',            status:'submitted', urgent:false, score:92, feedback:'Excellent work — all methods correct. Minor notation issue on Q4.' },
-  { id:5, title: 'Mechanics: Moments & Torque',       subject:'Physics',       teacher:'Mr. Park',   due:'20 Apr',            status:'marked',    urgent:false, score:78, feedback:'Good attempt. Q3 had the wrong sign convention — review lever arm direction.' },
-  { id:6, title: 'Sequences: nth Term Proofs',        subject:'Further Maths', teacher:'Ms. A', due:'16 Apr',            status:'marked',    urgent:false, score:87, feedback:'Strong algebraic proof on Q4. Q2 coefficient was slightly off — see annotation.' },
-  { id:7, title: 'Organic: Alkanes & Alkenes',        subject:'Chemistry',     teacher:'Dr. Owens',  due:'Fri 2 May',         status:'pending',   urgent:false, desc:'Complete the reaction mechanisms worksheet, Q1–10.' },
-  { id:8, title: 'Stoichiometry: Mole Calculations',  subject:'Chemistry',     teacher:'Dr. Owens',  due:'18 Apr',            status:'marked',    urgent:false, score:84, feedback:'Solid working. Q6 — remember to convert grams to moles before using the ratio.' },
-  { id:9, title: 'Differential Equations: Modelling', subject:'Further Maths', teacher:'Ms. A', due:'14 Apr',            status:'marked',    urgent:false, score:90, feedback:'Excellent setup of the model. Take care with the constant of integration in Q5.' },
-  // ── Reconciled with the new homework-store assignments (Homework.jsx seed) so
-  //    the dashboard homework tiles match the full Homework page. ──
-  { id:10, title: 'Calculus: Differentiation Basics',    subject:'Mathematics',   teacher:'Ms. A', due:'Tomorrow, 11:59 PM', status:'pending', urgent:false, desc:'Differentiate each expression fully and simplify — Q1–5.' },
-  { id:11, title: 'Integration: Definite & Indefinite',  subject:'Mathematics',   teacher:'Ms. A', due:'Fri 9 May',          status:'pending', urgent:false, desc:'Remember the constant of integration on indefinite integrals.' },
-  { id:12, title: 'Further Maths: Vectors',              subject:'Further Maths', teacher:'Ms. A', due:'2 May',              status:'marked',  urgent:false, score:88, feedback:'Excellent vector algebra — just tighten the converse in the perpendicularity proof.' },
-];
 
 const studentSessions = [
   { subject:'Mathematics',   date:'Mon 28 Apr', time:'09:00–10:30', room:'Room 3',  teacher:'Ms. Heebz A', type:'Regular' },

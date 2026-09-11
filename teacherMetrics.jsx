@@ -131,11 +131,13 @@ const getAtRiskStudents = (centreId, teacherId, termId) =>
   getMyStudents(centreId, teacherId, termId).filter(isAtRisk);
 
 // ── Homework "to mark" — derived from the homework module's ground truth ──────
-// Σ (submitted − marked) across the teacher's open/marking assignments. Reads the
-// teacherPages homeworkFull seed (the teacher's own list); never a stored count.
-const getToMark = () => {
-  const hw = window.homeworkFull || [];
-  return hw.reduce((n, a) => n + Math.max(0, (a.submitted || 0) - (a.marked || 0)), 0);
+// Submissions awaiting a mark on THIS teacher's own assignments. Delegates to the
+// one homework selector (window.klasioHomework, exposed by Homework.jsx) so the
+// dashboard tile, the bell badge and the Homework page always show one number.
+const getToMark = (teacherId) => {
+  if (!window.klasioHomework) return 0;
+  const id = teacherId || getPrincipal().id;
+  return window.klasioHomework.getHomeworkCounts({ teacherId: id }).toMark;
 };
 
 // ── The one metrics bundle every screen reads ────────────────────────────────
@@ -157,7 +159,7 @@ const getMetrics = (centreId, teacherId, termId) => {
     avgAttendance: avg(withNum('attendance')),
     avgScore:      avg(withNum('score')),
     atRisk:        students.filter(isAtRisk).length,
-    toMark:        getToMark(),
+    toMark:        getToMark(t),
     subjects:      getSubjectsTaught(c, t, term),
     term:          getCurrentTerm(),
   };

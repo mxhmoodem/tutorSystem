@@ -221,11 +221,13 @@ const buildCrumbs = (role, page) => {
   if (!item) return [{ label: parentId.charAt(0).toUpperCase() + parentId.slice(1) }];
   // Lead with the item's nav section (e.g. "People", "Academic") so the trail
   // reads section → page → sub-section (e.g. "Operations › Reports › Overview").
+  // Crumbs carrying a `page` are routes you can click back to; the section is a
+  // nav grouping with no route of its own, so it stays inert.
   const crumbs = [];
   if (item.section) crumbs.push({ label: item.section });
-  crumbs.push({ label: item.label });
+  crumbs.push({ label: item.label, page: item.id });
   if (!sub && section && Array.isArray(item.sub)) sub = item.sub.find(s => s.id === `${parentId}:${section}`);
-  if (sub) crumbs.push({ label: sub.label });
+  if (sub) crumbs.push({ label: sub.label, page: sub.id });
   return crumbs;
 };
 
@@ -378,8 +380,38 @@ const StudentSwitcher = ({ activeStudent, onPick }) => {
   );
 };
 
+// One crumb. Ancestors are buttons (click to go back up a level); the crumb you
+// are standing on is plain text. Shared by the nav-derived crumbs and the
+// in-page trail so both halves of the trail look and behave identically.
+const Crumb = ({ label, onClick, current }) => {
+  const [hov, setHov] = React.useState(false);
+  const base = {
+    fontSize: 13.5,
+    fontWeight: current ? 600 : 500,
+    color: current ? DS.text : (hov ? DS.text : DS.muted),
+    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+    maxWidth: 260, flexShrink: 0,
+  };
+  if (!onClick || current) return <span style={base}>{label}</span>;
+  return (
+    <button onClick={onClick} onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+      style={{
+        ...base, background: 'none', border: 'none', padding: '2px 4px', margin: '0 -4px',
+        borderRadius: 5, cursor: 'pointer', font: 'inherit', fontSize: 13.5, fontWeight: 500,
+        textDecoration: hov ? 'underline' : 'none', textUnderlineOffset: 3,
+      }}>{label}</button>
+  );
+};
+
 const TopBar = ({ view, page, comms, onNavigate, collapsed, onToggleSidebar, identityName, accountOwner, activeStudent }) => {
-  const crumbs = buildCrumbs(view, page);
+  // Full trail = the routed nav path (section › page › sub-section) + whatever
+  // nesting the screen itself declared (entity → tab → sub-screen). Everything
+  // but the final crumb is a level you can click back to.
+  const navCrumbs = buildCrumbs(view, page).map(c => ({
+    label: c.label,
+    onClick: c.page ? () => onNavigate(view, c.page) : null,
+  }));
+  const crumbs = [...navCrumbs, ...usePageTrailValue()];
   const term = readTermIndicator();
   const termRange = term.start && term.end
     ? `${fmtTermDate(term.start)} – ${fmtTermDate(term.end)}` : '';
@@ -395,14 +427,15 @@ const TopBar = ({ view, page, comms, onNavigate, collapsed, onToggleSidebar, ide
     <div style={{
       display: 'flex', alignItems: 'center', gap: 6,
       padding: '0 18px', height: 52,
-      borderBottom: `1px solid ${DS.border}`,
-      boxShadow: '0 1px 2px rgba(16,24,40,0.04)',
-      // Glassmorphism: translucent white + blur so the grey content frosts
-      // through as it scrolls under the sticky header.
+      // Stronger divider than a plain hairline: a darker border plus a short
+      // ambient shadow, so the white header still separates from the white
+      // content area it now matches.
+      borderBottom: '1px solid #D6DAE1',
+      boxShadow: '0 1px 4px rgba(16,24,40,0.07), 0 1px 2px rgba(16,24,40,0.05)',
+      // Solid white, matching the sidebar/navbar surface — content scrolls
+      // cleanly under the sticky header rather than frosting through it.
       position: 'sticky', top: 0,
-      background: 'rgba(255,255,255,0.72)',
-      backdropFilter: 'saturate(180%) blur(12px)',
-      WebkitBackdropFilter: 'saturate(180%) blur(12px)',
+      background: '#FFFFFF',
       flexShrink: 0, zIndex: 30,
     }}>
       {/* Sidebar collapse toggle */}
@@ -416,16 +449,11 @@ const TopBar = ({ view, page, comms, onNavigate, collapsed, onToggleSidebar, ide
       <div style={{ width: 1, height: 18, background: DS.border, margin: '0 6px 0 2px' }} />
 
       {/* Breadcrumb trail */}
-      <nav style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flex: 1 }}>
+      <nav aria-label="Breadcrumb" style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flex: 1, overflow: 'hidden' }}>
         {crumbs.map((c, i) => (
-          <React.Fragment key={i}>
-            {i > 0 && <Icon name="chevron_r" size={13} color={DS.faint} />}
-            <span style={{
-              fontSize: 13.5,
-              fontWeight: i === crumbs.length - 1 ? 600 : 500,
-              color: i === crumbs.length - 1 ? DS.text : DS.muted,
-              whiteSpace: 'nowrap',
-            }}>{c.label}</span>
+          <React.Fragment key={`${i}-${c.label}`}>
+            {i > 0 && <div style={{ flexShrink: 0, display: 'flex' }}><Icon name="chevron_r" size={13} color={DS.faint} /></div>}
+            <Crumb label={c.label} onClick={c.onClick} current={i === crumbs.length - 1} />
           </React.Fragment>
         ))}
       </nav>

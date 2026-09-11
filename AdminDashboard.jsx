@@ -390,33 +390,54 @@ const AdminDashboard = () => {
   const classesToday   = cm.getClassesForCentre().filter(c => c.day ===
     ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date().getDay()] && c.status !== 'archived');
   const unstaffedToday = classesToday.filter(c => !c.teacher).length;
+  // useAttendanceStore is window-exported; useAdminStore is a bare global const
+  // (classic scripts don't attach top-level `const` to window), so fall back to it.
+  const attStore   = window.useAttendanceStore ? window.useAttendanceStore() : null;
+  const adminStore = window.useAdminStore ? window.useAdminStore()
+    : (typeof useAdminStore === 'function' ? useAdminStore() : null);
+
+  // Registers that never got taken — the one operational gap an admin can actually
+  // close today, and the thing the hero was missing entirely. Derived from the same
+  // materialised sessions the Attendance screen reads (derive-don't-store), so the
+  // number here and the queue there can never disagree.
+  const registerGap = React.useMemo(() => {
+    if (!attStore || !adminStore || !window.materialiseSessions) return { total: 0, lapsed: 0 };
+    const cls = (adminStore.classes || []).filter(c => c.status !== 'paused' && c.status !== 'archived');
+    // Same window the Attendance screen materialises, so the hero's count and the
+    // queue it links to are the same number — not two answers to one question.
+    const all = window.materialiseSessions(cls, window.REGISTER_SETTINGS, window.getNow(), attStore, { backDays: 9, fwdDays: 2 });
+    const needs = all.filter(x => x.derived.state === 'awaiting' || x.derived.state === 'lapsed');
+    return { total: needs.length, lapsed: needs.filter(x => x.derived.state === 'lapsed').length };
+  }, [attStore, adminStore]);
+
   const alerts = [
     invRollup.overdue > 0 && { key: 'inv', tone: 'danger', icon: 'invoice',
       text: `${money(invRollup.overdue)} in overdue invoices to chase`, cta: 'View invoices', onClick: () => go('invoices') },
     unstaffedToday > 0 && { key: 'staff', tone: 'warning', icon: 'calendar',
       text: `${unstaffedToday} session${unstaffedToday !== 1 ? 's' : ''} today without a teacher`, cta: 'Open schedule', onClick: () => go('schedule') },
+    registerGap.total > 0 && { key: 'reg', tone: registerGap.lapsed ? 'danger' : 'warning', icon: 'clock',
+      text: `${registerGap.total} session${registerGap.total !== 1 ? 's' : ''} with no register taken`, cta: 'Open attendance', onClick: () => go('attendance') },
     flaggedCount > 0 && { key: 'flag', tone: 'warning', icon: 'alert',
       text: `${flaggedCount} student${flaggedCount !== 1 ? 's' : ''} flagged on attendance or progress`, cta: 'Review students', onClick: () => go('students') },
   ].filter(Boolean);
 
   // ── KPIs — every hero value is wired (no dashes, §8). ──
+  // Every figure here is something an admin can act on the SAME DAY. Capacity used
+  // moved to the Classes page (it barely moves week to week and belongs next to the
+  // classes it describes); sessions became "today" rather than "this week"; and
+  // registers outstanding — the thing actually chased each morning — took its place.
   const kpis = [
     { label: 'Active students',   value: String(cm.getActiveStudentCount()), sub: `${cm.getClassEnrolments()} enrolments` },
     { label: 'Attendance (week)', value: `${cm.getAttendanceWeek()}%`,        sub: 'across active students' },
+    { label: 'Sessions today',    value: String(sessions.today),              sub: `${sessions.total} this week` },
+    { label: 'Registers out',     value: String(registerGap.total),           sub: registerGap.total ? `${registerGap.lapsed} past the late window` : 'all taken' },
     { label: 'Outstanding',       value: money(invRollup.outstanding),        sub: invRollup.overdue > 0 ? `${money(invRollup.overdue)} overdue` : 'all current' },
-    { label: 'Sessions (week)',   value: String(sessions.total),              sub: `${sessions.today} today` },
-    { label: 'Capacity used',     value: `${capacity.pct}%`,                  sub: `${capacity.used}/${capacity.cap} seats` },
   ];
 
   // ── Schedule browser — centre-wide sessions materialised from the same
   //    source the attendance screen uses (derive-don't-store), grouped by day so
   //    the mini-calendar can browse any date. A wide window covers a few months
   //    of navigation; cancelled sessions are dropped rather than invented.
-  // useAttendanceStore is window-exported; useAdminStore is a bare global const
-  // (classic scripts don't attach top-level `const` to window), so fall back to it.
-  const attStore   = window.useAttendanceStore ? window.useAttendanceStore() : null;
-  const adminStore = window.useAdminStore ? window.useAdminStore()
-    : (typeof useAdminStore === 'function' ? useAdminStore() : null);
   const todayISO = window.attIso ? window.attIso(new Date(window.getNow())) : adminIsoOf(new Date());
   const [selectedDate, setSelectedDate] = React.useState(todayISO);
   const [scheduleView, setScheduleView] = React.useState('list');
@@ -492,11 +513,21 @@ const AdminDashboard = () => {
           </div>
         </div>
 
-        {/* Alert chips (hidden entirely if nothing is flagged) */}
-        {show('alerts') && alerts.length > 0 && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 18 }}>
-            {alerts.map(a => <HeroAlertChip key={a.key} {...a} />)}
-          </div>
+        {/* Alert chips — each appears only when its own count is non-zero. When every
+            check comes back clean the strip collapses to a single "all clear" line
+            rather than vanishing: an empty hero can't tell you whether nothing is
+            wrong or nothing was checked. */}
+        {show('alerts') && (
+          alerts.length > 0 ? (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 18 }}>
+              {alerts.map(a => <HeroAlertChip key={a.key} {...a} />)}
+            </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 18, fontSize: 12.5, color: HERO_TXT.soft }}>
+              <span style={{ display: 'flex', color: '#86EFAC' }}><Icon name="check" size={14} /></span>
+              All clear — no overdue invoices, unstaffed sessions or missing registers.
+            </div>
+          )
         )}
 
         {/* KPI stat band */}

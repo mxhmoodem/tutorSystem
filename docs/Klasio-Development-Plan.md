@@ -1,17 +1,17 @@
 # Klasio — Development Plan
 
-**19 phases · 6 milestones · vertical slices from Phase 2 onward**
+**21 phases · 6 milestones · vertical slices from Phase 2 onward**
 
-Every phase from Phase 2 ships its own tables, RLS policies, RPCs, triggers, views, typegen, seeds, API endpoints, tests and UI together — end to end — before the next slice starts. This document is the authority on phase order, slice contents and locked decisions. Read alongside `docs/Klasio-Data-Layer-Reference.md` (v2).
+Every phase from Phase 2 ships its own tables, RLS policies, RPCs, triggers, views, typegen, seeds, API endpoints, tests and UI together — end to end — before the next slice starts. This document is the authority on phase order, slice contents and locked decisions. Read alongside `docs/Klasio-Data-Layer-Reference.md` (v3).
 
-> **Behavioural spec & arbiter (B10).** The **prototype** (this repository) and **`INVENTORY.md`** are the behavioural specification — they define what each screen and flow does. Where the prototype and the two design documents conflict, **`docs/Klasio-Reconciliation.md`** is the arbiter: it records the adjudicated ruling for every discrepancy found in the two-document audit. This plan and the Data-Layer Reference have both been reconciled against it.
+**Behavioural spec:** the frontend prototype plus `INVENTORY.md` define expected behaviour. Where the prototype and this plan (or the reference) conflict, the reconciliation document (`docs/klasio-doc-reconciliation-fixes.md`) is the arbiter.
 
 ---
 
 ## Locked decisions
 
 | # | Decision | Value |
-| :-: | :-: | :-: |
+|---|---|---|
 | 1 | Styling | Pure CSS · CSS Modules · token system in `packages/ui/src/styles/tokens.css` · no Tailwind |
 | 2 | Server state | TanStack Query for all DB/API data · exactly seven globals in AppProvider (session, memberships, activeRole, activeCentre, activeTerm, featureFlags, accent) |
 | 3 | Router / forms | TanStack Router · react-hook-form + zod (schemas shared via `packages/shared/src/schemas/`) |
@@ -23,13 +23,14 @@ Every phase from Phase 2 ships its own tables, RLS policies, RPCs, triggers, vie
 | 9 | Storage | Cloudflare R2 · three buckets (dev/staging/prod) · EU location hint · signed URLs via Railway only |
 | 10 | Billing | Stripe · test mode until real legal entity · subscriptions at account level |
 | 11 | Analytics | PostHog EU cloud · staff roles only · student role never tracked · deferred to Phase 8 milestone |
-| 12 | No AI | No AI features, dependencies or copy anywhere in the platform. The Student Reports & Teacher Feedback domain is the successor to the deleted AI-feedback feature. |
+| 12 | No AI | No AI features, dependencies or copy anywhere in the platform. The Student Reports & Teacher Feedback system (Phase 8b) is the human-authored successor to the deleted AI-feedback feature |
 | 13 | No parent role | Guardians are data rows and email recipients only — no login, no dashboard |
 | 14 | No Redis | Postgres owns queuing (outbox), rate limiting, and lockouts |
-| 15 | DSL | Capability (`dsl_role` = lead \| deputy) on a membership row — not a separate role; at most one lead per centre (A7) |
-| 16 | Multi-role | A person holds multiple roles via multiple `memberships` rows (`UNIQUE (profile_id, centre_id, role)`); the dual-role view switch and multi-role Team management are first-class (A1) |
-| 17 | Ownership | Account Owner is `accounts.owner_profile_id`, not a membership role; `transfer_ownership` repoints that field (A2) |
-| 18 | Marketing framework | **Next.js** (per earlier locked decision — overrides the Astro reference that appeared in an earlier draft of Phase 17) |
+| 15 | DSL | Capability on a membership row (`dsl_role` = `lead` \| `deputy`, one lead per centre) — not a separate role |
+| 16 | Ownership | `accounts.owner_profile_id` — a field, not a membership role. Transfer = repoint one field (audited) |
+| 17 | Multi-role | A person holds >1 role via >1 membership row — `UNIQUE (profile_id, centre_id, role)`. Dual-role view switch is a product feature |
+| 18 | Family billing | Invoices bill a `families` row (siblings on one invoice); per-student attribution on lines; VAT configurable per centre |
+| 19 | Marketing site | Next.js (separate repo) — supersedes the earlier Astro note |
 
 ---
 
@@ -37,20 +38,21 @@ Every phase from Phase 2 ships its own tables, RLS policies, RPCs, triggers, vie
 
 Within every slice the order is fixed:
 
+```
 migration (tables + indexes + constraints)
-→ RLS policies (same file as the table)
-→ triggers + RPCs
-→ derived views (`v_` prefix)
-→ typegen (`npm run db:types`)
-→ seeds
-→ API endpoints (Railway, only for privileged ops)
-→ tests (isolation suite + unit + endpoint)
-→ UI (routes + feature components)
+  → RLS policies (same file as the table)
+  → triggers + RPCs
+  → derived views (v_ prefix)
+  → typegen (npm run db:types)
+  → seeds
+  → API endpoints (Railway, only for privileged ops)
+  → tests (isolation suite + unit + endpoint)
+  → UI (routes + feature components)
+```
 
 ---
 
 ## Phase 0 — Walking skeleton
-
 **Type:** horizontal infrastructure
 
 - Monorepo scaffold: `apps/web`, `apps/api`, `packages/shared`, `packages/db`
@@ -58,38 +60,35 @@ migration (tables + indexes + constraints)
 - CI: GitHub Actions — lint, typecheck, build on every PR
 - Vercel projects wired (`klasio-web`, `klasio-marketing`); Railway project wired (`klasio-api`)
 - `GET /health` → `200 { status: "ok" }` deploying green on staging
-- Structural folders seeded empty (`features/`, `components/ui/`, `services/`, `supabase/tests/`, `e2e/`)
+- Structural folders seeded empty (features/, components/ui/, services/, supabase/tests/, e2e/)
 - `.env.example` files; no secrets committed
-- **Commit both design docs into `docs/`** (B3): `docs/Klasio-Data-Layer-Reference.md`, `docs/Klasio-Development-Plan.md`, `docs/Klasio-Reconciliation.md`
 
 **Exit:** `/health` returns 200 on staging; CI green on a PR; preview deploy per PR works.
 
 ---
 
-## Phase 1 — Tenancy + auth spine (+ provisioning)
-
+## Phase 1 — Tenancy + auth spine
 **Type:** horizontal foundations · **safeguarding-critical**
 
-Tables: `accounts` (with `owner_profile_id`), `centres` (with `code`), `profiles`, `memberships` (multi-role), `students`, `student_claims`, `student_guardians`, `emergency_contacts`, `student_health`, `consents`, `invitations`, `guardian_approvals`
+Tables: `accounts` (incl. `owner_profile_id` — ownership is a field, decision #16), `centres` (incl. `code` for student login), `profiles`, `memberships` (**multi-role**: `UNIQUE (profile_id, centre_id, role)`, `dsl_role` lead/deputy — decisions #15/#17), `students` (incl. `family_id`), `families`, `student_guardians`, `emergency_contacts`, `student_health`, `consents`, `invitations`, `student_claims`, `guardian_approvals`
 
-RLS helpers introduced: `auth_uid()`, `is_superadmin()`, `auth_centre_ids()`, `auth_account_id()`, `is_account_owner()`, `has_role()` (EXISTS over rows), `is_dsl()` (`dsl_role IS NOT NULL`), `is_my_student()`, `owns_profile()`
+RLS helpers introduced: `auth_uid()`, `is_superadmin()`, `auth_centre_ids()`, `auth_account_id()`, `has_role()` (EXISTS over rows — multi-role safe), `is_account_owner()`, `is_dsl()`, `is_my_student()`, `owns_profile()`
 
-RPCs: `provision_account`, `set_member_role`, `transfer_ownership` (repoints `accounts.owner_profile_id`), `invite_member`, `create_centre`
+RPCs: `provision_account`, `set_member_role` (add/remove membership rows), `set_dsl_role`, `transfer_ownership` (repoints `owner_profile_id`), `invite_member`, `create_centre`
 
-Railway endpoints: `POST /v1/invites`, `POST /v1/invites/:id/resend`, `POST /v1/auth/student/login` (centre-code + username + PIN), `POST /v1/auth/guardian-approvals`, `POST /v1/auth/guardian-approvals/:token/confirm`, `POST /v1/students/:id/claim-slip` (printable claim slip via files pipeline — B6)
+Railway endpoints: `POST /v1/invites`, `POST /v1/invites/:id/resend`, `POST /v1/auth/student/login` (centre-code + username + PIN), `POST /v1/auth/guardian-approvals`, `POST /v1/auth/guardian-approvals/:token/confirm`
 
-Tests: **two-centre RLS isolation harness** — Account A vs Account B denial, per-role allow/deny for every table. This harness is the foundation every later slice appends to. **Multi-role case:** one profile holding `centre_admin` + `teacher` in the same centre resolves both role surfaces (A1).
+Student provisioning: claim-slip flow — `student_claims` rows with claim code + synthetic email, printable slip PDF, no email sent.
 
-UI: login, TOTP enrolment, **role switcher built as the multi-role model** (multiple membership rows, dual-role Admin/Teacher view switch, multi-role Team management — B7), active-centre picker, student claim-slip provisioning + printable slips, placeholder dashboards per role
+Tests: **two-centre RLS isolation harness** — Account A vs Account B denial, per-role allow/deny for every table. This harness is the foundation every later slice appends to. Explicit multi-role cases: one profile with admin + teacher rows at the same centre passes both role checks; ownership checks pass with no membership row.
 
-> **Note (B8):** `provision_account` appears in both Phase 1 and Phase 14 RPC sets **intentionally** — it is introduced here for account bootstrap and re-listed under the superadmin surface it ultimately backs in Phase 14.
+UI: login (staff TOTP; student centre-code + username + PIN), TOTP enrolment, **multi-role view switch** (a dual-role user flips between admin and teacher views), active-centre picker, multi-role Team management, claim-slip print flow, placeholder dashboards per role
 
-**Exit:** staff TOTP login works; student centre-code + PIN login works; one profile in two centres (and in two roles) sees correct data for each; claim slips print and claim; RLS harness green.
+**Exit:** staff TOTP login works; student PIN login works; one profile in two centres sees correct data for each; a dual-role user switches views at one centre; ownership transfer repoints one field; RLS harness green.
 
 ---
 
 ## Phase 2 — Files + email infrastructure
-
 **Type:** vertical slice · infrastructure
 
 Tables: `files`, `file_links`, `storage_rollups`, `email_outbox`, `email_suppressions`, `processed_events`
@@ -106,73 +105,68 @@ Tests: isolation (files visible only within centre), quota enforcement, suppress
 
 ---
 
-## Phase 3 — Academic core (+ cover teacher)
-
+## Phase 3 — Academic core
 **Type:** vertical slice
 
-Tables: `subjects` (with `level`/`description`), `year_groups`, `levels`, `exam_boards` (configurable class dimensions — A11), `grade_scales`, `grade_bands`, `terms`, `term_breaks`, `rooms`, `classes`, `class_cover` (B6), `class_schedules`, `sessions`, `enrolments`, `attendance_records`
+Tables: `subjects`, `grade_scales`, `grade_bands`, `terms` (stored `is_active` flag — documented deliberate exception to derive-don't-store), `term_breaks`, `rooms`, `class_dimensions` (configurable year groups / levels / exam boards with inline add), `classes`, `class_schedules`, `class_cover`, `sessions`, `enrolments`, `attendance_records`
 
-RPCs: `set_active_term` (audited — the authoritative `terms.is_active` flag, A9), `enrol_student`, `withdraw_enrolment`, `regenerate_sessions`, `assign_cover`
+RPCs: `set_active_term`, `enrol_student`, `withdraw_enrolment`, `regenerate_sessions`, `set_class_cover`
 
-Views: `v_class_summary`, `v_attendance_summary`, `v_enrolment_status`, `v_effective_teacher` (substantive vs cover teacher, derived per session date — A11/B6)
+Views: `v_class_summary`, `v_attendance_summary`, `v_enrolment_status`, `v_effective_teacher` (permanent teacher overridden by any covering `class_cover` row — schedule renders the cover teacher)
 
-Tests: isolation + `submit_register` derives `timesheet_entries` in the same transaction (keystone test) + cover teacher renders on the schedule within its date range, substantive teacher outside it
+Tests: isolation + `submit_register` derives `timesheet_entries` in the same transaction (keystone test)
 
-UI: class list, class detail, enrolment management, term picker, inline dimension add-new (subjects/year groups/levels/exam boards), assign-cover control on class + teacher profile
+UI: class list, class detail, enrolment management, term picker
 
-**Exit:** admin can create a class and enrol students; active term resolves to one value everywhere; a cover teacher shows on the schedule for the range, no stored `coverActive` flag.
+**Exit:** admin can create a class and enrol students; active term resolves to one value everywhere; a cover assignment changes the effective teacher on the schedule for its date range only.
 
 ---
 
 ## Phase 4 — Register + timesheets (keystone)
-
 **Type:** vertical slice · **derive-don't-store keystone**
 
-Tables: `timesheet_entries` (typed — A10), `timesheet_adjustments`, `staff_details`, `staff_rates`, `register_unlocks`, `attendance_amendments`
+Tables: `timesheet_entries`, `timesheet_adjustments`, `staff_details`, `staff_rates`, `register_unlocks`, `attendance_amendments`
 
-RPCs: `submit_register` (keystone — attendance + session confirmation + timesheet derivation in one transaction, consumes any active unlock), `approve_timesheet`, `adjust_timesheet`, `amend_attendance` (24h window, writes `attendance_amendments`), `grant_unlock`, `revoke_unlock`
+RPCs: `submit_register` (keystone — attendance + session confirmation + timesheet derivation in one transaction, consumes any active unlock), `log_timesheet_entry` (manual non-teaching work: prep/marking/meeting/training/cover; `teaching` type rejected), `approve_timesheet`, `adjust_timesheet`, `amend_attendance` (24h window, writes `attendance_amendments`), `grant_unlock`, `revoke_unlock`
+
+Timesheet model: `timesheet_entries.type` = `teaching` (system-derived only) \| `prep` \| `marking` \| `meeting` \| `training` \| `cover` (manually logged); statuses `draft → submitted → approved / rejected → exported` — no `paid` status on a ledger-only platform
 
 Views: `v_timesheet_summary`, `v_session_delivery`, `v_session_state` (the six derived register states — see the Data-Layer Reference for the state machine and transition rules)
 
 Register lock/unlock model:
-
 - Six derived states (`upcoming`, `open_live`, `awaiting`, `lapsed`, `recorded`, `cancelled`) computed at read time; `sessions.status` stays the three-value persisted enum
-- **Natural backfill window (A3):** `awaiting` holds while `now < ends_at + centres.register_backfill_hours` (default 72h, per-centre) OR an active unlock exists; submissions during natural backfill are flagged **late**. Once the window passes with no unlock the register `lapsed`-locks.
-- A `lapsed` register locks; a centre admin `grant_unlock` re-derives it to `awaiting` time-boxed (2h/4h/end-of-day/24h/48h); the grant is one-shot (consumed by the next `submit_register`) and auto-expires; the register re-locks immediately on submit
+- **Natural backfill window** (first path back in): after the live window, the register stays takeable — flagged late — until `ends_at + register_backfill_hours` (per-centre setting, default 72h). Teachers are never locked out the moment a session ends
+- After backfill, the register lapses and locks; a centre admin `grant_unlock` reopens it time-boxed (2h/4h/end-of-day/24h/48h); the grant is one-shot (consumed by the next `submit_register`) and auto-expires — the second path back in
 - Teacher self-serve per-mark amend within 24h of submission; after that, admin unlock is required for a full re-take
 
-Timesheet entry types (A10): `teaching` rows are system-derived only; `prep`/`marking`/`meeting`/`training`/`cover` may be entered manually by the teacher (self), subject to approval. Terminal status is `exported` (no `paid` — ledger-only platform).
+Tests: keystone test — one `submit_register` call produces correct attendance rows + timesheet entry; **backfill window** (session derives `awaiting` for 72h after end, submission flagged late, lapses after); unlock lifecycle (grant → lapsed session derives `awaiting` → submit consumes + re-locks → expiry re-lapses); manual `teaching` timesheet insert denied; amendment window enforced; cross-tenant denial on `register_unlocks` and `attendance_amendments`; all audited RPCs assert `audit_log` row
 
-Tests: keystone test — one `submit_register` call produces correct attendance rows + timesheet entry; unlock lifecycle (grant → session derives `awaiting` → submit consumes + re-locks → expiry re-lapses); natural-backfill late-flagging; manual non-teaching entry allowed, manual `teaching` insert denied; amendment window enforced; cross-tenant denial on `register_unlocks` and `attendance_amendments`; all audited RPCs assert `audit_log` row
-
-UI: register view with derived-state rows, register drawer (take/re-take), admin centre-wide "needs a register" list, unlock chooser, teacher + admin timesheets with non-teaching entry
+UI: register view with derived-state rows, register drawer (take/re-take), admin centre-wide "needs a register" list, unlock chooser, teacher + admin timesheets
 
 **Exit:** teacher submits register; timesheet entry appears derived; a lapsed register locks and an admin unlock reopens it for the teacher, then re-locks on submit; amendments are audited; audit rows exist. No separately stored metrics or session states.
 
 ---
 
 ## Phase 5 — Groups + announcements
-
 **Type:** vertical slice
 
-Tables: `groups`, `group_members` (A6), `comms_settings`, `announcements` (with `priority`/`pinned`/`expires_at`), `announcement_targets` (child audience table — A11, decision #4), `announcement_receipts`
+Tables: `groups`, `group_members`, `comms_settings`, `announcements` (priority, pinned, expires_at; nullable centre for platform scope), `announcement_targets` (multi-target audiences), `announcement_receipts`
 
-RPCs: `create_group`, `manage_group_members`, `publish_announcement` (resolves `announcement_targets` into receipts), `acknowledge_announcement`
+RPCs: `create_group`, `manage_group_members`, `publish_announcement`, `acknowledge_announcement`
 
 Email templates: announcement notification (respects quiet hours + prefs)
 
 Views: `v_announcement_reach`, `v_unread_announcements`
 
-Tests: isolation + scope resolution (centre/role/group/year/class/platform target rows resolve to the correct recipient set)
+Tests: isolation + target resolution (multi-target sets of centres/roles/groups/years/classes resolve to the correct combined recipient set; platform-scope announcements reach all centres; expired announcements drop out of feeds)
 
-UI: announcement composer (audience picker over targets, priority/pin/expiry), inbox, ack flow
+UI: announcement composer (multi-target picker, priority, pin, expiry), inbox (pinned first), ack flow, superadmin platform announcements
 
-**Exit:** admin publishes a centre-wide announcement; all staff see it; ack-required flow works; a superadmin `platform`-scope announcement reaches all centres.
+**Exit:** admin publishes a centre-wide announcement; all staff see it; ack-required flow works.
 
 ---
 
 ## Phase 6 — Results + assessments
-
 **Type:** vertical slice
 
 Tables: `assessments`, `results`
@@ -189,83 +183,80 @@ UI: assessment creation, results entry, results published view per student
 
 ---
 
-## Phase 7 — Invoicing (+ families + VAT)
-
+## Phase 7 — Invoicing
 **Type:** vertical slice
 
-Tables: `families` (with `billing_guardian_id` — A5, decision #3), `fee_plans`, `invoice_sequences`, `invoices` (`family_id` NOT NULL — replaces `student_id`), `invoice_lines` (with `student_id`, `vat_rate`), `payment_schedules`, `payments`. VAT config on `centres` (`vat_registered`, `vat_number`, `default_vat_rate`).
+Tables: `fee_plans`, `invoice_sequences`, `invoices` (billed to a **family** — decision #18; VAT totals snapshotted at issue), `invoice_lines` (per-student attribution, `vat_rate`/`vat_amount`), `payment_schedules`, `payments`. Centre VAT settings (`vat_registered`, `vat_number`, `default_vat_rate`) surface in Settings.
 
 RPCs: `record_payment` (audited), `void_invoice` (audited)
 
-Views: `v_invoice_status` (derived — never stored), `v_outstanding_balance`, `v_payment_schedule`. Invoice `subtotal`/`vat_total`/`total` and per-line `vat_amount` are **derived at read time** (A5).
+Views: `v_invoice_status` (derived — never stored), `v_outstanding_balance`, `v_payment_schedule`
 
-Railway endpoints: `POST /v1/invoices/:id/pdf`, `POST /v1/invoices/:id/send` (to the family's billing guardian), `GET /v1/invoices/export`, `POST /v1/invoices/import`
+Railway endpoints: `POST /v1/invoices/:id/pdf`, `POST /v1/invoices/:id/send`, `GET /v1/invoices/export`, `POST /v1/invoices/import`
 
 Email templates: invoice issued, payment reminder, overdue notice, payment received
 
-`pg_cron`: due reminders (N days before instalment), overdue sweep
+pg_cron: due reminders (N days before instalment), overdue sweep
 
-Tests: isolation + status derivation unit tests (all schedule/payment combinations) + VAT derivation (registered vs not, mixed line rates) + family billing (siblings on one invoice, lines attribute per student, billing-contact resolution + eldest-student tie-break) + audited RPCs assert audit rows
+Tests: isolation + status derivation unit tests (all schedule/payment combinations) + VAT derivation (registered vs not; rate override per line) + family invoice covers multiple siblings' lines + audited RPCs assert audit rows
 
-UI: invoice list, invoice detail (per-sibling lines + VAT), payment entry, family-facing read-only view
+UI: invoice list, invoice detail (family header, per-sibling lines), payment entry, VAT settings, guardian-facing read-only view
 
-**Exit:** admin creates a family invoice; siblings' lines attribute correctly; VAT derives; status derives from schedule vs payments; PDF emails to the billing guardian; CSV export/import round-trips.
+**Exit:** admin creates one invoice for a family of three siblings; status derives correctly from schedule vs payments; VAT computes correctly; PDF emails to the family's billing guardian; CSV export/import round-trips.
 
 ---
 
-## Phase 8 — Homework + Student Reports & Teacher Feedback ⟶ Milestone M1: pilot-ready
+## Phase 8 — Homework
+**Type:** vertical slice
 
-**Type:** vertical slice · **Milestone M1**
+Tables: `assignments`, `assignment_targets`, `questions`, `submissions`, `answers`
 
-> **B1/B6 — this phase takes the deleted AI phase's slot.** The AI-feedback sub-feature is gone (decision #12); **Student Reports & Teacher Feedback** (A12) is its successor and the headline of this phase. Homework ships alongside it (no AI), completing the daily-ops loop for M1.
+RPCs: `create_assignment`, `assign_homework`, `submit_homework` (auto-marks MCQ/numeric/expression)
 
-**Homework tables:** `assignments`, `assignment_targets`, `questions`, `submissions`, `answers` *(no `ai_feedback`)*
+Railway endpoints: `POST /v1/homework/import-pdf` (deterministic rule-based parsing — **no AI**, decision #12)
 
-**Reports tables (A12):** `report_rules`, `report_templates`, `rating_scales`, `rating_levels`, `reports`
+Email templates: feedback returned, homework due reminder (off by default for under-13s)
 
-RPCs: `create_assignment`, `assign_homework`, `submit_homework` (auto-marks MCQ/numeric/expression; subjective queued for manual teacher marking), `draft_report`, `publish_report` (audited)
+Views: `v_homework_completion`, `v_submission_summary`
 
-Railway endpoints: `POST /v1/homework/import-pdf`, `POST /v1/reports/:id/pdf` (render → R2), `POST /v1/reports/:id/send` *(optional)*
+Tests: isolation + auto-mark logic unit tests (all six question types) + teacher marking flow (manual marks + comments on subjective types)
 
-> **B1 — removed:** `POST /v1/homework/submissions/:id/draft-feedback` and its sibling, and the `approve_feedback` RPC. No Anthropic/AI call anywhere.
+UI: assignment builder (six question types), student submission view, teacher marking queue
 
-Email templates: report published (to guardians — no login), feedback returned, homework due reminder (off by default for under-13s)
+**Exit:** homework set, submitted, auto-marked (objective types), teacher-marked (subjective types) and returned to the student.
 
-Views: `v_homework_completion`, `v_submission_summary`, `v_reports_due` (**derived** due/upcoming engine from rules × frequency × existing reports; skips Optional — never stored due-flags)
+---
 
-Tests: isolation + auto-mark logic unit tests (all six question types) + report due-engine derivation (frequency × existing reports, Optional skipped) + report visibility (student sees own `published` only; guardian by email only) + publish audited
+## Phase 8b — Student Reports & Teacher Feedback ⟶ Milestone M1: pilot-ready
+**Type:** vertical slice · **flagship** · **Milestone M1**
 
-UI: assignment builder (six question types), student submission view, teacher marking queue; report templates + rating scales, report drafting from a rule or ad-hoc, upcoming/overdue reports card, publish + PDF
+The product's differentiator — human-authored written reports, the successor to the deleted AI-feedback feature.
+
+Tables: `report_rules`, `report_templates`, `rating_scales`, `rating_levels`, `reports`
+
+RPCs: `publish_report` (audited — locks content, renders PDF, queues guardian email)
+
+Railway endpoints: `POST /v1/student-reports/:id/pdf`, `POST /v1/student-reports/:id/send`
+
+Views: `v_reports_due` (**derived** due/upcoming queue from rules × frequency × existing reports — due-ness never stored)
+
+Email templates: report published (to guardians, PDF attached)
+
+Tests: isolation + due-engine unit tests (each frequency × existing-report combination) + student sees `published` only + publish is audited + 4-tier ratings resolve through the scale tables
+
+UI: report rules manager, template editor, ratings taxonomy settings, teacher due/upcoming queue, report writer, published-report student view, PDF export
 
 **M1 exit criteria:**
-
 - Centre admin can self-onboard (invite staff, create students, set term, create class, enrol students)
 - Daily operations loop works: class → register → timesheet → invoice → payment
-- Homework set, submitted, auto-marked (objective) and manually marked (subjective)
-- **Report drafted, published, and PDF delivered** (B1 — replaces "AI feedback drafted and approved")
+- Homework set, submitted, auto-marked and teacher-marked
+- Report rule creates due entries; teacher writes and publishes a report; guardian receives the PDF
 - PostHog initialised (EU cloud, staff roles only, student never tracked)
 - One friendly centre running as pilot
 
 ---
 
-## Phase 8b — Teacher working tools (Tracking + Lesson planner)
-
-**Type:** vertical slice *(B6 — shares the "teacher working tools" theme; renumber the tail if preferred)*
-
-Tables: `trackers`, `tracker_columns`, `tracker_entries` (A13); `lesson_plans` (A14)
-
-Views: tracker read models as needed
-
-Tests: isolation (teacher own-classes read/write; centre_admin read; **student no access** to trackers) + `UNIQUE (column_id, student_id)` enforced + lesson-plan scoping
-
-UI: Tracking Hub → Detail (typed columns score/check/text, keyboard nav, settings slide-over); lesson planner (per-class, optional per-session)
-
-**Exit:** teacher builds a tracker grid and enters values; students cannot see it; lesson plans persist per class/session.
-
----
-
 ## Phase 9 — Messaging
-
 **Type:** vertical slice · **safeguarding-critical**
 
 Tables: `conversations`, `conversation_participants`, `messages`, `message_flags`, `flag_rules`
@@ -289,7 +280,6 @@ UI: conversation list, thread view, message composer, DSL flag queue
 ---
 
 ## Phase 10 — Safeguarding incidents
-
 **Type:** vertical slice · **safeguarding-critical**
 
 Tables: `safeguarding_incidents`, `safeguarding_incident_notes`
@@ -307,14 +297,13 @@ UI: concern-raise button (always visible to staff), DSL incident log, incident t
 ---
 
 ## Phase 11 — Notifications + preferences
-
 **Type:** vertical slice
 
 Tables: `notifications`, `notification_prefs`
 
 Realtime: per-user notification channel (bell + badge counts)
 
-`pg_cron`: storage quota warnings (80% + 100% of pooled account quota)
+pg_cron: storage quota warnings (80% + 100% of pooled account quota)
 
 Views: `v_unread_notification_count`
 
@@ -327,12 +316,13 @@ UI: notification bell + dropdown, preferences page, read/unread state
 ---
 
 ## Phase 12 — Analytics Exports
+**Type:** vertical slice
 
-**Type:** vertical slice *(B5 — renamed from "Reports" to avoid colliding with the product's Student Reports feature)*
+> Renamed from "Reports" — that name belongs to the student-report-writing product domain (Phase 8b). This phase is admin analytics views + exports.
 
 Views: `v_attendance_report`, `v_results_report`, `v_timesheet_report`, `v_invoice_report`, `v_student_progress`
 
-Railway endpoints: `GET /v1/reports/:key/export` (CSV + PDF) — analytics/export exports, distinct from the product Reports domain
+Railway endpoints: `GET /v1/exports/:key` (CSV + PDF — renamed from `/v1/reports/*` to avoid the collision)
 
 Tables: `data_requests` (SAR/erasure lifecycle)
 
@@ -340,63 +330,71 @@ Tests: each view returns correct data for the role; export endpoint enforces ten
 
 UI: analytics browser, filters, export buttons, date-range picker
 
-**Exit:** admin exports attendance analytics as CSV; data matches `attendance_records`; cross-tenant rows absent.
+**Exit:** admin exports attendance analytics as CSV; data matches attendance_records; cross-tenant rows absent.
 
 ---
 
-## Phase 13 — Stripe billing (+ plan override codes) ⟶ Milestone M2
+## Phase 12b — Tracking + Lesson Planner
+**Type:** vertical slice · teacher working tools
 
+Tables: `trackers`, `tracker_columns`, `tracker_entries`, `lesson_plans`
+
+Views: none — grids read directly; keep cell writes cheap
+
+Tests: isolation (teacher sees own classes' trackers only; students have **no access** — internal working data); typed-column validation (score respects max, check is boolean); UNIQUE (column, student) upsert semantics
+
+UI: Tracking Hub → Detail two-state structure (typed columns, keyboard navigation, settings slide-over — per the redesign spec), lesson planner with optional session pinning
+
+**Exit:** teacher builds a tracker with score/check/text columns, fills cells with keyboard navigation; a student account cannot read any tracker row; lesson plans persist across sessions.
+
+---
+
+## Phase 13 — Stripe billing ⟶ Milestone M2
 **Type:** vertical slice · **Milestone M2**
 
-Tables: `plans`, `subscriptions` (with `redeemed_code_id`), `plan_codes`, `plan_code_redemptions` (A11), `feature_flags`, `centre_settings`, `storage_addons`
+Tables: `plans`, `subscriptions` (incl. `redeemed_code_id`), `plan_codes`, `plan_code_redemptions`, `storage_addons`, `feature_flags`, `centre_settings`
 
-RPCs: `redeem_plan_code` (audited)
+RPCs: `manage_plan_code`, `redeem_plan_code` (validates max_redemptions, logs redemption — audited)
 
 Railway endpoints: `POST /v1/billing/checkout`, `POST /v1/billing/portal`, `POST /v1/webhooks/stripe` (idempotent via `processed_events`)
 
 Email templates: subscription payment failed
 
-Tests: webhook idempotency (replay produces no duplicate rows), plan limits enforced via `feature_flags`, plan-code override (free_trial/percent_off/fixed_price for N months) resolves to the correct effective price and expires
+Tests: webhook idempotency (replay produces no duplicate rows), plan limits enforced via feature_flags, code redemption (each kind: free_trial / percent_off / fixed_price; max_redemptions enforced; duration expiry), storage add-on raises effective quota
 
-UI: plan picker (account owner), billing portal link, redeem-code + billing details (admin Billing settings tab), superadmin plan-code management, feature-gated UI surfaces
+UI: plan picker (account owner), promo-code redemption in the billing tab, superadmin plan-code manager, billing portal link, feature-gated UI surfaces
 
 **M2 exit criteria:**
-
 - Account owner can subscribe via Stripe Checkout
 - Plan limits enforced (seats, storage, centres)
-- Price-override codes redeemable and time-bounded
 - Stripe in live mode with real business details
 - Full audit trail from Phase 1 covering all audited RPCs
 
 ---
 
-## Phase 14 — Superadmin + privacy (+ maintenance mode) ⟶ Milestone M3
-
+## Phase 14 — Superadmin + privacy ⟶ Milestone M3
 **Type:** vertical slice · **Milestone M3**
 
-Tables: `platform_settings` (maintenance mode + impersonation banner — A11/B6)
+Railway endpoints: `POST /v1/admin/accounts`, `POST /v1/admin/accounts/:id/suspend`, `POST /v1/privacy/erasure`, `POST /v1/privacy/sar-export`, `GET /v1/jobs/:id` (poll async jobs — GET, matching the reference and Phase 15)
 
-Railway endpoints: `POST /v1/admin/accounts`, `POST /v1/admin/accounts/:id/suspend`, `POST /v1/privacy/erasure`, `POST /v1/privacy/sar-export`, `GET /v1/jobs/:id` (poll async jobs — B4, was erroneously `POST`)
+RPCs: `provision_account` (also listed in Phase 1 — intentional: the RPC ships in Phase 1, the superadmin UI for it ships here), `set_account_plan`, `toggle_feature_flag` (global maintenance mode = `account: null, key: 'maintenance_mode'`), `start_support_session` (scoped, time-boxed, audited)
 
-RPCs: `provision_account` *(see Phase 1 note — intentional re-listing, B8)*, `set_account_plan`, `toggle_feature_flag`, `set_maintenance_mode` (audited), `start_support_session` (scoped, time-boxed, audited — completes the impersonation feature, with the impersonation banner sourced from `platform_settings`, B6)
+Maintenance mode + impersonation: global maintenance banner (feature-flag driven, superadmin toggle); impersonation banner visible for the whole `start_support_session` window, session appears in the impersonation log
 
 Email templates: import job finished, SAR export ready
 
-Tests: superadmin cannot access centre-level data outside their scope; erasure anonymises profile but preserves safeguarding records; SAR bundle is complete; maintenance mode gates non-superadmin access; impersonation banner shows during a support session
+Tests: superadmin cannot access centre-level data outside their scope; erasure anonymises profile but preserves safeguarding records; SAR bundle is complete
 
-UI: superadmin dashboard (platform health, account list, impersonation log, maintenance toggle), privacy request workflow
+UI: superadmin dashboard (platform health, account list, impersonation log), maintenance-mode toggle + banner, impersonation banner, privacy request workflow
 
 **M3 exit criteria:**
-
 - Superadmin can provision, suspend and restore accounts
 - Erasure anonymises without deleting safeguarding records (anonymise-not-delete)
 - SAR export produces a complete bundle
-- Maintenance mode + impersonation banner operational
 
 ---
 
 ## Phase 15 — Bulk import/export
-
 **Type:** vertical slice
 
 Railway endpoints: `POST /v1/students/import`, `GET /v1/jobs/:id`
@@ -412,13 +410,12 @@ UI: import wizard (CSV upload, validation preview, confirm), job status polling
 ---
 
 ## Phase 16 — Hardening + AADC review ⟶ Milestone M4
-
 **Type:** horizontal hardening · **Milestone M4**
 
 - AADC formal review: student-role surface audit, streak/nudge audit, privacy defaults, rank exposure
 - PostHog audit: confirm student role events are zero
 - Sentry alert rules, source-map upload, release tagging formalised
-- `pg_cron` retention/anonymisation sweeps (GDPR data lifecycle)
+- pg_cron retention/anonymisation sweeps (GDPR data lifecycle)
 - Performance: query plan review on every `v_*` view; add indexes where needed
 - Security: RLS policy audit against reference matrix; rate limit tuning; webhook signature verification audit
 - Accessibility: contrast, keyboard navigation, focus management pass across all UI surfaces
@@ -429,10 +426,10 @@ UI: import wizard (CSV upload, validation preview, confirm), job status polling
 ---
 
 ## Phase 17 — Marketing site + onboarding polish ⟶ Milestone M5
-
 **Type:** vertical slice · **Milestone M5**
 
-- `klasio-marketing` repo: **Next.js** static/SSG site (decision #18 — overrides the earlier Astro reference), `klasio.com`, SEO, structured data
+- `klasio-marketing` repo: **Next.js** site (decision #19 — supersedes the earlier Astro note), `klasio.com`, SEO, structured data. Marketing owns top-of-funnel; console activation funnel starts at "Started signup"
+- Reconcile pricing tier names between marketing and console (Starter/Growth/Scale vs Basic/Growth/Pro) — one canonical set
 - In-app onboarding: guided first-run flow for new account owners (create centre → invite staff → create first class)
 - In-app help: contextual tips, empty-state guidance
 - Email: owner welcome sequence (transactional, not marketing)
@@ -442,11 +439,10 @@ UI: import wizard (CSV upload, validation preview, confirm), job status polling
 ---
 
 ## Phase 18 — Launch ⟶ Milestone M6
-
 **Type:** horizontal launch preparation · **Milestone M6**
 
-- Custom domain live (`app.klasio.app`, `klasio.com`)
-- Storage-key cutover: one-shot migration of legacy `tutoros.*` keys to `klasio.*` (A8 — not piecemeal)
+- Custom domain live (`app.klasio.com`, `klasio.com`)
+- Storage-key migration: one-shot `tutoros.*` → `klasio.*` cutover (never piecemeal)
 - Stripe live mode activated with real business details
 - All accounts migrated from test to live Stripe
 - Runbook: incident response, backup restore, scaling playbook
@@ -460,12 +456,12 @@ UI: import wizard (CSV upload, validation preview, confirm), job status polling
 ## Milestone summary
 
 | Milestone | Phase | Signal |
-| :-: | :-: | :-: |
-| M1 — Pilot ready | 8 | Daily ops loop works; homework + student reports live; one friendly centre live |
-| M2 — Billing live | 13 | Stripe live; plan limits + override codes enforced |
-| M3 — Platform complete | 14 | Superadmin + privacy + maintenance controls operational |
+|---|---|---|
+| M1 — Pilot ready | 8b | Daily ops loop + reports flagship work; one friendly centre live |
+| M2 — Billing live | 13 | Stripe live; plan limits enforced |
+| M3 — Platform complete | 14 | Superadmin + privacy controls operational |
 | M4 — Production hardened | 16 | AADC review done; performance + security pass |
-| M5 — Marketing live | 17 | Public-facing site (Next.js); onboarding polished |
+| M5 — Marketing live | 17 | Public-facing site; onboarding polished |
 | M6 — Launch | 18 | Public launch; paying customers |
 
 ---
@@ -485,4 +481,4 @@ A phase is not done until all of the following are true:
 
 ---
 
-*Last updated: **pre-Phase 0 — prototype only** (B2). No phase has started; the app in this repo is the prototype/behavioural spec. Update the relevant section header and inventory doc as each phase ships.*
+*Last updated: pre-Phase 0 — prototype only; no monorepo, CI, or `/health` exists yet. Update this line and the relevant inventory doc as each phase ships.*

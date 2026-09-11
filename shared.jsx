@@ -12,9 +12,9 @@
 //   sidebar 232px + content
 //   1664 viewport → content 1432px (uncapped — reads as full width)
 //   1920 viewport → content 1600px (44px each side)
-//   2560 viewport → content 1600px (centred, 464px each side)
+//   2560 viewport → content 1800px (centred, 464px each side)
 const LAYOUT = {
-  max:     1600,  // cap for standard pages — centres on large monitors
+  max:     1800,  // cap for standard pages — centres on large monitors
   narrow:   900,  // forms, wizards and editors that want a readable measure
   gutter:    32,  // horizontal padding, both sides
   top:       32,  // space between the sticky header and the first element
@@ -376,6 +376,91 @@ const StatCard = ({ label, value, sub, trend, trendDir, icon }) => {
   );
 };
 
+// ─── Stat Band ─────────────────────────────────────────────────────────────────
+// ONE card carrying every headline number for a page, instead of a row of
+// separate KPI tiles. Columns are divided by hairlines rather than by gaps and
+// borders, so the strip reads as a single object: big tabular figures, small
+// uppercase labels above them, a quiet sub line underneath. Three densities let
+// the same primitive fit pages with very different amounts of room:
+//   band    — the default. A full card; the page's headline numbers.
+//   compact — the same card at ~2/3 scale, for a secondary//detail surface.
+//   plain   — no card at all; a bare divided strip that sits directly under a
+//             PageHeader on pages whose real content is the table beneath it.
+// A stat is { label, value, sub, tone, icon, onClick }. `tone` colours ONLY the
+// figure and only when the number means something is wrong — a band of black
+// numbers with one amber one is readable at a glance; five colours is not.
+const StatBandItem = ({ stat, scale, first, clickable }) => {
+  const [hov, setHov] = React.useState(false);
+  const on = clickable && !!stat.onClick;
+  return (
+    <div
+      onClick={stat.onClick}
+      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+      title={stat.hint || undefined}
+      style={{
+        borderLeft: `1px solid ${DS.border}`,
+        padding: scale.pad, minWidth: 0, marginLeft: first ? 0 : undefined,
+        cursor: on ? 'pointer' : 'default',
+        background: on && hov ? DS.surface : 'transparent',
+        transition: 'background 0.12s ease',
+      }}
+    >
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 6,
+        fontSize: scale.label, fontWeight: 600, letterSpacing: '0.07em',
+        textTransform: 'uppercase', color: DS.faint,
+        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+      }}>
+        {stat.icon && <Icon name={stat.icon} size={scale.label} color={DS.faint} />}
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{stat.label}</span>
+      </div>
+      <div style={{
+        fontSize: scale.value, fontWeight: 700, lineHeight: 1.1, marginTop: scale.gap,
+        letterSpacing: '-0.9px', fontVariantNumeric: 'tabular-nums',
+        color: stat.tone || DS.text,
+      }}>{stat.value}</div>
+      {stat.sub && (
+        <div style={{
+          fontSize: scale.sub, color: DS.muted, marginTop: 4,
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        }}>{stat.sub}</div>
+      )}
+    </div>
+  );
+};
+
+const STAT_BAND_SCALE = {
+  band:    { value: 32, label: 10.5, sub: 12,   gap: 8, pad: '4px 22px', min: 150 },
+  compact: { value: 23, label: 10,   sub: 11.5, gap: 6, pad: '2px 18px', min: 130 },
+  plain:   { value: 25, label: 10,   sub: 11.5, gap: 6, pad: '2px 20px', min: 140 },
+};
+
+const StatBand = ({ stats = [], variant = 'band', style }) => {
+  const list = stats.filter(Boolean);
+  if (!list.length) return null;
+  const scale = STAT_BAND_SCALE[variant] || STAT_BAND_SCALE.band;
+  const shell = variant === 'plain'
+    ? { padding: '2px 0 18px' }
+    : {
+      background: DS.card, border: `1px solid ${DS.cardBorder}`, boxShadow: DS.cardShadow,
+      borderRadius: 12, padding: variant === 'compact' ? '16px 4px' : '20px 4px',
+    };
+  return (
+    // The -1px pull inside an overflow-hidden shell hides the leading divider on
+    // every wrapped row, so a band that reflows still starts flush on each line.
+    <div style={{ ...shell, overflow: 'hidden', ...style }}>
+      <div style={{
+        display: 'grid', gridTemplateColumns: `repeat(auto-fit, minmax(${scale.min}px, 1fr))`,
+        rowGap: 16, marginLeft: -1,
+      }}>
+        {list.map((s, i) => (
+          <StatBandItem key={s.label || i} stat={s} scale={scale} first={i === 0} clickable />
+        ))}
+      </div>
+    </div>
+  );
+};
+
 // ─── Sidebar ───────────────────────────────────────────────────────────────────
 // Settings is one shared tabbed page per role: a role-specific first tab, then the
 // common Notifications / Appearance / Account tabs. Build the sidebar sub-items so
@@ -538,10 +623,27 @@ const NAV_CONFIG = {
   },
 };
 
+// Routes whose nav parent the `<id>_<detail>` → `<id>s` rule can't reach: either
+// the singular→plural step isn't a bare "+s" (class → classes), or the page id
+// shares no stem with its nav item (claim_slips lives under People & invites).
+// Without an entry here a drill-in page loses its parent — the sidebar stops
+// highlighting the section and the breadcrumb falls back to a bare stem.
+const PAGE_NAV_PARENT = {
+  class_detail:    'classes',
+  class_roster:    'classes',
+  invite_teachers: 'teachers',
+  claim_slips:     'people',
+  lesson_planner:  'lesson_planner',
+};
+
 // The page id is the part before any `:` — sub-sections use a `<parent>:<sub>`
 // convention (e.g. reports:browse) while ordinary sub-pages use `<id>_<detail>`
-// (e.g. students_add). Both fold back to the parent for nav highlighting.
-const navParentId = (active) => (active || '').split(':')[0].split('_')[0];
+// (e.g. students_add). Both fold back to the parent for nav highlighting and
+// for the breadcrumb trail.
+const navParentId = (active) => {
+  const id = (active || '').split(':')[0];
+  return PAGE_NAV_PARENT[id] || id.split('_')[0];
+};
 
 // Hover states on the grey sidebar need a *lighter* (white-ish) wash than the
 // page primitives' DS.surfaceHover, which is nearly the same grey as the bar.
@@ -756,7 +858,7 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
 
     return (
       <div
-        style={{ position: 'relative' }}
+        style={{ position: 'relative', flexShrink: 0 }}
         onMouseEnter={() => collapsed && openFlyout(item.id)}
         onMouseLeave={() => collapsed && closeFlyout()}
       >
@@ -767,31 +869,36 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
           title={collapsed ? item.label : undefined}
           style={{
             display: 'flex', alignItems: 'center', gap: 10,
-            padding: collapsed ? '9px 0' : '8px 12px',
+            // Collapsed rows carry a slightly larger icon on slightly tighter
+            // vertical padding, so the row height stays ~the same as expanded
+            // (the whole list still has to fit without scrolling — flyouts need
+            // overflow:visible, so a scrollbar isn't an option here).
+            padding: collapsed ? '7px 0' : '6px 12px',
             justifyContent: collapsed ? 'center' : 'flex-start',
-            borderRadius: 7, width: '100%',
+            borderRadius: 6, width: '100%',
             border: 'none', background: isActive ? DS.accentLight : isHovered ? SIDE_HOVER : 'transparent',
             color: isActive ? DS.accent : DS.sub,
-            cursor: 'pointer', fontSize: 14, fontWeight: isActive ? 600 : 400,
+            cursor: 'pointer', fontSize: 13.5, fontWeight: isActive ? 500 : 400,
             textAlign: 'left', transition: 'background 0.12s', position: 'relative',
           }}
         >
-          <Icon name={item.icon} size={16} color={isActive ? DS.accent : DS.muted} />
+          <Icon name={item.icon} size={collapsed ? 18 : 16} color={isActive ? DS.accent : DS.muted} />
           {!collapsed && <span style={{ flex: 1, minWidth: 0 }}>{item.label}</span>}
           {/* When collapsed, surface unread counts as a small corner dot */}
+          {/* Collapsed: a quiet presence dot, not an alert. */}
           {collapsed && badgeCount > 0 && (
             <span style={{
               position: 'absolute', top: 5, right: 9,
-              width: 7, height: 7, borderRadius: '50%',
-              background: DS.danger, border: `1.5px solid ${DS.sidebarBg}`,
+              width: 6, height: 6, borderRadius: '50%',
+              background: DS.faint, border: `1.5px solid ${DS.sidebarBg}`,
             }} />
           )}
           {!collapsed && badgeCount > 0 && (
             <span style={{
-              minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9,
-              background: DS.danger, color: '#fff', fontSize: 10.5, fontWeight: 700,
-              display: 'flex', alignItems: 'center', justifyContent: 'center', marginLeft: 'auto',
-            }}>{badgeCount > 9 ? '9+' : badgeCount}</span>
+              fontSize: 12, fontWeight: 400, color: DS.muted,
+              fontVariantNumeric: 'tabular-nums',
+              marginLeft: 'auto', paddingLeft: 6,
+            }}>{badgeCount > 99 ? '99+' : badgeCount}</span>
           )}
           {!collapsed && (hasSub ? (
             <span
@@ -811,12 +918,7 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
             <span style={{ display: 'flex', alignItems: 'center', marginLeft: 'auto' }}>
               <Icon name="chevron_r" size={15} color={isActive ? DS.accent : DS.faint} />
             </span>
-          ) : isActive && (
-            <div style={{
-              width: 5, height: 5, borderRadius: '50%',
-              background: DS.accent, marginLeft: 'auto',
-            }} />
-          ))}
+          ) : null)}
         </button>
 
         {/* Expanded sub-items — indented under a vertical guide line */}
@@ -874,10 +976,10 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
         onMouseLeave={() => setHoveredItem(null)}
         style={{
           display: 'flex', alignItems: 'center', gap: 8, width: '100%',
-          padding: '7px 10px', borderRadius: 6, border: 'none',
+          padding: '5px 10px', borderRadius: 6, border: 'none',
           background: isActive ? DS.accentLight : isHovered ? (inFlyout ? DS.surfaceHover : SIDE_HOVER) : 'transparent',
           color: isActive ? DS.accent : DS.muted,
-          cursor: 'pointer', fontSize: 13.5, fontWeight: isActive ? 600 : 400,
+          cursor: 'pointer', fontSize: 13, fontWeight: isActive ? 500 : 400,
           textAlign: 'left', transition: 'background 0.12s', whiteSpace: 'nowrap',
         }}
       >
@@ -909,7 +1011,7 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
           sidebar + content header. The centre switcher now lives at the bottom
           of the bar. */}
       <div style={{
-        height: 52, boxSizing: 'border-box',
+        height: 52, boxSizing: 'border-box', flexShrink: 0,
         display: 'flex', flexDirection: 'column', justifyContent: 'center',
         borderBottom: `1px solid ${DS.border}`,
         marginBottom: 8,
@@ -921,18 +1023,22 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
 
       {/* Role switcher (demo) — hidden while collapsed */}
       {onRoleSwitch && !collapsed && (
-        <div style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 10, color: DS.faint, padding: '4px 4px 6px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Switch view</div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
-            {[['superadmin','Owner'],['admin','Admin'],['teacher','Teacher'],['student','Student']].map(([r,lbl]) => (
-              <button key={r} onClick={() => onRoleSwitch(r)} style={{
-                padding: '4px 6px', borderRadius: 5, border: `1px solid ${role === r ? DS.accentBorder : DS.border}`,
-                background: role === r ? DS.accentLight : DS.bg,
-                color: role === r ? DS.accent : DS.muted,
-                fontSize: 10, fontWeight: role === r ? 600 : 400, cursor: 'pointer',
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 2, marginBottom: 10,
+          padding: 2, background: DS.surface, borderRadius: 6,
+        }}>
+          {[['superadmin','Owner'],['admin','Admin'],['teacher','Teacher'],['student','Student']].map(([r,lbl]) => (
+            <button key={r} onClick={() => onRoleSwitch(r)}
+              aria-pressed={role === r}
+              title={`View the app as ${lbl}`}
+              style={{
+                flex: 1, padding: '3px 4px', borderRadius: 4, border: 'none',
+                background: role === r ? DS.bg : 'transparent',
+                color: role === r ? DS.sub : DS.faint,
+                fontSize: 11, fontWeight: role === r ? 500 : 400, cursor: 'pointer',
+                transition: 'background 0.12s',
               }}>{lbl}</button>
-            ))}
-          </div>
+          ))}
         </div>
       )}
 
@@ -942,6 +1048,10 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
           hidden in the icon-only collapsed bar. */}
       <nav style={{
         flex: 1, display: 'flex', flexDirection: 'column', gap: 2,
+        // minHeight:0 lets the nav shrink below its content height. Rows are
+        // flexShrink:0, so the only give is in the collapsed group spacers —
+        // they compress (7px → 0) on a short viewport before anything else does.
+        minHeight: 0,
         // Collapsed the bar is icon-only and flyouts must escape it, so nothing clips.
         // Expanded it scrolls vertically only — a stray horizontal bar under a long
         // label would sit right on the content edge.
@@ -950,14 +1060,24 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
       }}>
         {navItems.map((item, i) => {
           const prev = navItems[i - 1];
+          const startsGroup = !!prev && prev.section !== item.section;
           const showLabel = !collapsed && item.section && (!prev || prev.section !== item.section);
+          // Collapsed hides the section labels, which otherwise supply all the
+          // spacing between groups — without them the icons read as one
+          // undifferentiated strip. A small spacer keeps the grouping legible
+          // at a fraction of the label's height.
+          const showGap = collapsed && startsGroup;
           return (
             <React.Fragment key={item.id}>
+              {/* Shrinkable on purpose: on a short viewport the gaps give way
+                  before the rows do, so the icon list still fits without
+                  scrolling (collapsed nav can't scroll — flyouts need to escape it). */}
+              {showGap && <div style={{ height: 7 }} />}
               {showLabel && (
                 <div style={{
-                  fontSize: 10, fontWeight: 600, color: DS.faint,
-                  textTransform: 'uppercase', letterSpacing: '0.07em',
-                  padding: '0 12px', margin: i === 0 ? '2px 0 4px' : '12px 0 4px',
+                  fontSize: 11.5, fontWeight: 500, color: DS.faint,
+                  padding: '0 12px', margin: i === 0 ? '2px 0 3px' : '14px 0 3px',
+                  flexShrink: 0,
                 }}>{item.section}</div>
               )}
               <NavItem item={item} />
@@ -1048,6 +1168,95 @@ const PageHeader = ({ title, subtitle, actions }) => (
     {actions && <div style={{ display: 'flex', gap: 8 }}>{actions}</div>}
   </div>
 );
+
+// ─── Breadcrumb trail (in-page nesting) ────────────────────────────────────────
+// The header crumb trail is derived from NAV_CONFIG (section › page › sub-section),
+// which only knows about *routed* nav ids. But most of the product nests further
+// inside a single route: a class workspace, a student profile, a homework
+// assignment, a report editor, a wizard step. Those screens declare the rest of
+// the trail here and the header appends it, so the crumbs always describe where
+// you actually are:
+//
+//   usePageTrail([{ label: 'Year 10 Maths', onClick: backToClasses }, { label: 'Students' }])
+//   → "Teaching › My Classes › Year 10 Maths › Students"
+//
+// Rules: a crumb with `onClick` is a level you can return to and renders
+// clickable; the deepest crumb is where you are, so it never needs one. A screen
+// with no nesting calls nothing — a layer clears itself when its owner unmounts.
+//
+// The optional second argument is the LAYER, so nesting can be declared by the
+// component that actually owns each level rather than being threaded through
+// props: a detail page declares its entity at layer 0 and the tab view inside it
+// declares the active tab at layer 1. Layers merge in ascending order.
+let PAGE_TRAIL = [];
+const TRAIL_LAYERS = new Map();
+const TRAIL_SUBS = new Set();
+const recomputeTrail = () => {
+  PAGE_TRAIL = [...TRAIL_LAYERS.keys()].sort((a, b) => a - b)
+    .reduce((acc, k) => acc.concat(TRAIL_LAYERS.get(k)), []);
+  TRAIL_SUBS.forEach(fn => fn(PAGE_TRAIL));
+};
+const setPageTrail = (crumbs, layer = 0) => {
+  const list = (crumbs || []).filter(c => c && c.label);
+  if (list.length) TRAIL_LAYERS.set(layer, list); else TRAIL_LAYERS.delete(layer);
+  recomputeTrail();
+};
+const subscribePageTrail = (fn) => { TRAIL_SUBS.add(fn); return () => TRAIL_SUBS.delete(fn); };
+
+const usePageTrail = (crumbs, layer = 0) => {
+  const list = (crumbs || []).filter(c => c && c.label);
+  // Labels alone key the effect: handlers change identity on every render, so
+  // they're read from a ref at click time instead (always the latest closure).
+  const key = list.map(c => c.label).join(' › ');
+  const ref = React.useRef(list);
+  ref.current = list;
+  React.useEffect(() => {
+    setPageTrail(ref.current.map((c, i) => ({
+      label: c.label,
+      onClick: c.onClick ? () => { const cur = ref.current[i]; if (cur && cur.onClick) cur.onClick(); } : null,
+    })), layer);
+  }, [key, layer]);
+  // Clearing on unmount is safe across a screen swap: React runs the outgoing
+  // screen's cleanup before the incoming screen's effects.
+  React.useEffect(() => () => setPageTrail([], layer), [layer]);
+};
+
+// Live trail for the header. (Module state, not context — the header lives in a
+// different render tree root than the routed page.)
+const usePageTrailValue = () => {
+  const [trail, setTrail] = React.useState(PAGE_TRAIL);
+  React.useEffect(() => subscribePageTrail(setTrail), []);
+  return trail;
+};
+
+// ─── Back control ──────────────────────────────────────────────────────────────
+// THE back control for the whole product. One design, one placement: a hairline
+// pill on its own line, flush with the content gutter, directly above the page
+// title (or hero banner). Pages must not roll their own "← Back to X" — drop this
+// in as the first child of <Page> and name the destination in `label`.
+const BackLink = ({ onClick, label = 'Back', style = {} }) => {
+  const [hov, setHov] = React.useState(false);
+  return (
+    <button type="button" onClick={onClick}
+      title={label === 'Back' ? 'Back' : `Back to ${label}`}
+      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 5,
+        height: 30, padding: '0 12px 0 8px', marginBottom: 16,
+        borderRadius: 999, border: `1px solid ${DS.borderDark}`,
+        background: hov ? DS.surface : 'transparent',
+        color: hov ? DS.text : DS.sub, fontSize: 12.5, fontWeight: 600,
+        cursor: 'pointer', whiteSpace: 'nowrap', maxWidth: '100%',
+        transition: 'background 0.12s, border-color 0.12s, color 0.12s',
+        ...style,
+      }}>
+      <span style={{ display: 'flex', transform: hov ? 'translateX(-2px)' : 'none', transition: 'transform 0.12s' }}>
+        <Icon name="chevron_l" size={14} color={hov ? DS.text : DS.muted} strokeWidth={2.2} />
+      </span>
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
+    </button>
+  );
+};
 
 // ─── Button ────────────────────────────────────────────────────────────────────
 const Btn = ({ variant = 'primary', children, icon, onClick, small, style = {}, disabled = false }) => {
@@ -2351,7 +2560,8 @@ const Combobox = ({
 // ─── Export ────────────────────────────────────────────────────────────────────
 Object.assign(window, {
   DS, LAYOUT, pageFrame, Page,
-  Icon, Badge, StatusPill, Avatar, KPICard, StatCard, shadeColor, Sidebar, PageHeader, Btn, Card,
+  Icon, Badge, StatusPill, Avatar, KPICard, StatCard, StatBand, shadeColor, Sidebar, PageHeader, Btn, Card,
+  BackLink, usePageTrail, usePageTrailValue, setPageTrail,
   HERO_TXT, heroSurface, HeroSolidBtn, HeroGhostBtn, HoverRow,
   Table, TableRow, RowActionsMenu, Checkbox, Sparkline, LineChart, BarChart, ScorePill, Divider, NAV_CONFIG, navParentId,
   Modal, Field, Input, Textarea, Select, Segmented, TabNav, TabBtn, SearchInput, EmptyState,

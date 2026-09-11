@@ -2,10 +2,10 @@
 //  Klasio — Extra Teacher Pages
 // ══════════════════════════════════════════════════════════════
 
-// Mock data (teacherClasses, homeworkFull, teacherAllClasses,
-// DEFAULT_TRACKERS) lives in mocks/teacherPages.mock.jsx, loaded before this
-// file in index.html. The Reports page is provided by Reports.jsx
-// (window.TeacherReports).
+// Mock data (teacherClasses, teacherAllClasses, DEFAULT_TRACKERS) lives in
+// mocks/teacherPages.mock.jsx, loaded before this file in index.html. Homework
+// figures come from the homework store via window.klasioHomework — never a seed
+// list. The Reports page is provided by Reports.jsx (window.TeacherReports).
 
 // ─── Classes Page ───────────────────────────────────────────────────────────────
 // The class list is a launch pad into each class, not a register. A row click opens
@@ -334,13 +334,20 @@ const ClassDetailShell = ({
   tabs, activeTab, onTab, children,
 }) => {
   const grad = classBannerGradient(bannerTheme, color);
+  // Every class workspace (teacher, admin, student) renders through this shell, so
+  // it's also the one place that declares the class → tab nesting to the header
+  // breadcrumb: "… › My Classes › Year 10 Maths › Roster".
+  const activeLabel = ((tabs || []).find(t => t.id === activeTab) || {}).label;
+  // The class crumb returns to the workspace's own landing tab (the list above it
+  // is already covered by the nav crumb, e.g. "My Classes").
+  const first = (tabs || [])[0];
+  usePageTrail([
+    { label: title, onClick: first ? () => onTab && onTab(first.id) : null },
+    { label: activeLabel },
+  ]);
   return (
     <div style={pageFrame()}>
-      {onBack && (
-        <button onClick={onBack} style={{ display:'inline-flex', alignItems:'center', gap:6, background:'none', border:'none', cursor:'pointer', color:DS.muted, fontSize:13, fontWeight:500, padding:0, marginBottom:14 }}>
-          <Icon name="chevron_l" size={15} color={DS.muted} /> {backLabel}
-        </button>
-      )}
+      {onBack && <BackLink onClick={onBack} label={backLabel} />}
 
       {preBanner}
 
@@ -532,10 +539,13 @@ const ClassStudentsTab = ({ cls, color, goProfile }) => {
 // ── Homework tab ────────────────────────────────────────────────────────────────
 const ClassHomeworkTab = ({ cls, color, classHw }) => {
   const hwStatusVariant = { open:'default', marking:'warning', complete:'success' };
-  const active = classHw.filter(h => h.status !== 'complete').length;
-  const toMark = classHw.filter(h => h.status === 'marking').length;
-  const sub = classHw.reduce((s, h) => s + h.submitted, 0), tot = classHw.reduce((s, h) => s + h.total, 0);
-  const rate = tot ? Math.round(sub / tot * 100) : 0;
+  // Every figure here comes from the one homework selector.
+  const counts = window.klasioHomework
+    ? window.klasioHomework.getHomeworkCounts({ classLabel: cls.group })
+    : { active:0, toMark:0, submissionRate:0, total:0 };
+  const active = counts.active;
+  const toMark = counts.toMark;
+  const rate = counts.submissionRate;
   const goHw = () => window.__navigate && window.__navigate('teacher', 'homework');
   return (
     <div>
@@ -916,15 +926,9 @@ const TeacherClassDetailPage = () => {
   const subject = cls.name.replace(/^(GCSE|A-?Level)\s+/i, '');
   const code    = classJoinCode(cls.id, cls.group);
 
-  // Homework set for this group — match homeworkFull rows by year number + group letter
-  // ('Year 10 – Group A' ↔ 'Yr 10 Group A').
-  const yr  = (cls.group.match(/\d+/) || [])[0];
-  const grp = (cls.group.match(/Group\s+([A-Za-z])/i) || [])[1];
-  const classHw = homeworkFull.filter(h => {
-    const hy = (h.class.match(/\d+/) || [])[0];
-    const hg = (h.class.match(/Group\s+([A-Za-z])/i) || [])[1];
-    return hy === yr && grp && hg === grp;
-  });
+  // Homework set for this group — read from the homework store through the shared
+  // selector, so this tab, the Homework page and the bell badge cannot disagree.
+  const classHw = window.klasioHomework ? window.klasioHomework.listClassHomework(cls.group) : [];
 
   // Best-effort link to the shared student profile — only if the roster name resolves
   // to a real record in the admin store.
@@ -955,207 +959,6 @@ const TeacherClassDetailPage = () => {
       {activeTab === 'analytics'  && <ClassAnalyticsTab cls={cls} color={color} classHw={classHw} />}
       {activeTab === 'settings'   && <ClassSettingsTab cls={cls} color={color} subject={subject} level={level} bannerTheme={bannerTheme} setBannerTheme={setBannerTheme} />}
     </ClassDetailShell>
-  );
-};
-
-// ─── Full Homework Management ───────────────────────────────────────────────────
-const TeacherHomeworkPage = () => {
-  const [tab, setTab] = React.useState('all');
-  const [showNewForm, setShowNewForm] = React.useState(false);
-  const [newHw, setNewHw] = React.useState({ title:'', class:'', due:'', instructions:'' });
-  const [saved, setSaved] = React.useState(false);
-
-  // Map data to "active / marking / closed" tabs visible in card grid
-  const filtered = homeworkFull.filter(h =>
-    tab === 'all'      ? true :
-    tab === 'marking'  ? h.status === 'marking' :
-    tab === 'open'     ? h.status === 'open' :
-    h.status === 'complete'
-  );
-
-  const stats = {
-    active:    homeworkFull.filter(h => h.status !== 'complete').length,
-    marking:   homeworkFull.filter(h => h.status === 'marking').length,
-    drafts:    0,
-    rate:      Math.round(homeworkFull.reduce((s,h) => s + h.submitted, 0) / homeworkFull.reduce((s,h) => s + h.total, 0) * 100),
-  };
-
-  const handleSave = () => {
-    setSaved(true);
-    setShowNewForm(false);
-    setNewHw({ title:'', class:'', due:'', instructions:'' });
-    setTimeout(() => setSaved(false), 3000);
-  };
-
-  // Subject colour for the card's left stripe
-  const subjectColor = (subj) =>
-    subj.includes('A-Level') ? '#7C3AED' :
-    subj.includes('Physics') ? '#0891B2' :
-    DS.accent;
-
-  return (
-    <div style={pageFrame()}>
-      <div style={{ fontSize:11, fontWeight:700, color:DS.muted, letterSpacing:'0.08em', textTransform:'uppercase', marginBottom:6 }}>
-        Spring Term · Week 8
-      </div>
-      <PageHeader
-        title="Homework"
-        subtitle={`${homeworkFull.length} assignments · ${stats.marking} awaiting your review`}
-        actions={[
-          saved && <Badge key="s" variant="success">Assignment set!</Badge>,
-          <Btn key="new" variant="primary" icon="plus" small onClick={() => setShowNewForm(!showNewForm)}>
-            Set Homework
-          </Btn>,
-        ].filter(Boolean)}
-      />
-
-      {/* KPI stats row */}
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:14, marginBottom:24 }}>
-        {[
-          ['Active',          stats.active,  DS.success],
-          ['Awaiting Marking',stats.marking, DS.warning],
-          ['Drafts',          stats.drafts,  DS.muted   ],
-          ['Submission Rate', stats.rate+'%',DS.accent  ],
-        ].map(([l,v,c]) => (
-          <div key={l} style={{
-            background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:10,
-            padding:'16px 20px',
-          }}>
-            <div style={{ fontSize:11, fontWeight:600, color:DS.faint, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom:8 }}>{l}</div>
-            <div style={{ fontSize:28, fontWeight:800, color:c, letterSpacing:'-0.5px', lineHeight:1 }}>{v}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* New homework form */}
-      {showNewForm && (
-        <div style={{
-          background:DS.accentLight, border:`1px solid ${DS.accentBorder}`,
-          borderRadius:10, padding:'24px', marginBottom:24,
-        }}>
-          <div style={{ fontSize:14, fontWeight:600, color:DS.text, marginBottom:16 }}>New Assignment</div>
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:16, marginBottom:16 }}>
-            <div>
-              <label style={{ fontSize:12, fontWeight:600, color:DS.sub, display:'block', marginBottom:6 }}>Title</label>
-              <input
-                value={newHw.title}
-                onChange={e => setNewHw(p => ({ ...p, title:e.target.value }))}
-                placeholder="e.g. Algebra: Completing the Square"
-                style={{ width:'100%', padding:'8px 12px', borderRadius:7, border:`1px solid ${DS.border}`, fontSize:13, outline:'none', boxSizing:'border-box' }}
-              />
-            </div>
-            <div>
-              <label style={{ fontSize:12, fontWeight:600, color:DS.sub, display:'block', marginBottom:6 }}>Class</label>
-              <select
-                value={newHw.class}
-                onChange={e => setNewHw(p => ({ ...p, class:e.target.value }))}
-                style={{ width:'100%', padding:'8px 12px', borderRadius:7, border:`1px solid ${DS.border}`, fontSize:13, outline:'none', background:DS.bg, boxSizing:'border-box' }}
-              >
-                <option value="">Select class…</option>
-                {teacherClasses.map(c => <option key={c.id} value={c.group}>{c.group}</option>)}
-              </select>
-            </div>
-            <div>
-              <label style={{ fontSize:12, fontWeight:600, color:DS.sub, display:'block', marginBottom:6 }}>Due date</label>
-              <input
-                type="date"
-                value={newHw.due}
-                onChange={e => setNewHw(p => ({ ...p, due:e.target.value }))}
-                style={{ width:'100%', padding:'8px 12px', borderRadius:7, border:`1px solid ${DS.border}`, fontSize:13, outline:'none', boxSizing:'border-box' }}
-              />
-            </div>
-          </div>
-          <div style={{ marginBottom:16 }}>
-            <label style={{ fontSize:12, fontWeight:600, color:DS.sub, display:'block', marginBottom:6 }}>Instructions for students</label>
-            <textarea
-              rows={3}
-              value={newHw.instructions}
-              onChange={e => setNewHw(p => ({ ...p, instructions:e.target.value }))}
-              placeholder="Describe the task, which questions to complete, any resources to use…"
-              style={{ width:'100%', padding:'8px 12px', borderRadius:7, border:`1px solid ${DS.border}`, fontSize:13, outline:'none', resize:'vertical', boxSizing:'border-box', fontFamily:'inherit' }}
-            />
-          </div>
-          <div style={{ display:'flex', gap:8 }}>
-            <Btn variant="primary" icon="check" onClick={handleSave}>Set Assignment</Btn>
-            <Btn variant="secondary" onClick={() => setShowNewForm(false)}>Cancel</Btn>
-          </div>
-        </div>
-      )}
-
-      {/* Tabs */}
-      <div style={{ display:'flex', borderBottom:`1px solid ${DS.border}`, marginBottom:20 }}>
-        {[
-          ['all',     'All',       homeworkFull.length],
-          ['marking', 'To Mark',   stats.marking],
-          ['open',    'Open',      homeworkFull.filter(h=>h.status==='open').length],
-          ['complete','Closed',    homeworkFull.filter(h=>h.status==='complete').length],
-        ].map(([id,label,count]) => (
-          <button key={id} onClick={() => setTab(id)} style={{
-            padding:'10px 18px', border:'none', background:'none', cursor:'pointer',
-            fontSize:14, fontWeight: tab===id ? 600 : 400,
-            color: tab===id ? DS.accent : DS.muted,
-            borderBottom:`2px solid ${tab===id ? DS.accent : 'transparent'}`,
-            marginBottom:-1, display:'flex', alignItems:'center', gap:7,
-          }}>
-            {label}
-            <span style={{ fontSize:11, fontWeight:600, padding:'1px 7px', borderRadius:10, background:DS.surface, color:DS.muted }}>{count}</span>
-          </button>
-        ))}
-      </div>
-
-      {/* Assignment card grid */}
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:16 }}>
-        {filtered.map(hw => {
-          const color = subjectColor(hw.subject);
-          const pct = (hw.submitted / hw.total) * 100;
-          const toMark = hw.submitted - hw.marked;
-          return (
-            <div key={hw.id} style={{
-              background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:10,
-              padding:'18px 20px', borderTop:`3px solid ${color}`,
-              display:'flex', flexDirection:'column', gap:14,
-            }}>
-              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:10 }}>
-                <div style={{ minWidth:0, flex:1 }}>
-                  <div style={{ fontSize:14, fontWeight:600, color:DS.text, marginBottom:3, lineHeight:1.3 }}>{hw.title}</div>
-                  <div style={{ fontSize:12, color:DS.muted }}>{hw.subject} · {hw.class}</div>
-                </div>
-                {toMark > 0 && hw.status === 'marking' && (
-                  <Badge variant="warning">{toMark} to mark</Badge>
-                )}
-                {hw.status === 'complete' && <Badge variant="success">Closed</Badge>}
-              </div>
-
-              <div style={{ fontSize:12, color:DS.muted }}>Due {hw.due}</div>
-
-              {/* Progress */}
-              <div>
-                <div style={{ height:6, background:DS.surface, borderRadius:3, overflow:'hidden', marginBottom:6 }}>
-                  <div style={{ width:`${pct}%`, height:'100%', background: pct===100 ? DS.success : color, borderRadius:3 }} />
-                </div>
-                <div style={{ fontSize:11, color:DS.muted, textAlign:'right', fontVariantNumeric:'tabular-nums' }}>
-                  {hw.submitted}/{hw.total} submitted
-                </div>
-              </div>
-
-              {/* Action */}
-              {hw.status === 'marking' && (
-                <Btn variant="primary" small>Mark Submissions</Btn>
-              )}
-              {hw.status === 'open' && (
-                <Btn variant="secondary" small>View Submissions</Btn>
-              )}
-              {hw.status === 'complete' && hw.avgScore && (
-                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', fontSize:12 }}>
-                  <span style={{ color:DS.muted }}>Class avg</span>
-                  <ScorePill score={hw.avgScore} />
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
   );
 };
 
@@ -1774,13 +1577,14 @@ const AttDevNudge = ({ onChange }) => {
 };
 
 // ─── Admin stub: centre-wide "sessions missing a register" (D6) ──────────────────
-const AttAdminMissing = ({ sessions, rosterOf, att, now, onOpen, onGrant, onRevoke, onBackToTeacher }) => {
+const AttAdminMissing = ({ sessions, rosterOf, att, now, onOpen, onGrant, onRevoke }) => {
   const missing = sessions
     .filter(s => s.derived.state === 'awaiting' || s.derived.state === 'lapsed')
     .sort((a, b) => a.starts_at - b.starts_at);
+  // This is a lens on the same page, not a page inside it, so the way out is the
+  // "Teacher view" toggle in the page header — no second back affordance here.
   return (
-    <Card title="Sessions missing a register" subtitle="Quick oversight of your own cohort. For every teacher across the centre, use the admin Attendance page."
-      actions={<Btn variant="secondary" small onClick={onBackToTeacher}>Back to my register</Btn>}>
+    <Card title="Sessions missing a register" subtitle="Quick oversight of your own cohort. For every teacher across the centre, use the admin Attendance page.">
       {missing.length === 0 ? (
         <div style={{ padding:'8px 4px' }}>
           <EmptyState icon="check" title="Nothing outstanding" message="Every session in range has a register or is within its window." />
@@ -1853,6 +1657,7 @@ const TeacherAttendancePage = () => {
   const revokeUnlock = (s) => { att.revoke_unlock(s.id, { by: me && me.id }); rerender(); };
 
   const allRecordedToday = daySessions.length > 0 && daySessions.every(s => s.derived.state === 'recorded' || s.derived.state === 'cancelled');
+  usePageTrail(viewRole === 'admin' ? [{ label: 'Admin oversight' }] : []);
 
   return (
     <div style={pageFrame()}>
@@ -1871,7 +1676,7 @@ const TeacherAttendancePage = () => {
 
       {viewRole === 'admin' ? (
         <AttAdminMissing sessions={sessions} rosterOf={rosterOf} att={att} now={now}
-          onOpen={openPanel} onGrant={grantUnlock} onRevoke={revokeUnlock} onBackToTeacher={() => setViewRole('teacher')} />
+          onOpen={openPanel} onGrant={grantUnlock} onRevoke={revokeUnlock} />
       ) : (
         <>
           {/* Needs register (pinned, only when non-empty) */}
@@ -2613,7 +2418,8 @@ const LessonPlanEditor = ({
                 {exists && <Btn variant="secondary" icon="copy" onClick={() => setDupOpen(true)}>Duplicate to another class</Btn>}
               </>
             )}
-            <Btn variant="ghost" icon="chevron_d" onClick={onBack}>Back to All Plans</Btn>
+            {/* Going back lives in the page's back control (top-left), not in the
+                action rail — this column is for actions ON the plan. */}
             {!readOnly && exists && <Btn variant="ghost" icon="x" onClick={onDelete}>Delete Plan</Btn>}
           </div>
         </div>
@@ -2702,19 +2508,20 @@ const LessonPlannerPage = ({ initialGroup, initialDate, initialMode }) => {
     setScreen('editor');
   };
 
+  // The editor is a page inside the planner, so it gets the standard back control
+  // (top-left, above the title) and a crumb naming the plan you're in.
+  const backToBrowse = () => setScreen('browse');
+  usePageTrail(screen === 'editor' ? [{ label: plan.title || 'Untitled lesson' }] : []);
+
   return (
     <div style={pageFrame()}>
+      {screen === 'editor' && <BackLink onClick={backToBrowse} label="All plans" />}
       <PageHeader
         title="Lesson Planner"
         subtitle={screen === 'browse'
           ? 'Search saved lessons or plan a new one'
           : 'Plan, save and review lessons for any class on any date'}
         actions={[
-          screen === 'editor' && (
-            <Btn key="back" variant="secondary" icon="chevron_d" small onClick={() => setScreen('browse')}>
-              All Plans
-            </Btn>
-          ),
           screen === 'browse' && (
             <Btn key="new" variant="primary" icon="plus" small onClick={startNew}>
               Plan a New Lesson
@@ -3517,6 +3324,7 @@ const reorderBtn = (disabled) => ({ background: 'none', border: 'none', cursor: 
 const TrackerDetail = ({ tracker, trackers, api, onBack, onSwitch, onNew }) => {
   const columns = tracker.columns || [];
   const students = studentsOf(tracker);
+  usePageTrail([{ label: tracker.name }]);
 
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [colMenu, setColMenu] = React.useState(null);          // colId | '__new' | null
@@ -3585,12 +3393,9 @@ const TrackerDetail = ({ tracker, trackers, api, onBack, onSwitch, onNew }) => {
 
   return (
     <div>
+      <BackLink onClick={onBack} label="All trackers" />
       {/* Detail header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18, flexWrap: 'wrap' }}>
-        <button type="button" onClick={onBack} title="Back to all trackers"
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '7px 10px', borderRadius: 8, border: `1px solid ${DS.border}`, background: DS.bg, color: DS.sub, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}>
-          <Icon name="chevron_l" size={15} /> All trackers
-        </button>
         <Combobox value={tracker.id} groups={switcherGroups} onSelect={onSwitch} width={320} icon="chart" ariaLabel="Switch tracker"
           triggerStyle={{ maxWidth: 320 }}
           footer={<Btn variant="primary" icon="plus" small style={{ width: '100%', justifyContent: 'center' }} onClick={() => onNew()}>New tracker</Btn>} />

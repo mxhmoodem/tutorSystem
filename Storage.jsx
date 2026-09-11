@@ -469,11 +469,15 @@ const StorageAdminPanel = () => {
       )}
 
       {/* Suggest-first + guarded delete */}
-      <StgSection title="Free up space" subtitle="Suggestions first — only resources, question attachments and avatars can be deleted here" icon="trash">
+      {/* Named for what it shows, not for what it promises. Nothing here decides what
+          you don't need — it ranks the files you ARE allowed to delete by size and by
+          age and lets you judge. Retention-locked categories (submissions, messages,
+          safeguarding records) never appear. */}
+      <StgSection title="Largest & oldest files" subtitle="Review what is taking up room — only resources, question attachments and avatars can be deleted here" icon="search">
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', marginBottom: 14, borderRadius: 10, background: DS.accentLight, border: `1px solid ${DS.accentBorder}` }}>
           <Icon name="zap" size={16} color={DS.accent} />
           <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: DS.sub }}>
-            You could reclaim up to <b>{stgFmtBytes(reclaimable)}</b> from deletable categories. Locked categories (submissions, message & safeguarding records) are retained and can’t be removed here.
+            <b>{stgFmtBytes(reclaimable)}</b> sits in categories you can delete from — review the lists below and decide what goes. Locked categories (submissions, message & safeguarding records) are retained and can’t be removed here.
           </div>
         </div>
 

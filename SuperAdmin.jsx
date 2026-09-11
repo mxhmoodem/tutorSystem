@@ -123,6 +123,209 @@ const SAMetrics = {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
+//  USER DIRECTORY  —  every user on the platform, materialised from the seed
+// ═══════════════════════════════════════════════════════════════════════════
+//  The Users screen is a directory of EVERY user, but the seed only carries
+//  per-centre head counts. Individual rows are materialised here from a seeded
+//  PRNG (identical every reload — no persistence, no Math.random) and allocated
+//  across centres by largest remainder so each role's row count lands EXACTLY
+//  on the trusted SA_ROLE_COUNTS tally. Nothing on the Users page hardcodes a
+//  number: MFA adoption, 30-day actives and role splits are all counted off
+//  these rows, so the stat card and the table can never disagree.
+//  PRODUCTION: this is a paged, server-side directory query — never a client
+//  materialisation of every tenant's users.
+const saRng = (seed) => {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) { h ^= seed.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return () => {
+    h += 0x6D2B79F5;
+    let t = h;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+};
+
+const SA_FIRST = ['Amara', 'Oliver', 'Priya', 'Noah', 'Zainab', 'Ethan', 'Mei', 'Liam', 'Sofia', 'Kai',
+  'Isla', 'Marcus', 'Nadia', 'Theo', 'Elena', 'Idris', 'Freya', 'Omar', 'Chloe', 'Jonas',
+  'Yara', 'Felix', 'Anika', 'Rohan', 'Maja', 'Callum', 'Leila', 'Dmitri', 'Sana', 'Hugo',
+  'Tara', 'Emeka', 'Lucia', 'Arjun', 'Nora', 'Sven', 'Aisha', 'Mateo', 'Ines', 'Bilal',
+  'Greta', 'Rafael', 'Hana', 'Declan', 'Alba', 'Tobias', 'Simone', 'Kofi', 'Ravi', 'Elsa',
+  'Jamal', 'Beatrix', 'Nikolai', 'Amelie', 'Sian', 'Otto', 'Rania', 'Casper', 'Lena', 'Tomas'];
+const SA_LAST = ['Bennett', 'Okafor', 'Nair', 'Lindqvist', 'Haddad', 'Whitfield', 'Moreau', 'Kaur', 'Vasquez', 'Novak',
+  'Fitzgerald', 'Adeyemi', 'Sorensen', 'Rahman', 'Delgado', 'Kowalski', 'Mbeki', 'Ferreira', 'Halvorsen', 'Chatterjee',
+  'Marchetti', 'Osei', 'Lindgren', 'Sadiq', 'Petrov', 'Ellery', 'Nakamura', 'Bergstrom', 'Iqbal', 'Duarte',
+  'Sandoval', 'Fontaine', 'Achebe', 'Weiss', 'Kristensen', 'Baptiste', 'Sultana', 'Ramirez', 'Lindholm', 'Okonjo',
+  'Sinclair', 'Batista', 'Farrow', 'Nguyen', 'Almeida', 'Reinhardt', 'Ashworth', 'Zielinski'];
+const SA_PARENT_DOMAINS = ['gmail.com', 'outlook.com', 'proton.me', 'icloud.com', 'yahoo.co.uk'];
+
+// Largest-remainder allocation of `total` over integer weights — keeps the sum
+// EXACT (a plain proportional round would drift off the trusted tally).
+const saAllocate = (weights, total) => {
+  const sum = weights.reduce((a, b) => a + b, 0);
+  if (!sum) return weights.map(() => 0);
+  const raw = weights.map(w => (w / sum) * total);
+  const base = raw.map(Math.floor);
+  let left = total - base.reduce((a, b) => a + b, 0);
+  const order = raw.map((v, i) => ({ i, frac: v - Math.floor(v) })).sort((a, b) => b.frac - a.frac);
+  for (let k = 0; left > 0; k = (k + 1) % order.length, left--) base[order[k].i] += 1;
+  return base;
+};
+
+// Recency ladder — how recently a user was seen. `days` drives the 30-day
+// active tally, so "Active (30d)" / "Seen today" are counts, not guesses. The
+// weights are set so the platform-wide day-0 share lands on the DAU figure the
+// Engagement screen reports (~39%), and are then skewed per centre by its usage
+// score: a busy centre's users sit higher up the ladder, a dormant one's lower.
+const SA_SEEN = [
+  { label: 'Now',       days: 0,    w: 0.09 },
+  { label: '40m ago',   days: 0,    w: 0.10 },
+  { label: '3h ago',    days: 0,    w: 0.08 },
+  { label: '7h ago',    days: 0,    w: 0.06 },
+  { label: 'Yesterday', days: 1,    w: 0.14 },
+  { label: '3d ago',    days: 3,    w: 0.14 },
+  { label: '6d ago',    days: 6,    w: 0.09 },
+  { label: '12d ago',   days: 12,   w: 0.08 },
+  { label: '21d ago',   days: 21,   w: 0.05 },
+  { label: '38d ago',   days: 38,   w: 0.06 },
+  { label: '2mo ago',   days: 62,   w: 0.05 },
+  { label: '5mo ago',   days: 150,  w: 0.04 },
+  { label: 'Never',     days: 9999, w: 0.02 },
+];
+const SA_SEEN_NEVER = SA_SEEN[SA_SEEN.length - 1];
+const saPickSeen = (r, usage) => {
+  // usage 100 → exponent 1.44 (skew recent); usage 0 → 0.33 (skew stale).
+  const skewed = Math.pow(r, Math.max(0.3, 1 + (usage - 60) / 90));
+  let acc = 0;
+  for (let i = 0; i < SA_SEEN.length; i++) { acc += SA_SEEN[i].w; if (skewed < acc) return SA_SEEN[i]; }
+  return SA_SEEN_NEVER;
+};
+
+const saDomainOf = (a) => (a.ownerEmail || '').split('@')[1] || 'klasio.io';
+const saSlug = (s) => s.toLowerCase().replace(/[^a-z]+/g, '');
+
+let _saDirectory = null;
+const saBuildDirectory = () => {
+  const centres = SAMetrics.allCentres();
+  const byAccount = {};
+  SA_ACCOUNTS.forEach(a => { byAccount[a.id] = a; });
+
+  // Teachers and students come STRAIGHT off each centre's roster, so a centre's
+  // rows here always equal the head count its card shows. Only parents (which
+  // the roster doesn't carry) are apportioned, by student weight.
+  const teacherQuota = centres.map(c => c.teachers);
+  const studentQuota = centres.map(c => c.students);
+  const parentQuota  = saAllocate(centres.map(c => c.students), SA_ROLE_COUNTS.parent);
+
+  const out = [];
+  let n = 0;
+  const push = (u) => { out.push({ ...u, id: 'usr_' + (n++).toString(36).padStart(4, '0') }); };
+  // Emails are unique platform-wide; only a genuine clash gets a numeric suffix.
+  const takenEmail = {};
+  const mkEmail = (local, host) => {
+    let e = local + '@' + host;
+    for (let k = 2; takenEmail[e]; k++) e = local + k + '@' + host;
+    takenEmail[e] = true;
+    return e;
+  };
+  SA_ACCOUNTS.forEach(a => { takenEmail[a.ownerEmail] = true; });
+
+  // 1 — the platform owner.
+  push({
+    name: 'Marcus Hale', email: `marcus@${'klasio.io'}`, role: 'superadmin',
+    accountId: null, account: `${BRAND.name} (platform)`, centre: '—', country: 'UK',
+    status: 'active', lastSeen: 'Now', seenDays: 0, joined: 'May 2024', mfa: true, meta: 'Platform owner',
+  });
+
+  // 2 — one centre admin per account (the account owner).
+  SA_ACCOUNTS.forEach(a => push({
+    name: a.owner, email: a.ownerEmail, role: 'admin',
+    accountId: a.id, account: a.name, centre: a.centres[0].name, country: a.country,
+    status: a.status === 'suspended' ? 'suspended' : a.status === 'past_due' ? 'locked' : 'active',
+    lastSeen: a.status === 'suspended' ? '2mo ago' : a.centres[0].usage > 60 ? 'Today' : '6d ago',
+    seenDays: a.status === 'suspended' ? 62 : a.centres[0].usage > 60 ? 0 : 6,
+    joined: a.createdAt, mfa: a.churnRisk !== 'high', meta: 'Account owner',
+  }));
+
+  // 3 — teachers, students and parents, spread over the real centre roster.
+  centres.forEach((c, ci) => {
+    const acc = byAccount[c.accountId];
+    const rnd = saRng(c.id);
+    const domain = saDomainOf(acc);
+    const used = {};
+    const person = () => {
+      let f, l, key, guard = 0;
+      do {
+        f = SA_FIRST[Math.floor(rnd() * SA_FIRST.length)];
+        l = SA_LAST[Math.floor(rnd() * SA_LAST.length)];
+        key = f + l;
+      } while (used[key] && ++guard < 8);
+      used[key] = true;
+      return { first: f, last: l, name: `${f} ${l}` };
+    };
+    // Higher-usage centres have more recently-seen users; a suspended account
+    // has nobody signing in at all.
+    const seen = () => (acc.status === 'suspended' ? SA_SEEN_NEVER : saPickSeen(rnd(), c.usage));
+    const statusFor = (mfaAllowed) => {
+      if (acc.status === 'suspended') return 'suspended';
+      const r = rnd();
+      if (r < 0.025) return 'pending';
+      if (mfaAllowed && r < 0.04) return 'locked';
+      return 'active';
+    };
+
+    for (let i = 0; i < teacherQuota[ci]; i++) {
+      const p = person(); const s = seen();
+      push({
+        name: p.name, email: mkEmail(`${p.first[0].toLowerCase()}.${saSlug(p.last)}`, domain), role: 'teacher',
+        accountId: c.accountId, account: c.accountName, centre: c.name, country: c.country,
+        status: statusFor(true), lastSeen: s.label, seenDays: s.days,
+        joined: acc.createdAt, mfa: rnd() < 0.78, meta: `${1 + Math.floor(rnd() * 6)} classes`,
+      });
+    }
+    for (let i = 0; i < studentQuota[ci]; i++) {
+      const p = person(); const s = seen();
+      push({
+        name: p.name, email: mkEmail(`${saSlug(p.first)}.${saSlug(p.last)}`, 'students.' + domain), role: 'student',
+        accountId: c.accountId, account: c.accountName, centre: c.name, country: c.country,
+        status: statusFor(false), lastSeen: s.label, seenDays: s.days,
+        joined: acc.createdAt, mfa: false, meta: `Year ${7 + Math.floor(rnd() * 7)}`,
+      });
+    }
+    for (let i = 0; i < parentQuota[ci]; i++) {
+      const p = person(); const s = seen();
+      push({
+        name: p.name, email: mkEmail(`${saSlug(p.first)}.${saSlug(p.last)}`, SA_PARENT_DOMAINS[Math.floor(rnd() * SA_PARENT_DOMAINS.length)]), role: 'parent',
+        accountId: c.accountId, account: c.accountName, centre: c.name, country: c.country,
+        status: statusFor(false), lastSeen: s.label, seenDays: s.days,
+        joined: acc.createdAt, mfa: rnd() < 0.31, meta: `${1 + Math.floor(rnd() * 2)} linked learner(s)`,
+      });
+    }
+  });
+
+  return out;
+};
+
+// Directory selectors hang off the same metrics layer as everything else.
+SAMetrics.directory = () => (_saDirectory || (_saDirectory = saBuildDirectory()));
+SAMetrics.directoryStats = () => {
+  const d = SAMetrics.directory();
+  const mfaEligible = d.filter(u => u.role !== 'student');
+  const tally = (fn) => d.reduce((n, u) => n + (fn(u) ? 1 : 0), 0);
+  return {
+    total: d.length,
+    active30: tally(u => u.seenDays <= 30),
+    today: tally(u => u.seenDays === 0),
+    mfaOn: mfaEligible.filter(u => u.mfa).length,
+    mfaEligible: mfaEligible.length,
+    suspended: tally(u => u.status === 'suspended'),
+    locked: tally(u => u.status === 'locked'),
+    pending: tally(u => u.status === 'pending'),
+    dormant: tally(u => u.seenDays > 90),
+  };
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
 //  AUDIT LOG STORE  —  append-only safeguarding artifact
 // ═══════════════════════════════════════════════════════════════════════════
 //  No code path edits or deletes an entry. Runtime entries (impersonation,
@@ -278,6 +481,218 @@ const SARegionMap = ({ regions }) => {
   );
 };
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  STAT SURFACES  —  ONE card per stat row (not a row of boxes)
+// ═══════════════════════════════════════════════════════════════════════════
+//  Every owner-console screen used to open with 4–7 separate bordered tiles,
+//  which reads as clutter at 7-across and forces the numbers small. The console
+//  now has ONE stat surface language instead:
+//
+//    <SAStatBand/>   a single card split by hairlines — the default row
+//    <SALeadStat/>   one hero number + a grid of supporting stats (money pages)
+//    <SAStatTabs/>   one card, switchable views (pages with several stat families)
+//
+//  Shared typography: big tabular number, small quiet uppercase label, one line
+//  of context underneath. Colour is carried by the context line / bar, never by
+//  the number, so a row of nine reads calm.
+const SA_TONE = { pos: DS.success, neg: DS.danger, warn: DS.warning, info: DS.info, muted: DS.muted, accent: DS.accent };
+const saTone = (t) => (t ? (SA_TONE[t] || t) : null);
+
+const SAStatCell = ({ s, valueSize = 28, divider, rowDivider, pad = '16px 20px 17px' }) => {
+  const [hov, setHov] = React.useState(false);
+  const tone = saTone(s.tone);
+  const clickable = !!s.onClick;
+  return (
+    <div
+      title={s.tip || ''}
+      onClick={s.onClick}
+      onMouseEnter={() => setHov(true)}
+      onMouseLeave={() => setHov(false)}
+      style={{
+        padding: pad, minWidth: 0,
+        borderLeft: divider ? `1px solid ${DS.border}` : 'none',
+        borderTop: rowDivider ? `1px solid ${DS.border}` : 'none',
+        background: clickable && hov ? DS.surface : 'transparent',
+        cursor: clickable ? 'pointer' : s.tip ? 'help' : 'default',
+        transition: 'background 0.12s ease',
+      }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+        {s.dot && <span style={{ width: 6, height: 6, borderRadius: '50%', background: s.dot, flexShrink: 0 }} />}
+        <span style={{
+          fontSize: 10.5, fontWeight: 600, letterSpacing: '0.07em', textTransform: 'uppercase',
+          color: DS.faint, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        }}>{s.label}</span>
+        {clickable && hov && <Icon name="chevron_r" size={11} color={DS.faint} />}
+      </div>
+      <div style={{
+        fontSize: valueSize, fontWeight: 700, letterSpacing: '-0.9px', lineHeight: 1.05, marginTop: 9,
+        color: s.valueColor || DS.text, fontVariantNumeric: 'tabular-nums',
+        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+      }}>{s.value}</div>
+      {s.bar != null && <div style={{ marginTop: 10, display: 'flex' }}><SAHBar pct={s.bar} color={s.barColor || DS.accent} height={4} /></div>}
+      {(s.sub || s.trend) && (
+        <div style={{ marginTop: 7, display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+          {s.trend && (
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 11.5, fontWeight: 600, flexShrink: 0,
+              color: s.trendDir === 'up' ? DS.success : s.trendDir === 'down' ? DS.danger : DS.muted,
+            }}>
+              <Icon name={s.trendDir === 'up' ? 'trending_up' : s.trendDir === 'down' ? 'trending_dn' : 'clock'} size={12} />
+              {s.trend}
+            </span>
+          )}
+          {s.sub && <span style={{ fontSize: 11.5, color: tone || DS.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.sub}</span>}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// The workhorse: N stats on ONE card. `size` scales the number only.
+const SAStatBand = ({ items = [], size = 'md', columns, style }) => {
+  const cols = columns || items.length || 1;
+  const valueSize = { lg: 34, md: 28, sm: 24 }[size] || 28;
+  return (
+    <div style={{
+      background: DS.card, border: `1px solid ${DS.cardBorder}`, borderRadius: 12, boxShadow: DS.cardShadow,
+      display: 'grid', gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, overflow: 'hidden', ...style,
+    }}>
+      {items.map((s, i) => (
+        <SAStatCell key={s.label} s={s} valueSize={valueSize} divider={i % cols !== 0} rowDivider={i >= cols} />
+      ))}
+    </div>
+  );
+};
+
+// Hero + supporting grid — for pages with one headline number (money, health).
+const SALeadStat = ({ lead, items = [], columns = 3, style }) => {
+  const cols = columns;
+  return (
+    <div style={{
+      background: DS.card, border: `1px solid ${DS.cardBorder}`, borderRadius: 12, boxShadow: DS.cardShadow,
+      display: 'grid', gridTemplateColumns: 'minmax(230px, 0.95fr) 2.6fr', overflow: 'hidden', ...style,
+    }}>
+      <div style={{
+        padding: '24px 26px', background: DS.surface, borderRight: `1px solid ${DS.border}`,
+        display: 'flex', flexDirection: 'column', justifyContent: 'center', minWidth: 0,
+      }}>
+        <div style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: '0.07em', textTransform: 'uppercase', color: DS.muted }}>{lead.label}</div>
+        <div style={{
+          fontSize: 46, fontWeight: 700, letterSpacing: '-1.8px', color: DS.text, lineHeight: 1,
+          marginTop: 12, fontVariantNumeric: 'tabular-nums',
+        }}>{lead.value}</div>
+        <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+          {lead.trend && (
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12.5, fontWeight: 600,
+              padding: '2px 8px', borderRadius: 20,
+              background: lead.trendDir === 'down' ? DS.dangerBg : DS.successBg,
+              color: lead.trendDir === 'down' ? DS.danger : DS.success,
+            }}>
+              <Icon name={lead.trendDir === 'down' ? 'trending_dn' : 'trending_up'} size={12} />{lead.trend}
+            </span>
+          )}
+          {lead.sub && <span style={{ fontSize: 12, color: DS.muted }}>{lead.sub}</span>}
+        </div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
+        {items.map((s, i) => (
+          <SAStatCell key={s.label} s={s} valueSize={24} divider={i % cols !== 0} rowDivider={i >= cols} pad="15px 18px 16px" />
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// One card, several stat views. `tabs` = [{ id, label, items, columns, size, render }].
+const SAStatTabs = ({ tabs = [], right, defaultTab }) => {
+  const [tab, setTab] = React.useState(defaultTab || (tabs[0] && tabs[0].id));
+  const cur = tabs.find(t => t.id === tab) || tabs[0];
+  if (!cur) return null;
+  const cols = cur.columns || (cur.items || []).length || 1;
+  const valueSize = { lg: 34, md: 28, sm: 24 }[cur.size || 'md'] || 28;
+  return (
+    <div style={{ background: DS.card, border: `1px solid ${DS.cardBorder}`, borderRadius: 12, boxShadow: DS.cardShadow, overflow: 'hidden' }}>
+      <div style={{ display: 'flex', alignItems: 'stretch', gap: 2, padding: '0 10px', borderBottom: `1px solid ${DS.border}`, background: DS.surface }}>
+        {tabs.map(t => {
+          const on = t.id === cur.id;
+          return (
+            <button key={t.id} onClick={() => setTab(t.id)} style={{
+              appearance: 'none', background: 'none', border: 'none', cursor: 'pointer',
+              padding: '11px 12px 10px', fontSize: 12.5, fontWeight: on ? 700 : 500,
+              color: on ? DS.text : DS.muted, borderBottom: `2px solid ${on ? DS.accent : 'transparent'}`,
+              display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap',
+            }}>
+              {t.icon && <Icon name={t.icon} size={13} color={on ? DS.accent : DS.faint} />}
+              {t.label}
+            </button>
+          );
+        })}
+        <div style={{ flex: 1 }} />
+        {right && <div style={{ display: 'flex', alignItems: 'center', paddingLeft: 10 }}>{right}</div>}
+      </div>
+      {(cur.items || []).length > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
+          {cur.items.map((s, i) => (
+            <SAStatCell key={s.label} s={s} valueSize={valueSize} divider={i % cols !== 0} rowDivider={i >= cols} />
+          ))}
+        </div>
+      )}
+      {cur.render && (
+        <div style={{ borderTop: (cur.items || []).length ? `1px solid ${DS.border}` : 'none', padding: '18px 20px' }}>{cur.render}</div>
+      )}
+    </div>
+  );
+};
+
+// Quiet section heading inside a detail popover.
+const SASectionLabel = ({ children }) => (
+  <div style={{
+    fontSize: 10.5, fontWeight: 600, letterSpacing: '0.07em', textTransform: 'uppercase',
+    color: DS.faint, marginBottom: 9,
+  }}>{children}</div>
+);
+
+// Compact label/value pair used inside detail popovers (Centres / Users).
+const SADetailRow = ({ label, children, last }) => (
+  <div style={{
+    display: 'flex', alignItems: 'center', gap: 12, padding: '9px 0',
+    borderBottom: last ? 'none' : `1px solid ${DS.border}`,
+  }}>
+    <span style={{ fontSize: 12, color: DS.muted, minWidth: 96, flexShrink: 0 }}>{label}</span>
+    <div style={{ flex: 1, minWidth: 0, textAlign: 'right', fontSize: 12.5, color: DS.text, fontWeight: 500 }}>{children}</div>
+  </div>
+);
+
+// Grouped action list inside a detail popover: a full-width row per action so
+// every account/user action lives in ONE predictable place (no row kebabs).
+const SAActionList = ({ items = [] }) => (
+  <div style={{ border: `1px solid ${DS.border}`, borderRadius: 10, overflow: 'hidden' }}>
+    {items.map((a, i) => <SAActionRow key={a.label} a={a} last={i === items.length - 1} />)}
+  </div>
+);
+
+const SAActionRow = ({ a, last }) => {
+  const [hov, setHov] = React.useState(false);
+  const col = a.danger ? DS.danger : DS.text;
+  return (
+    <button onClick={a.onClick} disabled={a.disabled}
+      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+      style={{
+        width: '100%', appearance: 'none', textAlign: 'left', cursor: a.disabled ? 'not-allowed' : 'pointer',
+        border: 'none', borderBottom: last ? 'none' : `1px solid ${DS.border}`,
+        background: hov && !a.disabled ? (a.danger ? DS.dangerBg : DS.surface) : DS.bg,
+        padding: '11px 14px', display: 'flex', alignItems: 'center', gap: 10,
+        opacity: a.disabled ? 0.5 : 1, transition: 'background 0.12s ease',
+      }}>
+      <Icon name={a.icon || 'chevron_r'} size={15} color={a.danger ? DS.danger : DS.muted} />
+      <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 500, color: col }}>{a.label}</span>
+      {a.hint && <span style={{ fontSize: 11.5, color: DS.faint }}>{a.hint}</span>}
+      <Icon name="chevron_r" size={13} color={DS.faint} />
+    </button>
+  );
+};
+
 // Lightweight transient success banner (prototype feedback for wired actions).
 const SAFlash = ({ msg, onDone }) => {
   React.useEffect(() => { if (!msg) return; const t = setTimeout(onDone, 2600); return () => clearTimeout(t); }, [msg]);
@@ -311,11 +726,20 @@ const SuperAdminDashboard = () => {
   const distTotal = dist.reduce((s, d) => s + d.accounts, 0) || 1;
   const topAccounts = SAMetrics.accountsByMRR().slice(0, 6);
 
-  const kpis = [
-    { label: 'Monthly Recurring Revenue', value: `£${mrr.toLocaleString()}`, trend: '+7.3% vs last month', trendDir: 'up', icon: 'invoice', iconBg: DS.accentLight, accent: DS.accent  },
-    { label: 'Active Centres',            value: SAMetrics.activeCentres().toString(), trend: '+2 this month', trendDir: 'up', icon: 'book',  iconBg: '#F0F9FF', accent: DS.info },
-    { label: 'Total Users',               value: SAMetrics.totalUsers().toLocaleString(), trend: '+167 this month', trendDir: 'up', icon: 'users', iconBg: '#F0FDF4', accent: DS.success },
-    { label: 'Churn Rate',                value: `${SAMetrics.churnRate()}%`, trend: '-0.4% vs last month', trendDir: 'up', icon: 'trending_dn', iconBg: '#FFFBEB', accent: DS.warning },
+  // ONE stat surface: MRR is the headline of this console, the rest support it.
+  const goto = (page) => () => window.__navigate && window.__navigate('superadmin', page);
+  const leadStat = {
+    label: 'Monthly Recurring Revenue',
+    value: `£${mrr.toLocaleString()}`,
+    trend: '+7.3%', trendDir: 'up', sub: 'vs last month',
+  };
+  const supportStats = [
+    { label: 'ARR',            value: `£${SAMetrics.arr().toLocaleString()}`,          sub: 'annualised run rate',   onClick: goto('revenue') },
+    { label: 'Accounts',       value: SAMetrics.accounts().length.toString(),           sub: `${SAMetrics.payingAccounts().length} billing`, onClick: goto('centres') },
+    { label: 'Active Centres', value: SAMetrics.activeCentres().toString(),             trend: '+2', trendDir: 'up', sub: 'this month', onClick: goto('centres') },
+    { label: 'Total Users',    value: SAMetrics.totalUsers().toLocaleString(),          trend: '+167', trendDir: 'up', sub: 'this month', onClick: goto('users') },
+    { label: 'ARPU',           value: `£${SAMetrics.arpu().toLocaleString()}`,          sub: 'per paying account',    onClick: goto('revenue') },
+    { label: 'Churn Rate',     value: `${SAMetrics.churnRate()}%`,                      trend: '−0.4pp', trendDir: 'up', sub: 'vs last month', onClick: goto('revenue') },
   ];
 
   // Board pack (period-scoped) → CSV download, audited.
@@ -370,10 +794,8 @@ const SuperAdminDashboard = () => {
         </div>
       )}
 
-      {/* KPI Row */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
-        {kpis.map(k => <KPICard key={k.label} {...k} />)}
-      </div>
+      {/* Headline stat surface — hero MRR + supporting grid, one card */}
+      <SALeadStat lead={leadStat} items={supportStats} columns={3} style={{ marginBottom: 20 }} />
 
       {/* Charts row — trend + KPI both driven by getPlatformMRR() */}
       <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 20, marginBottom: 20 }}>
@@ -462,27 +884,17 @@ const SuperAdminDashboard = () => {
         </Card>
       </div>
 
-      {/* Health row (links into System Health) */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 20 }}>
-        {[
-          { label: 'API Response', value: '142ms', sub: 'p95 last 1h', dot: DS.success },
-          { label: 'Uptime',       value: '99.98%', sub: '30-day rolling', dot: DS.success },
-          { label: 'Error Rate',   value: `${SA_SYS.errorRate}%`, sub: '5xx responses', dot: DS.success },
-          { label: 'Job Queue',    value: SA_SYS.jobsPending.toString(), sub: 'pending tasks', dot: DS.warning },
-        ].map(s => (
-          <div key={s.label} onClick={() => window.__navigate && window.__navigate('superadmin', 'system')} style={{
-            background: DS.bg, border: `1px solid ${DS.cardBorder}`, borderRadius: 10,
-            padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer',
-          }}>
-            <div style={{ width: 8, height: 8, borderRadius: '50%', background: s.dot }} />
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 11, color: DS.muted }}>{s.label}</div>
-              <div style={{ fontSize: 18, fontWeight: 700, color: DS.text }}>{s.value}</div>
-              <div style={{ fontSize: 10, color: DS.faint }}>{s.sub}</div>
-            </div>
-          </div>
-        ))}
-      </div>
+      {/* Health band (one card, links into System Health) */}
+      <SAStatBand
+        size="sm"
+        style={{ marginBottom: 20 }}
+        items={[
+          { label: 'API Response', value: '142ms', sub: 'p95 last 1h',     dot: DS.success, onClick: goto('system') },
+          { label: 'Uptime',       value: '99.98%', sub: '30-day rolling', dot: DS.success, onClick: goto('system') },
+          { label: 'Error Rate',   value: `${SA_SYS.errorRate}%`, sub: '5xx responses', dot: DS.success, onClick: goto('system') },
+          { label: 'Job Queue',    value: SA_SYS.jobsPending.toString(), sub: 'pending tasks', dot: DS.warning, tone: 'warn', onClick: goto('system') },
+        ]}
+      />
       <SAFlash msg={flash} onDone={() => setFlash('')} />
     </div>
   );
@@ -564,27 +976,32 @@ const SACentresPage = () => {
   const suspendedCount = accounts.filter(a => a.status === 'suspended' || a.status === 'past_due').length;
   const atRiskCount = accounts.filter(isAtRisk).length;
 
+  const mrrTotal = accounts.reduce((s, a) => s + mrrOf(a), 0);
   const stats = [
-    { label: 'Accounts', value: accounts.length.toString(), sub: `${totalCentres} centres`, color: DS.accent },
-    { label: 'Active',   value: activeCount.toString(),      sub: 'billing',                 color: DS.success },
-    { label: 'On Trial', value: trialCount.toString(),       sub: 'in evaluation',           color: DS.info },
-    { label: 'Past Due / Suspended', value: suspendedCount.toString(), sub: 'billing issues', color: DS.danger },
-    { label: 'At Risk',  value: atRiskCount.toString(),      sub: 'see rule',                color: DS.warning, tip: AT_RISK_RULE },
+    { label: 'Accounts',  value: accounts.length.toString(), sub: `${totalCentres} centres`, onClick: () => setFilter('all') },
+    { label: 'Active',    value: activeCount.toString(),     sub: 'billing normally', tone: 'pos', dot: DS.success, onClick: () => setFilter('active') },
+    { label: 'On Trial',  value: trialCount.toString(),      sub: 'in evaluation',    tone: 'info', dot: DS.info,   onClick: () => setFilter('trial') },
+    { label: 'Past Due',  value: suspendedCount.toString(),  sub: 'billing issues',   tone: 'neg',  dot: DS.danger, onClick: () => setFilter('past_due') },
+    { label: 'At Risk',   value: atRiskCount.toString(),     sub: 'see rule',         tone: 'warn', dot: DS.warning, tip: AT_RISK_RULE, onClick: () => setFilter('risk') },
+    { label: 'Total MRR', value: `£${mrrTotal.toLocaleString()}`, sub: 'across accounts' },
   ];
 
-  const rowMenu = (a) => {
+  // Every account action lives here and is rendered ONLY inside the detail
+  // popover — the table has no per-row kebab, the whole row opens the popover.
+  const accountActions = (a) => {
     const items = [
-      { label: 'View account', icon: 'eye', onClick: () => setSelected(a) },
-      { label: 'Impersonate admin', icon: 'user', onClick: () => saImpersonateEnter(a, 'Admin') },
-      { label: 'Change plan', icon: 'invoice', onClick: () => setPlanEdit(a) },
+      { label: 'Impersonate admin', icon: 'user', primary: true, onClick: () => saImpersonateEnter(a, 'Admin') },
+      { label: 'Change plan', icon: 'invoice', hint: SAMetrics.planName(a.planId), onClick: () => setPlanEdit(a) },
+      { label: 'View invoices', icon: 'invoice', onClick: () => { setFlash('Opening invoices…'); saAudit({ action: `Viewed invoices for ${a.name}`, type: 'account', target: a.name }); } },
     ];
-    if (a.status === 'trial') items.push({ label: 'Extend trial', icon: 'calendar', onClick: () => patch(a.id, { trialEndsAt: '31 Aug 2026' }, { action: `Extended trial for ${a.name}`, type: 'account', target: a.name }) });
-    if (a.status === 'suspended') items.push({ label: 'Reactivate', icon: 'check', onClick: () => patch(a.id, { status: 'active' }, { action: `Reactivated ${a.name}`, type: 'account', target: a.name }) });
-    else items.push({ label: 'Suspend', icon: 'alert', danger: true, onClick: () => setConfirm({ title: `Suspend ${a.name}?`, body: 'All centre dashboards for this account go read-only until reactivated.', danger: true, ok: 'Suspend', onOk: () => patch(a.id, { status: 'suspended' }, { action: `Suspended ${a.name}`, type: 'account', target: a.name }) }) });
-    items.push({ label: 'View invoices', icon: 'invoice', onClick: () => { setFlash('Opening invoices…'); saAudit({ action: `Viewed invoices for ${a.name}`, type: 'account', target: a.name }); } });
+    if (a.status === 'trial') items.push({ label: 'Extend trial', icon: 'calendar', hint: a.trialEndsAt || '', onClick: () => patch(a.id, { trialEndsAt: '31 Aug 2026' }, { action: `Extended trial for ${a.name}`, type: 'account', target: a.name }) });
+    items.push({ label: 'View audit trail', icon: 'list', onClick: () => window.__navigate && window.__navigate('superadmin', 'security') });
+    if (a.status === 'suspended') items.push({ label: 'Reactivate account', icon: 'check', onClick: () => patch(a.id, { status: 'active' }, { action: `Reactivated ${a.name}`, type: 'account', target: a.name }) });
+    else items.push({ label: 'Suspend account', icon: 'alert', danger: true, onClick: () => setConfirm({ title: `Suspend ${a.name}?`, body: 'All centre dashboards for this account go read-only until reactivated.', danger: true, ok: 'Suspend', onOk: () => patch(a.id, { status: 'suspended' }, { action: `Suspended ${a.name}`, type: 'account', target: a.name }) }) });
     items.push({ label: 'Delete account', icon: 'trash', danger: true, onClick: () => setConfirm({ title: `Delete ${a.name}?`, body: 'Enters a 30-day retention countdown before permanent erasure (GDPR). Recoverable until then.', danger: true, ok: 'Delete', onOk: () => { setAccounts(list => list.filter(x => x.id !== a.id)); setSelected(null); saAudit({ action: `Scheduled deletion of ${a.name} (30-day retention)`, type: 'account', target: a.name }); setFlash('Account scheduled for deletion'); } }) });
     return items;
   };
+
 
   return (
     <div style={pageFrame()}>
@@ -604,19 +1021,8 @@ const SACentresPage = () => {
         ]}
       />
 
-      {/* Stats row */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 20 }}>
-        {stats.map(s => (
-          <div key={s.label} title={s.tip || ''} style={{
-            background: DS.bg, border: `1px solid ${DS.cardBorder}`, borderRadius: 10, padding: '14px 16px',
-            cursor: s.tip ? 'help' : 'default',
-          }}>
-            <div style={{ fontSize: 11, color: DS.muted }}>{s.label}</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: s.color, marginTop: 4 }}>{s.value}</div>
-            <div style={{ fontSize: 10, color: DS.faint, marginTop: 2 }}>{s.sub}</div>
-          </div>
-        ))}
-      </div>
+      {/* Stat band — one card; each segment is also a filter shortcut */}
+      <SAStatBand items={stats} size="sm" style={{ marginBottom: 20 }} />
 
       <div style={{ display: 'flex', gap: 12, marginBottom: 20, alignItems: 'center' }}>
         <div style={{
@@ -638,13 +1044,17 @@ const SACentresPage = () => {
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: selected ? '1fr 380px' : '1fr', gap: 20 }}>
-        <Card>
-          <Table
-            cols={['Account', 'Owner', 'Plan', 'Centres', 'MRR', 'Status', 'Joined', { label: 'Actions', align: 'right' }]}
-            rows={filtered.map(a => [
-              <div onClick={() => setSelected(a)} style={{ cursor: 'pointer' }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: DS.accent }}>{a.name}</div>
+      {/* Directory — no action column: the whole row opens the detail popover */}
+      <Card title="Accounts" subtitle="Select a row to open its details and actions"
+        actions={[<Badge key="n" variant="default">{filtered.length} of {accounts.length}</Badge>]}>
+        <Table
+          cols={['Account', 'Owner', 'Plan', 'Centres', 'MRR', 'Status', 'Risk', 'Joined']}
+          rowKey={(r, i) => (filtered[i] ? filtered[i].id : i)}
+          rows={filtered.map(a => ({
+            onClick: () => setSelected(a),
+            cells: [
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>{a.name}</div>
                 <div style={{ fontSize: 11.5, color: DS.muted, marginTop: 1 }}>{a.centres.map(c => c.city).join(', ')}</div>
               </div>,
               <span style={{ fontSize: 13, color: DS.muted }}>{a.owner}</span>,
@@ -652,76 +1062,118 @@ const SACentresPage = () => {
               <span style={{ fontSize: 13, color: DS.sub }}>{a.centres.length}</span>,
               <span style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>£{mrrOf(a).toLocaleString()}</span>,
               <SAStatusPill status={a.status} />,
+              <SAChurnDot risk={a.churnRisk} />,
               <span style={{ fontSize: 12, color: DS.muted }}>{a.createdAt}</span>,
-              <RowActionsMenu items={rowMenu(a)} />,
-            ])}
-          />
-        </Card>
+            ],
+          }))}
+          empty="No accounts match this filter"
+        />
+      </Card>
 
+      {/* Account detail popover — the ONE place every account action lives */}
+      <SlideOver
+        open={!!selected}
+        onClose={() => setSelected(null)}
+        width={470}
+        icon="book"
+        iconColor={selected ? saPlanColor(selected.planId) : DS.accent}
+        title={selected ? selected.name : ''}
+        subtitle={selected ? `${SA_COUNTRY_FLAG[selected.country] || ''} ${selected.country} · joined ${selected.createdAt}` : ''}
+      >
         {selected && (
-          <Card title={selected.name} actions={[
-            <button key="x" onClick={() => setSelected(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: DS.muted, padding: 0, display: 'flex' }}>
-              <Icon name="x" size={16} />
-            </button>,
-          ]}>
-            <div style={{ padding: '20px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
-                <Avatar name={selected.name} size={48} color={DS.accent} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+            {/* Owner + state */}
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 12 }}>
+                <Avatar name={selected.owner} size={38} color={DS.accent} />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 600, color: DS.text }}>{selected.owner}</div>
+                  <div style={{ fontSize: 12, color: DS.muted, overflow: 'hidden', textOverflow: 'ellipsis' }}>{selected.ownerEmail}</div>
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <SAStatusPill status={selected.status} />
+                <SAPlanPill planId={selected.planId} />
+                <Badge variant={selected.churnRisk === 'low' ? 'success' : selected.churnRisk === 'med' ? 'warning' : 'danger'}>{selected.churnRisk} churn risk</Badge>
+                {selected.promoCode && <Badge variant="default">code {selected.promoCode}</Badge>}
+              </div>
+              {selected.trialEndsAt && (
+                <div style={{ marginTop: 10, padding: '8px 11px', borderRadius: 8, background: DS.infoBg, border: `1px solid ${DS.accentBorder}`, fontSize: 12, color: DS.info, display: 'flex', alignItems: 'center', gap: 7 }}>
+                  <Icon name="calendar" size={13} color={DS.info} /> Trial ends {selected.trialEndsAt}
+                </div>
+              )}
+            </div>
+
+            {/* Numbers — same stat language as the page band */}
+            <SAStatBand
+              size="sm"
+              columns={2}
+              items={[
+                { label: 'MRR', value: `£${mrrOf(selected).toLocaleString()}`, sub: SAMetrics.isBilling(selected) ? 'billing' : 'not billing' },
+                { label: 'Centres', value: selected.centres.length.toString(), sub: selected.centres.map(c => c.city).join(', ') },
+                { label: 'Students', value: selected.centres.reduce((s, c) => s + c.students, 0).toLocaleString(), sub: `${SAMetrics.seatUsage(selected).students.licensed} licensed` },
+                { label: 'Teachers', value: selected.centres.reduce((s, c) => s + c.teachers, 0).toString(), sub: `${SAMetrics.seatUsage(selected).teachers.licensed} licensed` },
+              ]}
+            />
+
+            {/* Seat fill */}
+            {(() => {
+              const su = SAMetrics.seatUsage(selected).students;
+              const pct = su.licensed ? Math.round((su.used / su.licensed) * 100) : 0;
+              return (
                 <div>
-                  <div style={{ fontSize: 15, fontWeight: 600, color: DS.text }}>{selected.name}</div>
-                  <div style={{ fontSize: 12, color: DS.muted }}>{selected.owner} · {selected.country}</div>
+                  <SASectionLabel>Student seat fill</SASectionLabel>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <SAHBar pct={pct} color={pct >= 90 ? DS.danger : pct >= 70 ? DS.warning : DS.success} height={7} />
+                    <span style={{ fontSize: 12.5, fontWeight: 600, color: DS.text, minWidth: 78, textAlign: 'right' }}>{su.used}/{su.licensed} · {pct}%</span>
+                  </div>
+                  {pct >= 90 && <div style={{ fontSize: 11.5, color: DS.warning, marginTop: 6 }}>At capacity — upsell candidate.</div>}
                 </div>
-              </div>
+              );
+            })()}
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
-                {[
-                  ['MRR', `£${mrrOf(selected).toLocaleString()}`],
-                  ['Centres', selected.centres.length],
-                  ['Students', selected.centres.reduce((s, c) => s + c.students, 0)],
-                  ['Teachers', selected.centres.reduce((s, c) => s + c.teachers, 0)],
-                ].map(([l, v]) => (
-                  <div key={l} style={{ padding: '10px 12px', background: DS.surface, borderRadius: 7, border: `1px solid ${DS.border}` }}>
-                    <div style={{ fontSize: 11, color: DS.muted }}>{l}</div>
-                    <div style={{ fontSize: 16, fontWeight: 700, color: DS.text }}>{v}</div>
+            {/* Member centres */}
+            <div>
+              <SASectionLabel>Member centres · {selected.centres.length}</SASectionLabel>
+              <div style={{ border: `1px solid ${DS.border}`, borderRadius: 10, overflow: 'hidden' }}>
+                {selected.centres.map((c, i) => (
+                  <div key={c.id} style={{ padding: '10px 13px', borderBottom: i < selected.centres.length - 1 ? `1px solid ${DS.border}` : 'none' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <Icon name="book" size={13} color={DS.faint} />
+                      <span style={{ flex: 1, fontSize: 12.5, fontWeight: 600, color: DS.text }}>{c.name}</span>
+                      <span style={{ fontSize: 11.5, color: DS.muted }}>{c.city}</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 7 }}>
+                      <span style={{ fontSize: 11.5, color: DS.muted, minWidth: 112 }}>{c.students} students · {c.teachers} staff</span>
+                      <SAHBar pct={c.usage} color={c.usage >= 70 ? DS.success : c.usage >= 40 ? DS.warning : DS.danger} height={5} />
+                      <span style={{ fontSize: 11, color: DS.faint, minWidth: 34, textAlign: 'right' }}>{c.usage}%</span>
+                    </div>
                   </div>
                 ))}
-              </div>
-
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: DS.sub, marginBottom: 8 }}>Status</div>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <SAStatusPill status={selected.status} />
-                  <SAPlanPill planId={selected.planId} />
-                  <Badge variant={selected.churnRisk === 'low' ? 'success' : selected.churnRisk === 'med' ? 'warning' : 'danger'}>{selected.churnRisk} churn risk</Badge>
-                </div>
-                {selected.trialEndsAt && <div style={{ fontSize: 11, color: DS.muted, marginTop: 8 }}>Trial ends {selected.trialEndsAt}</div>}
-              </div>
-
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: DS.sub, marginBottom: 8 }}>Member centres</div>
-                {selected.centres.map(c => (
-                  <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', borderBottom: `1px solid ${DS.border}` }}>
-                    <Icon name="book" size={13} color={DS.faint} />
-                    <span style={{ flex: 1, fontSize: 12.5, color: DS.sub }}>{c.name}</span>
-                    <span style={{ fontSize: 11, color: DS.muted }}>{c.city} · {c.students} students</span>
-                  </div>
-                ))}
-              </div>
-
-              <Divider />
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <Btn variant="primary" icon="user" onClick={() => saImpersonateEnter(selected, 'Admin')}>Impersonate Admin</Btn>
-                <Btn variant="secondary" icon="invoice" onClick={() => setPlanEdit(selected)}>Change Plan</Btn>
-                <Btn variant="secondary" icon="invoice" onClick={() => { setFlash('Opening invoices…'); saAudit({ action: `Viewed invoices for ${selected.name}`, type: 'account', target: selected.name }); }}>View Invoices</Btn>
-                {selected.status === 'suspended'
-                  ? <Btn variant="secondary" icon="check" onClick={() => patch(selected.id, { status: 'active' }, { action: `Reactivated ${selected.name}`, type: 'account', target: selected.name })}>Reactivate</Btn>
-                  : <Btn variant="danger" icon="alert" onClick={() => setConfirm({ title: `Suspend ${selected.name}?`, body: 'All centre dashboards go read-only until reactivated.', danger: true, ok: 'Suspend', onOk: () => patch(selected.id, { status: 'suspended' }, { action: `Suspended ${selected.name}`, type: 'account', target: selected.name }) })}>Suspend Account</Btn>}
               </div>
             </div>
-          </Card>
+
+            {/* Account facts */}
+            <div>
+              <SASectionLabel>Account</SASectionLabel>
+              <div style={{ border: `1px solid ${DS.border}`, borderRadius: 10, padding: '2px 13px' }}>
+                <SADetailRow label="Plan">{SAMetrics.planName(selected.planId)} · £{SAMetrics.planPrice(selected.planId)}/mo</SADetailRow>
+                <SADetailRow label="Country">{SA_COUNTRY_FLAG[selected.country] || ''} {selected.country}</SADetailRow>
+                <SADetailRow label="Joined">{selected.createdAt}</SADetailRow>
+                <SADetailRow label="Account ID" last>
+                  <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11.5, color: DS.muted }}>{selected.id}</span>
+                </SADetailRow>
+              </div>
+            </div>
+
+            {/* Every action for this account */}
+            <div>
+              <SASectionLabel>Actions</SASectionLabel>
+              <SAActionList items={accountActions(selected)} />
+            </div>
+          </div>
         )}
-      </div>
+      </SlideOver>
 
       {/* Onboard-centre wizard — defaults from Settings → Platform Defaults */}
       <OnboardAccountWizard open={wizard} plans={plansStore.plans.filter(p => !p.archived)} onClose={() => setWizard(false)}
@@ -832,185 +1284,340 @@ const OnboardAccountWizard = ({ open, plans, onClose, onCreate }) => {
 //  USERS & ACCOUNTS  —  role counts from ONE source (getUserCounts)
 // ═══════════════════════════════════════════════════════════════════════════
 
+// The Users screen is, first and foremost, a DIRECTORY: one table of every
+// user on the platform. Everything that used to sit above it as four separate
+// chart cards and a five-tile stat row now lives in ONE switchable stat card,
+// so the table starts near the top of the page. Every figure in that card is
+// tallied off the directory rows (SAMetrics.directoryStats) — the summary and
+// the table are the same data, so they cannot disagree.
+const SA_ROLE_ORDER = ['student', 'teacher', 'admin', 'parent', 'superadmin'];
+const SA_ROLE_LABEL = { superadmin: 'Owner', admin: 'Centre Admin', teacher: 'Teacher', student: 'Student', parent: 'Parent' };
+
+const SARolePill = ({ role, colors }) => (
+  <span style={{
+    display: 'inline-flex', alignItems: 'center', fontSize: 11.5, fontWeight: 600,
+    padding: '2px 9px', borderRadius: 6, whiteSpace: 'nowrap',
+    background: (colors[role] || DS.muted) + '1A', color: colors[role] || DS.muted,
+  }}>{SA_ROLE_LABEL[role] || role}</span>
+);
+
 const SAUsersPage = () => {
   const [search, setSearch] = React.useState('');
   const [roleFilter, setRoleFilter] = React.useState('all');
+  const [statusFilter, setStatusFilter] = React.useState('all');
+  const [accountFilter, setAccountFilter] = React.useState('all');
+  const [activity, setActivity] = React.useState('all');
+  const [selected, setSelected] = React.useState(null);
   const [bulk, setBulk] = React.useState(false);
   const [flash, setFlash] = React.useState('');
 
-  const counts = SAMetrics.userCounts();       // trusted single source
+  const directory = SAMetrics.directory();
+  const ds = SAMetrics.directoryStats();
+  const counts = SAMetrics.userCounts();
   const total = SAMetrics.totalUsers();
   const roleColors = { superadmin: DS.accent, admin: SA_CHART_PALETTE[5], teacher: SA_CHART_PALETTE[0], student: SA_CHART_PALETTE[1], parent: SA_CHART_PALETTE[2] };
 
-  // Directory rows derived from accounts (owners as admin users) + a couple of
-  // seeded non-admins. Every count above is the trusted tally, not this list.
-  const directory = [
-    { name: 'Marcus Hale', email: `marcus@${'klasio.io'}`, role: 'superadmin', account: '—', status: 'active', lastSeen: 'Now', joined: 'May 2024', mfa: true },
-    ...SA_ACCOUNTS.map(a => ({ name: a.owner, email: a.ownerEmail, role: 'admin', account: a.name, status: a.status === 'suspended' ? 'suspended' : a.status === 'past_due' ? 'locked' : 'active', lastSeen: '—', joined: a.createdAt, mfa: a.churnRisk !== 'high' })),
-  ];
-  const filtered = directory.filter(u => {
-    const matchSearch = u.name.toLowerCase().includes(search.toLowerCase()) || u.email.toLowerCase().includes(search.toLowerCase());
-    const matchRole = roleFilter === 'all' || u.role === roleFilter;
-    return matchSearch && matchRole;
-  });
+  const growth = SA_USER_GROWTH.series[0].data;
+  const newThisMonth = growth[growth.length - 1] - growth[growth.length - 2];
+  const pct = (n) => (total ? +((n / total) * 100).toFixed(1) : 0);
+
+  const filtered = React.useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return directory.filter(u => {
+      if (roleFilter !== 'all' && u.role !== roleFilter) return false;
+      if (statusFilter !== 'all' && u.status !== statusFilter) return false;
+      if (accountFilter !== 'all' && u.accountId !== accountFilter) return false;
+      if (activity === 'active' && u.seenDays > 30) return false;
+      if (activity === 'dormant' && u.seenDays <= 90) return false;
+      if (activity === 'mfa_off' && (u.mfa || u.role === 'student')) return false;
+      if (!q) return true;
+      return u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q) ||
+        u.account.toLowerCase().includes(q) || u.centre.toLowerCase().includes(q);
+    });
+  }, [directory, search, roleFilter, statusFilter, accountFilter, activity]);
+
+  const filtersOn = roleFilter !== 'all' || statusFilter !== 'all' || accountFilter !== 'all' || activity !== 'all' || !!search;
+  const clearFilters = () => { setSearch(''); setRoleFilter('all'); setStatusFilter('all'); setAccountFilter('all'); setActivity('all'); };
 
   // Donut AND bars both read `counts` → they can never disagree.
-  const roleRows = [
-    { key: 'student', role: 'Students', count: counts.student, color: roleColors.student },
-    { key: 'teacher', role: 'Teachers', count: counts.teacher, color: roleColors.teacher },
-    { key: 'admin', role: 'Centre Admins', count: counts.admin, color: roleColors.admin },
-    { key: 'parent', role: 'Parents', count: counts.parent, color: roleColors.parent },
-    { key: 'superadmin', role: 'Superadmins', count: counts.superadmin, color: roleColors.superadmin },
-  ];
-  const maxRole = Math.max(...roleRows.map(r => r.count));
+  const roleRows = SA_ROLE_ORDER.map(k => ({
+    key: k, role: SA_ROLE_LABEL[k] + (k === 'superadmin' ? 's' : 's'), count: counts[k] || 0, color: roleColors[k],
+  }));
+  const maxRole = Math.max(...roleRows.map(r => r.count), 1);
 
-  const stats = [
-    { label: 'Total Users', value: total.toLocaleString(), sub: '+124 this month', color: DS.accent, icon: 'users' },
-    { label: 'New Signups (Jun)', value: '124', sub: '+18% vs May', color: DS.success, icon: 'plus' },
-    { label: 'Active (30d)', value: Math.round(total * 0.699).toLocaleString(), sub: '69.9% of total', color: DS.info, icon: 'eye' },
-    { label: 'Retention (M1)', value: '85.4%', sub: '+2.1% vs cohort', color: SA_CHART_PALETTE[1], icon: 'trending_up' },
-    { label: 'MFA Adoption', value: '68.4%', sub: '+4.2% MoM', color: DS.warning, icon: 'shield' },
+  const mfaPct = ds.mfaEligible ? +((ds.mfaOn / ds.mfaEligible) * 100).toFixed(1) : 0;
+
+  const statTabs = [
+    {
+      id: 'overview', label: 'Overview', icon: 'chart', size: 'md', columns: 5,
+      items: [
+        { label: 'Total Users',  value: total.toLocaleString(),        trend: `+${newThisMonth}`, trendDir: 'up', sub: 'this month' },
+        { label: 'Active (30d)', value: ds.active30.toLocaleString(),  sub: `${pct(ds.active30)}% of total`, tone: 'pos' },
+        { label: 'Seen Today',   value: ds.today.toLocaleString(),     sub: `${pct(ds.today)}% of total` },
+        { label: 'Dormant (90d+)', value: ds.dormant.toLocaleString(), sub: 'no sign-in', tone: ds.dormant ? 'warn' : 'muted' },
+        { label: 'Accounts',     value: SAMetrics.accounts().length.toString(), sub: `${SAMetrics.totalCentres()} centres` },
+      ],
+      render: (
+        <div>
+          <div style={{ display: 'flex', gap: 16, marginBottom: 10 }}>
+            {SA_USER_GROWTH.series.map(s => (
+              <div key={s.label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{ width: 22, height: 2, background: s.color, borderRadius: 2 }} />
+                <span style={{ fontSize: 11.5, color: DS.muted }}>{s.label}</span>
+              </div>
+            ))}
+          </div>
+          <LineChart labels={SA_USER_GROWTH.labels} series={SA_USER_GROWTH.series} height={170} />
+        </div>
+      ),
+    },
+    {
+      id: 'roles', label: 'Roles', icon: 'users', size: 'sm', columns: 5,
+      items: roleRows.map(r => ({
+        label: r.role, value: r.count.toLocaleString(), sub: `${pct(r.count)}% of users`,
+        bar: (r.count / maxRole) * 100, barColor: r.color, dot: r.color,
+        onClick: () => setRoleFilter(r.key),
+      })),
+      render: (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 28, flexWrap: 'wrap' }}>
+          {/* Largest-remainder so the slice labels actually sum to 100%. */}
+          <SADonut data={saAllocate(roleRows.map(r => r.count), 100).map((p, i) => ({ pct: p, color: roleRows[i].color }))} size={130} />
+          <div style={{ flex: 1, minWidth: 240 }}>
+            {roleRows.map(r => (
+              <div key={r.key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '5px 0' }}>
+                <div style={{ width: 8, height: 8, borderRadius: '50%', background: r.color }} />
+                <span style={{ flex: 1, fontSize: 12.5, color: DS.sub }}>{r.role}</span>
+                <div style={{ width: 140 }}><SAHBar pct={(r.count / maxRole) * 100} color={r.color} height={6} /></div>
+                <span style={{ fontSize: 12.5, fontWeight: 600, color: DS.text, minWidth: 46, textAlign: 'right' }}>{r.count.toLocaleString()}</span>
+              </div>
+            ))}
+            <div style={{ fontSize: 11.5, color: DS.muted, marginTop: 8 }}>Select a segment above to filter the directory by that role.</div>
+          </div>
+        </div>
+      ),
+    },
+    {
+      id: 'security', label: 'Security', icon: 'shield', size: 'sm', columns: 5,
+      items: [
+        { label: 'MFA Adoption', value: `${mfaPct}%`, sub: `${ds.mfaOn.toLocaleString()} of ${ds.mfaEligible.toLocaleString()} eligible`, bar: mfaPct, barColor: mfaPct >= 80 ? DS.success : DS.warning },
+        { label: 'MFA Off',   value: (ds.mfaEligible - ds.mfaOn).toLocaleString(), sub: 'staff & parents', tone: 'warn', onClick: () => setActivity('mfa_off') },
+        { label: 'Locked',    value: ds.locked.toLocaleString(),    sub: 'sign-in blocked', tone: 'neg', onClick: () => setStatusFilter('locked') },
+        { label: 'Suspended', value: ds.suspended.toLocaleString(), sub: 'account-level', tone: 'neg', onClick: () => setStatusFilter('suspended') },
+        { label: 'Pending Invites', value: ds.pending.toLocaleString(), sub: 'never activated', tone: 'warn', onClick: () => setStatusFilter('pending') },
+      ],
+      render: (
+        <div style={{ fontSize: 12, color: DS.muted, lineHeight: 1.6 }}>
+          Students are excluded from the MFA denominator (AADC — minors are not asked for a second factor).
+          Locked accounts are auto-locked after repeated failed sign-ins; suspended users belong to a suspended account.
+        </div>
+      ),
+    },
+    {
+      id: 'seats', label: 'Seat usage', icon: 'grid', size: 'sm', columns: 4,
+      items: (() => {
+        const paying = SAMetrics.payingAccounts();
+        const used = paying.reduce((s, a) => s + SAMetrics.seatUsage(a).students.used, 0);
+        const lic = paying.reduce((s, a) => s + SAMetrics.seatUsage(a).students.licensed, 0);
+        const fill = lic ? Math.round((used / lic) * 100) : 0;
+        const near = paying.filter(a => { const s = SAMetrics.seatUsage(a).students; return s.licensed && s.used / s.licensed >= 0.9; }).length;
+        return [
+          { label: 'Student Seats Used', value: used.toLocaleString(), sub: `of ${lic.toLocaleString()} licensed`, bar: fill, barColor: fill >= 90 ? DS.danger : fill >= 70 ? DS.warning : DS.success },
+          { label: 'Overall Fill', value: `${fill}%`, sub: 'paying accounts only' },
+          { label: 'At Capacity', value: near.toString(), sub: '≥90% filled — upsell', tone: near ? 'warn' : 'muted' },
+          { label: 'Headroom', value: Math.max(0, lic - used).toLocaleString(), sub: 'seats available' },
+        ];
+      })(),
+      render: (
+        <div>
+          {SAMetrics.payingAccounts().map(a => {
+            const s = SAMetrics.seatUsage(a).students;
+            const p = s.licensed ? Math.round((s.used / s.licensed) * 100) : 0;
+            return { a, s, pct: p };
+          }).sort((x, y) => y.pct - x.pct).slice(0, 8).map(({ a, s, pct: p }) => (
+            <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '5px 0' }}>
+              <span style={{ flex: 1, fontSize: 12.5, color: DS.sub, minWidth: 0 }}>{a.name}</span>
+              <div style={{ width: 160 }}><SAHBar pct={p} color={p >= 90 ? DS.danger : p >= 70 ? DS.warning : DS.success} height={6} /></div>
+              <span style={{ fontSize: 12, fontWeight: 600, color: p >= 90 ? DS.danger : DS.text, minWidth: 70, textAlign: 'right' }}>{s.used}/{s.licensed}</span>
+            </div>
+          ))}
+          <div style={{ fontSize: 11.5, color: DS.muted, marginTop: 8 }}>Student seats used vs licensed (plan seats × centres). ≥90% flags an upsell.</div>
+        </div>
+      ),
+    },
   ];
 
-  const userMenu = (u) => [
-    { label: 'Reset password', icon: 'mail', onClick: () => { saAudit({ action: `Sent password reset to ${u.email}`, type: 'security', target: u.email }); setFlash('Password reset sent'); } },
-    { label: 'Revoke sessions', icon: 'x', onClick: () => { saAudit({ action: `Revoked sessions (force logout) for ${u.email}`, type: 'security', target: u.email }); setFlash('Sessions revoked'); } },
-    { label: u.mfa ? 'MFA required (on)' : 'Require MFA', icon: 'shield', onClick: () => { saAudit({ action: `Set MFA required for ${u.email}`, type: 'security', target: u.email }); setFlash('MFA requirement updated'); } },
-    { label: 'Change role', icon: 'user', onClick: () => setFlash('Role picker (prototype)') },
-    { label: 'Suspend user', icon: 'alert', danger: true, onClick: () => { saAudit({ action: `Suspended user ${u.email}`, type: 'security', target: u.email }); setFlash('User suspended'); } },
-    { label: 'View audit trail', icon: 'list', onClick: () => window.__navigate && window.__navigate('superadmin', 'security') },
+  const userActions = (u) => {
+    const items = [
+      { label: 'Reset password', icon: 'mail', onClick: () => { saAudit({ action: `Sent password reset to ${u.email}`, type: 'security', target: u.email }); setFlash('Password reset sent'); } },
+      { label: 'Revoke sessions', icon: 'x', hint: 'force logout', onClick: () => { saAudit({ action: `Revoked sessions (force logout) for ${u.email}`, type: 'security', target: u.email }); setFlash('Sessions revoked'); } },
+      { label: u.mfa ? 'MFA required (on)' : 'Require MFA', icon: 'shield', disabled: u.role === 'student', hint: u.role === 'student' ? 'not for minors' : '', onClick: () => { saAudit({ action: `Set MFA required for ${u.email}`, type: 'security', target: u.email }); setFlash('MFA requirement updated'); } },
+      { label: 'Change role', icon: 'user', hint: SA_ROLE_LABEL[u.role] || u.role, onClick: () => setFlash('Role picker (prototype)') },
+    ];
+    if (u.accountId) items.push({ label: 'Open account', icon: 'book', hint: u.account, onClick: () => { window.__saCentresFocus = u.accountId; window.__navigate && window.__navigate('superadmin', 'centres'); } });
+    items.push({ label: 'View audit trail', icon: 'list', onClick: () => window.__navigate && window.__navigate('superadmin', 'security') });
     // AADC: minor-data actions on a user are audited; the drill-down prefers
     // counts over identities where the owner doesn't need the identity.
-    { label: 'GDPR export / delete', icon: 'download', onClick: () => { saAudit({ action: `Raised DSAR for ${u.email}`, type: 'export', target: u.email }); window.__navigate && window.__navigate('superadmin', 'security'); } },
-  ];
+    items.push({ label: 'GDPR export / delete', icon: 'download', onClick: () => { saAudit({ action: `Raised DSAR for ${u.email}`, type: 'export', target: u.email }); window.__navigate && window.__navigate('superadmin', 'security'); } });
+    items.push({ label: 'Suspend user', icon: 'alert', danger: true, onClick: () => { saAudit({ action: `Suspended user ${u.email}`, type: 'security', target: u.email }); setFlash('User suspended'); setSelected(null); } });
+    return items;
+  };
+
+  const selectStyle = {
+    padding: '8px 10px', borderRadius: 8, border: `1px solid ${DS.border}`, background: DS.bg,
+    color: DS.sub, fontSize: 13, cursor: 'pointer', maxWidth: 190,
+  };
 
   return (
     <div style={pageFrame()}>
       <PageHeader
         title="Users & Accounts"
-        subtitle="Across all accounts on the platform"
+        subtitle={`${total.toLocaleString()} users across ${SAMetrics.accounts().length} accounts and ${SAMetrics.totalCentres()} centres`}
         actions={[
-          <Btn key="exp" variant="secondary" icon="download" small onClick={() => { const rows = [['Name', 'Role', 'Account', 'Status', 'Joined']]; filtered.forEach(u => rows.push([u.name, u.role, u.account, u.status, u.joined])); saDownloadCSV('klasio-users.csv', rows); saAudit({ action: `Exported users CSV (${filtered.length} rows)`, type: 'export', target: 'Users' }); setFlash('Users exported'); }}>Export</Btn>,
+          <Btn key="exp" variant="secondary" icon="download" small onClick={() => {
+            const rows = [['Name', 'Email', 'Role', 'Account', 'Centre', 'Status', 'MFA', 'Last seen', 'Joined']];
+            filtered.forEach(u => rows.push([u.name, u.email, u.role, u.account, u.centre, u.status, u.mfa ? 'on' : 'off', u.lastSeen, u.joined]));
+            saDownloadCSV('klasio-users.csv', rows);
+            saAudit({ action: `Exported users CSV (${filtered.length} rows)`, type: 'export', target: 'Users' });
+            setFlash('Users exported');
+          }}>Export</Btn>,
           <Btn key="msg" variant="primary" icon="bell" small onClick={() => setBulk(true)}>Bulk Message</Btn>,
         ]}
       />
 
-      {/* Stats row */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 20 }}>
-        {stats.map(s => (
-          <div key={s.label} style={{ background: DS.bg, border: `1px solid ${DS.cardBorder}`, borderRadius: 10, padding: '14px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 11, color: DS.muted }}>{s.label}</div>
-              <div style={{ fontSize: 22, fontWeight: 700, color: DS.text, marginTop: 4 }}>{s.value}</div>
-              <div style={{ fontSize: 10, color: s.color, marginTop: 2, fontWeight: 500 }}>{s.sub}</div>
-            </div>
-            <div style={{ width: 28, height: 28, borderRadius: 7, background: s.color + '15', color: s.color, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-              <Icon name={s.icon} size={14} />
-            </div>
-          </div>
-        ))}
-      </div>
+      {/* ONE stat card, switchable views — replaces the old tile row + 4 charts */}
+      <SAStatTabs
+        tabs={statTabs}
+        right={filtersOn
+          ? <Btn variant="ghost" small icon="x" onClick={clearFilters}>Clear filters</Btn>
+          : <span style={{ fontSize: 11.5, color: DS.faint, paddingRight: 4 }}>Platform-wide</span>}
+      />
 
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 20, marginBottom: 20 }}>
-        <Card title="User Growth & Activity" actions={[<Badge key="b" variant="accent">Last 8 months</Badge>]}>
-          <div style={{ padding: '20px' }}>
-            <div style={{ display: 'flex', gap: 16, marginBottom: 12 }}>
-              {SA_USER_GROWTH.series.map(s => (
-                <div key={s.label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <div style={{ width: 24, height: 2, background: s.color, borderRadius: 2 }} />
-                  <span style={{ fontSize: 12, color: DS.muted }}>{s.label}</span>
-                </div>
-              ))}
-            </div>
-            <LineChart labels={SA_USER_GROWTH.labels} series={SA_USER_GROWTH.series} height={200} />
-          </div>
-        </Card>
-
-        <Card title="Users by Role">
-          <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
-            <SADonut data={roleRows.map(r => ({ pct: Math.round((r.count / total) * 100), color: r.color }))} size={140} />
-            <div style={{ width: '100%' }}>
-              {roleRows.map(r => (
-                <div key={r.key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0' }}>
-                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: r.color }} />
-                  <span style={{ flex: 1, fontSize: 12, color: DS.sub }}>{r.role}</span>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: DS.text }}>{r.count.toLocaleString()}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </Card>
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 20, marginBottom: 20 }}>
-        <Card title="Role Breakdown" actions={[<Badge key="b" variant="default">All accounts</Badge>]}>
-          <div style={{ padding: '20px' }}>
-            {roleRows.map(r => (
-              <div key={r.key} style={{ marginBottom: 14 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
-                  <span style={{ fontSize: 13, color: DS.sub }}>{r.role}</span>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>{r.count.toLocaleString()}</span>
-                </div>
-                <SAHBar pct={(r.count / maxRole) * 100} color={r.color} height={8} />
-              </div>
-            ))}
-          </div>
-        </Card>
-
-        {/* Seats used vs licensed — expansion-revenue + enforcement signal */}
-        <Card title="Seat Usage by Account" actions={[<Badge key="b" variant="default">Top by fill</Badge>]}>
-          <div style={{ padding: '16px 20px' }}>
-            {SAMetrics.payingAccounts().map(a => {
-              const s = SAMetrics.seatUsage(a).students;
-              const pct = s.licensed ? Math.round((s.used / s.licensed) * 100) : 0;
-              return { a, s, pct };
-            }).sort((x, y) => y.pct - x.pct).slice(0, 6).map(({ a, s, pct }) => (
-              <div key={a.id} style={{ marginBottom: 12 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                  <span style={{ fontSize: 12.5, color: DS.sub }}>{a.name}</span>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: pct >= 90 ? DS.danger : DS.text }}>{s.used}/{s.licensed}</span>
-                </div>
-                <SAHBar pct={pct} color={pct >= 90 ? DS.danger : pct >= 70 ? DS.warning : DS.success} height={7} />
-              </div>
-            ))}
-            <div style={{ fontSize: 11, color: DS.muted, marginTop: 4 }}>Student seats used vs licensed (plan seats × centres). ≥90% flags an upsell.</div>
-          </div>
-        </Card>
-      </div>
-
-      <div style={{ display: 'flex', gap: 12, marginBottom: 20, alignItems: 'center' }}>
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8, background: DS.bg, border: `1px solid ${DS.border}`, borderRadius: 8, padding: '8px 12px' }}>
+      {/* Filters */}
+      <div style={{ display: 'flex', gap: 10, margin: '20px 0', alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 240, display: 'flex', alignItems: 'center', gap: 8, background: DS.bg, border: `1px solid ${DS.border}`, borderRadius: 8, padding: '8px 12px' }}>
           <Icon name="search" size={14} color={DS.faint} />
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search users…" style={{ border: 'none', outline: 'none', fontSize: 14, color: DS.text, flex: 1, background: 'transparent' }} />
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name, email, account or centre…"
+            style={{ border: 'none', outline: 'none', fontSize: 14, color: DS.text, flex: 1, background: 'transparent' }} />
         </div>
         <div style={{ display: 'flex', gap: 6 }}>
-          {[['all', 'All'], ['superadmin', 'Owner'], ['admin', 'Admin'], ['teacher', 'Teacher'], ['student', 'Student']].map(([id, label]) => (
+          {[['all', 'All'], ...SA_ROLE_ORDER.map(r => [r, SA_ROLE_LABEL[r]])].map(([id, label]) => (
             <button key={id} onClick={() => setRoleFilter(id)} style={{
-              padding: '7px 14px', borderRadius: 7, border: `1px solid ${roleFilter === id ? DS.accentBorder : DS.border}`,
+              padding: '7px 13px', borderRadius: 7, border: `1px solid ${roleFilter === id ? DS.accentBorder : DS.border}`,
               background: roleFilter === id ? DS.accentLight : DS.bg, color: roleFilter === id ? DS.accent : DS.muted,
-              fontSize: 13, fontWeight: roleFilter === id ? 600 : 400, cursor: 'pointer',
+              fontSize: 13, fontWeight: roleFilter === id ? 600 : 400, cursor: 'pointer', whiteSpace: 'nowrap',
             }}>{label}</button>
           ))}
         </div>
+        <select value={accountFilter} onChange={e => setAccountFilter(e.target.value)} style={selectStyle}>
+          <option value="all">All accounts</option>
+          {SAMetrics.accounts().map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+        </select>
+        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={selectStyle}>
+          <option value="all">Any status</option>
+          <option value="active">Active</option>
+          <option value="pending">Pending invite</option>
+          <option value="locked">Locked</option>
+          <option value="suspended">Suspended</option>
+        </select>
+        <select value={activity} onChange={e => setActivity(e.target.value)} style={selectStyle}>
+          <option value="all">Any activity</option>
+          <option value="active">Active in 30 days</option>
+          <option value="dormant">Dormant 90 days+</option>
+          <option value="mfa_off">MFA off (staff)</option>
+        </select>
       </div>
 
-      <Card>
+      {/* The directory — every user, one row each; the row opens the detail */}
+      <Card title="User directory" subtitle="Select a row to open the user and its actions"
+        actions={[<Badge key="n" variant="default">{filtered.length.toLocaleString()} of {total.toLocaleString()}</Badge>]}>
         <Table
-          cols={['User', 'Role', 'Account', 'Status', 'MFA', 'Joined', { label: 'Actions', align: 'right' }]}
-          rows={filtered.map(u => [
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>{u.name}</div>
-              <div style={{ fontSize: 11.5, color: DS.muted, marginTop: 1 }}>{u.email}</div>
-            </div>,
-            <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 5, background: (roleColors[u.role] || DS.muted) + '20', color: roleColors[u.role] || DS.muted, textTransform: 'capitalize' }}>{u.role}</span>,
-            <span style={{ fontSize: 13, color: DS.muted }}>{u.account}</span>,
-            <SAStatusPill status={u.status} />,
-            u.mfa ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, color: DS.success }}><Icon name="check" size={12} />On</span> : <span style={{ fontSize: 12, color: DS.faint }}>Off</span>,
-            <span style={{ fontSize: 12, color: DS.muted }}>{u.joined}</span>,
-            <RowActionsMenu items={userMenu(u)} />,
-          ])}
+          defaultPageSize={25}
+          pageSizeOptions={[25, 50, 100, 250]}
+          cols={['User', 'Role', 'Account', 'Centre', 'Status', 'MFA', 'Last seen']}
+          rowKey={(r, i) => (filtered[i] ? filtered[i].id : i)}
+          rows={filtered.map(u => ({
+            onClick: () => setSelected(u),
+            cells: [
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                <Avatar name={u.name} size={30} color={roleColors[u.role]} />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>{u.name}</div>
+                  <div style={{ fontSize: 11.5, color: DS.muted, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.email}</div>
+                </div>
+              </div>,
+              <SARolePill role={u.role} colors={roleColors} />,
+              <span style={{ fontSize: 12.5, color: DS.sub }}>{u.account}</span>,
+              <span style={{ fontSize: 12, color: DS.muted }}>{u.centre}</span>,
+              <SAStatusPill status={u.status} />,
+              u.role === 'student'
+                ? <span style={{ fontSize: 12, color: DS.faint }}>n/a</span>
+                : u.mfa
+                  ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, color: DS.success }}><Icon name="check" size={12} />On</span>
+                  : <span style={{ fontSize: 12, color: DS.faint }}>Off</span>,
+              <span style={{ fontSize: 12, color: u.seenDays > 90 ? DS.faint : DS.muted }}>{u.lastSeen}</span>,
+            ],
+          }))}
+          empty="No users match these filters"
         />
       </Card>
+
+      {/* User detail popover — identity, context and every action in one place */}
+      <SlideOver
+        open={!!selected}
+        onClose={() => setSelected(null)}
+        width={450}
+        icon="user"
+        iconColor={selected ? roleColors[selected.role] : DS.accent}
+        title={selected ? selected.name : ''}
+        subtitle={selected ? selected.email : ''}
+      >
+        {selected && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              <SARolePill role={selected.role} colors={roleColors} />
+              <SAStatusPill status={selected.status} />
+              {selected.role !== 'student' && (
+                <Badge variant={selected.mfa ? 'success' : 'warning'}>{selected.mfa ? 'MFA on' : 'MFA off'}</Badge>
+              )}
+              {selected.seenDays > 90 && <Badge variant="default">Dormant</Badge>}
+            </div>
+
+            <SAStatBand
+              size="sm"
+              columns={2}
+              items={[
+                { label: 'Last seen', value: selected.lastSeen, sub: selected.seenDays <= 30 ? 'active this month' : 'outside 30 days', tone: selected.seenDays <= 30 ? 'pos' : 'warn' },
+                { label: 'Joined', value: selected.joined, sub: 'account start' },
+              ]}
+            />
+
+            <div>
+              <SASectionLabel>Placement</SASectionLabel>
+              <div style={{ border: `1px solid ${DS.border}`, borderRadius: 10, padding: '2px 13px' }}>
+                <SADetailRow label="Account">{selected.account}</SADetailRow>
+                <SADetailRow label="Centre">{selected.centre}</SADetailRow>
+                <SADetailRow label="Country">{SA_COUNTRY_FLAG[selected.country] || ''} {selected.country}</SADetailRow>
+                <SADetailRow label="Detail">{selected.meta}</SADetailRow>
+                <SADetailRow label="User ID" last>
+                  <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11.5, color: DS.muted }}>{selected.id}</span>
+                </SADetailRow>
+              </div>
+            </div>
+
+            {selected.role === 'student' && (
+              <div style={{ padding: '10px 12px', borderRadius: 8, background: DS.warningBg, border: `1px solid ${DS.warningBorder}`, fontSize: 12, color: DS.warning, display: 'flex', gap: 8 }}>
+                <Icon name="shield" size={14} color={DS.warning} />
+                <span>Minor's record (AADC). Prefer centre-level action; every access here is audited.</span>
+              </div>
+            )}
+
+            <div>
+              <SASectionLabel>Actions</SASectionLabel>
+              <SAActionList items={userActions(selected)} />
+            </div>
+          </div>
+        )}
+      </SlideOver>
 
       <BulkMessageModal open={bulk} onClose={() => setBulk(false)} onSend={(n) => { saAudit({ action: `Sent bulk message to ${n} recipients (safeguarding-routed)`, type: 'comms', target: 'Users' }); setFlash(`Bulk message queued to ${n} recipients`); }} />
       <SAFlash msg={flash} onDone={() => setFlash('')} />
@@ -1060,14 +1667,16 @@ const SARevenuePage = () => {
   const dist = SAMetrics.planDistribution();
   const maxPlanMRR = Math.max(...dist.map(d => d.mrr), 1);
 
+  // Money page → hero + supporting grid. MRR is the number this page is about;
+  // the other six qualify it, so they sit smaller on the SAME card.
+  const leadStat = { label: 'Monthly Recurring Revenue', value: `£${mrr.toLocaleString()}`, trend: `+£${SAMetrics.newMRR().toLocaleString()}`, trendDir: 'up', sub: 'net new this month' };
   const stats = [
-    { label: 'MRR', value: `£${mrr.toLocaleString()}`, sub: `+£${SAMetrics.newMRR()} MoM`, color: DS.accent, icon: 'invoice' },
-    { label: 'ARR', value: `£${SAMetrics.arr().toLocaleString()}`, sub: '+15.2% YoY', color: SA_CHART_PALETTE[0], icon: 'trending_up' },
-    { label: 'New MRR', value: `£${SAMetrics.newMRR().toLocaleString()}`, sub: 'this month', color: DS.success, icon: 'plus' },
-    { label: 'Churned MRR', value: `£${SAMetrics.churnedMRR().toLocaleString()}`, sub: 'this month', color: DS.danger, icon: 'trending_dn' },
-    { label: 'ARPU', value: `£${SAMetrics.arpu().toLocaleString()}`, sub: 'per account', color: DS.info, icon: 'users' },
-    { label: 'NRR', value: `${SAMetrics.nrr()}%`, sub: 'net revenue retention', color: SA_CHART_PALETTE[4], icon: 'zap' },
-    { label: 'Failed Payments', value: failed.length.toString(), sub: `£${SAMetrics.failedAtRisk().toLocaleString()} at risk`, color: DS.warning, icon: 'alert' },
+    { label: 'ARR',             value: `£${SAMetrics.arr().toLocaleString()}`,        trend: '+15.2%', trendDir: 'up', sub: 'YoY' },
+    { label: 'New MRR',         value: `£${SAMetrics.newMRR().toLocaleString()}`,     sub: 'this month', tone: 'pos' },
+    { label: 'Churned MRR',     value: `£${SAMetrics.churnedMRR().toLocaleString()}`, sub: 'this month', tone: 'neg' },
+    { label: 'ARPU',            value: `£${SAMetrics.arpu().toLocaleString()}`,       sub: 'per paying account' },
+    { label: 'NRR',             value: `${SAMetrics.nrr()}%`,                         sub: 'net revenue retention', tone: SAMetrics.nrr() >= 100 ? 'pos' : 'warn' },
+    { label: 'Failed Payments', value: failed.length.toString(),                      sub: `£${SAMetrics.failedAtRisk().toLocaleString()} at risk`, tone: failed.length ? 'warn' : 'muted', dot: failed.length ? DS.warning : DS.success },
   ];
 
   const txns = SA_TXNS.map(t => ({ ...t, acc: SAMetrics.account(t.accountId) }));
@@ -1088,20 +1697,7 @@ const SARevenuePage = () => {
         ]}
       />
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 10, marginBottom: 20 }}>
-        {stats.map(s => (
-          <div key={s.label} style={{ background: DS.bg, border: `1px solid ${DS.cardBorder}`, borderRadius: 10, padding: '14px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 11, color: DS.muted }}>{s.label}</div>
-              <div style={{ fontSize: 18, fontWeight: 700, color: s.color, marginTop: 4 }}>{s.value}</div>
-              <div style={{ fontSize: 10, color: DS.faint, marginTop: 2 }}>{s.sub}</div>
-            </div>
-            <div style={{ width: 24, height: 24, borderRadius: 6, background: s.color + '15', color: s.color, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-              <Icon name={s.icon} size={12} />
-            </div>
-          </div>
-        ))}
-      </div>
+      <SALeadStat lead={leadStat} items={stats} columns={3} style={{ marginBottom: 20 }} />
 
       <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr', gap: 20, marginBottom: 20 }}>
         <Card title="New vs Churned Revenue (Monthly)" actions={[<Badge key="b" variant="accent">Last 8 months</Badge>]}>
@@ -1208,13 +1804,15 @@ const SARevenuePage = () => {
 
 const SAEngagementPage = () => {
   const [flash, setFlash] = React.useState('');
+  // Engagement has no single headline — six peers on one band, DAU/MAU carrying
+  // a fill bar because it's the only ratio in the row.
   const stats = [
-    { label: 'DAU', value: '634', sub: '+24 vs yesterday', color: DS.accent, icon: 'users' },
-    { label: 'WAU', value: '1,089', sub: '67.1% of MAU', color: SA_CHART_PALETTE[0], icon: 'users' },
-    { label: 'MAU', value: '1,620', sub: '+110 this month', color: DS.info, icon: 'trending_up' },
-    { label: 'DAU/MAU Ratio', value: '39.1%', sub: 'Good engagement', color: DS.success, icon: 'zap' },
-    { label: 'Avg Session', value: '18m 42s', sub: '+1m 12s vs last wk', color: SA_CHART_PALETTE[4], icon: 'eye' },
-    { label: 'Sessions / Day', value: '2,841', sub: 'across all centres', color: DS.warning, icon: 'book' },
+    { label: 'DAU',            value: '634',      trend: '+24', trendDir: 'up', sub: 'vs yesterday' },
+    { label: 'WAU',            value: '1,089',    sub: '67.1% of MAU' },
+    { label: 'MAU',            value: '1,620',    trend: '+110', trendDir: 'up', sub: 'this month' },
+    { label: 'DAU/MAU',        value: '39.1%',    sub: 'sticky usage', tone: 'pos', bar: 39.1, barColor: DS.success },
+    { label: 'Avg Session',    value: '18m 42s',  trend: '+1m 12s', trendDir: 'up', sub: 'vs last wk' },
+    { label: 'Sessions / Day', value: '2,841',    sub: 'across all centres' },
   ];
 
   const sessionsByRole = [
@@ -1243,7 +1841,7 @@ const SAEngagementPage = () => {
   const funnelTop = funnelRaw[0].count;
   const funnel = funnelRaw.map(f => ({ ...f, pct: +((f.count / funnelTop) * 100).toFixed(1) }));
 
-  const SAMPLE = <Badge variant="warning">Sample data — needs analytics events (phase 2)</Badge>;
+  const SAMPLE = <Badge key="sample" variant="warning">Sample data — needs analytics events (phase 2)</Badge>;
 
   return (
     <div style={pageFrame()}>
@@ -1253,18 +1851,7 @@ const SAEngagementPage = () => {
         actions={[<Btn key="exp" variant="secondary" icon="download" small onClick={() => setFlash('Engagement export (prototype)')}>Export</Btn>]}
       />
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12, marginBottom: 20 }}>
-        {stats.map(s => (
-          <div key={s.label} style={{ background: DS.bg, border: `1px solid ${DS.cardBorder}`, borderRadius: 10, padding: '14px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 11, color: DS.muted }}>{s.label}</div>
-              <div style={{ fontSize: 18, fontWeight: 700, color: DS.text, marginTop: 4 }}>{s.value}</div>
-              <div style={{ fontSize: 10, color: s.color, marginTop: 2, fontWeight: 500 }}>{s.sub}</div>
-            </div>
-            <div style={{ width: 24, height: 24, borderRadius: 6, background: s.color + '15', color: s.color, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={s.icon} size={12} /></div>
-          </div>
-        ))}
-      </div>
+      <SAStatBand items={stats} size="sm" style={{ marginBottom: 20 }} />
 
       <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 20, marginBottom: 20 }}>
         <Card title="Daily Active Users (This Week)" actions={[SAMPLE]}>
@@ -1422,39 +2009,32 @@ const SASystemPage = () => {
         <Badge variant="success">{SA_SYS.uptime30} 30-day uptime</Badge>
       </div>
 
-      {/* Single derived error rate (was 0.4% KPI vs 0.04% p-tile) → one value. */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 20 }}>
-        {[
-          { label: 'Uptime (30d)', value: SA_SYS.uptime30, sub: '9m downtime', color: DS.success, icon: 'zap' },
-          { label: 'API Response', value: '124ms', sub: '−3ms vs avg', color: DS.success, icon: 'trending_up' },
-          { label: 'Error Rate', value: `${SA_SYS.errorRate}%`, sub: '5xx responses', color: DS.success, icon: 'alert' },
-          { label: 'Jobs in Queue', value: jobs.reduce((s, j) => s + j.pending, 0).toString(), sub: '3 pending email', color: DS.info, icon: 'book' },
-          { label: 'Storage Used', value: '64%', sub: '2.4 TB / 3.8 TB', color: SA_CHART_PALETTE[4], icon: 'download' },
-        ].map(s => (
-          <div key={s.label} style={{ background: DS.bg, border: `1px solid ${DS.cardBorder}`, borderRadius: 10, padding: '14px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 11, color: DS.muted }}>{s.label}</div>
-              <div style={{ fontSize: 20, fontWeight: 700, color: DS.text, marginTop: 4 }}>{s.value}</div>
-              <div style={{ fontSize: 10, color: s.color, marginTop: 2, fontWeight: 500 }}>{s.sub}</div>
-            </div>
-            <div style={{ width: 24, height: 24, borderRadius: 6, background: s.color + '15', color: s.color, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={s.icon} size={12} /></div>
-          </div>
-        ))}
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
-        {[
-          { label: 'API p50', value: '42ms', color: DS.success, bar: 28 },
-          { label: 'API p95', value: '142ms', color: DS.success, bar: 42 },
-          { label: 'API p99', value: '480ms', color: DS.warning, bar: 68 },
-          { label: 'Error Rate', value: `${SA_SYS.errorRate}%`, color: DS.success, bar: 8 },
-        ].map(s => (
-          <div key={s.label} style={{ background: DS.bg, border: `1px solid ${DS.cardBorder}`, borderRadius: 10, padding: '16px 18px' }}>
-            <div style={{ fontSize: 11, color: DS.muted, marginBottom: 8 }}>{s.label}</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: DS.text, marginBottom: 8 }}>{s.value}</div>
-            <SAHBar pct={s.bar} color={s.color} height={5} />
-          </div>
-        ))}
+      {/* Two stat families (capacity vs latency) → ONE card with two views.
+          Error rate is a single derived value shown in both. */}
+      <div style={{ marginBottom: 24 }}>
+        <SAStatTabs
+          tabs={[
+            {
+              id: 'health', label: 'Capacity', icon: 'zap', size: 'sm', columns: 5,
+              items: [
+                { label: 'Uptime (30d)',  value: SA_SYS.uptime30, sub: '9m downtime', tone: 'pos', dot: DS.success },
+                { label: 'API Response',  value: '124ms', trend: '−3ms', trendDir: 'up', sub: 'vs avg' },
+                { label: 'Error Rate',    value: `${SA_SYS.errorRate}%`, sub: '5xx responses', tone: 'pos', dot: DS.success },
+                { label: 'Jobs in Queue', value: jobs.reduce((s, j) => s + j.pending, 0).toString(), sub: '3 pending email', tone: 'info' },
+                { label: 'Storage Used',  value: '64%', sub: '2.4 TB / 3.8 TB', bar: 64, barColor: SA_CHART_PALETTE[4] },
+              ],
+            },
+            {
+              id: 'latency', label: 'Latency', icon: 'trending_up', size: 'sm', columns: 4,
+              items: [
+                { label: 'API p50',    value: '42ms',  sub: 'median request',  bar: 28, barColor: DS.success },
+                { label: 'API p95',    value: '142ms', sub: 'slow tail',       bar: 42, barColor: DS.success },
+                { label: 'API p99',    value: '480ms', sub: 'worst 1%',        bar: 68, barColor: DS.warning, tone: 'warn' },
+                { label: 'Error Rate', value: `${SA_SYS.errorRate}%`, sub: '5xx responses', bar: 8, barColor: DS.success },
+              ],
+            },
+          ]}
+        />
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 20, marginBottom: 20 }}>
@@ -1514,20 +2094,15 @@ const SACommsPage = ({ embedded }) => {
         <PageHeader title="Support" subtitle="Support tickets and email activity across all accounts" />
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
-        {[
-          { label: 'Open Tickets', value: openCount.toString(), sub: `${pendingCount} pending` },
-          { label: 'Emails Sent (7d)', value: '14,820', sub: 'delivery 99.4%' },
-          { label: 'Avg Resolution', value: '3h 42m', sub: '−18m vs prior' },
-          { label: 'Bounce Rate', value: '0.8%', sub: 'within target' },
-        ].map(s => (
-          <div key={s.label} style={{ background: DS.bg, border: `1px solid ${DS.cardBorder}`, borderRadius: 10, padding: '16px 18px' }}>
-            <div style={{ fontSize: 12, color: DS.muted }}>{s.label}</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: DS.text, marginTop: 4 }}>{s.value}</div>
-            <div style={{ fontSize: 11, color: DS.success, marginTop: 2 }}>{s.sub}</div>
-          </div>
-        ))}
-      </div>
+      <SAStatBand
+        style={{ marginBottom: 24 }}
+        items={[
+          { label: 'Open Tickets',     value: openCount.toString(), sub: `${pendingCount} pending`, tone: openCount ? 'warn' : 'pos', dot: openCount ? DS.warning : DS.success },
+          { label: 'Emails Sent (7d)', value: '14,820', sub: '99.4% delivered' },
+          { label: 'Avg Resolution',   value: '3h 42m', trend: '−18m', trendDir: 'up', sub: 'vs prior' },
+          { label: 'Bounce Rate',      value: '0.8%',   sub: 'within target', tone: 'pos' },
+        ]}
+      />
 
       <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 20, marginBottom: 20 }}>
         <Card title="Support Tickets" actions={[<Badge key="o" variant="warning">{openCount} open</Badge>, <Badge key="p" variant="default">{pendingCount} pending</Badge>]}>
@@ -1624,20 +2199,16 @@ const SASecurityPage = () => {
         }}>Export Audit Log</Btn>]}
       />
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
-        {[
-          { label: 'Failed Logins (24h)', value: '21', color: DS.warning, sub: '3 from new IPs' },
-          { label: 'Locked Accounts', value: '2', color: DS.danger, sub: '1 auto-locked' },
-          { label: 'Active Sessions', value: '342', color: DS.success, sub: 'across 1,089 users' },
-          { label: 'Open DSARs', value: openDeadlines.toString(), color: DS.accent, sub: 'with legal SLA' },
-        ].map(s => (
-          <div key={s.label} style={{ background: DS.bg, border: `1px solid ${DS.cardBorder}`, borderRadius: 10, padding: '16px 18px' }}>
-            <div style={{ fontSize: 12, color: DS.muted }}>{s.label}</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: s.color, marginTop: 4 }}>{s.value}</div>
-            <div style={{ fontSize: 11, color: DS.muted, marginTop: 2 }}>{s.sub}</div>
-          </div>
-        ))}
-      </div>
+      {/* Locked accounts is a tally off the user directory, not a literal. */}
+      <SAStatBand
+        style={{ marginBottom: 24 }}
+        items={[
+          { label: 'Failed Logins (24h)', value: '21', sub: '3 from new IPs', tone: 'warn', dot: DS.warning },
+          { label: 'Locked Accounts', value: SAMetrics.directoryStats().locked.toString(), sub: 'auto-locked on failures', tone: 'neg', dot: DS.danger },
+          { label: 'Active Sessions', value: '342', sub: `across ${SAMetrics.directoryStats().active30.toLocaleString()} active users`, tone: 'pos', dot: DS.success },
+          { label: 'Open DSARs', value: openDeadlines.toString(), sub: 'with legal SLA', tone: openDeadlines ? 'warn' : 'pos', dot: openDeadlines ? DS.warning : DS.success },
+        ]}
+      />
 
       {/* DSAR queue — real workflow with requester/target/deadline/status/fulfil */}
       <Card title="Data Subject Requests (DSAR)" subtitle="UK-GDPR / AADC — legal SLA deadlines" actions={[<Badge key="b" variant={openDeadlines ? 'warning' : 'success'}>{openDeadlines} open</Badge>]} style={{ marginBottom: 20 }}>
@@ -1678,7 +2249,8 @@ const SASecurityPage = () => {
               { label: 'AADC (child data) posture', value: 'Enforced', icon: 'shield', color: DS.success },
               { label: 'Encryption (in transit)', value: 'TLS 1.3', icon: 'zap', color: DS.success },
               { label: 'Encryption (at rest)', value: 'AES-256', icon: 'zap', color: DS.success },
-              { label: 'MFA Adoption', value: '68.4%', icon: 'shield', color: DS.accent },
+              // Same tally the Users → Security tab shows (students excluded).
+              { label: 'MFA Adoption', value: (() => { const d = SAMetrics.directoryStats(); return d.mfaEligible ? `${((d.mfaOn / d.mfaEligible) * 100).toFixed(1)}%` : '—'; })(), icon: 'shield', color: DS.accent },
             ].map((item, i, arr) => (
               <div key={item.label} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderBottom: i < arr.length - 1 ? `1px solid ${DS.border}` : 'none' }}>
                 <div style={{ width: 28, height: 28, borderRadius: 6, background: item.color + '15', color: item.color, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={item.icon} size={14} /></div>

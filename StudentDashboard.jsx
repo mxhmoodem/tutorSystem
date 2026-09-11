@@ -6,8 +6,8 @@
 // grade model and the active term all come from the student SoT
 // (studentData.jsx → window.klasioStudent), loaded before this file. Homework lives
 // in Homework.jsx (StudentHomework); reports come from the shared reports store
-// (Reports.jsx, window.StudentReports). The studentHomework mock still seeds the
-// Overview "due soon" list via klasioStudent.metrics.homeworkSummary().
+// (Reports.jsx, window.StudentReports). The Overview "due soon" list comes from
+// klasioStudent.metrics.homeworkSummary(), which reads the live homework store.
 
 // ─── Overview page ─────────────────────────────────────────────────────────────
 // Subject themes — pastel cards with abstract shapes

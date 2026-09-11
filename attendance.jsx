@@ -19,7 +19,11 @@
 //  existing TimesheetCapture on confirm — a separate path from marks (D4).
 // ══════════════════════════════════════════════════════════════════════════════
 
-const ATT_STORE_KEY = 'tutoros.attendance.v1';
+// v2 — the seed grew from one teacher's eight classes to a centre-wide register
+// history (mocks/attendance.mock.jsx), and submittedBy now names the real
+// delivering adult rather than a hardcoded 't1'. Bumped so an existing prototype
+// store doesn't pin the old, teacher-1-only history.
+const ATT_STORE_KEY = 'tutoros.attendance.v2';
 const ATT_DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 // ── small date helpers (local-time, matching the rest of the app) ──────────────
@@ -222,12 +226,24 @@ function recentSessions(sessions, rosterOf, store, limit) {
 // ══════════════════════════════════════════════════════════════════════════════
 //  Store — source-of-truth writes only. Everything else is derived above.
 // ══════════════════════════════════════════════════════════════════════════════
+// The delivering adult on a seeded register: the row's own teacherId when the seed
+// names one (the generated centre-wide history does), else the teacher rostered to
+// that class. This is the field the staff-attendance view reads back — "did this
+// teacher take their own session" — so it must name a real teacher, not a constant.
+const attSeedDeliveredBy = (row) => {
+  if (row.teacherId) return row.teacherId;
+  const classId = String(row.sessionId || '').split('|')[0];
+  const cls = (window.SEED_CLASSES || []).find(c => c.id === classId);
+  const t = cls && (window.SEED_TEACHERS || []).find(x => x.name === cls.teacher);
+  return t ? t.id : 't1';
+};
+
 const attSeedStore = () => {
   const submissions = {};
   (window.ATT_SEED_DELIVERED || []).forEach(row => {
     submissions[row.sessionId] = {
       submittedAt: new Date(row.at).getTime(),
-      submittedBy: 't1',            // Heebz A (rostered) — resolved to real id below at read time
+      submittedBy: attSeedDeliveredBy(row),
       synth: true,                  // marks synthesised deterministically from the roster
       note: '', late: false, byAdmin: false,
     };

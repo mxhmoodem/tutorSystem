@@ -79,17 +79,33 @@ const SA_COUNTRY_FLAG = { UK: '🇬🇧', IE: '🇮🇪', SE: '🇸🇪', FR: '�
 
 // ══════════════════════════════════════════════════════════════
 //  TRUSTED role counts — the single source for the Users donut, Users bars,
-//  and Platform Controls → Roles. Everything reconciles to these.
-//  (SuperAdmin 1 / Admin 12 / Teacher 198 / Student 1,342 / Parent 70 = 1,623)
+//  the Users directory (SAMetrics.directory materialises EXACTLY this many
+//  rows per role), seat usage, and Platform Controls → Roles.
+//
+//  These are DERIVED from the centre rosters above rather than typed, because
+//  the same head counts also drive per-centre cards and seat usage: a typed
+//  tally drifts from them the moment a centre changes. Admin is one owner per
+//  account; parents are the only free parameter (the roster carries no parent
+//  head count). Currently: SuperAdmin 1 / Admin 16 / Teacher 87 / Student
+//  1,446 / Parent 70 = 1,620.
 // ══════════════════════════════════════════════════════════════
-const SA_ROLE_COUNTS = { superadmin: 1, admin: 12, teacher: 198, student: 1342, parent: 70 };
+const SA_CENTRE_ROSTER = SA_ACCOUNTS.reduce((out, a) => out.concat(a.centres), []);
+const SA_ROLE_COUNTS = {
+  superadmin: 1,
+  admin:      SA_ACCOUNTS.length,
+  teacher:    SA_CENTRE_ROSTER.reduce((s, c) => s + c.teachers, 0),
+  student:    SA_CENTRE_ROSTER.reduce((s, c) => s + c.students, 0),
+  parent:     70,
+};
+const SA_TOTAL_USERS = Object.values(SA_ROLE_COUNTS).reduce((a, b) => a + b, 0);
 
-// ─── User growth trend (last 8 months; ends at the trusted total = 1,623) ────
+// ─── User growth trend (last 8 months). The final point IS the derived total,
+//     so the chart can never end somewhere the KPI doesn't. ─────────────────
 const SA_USER_GROWTH = {
   labels: ['Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar', 'Apr'],
   series: [
-    { label: 'Total users', data: [712, 778, 842, 968, 1124, 1287, 1456, 1623], color: SA_CHART_PALETTE[0] },
-    { label: 'DAU',         data: [268, 291, 312, 358, 421, 487, 542, 612],     color: SA_CHART_PALETTE[1] },
+    { label: 'Total users', data: [712, 778, 842, 968, 1124, 1287, 1456, SA_TOTAL_USERS], color: SA_CHART_PALETTE[0] },
+    { label: 'DAU',         data: [268, 291, 312, 358, 421, 487, 542, 612],               color: SA_CHART_PALETTE[1] },
   ],
 };
 

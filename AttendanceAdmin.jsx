@@ -61,14 +61,6 @@ const AdminAttendancePage = () => {
   // The adult whose timesheet an admin-taken register logs to = the rostered teacher.
   const panelTeacher = panelSession ? (store.teachers.find(t => t.name === panelSession.teacher) || store.teachers[0]) : null;
 
-  const kpi = (label, value, sub, tone) => (
-    <div style={{ background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:12, padding:'16px 18px', boxShadow:DS.cardShadow }}>
-      <div style={{ fontSize:11, fontWeight:600, color:DS.faint, letterSpacing:'0.05em', textTransform:'uppercase', marginBottom:8 }}>{label}</div>
-      <div style={{ fontSize:26, fontWeight:800, color: tone || DS.text, letterSpacing:'-0.5px', lineHeight:1 }}>{value}</div>
-      <div style={{ fontSize:12, color:DS.muted, marginTop:5 }}>{sub}</div>
-    </div>
-  );
-
   return (
     <div style={pageFrame()}>
       <PageHeader title="Attendance"
@@ -77,60 +69,77 @@ const AdminAttendancePage = () => {
 
       {DevNudge && <DevNudge onChange={rerender} />}
 
-      {/* KPI row — all derived */}
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:14, marginBottom:22 }}>
-        {kpi('Sessions today', String(todayCountable.length), `${doneToday} register${doneToday === 1 ? '' : 's'} done`, DS.text)}
-        {kpi('Registers done', todayCountable.length ? `${Math.round((doneToday / todayCountable.length) * 100)}%` : '—', 'of today’s sessions', DS.success)}
-        {kpi('Needs a register', String(needs.length), `${lapsedCount} lapsed · ${needs.length - lapsedCount} late-window`, needs.length ? DS.warning : DS.success)}
-        {kpi('Centre attendance', centreRate.pct == null ? '—' : `${centreRate.pct}%`, `${centreRate.deliveredSessions} delivered sessions`, DS.text)}
-      </div>
+      {/* The two columns below already carry the counts (a day's sessions on the left,
+          the outstanding queue on the right), so this strip is deliberately short:
+          only the two figures neither column states — how much of today is done, and
+          what the centre's actual attendance rate is. */}
+      <StatBand variant="plain" stats={[
+        { label: 'Registers done today', value: todayCountable.length ? `${doneToday}/${todayCountable.length}` : '—',
+          sub: todayCountable.length ? `${Math.round((doneToday / todayCountable.length) * 100)}% of today’s sessions` : 'no sessions today',
+          tone: todayCountable.length && doneToday < todayCountable.length ? DS.warning : DS.success },
+        { label: 'Centre attendance', value: centreRate.pct == null ? '—' : `${centreRate.pct}%`,
+          sub: `${centreRate.deliveredSessions} delivered sessions`,
+          hint: 'Present + late as a share of all marks on delivered sessions' },
+      ]} />
 
-      {/* Needs a register — centre-wide, oldest first, admins can unlock */}
-      <div style={{ marginBottom:22, border:`1px solid ${needs.length ? DS.warningBorder : DS.cardBorder}`, borderRadius:12, overflow:'hidden', background:DS.bg, boxShadow:DS.cardShadow }}>
-        <div style={{ display:'flex', alignItems:'center', gap:10, padding:'12px 18px', background: needs.length ? DS.warningBg : DS.surface, borderBottom:`1px solid ${needs.length ? DS.warningBorder : DS.border}` }}>
-          <Icon name={needs.length ? 'clock' : 'check'} size={17} color={needs.length ? DS.warning : DS.success} />
-          <span style={{ fontSize:14, fontWeight:700, color: needs.length ? DS.warning : DS.success }}>Needs a register</span>
-          <span style={{ fontSize:12, color: needs.length ? DS.warning : DS.muted }}>
-            {needs.length ? `${needs.length} across the centre — unlock a session to let its teacher take it late.` : 'Nothing outstanding across the centre.'}
-          </span>
+      {/* Two columns: what is happening (left) and what is outstanding (right). The
+          left column is the browsable day view — the normal, calm state of the page.
+          The right is the work queue, and it is the one that goes quiet when there's
+          nothing to do. Splitting them stops a long backlog pushing the day view off
+          the screen, which is what happened when they were stacked. */}
+      <div style={{ display:'grid', gridTemplateColumns:'minmax(0, 1.15fr) minmax(0, 0.85fr)', gap:20, alignItems:'start' }}>
+
+        <Card title={selectedDate === todayIso ? 'Today' : attFmtDay ? attFmtDay(selectedDate) : selectedDate}
+          actions={
+            <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+              <Select value={teacherFilter} onChange={e => setTeacherFilter(e.target.value)} style={{ width:150, fontSize:12 }}>
+                <option value="all">All teachers</option>
+                {teachers.map(t => <option key={t} value={t}>{t}</option>)}
+              </Select>
+              <button onClick={() => shiftDate(-1)} title="Previous day" style={{ display:'inline-flex', padding:6, borderRadius:6, border:`1px solid ${DS.border}`, background:DS.bg, cursor:'pointer' }}><Icon name="chevron_l" size={15} color={DS.muted} /></button>
+              <input type="date" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} style={{ padding:'5px 9px', borderRadius:6, border:`1px solid ${DS.border}`, fontSize:12.5, outline:'none', color:DS.text }} />
+              <button onClick={() => shiftDate(1)} title="Next day" style={{ display:'inline-flex', padding:6, borderRadius:6, border:`1px solid ${DS.border}`, background:DS.bg, cursor:'pointer' }}><Icon name="chevron_r" size={15} color={DS.muted} /></button>
+              {selectedDate !== todayIso && <button onClick={() => setSelectedDate(todayIso)} style={{ padding:'6px 10px', borderRadius:6, border:`1px solid ${DS.accentBorder}`, background:DS.accentLight, color:DS.accent, fontSize:12, fontWeight:600, cursor:'pointer' }}>Today</button>}
+            </div>
+          }>
+          {browse.length === 0 ? (
+            <div style={{ padding:'10px 4px' }}>
+              <EmptyState icon="calendar" title="No sessions" message="No sessions match this teacher and day." />
+            </div>
+          ) : (
+            <div>
+              {browse.map(s => (
+                <SessionRow key={s.id} session={s} roster={rosterOf(s)} att={att} isAdmin={true} showDate={false}
+                  onOpen={openPanel} onReinstate={reinstate} onGrant={grantUnlock} onRevoke={revokeUnlock} />
+              ))}
+            </div>
+          )}
+        </Card>
+
+        <div style={{ border:`1px solid ${needs.length ? DS.warningBorder : DS.cardBorder}`, borderRadius:12, overflow:'hidden', background:DS.bg, boxShadow:DS.cardShadow }}>
+          <div style={{ display:'flex', alignItems:'center', gap:10, padding:'13px 18px', background: needs.length ? DS.warningBg : DS.surface, borderBottom:`1px solid ${needs.length ? DS.warningBorder : DS.border}` }}>
+            <Icon name={needs.length ? 'clock' : 'check'} size={17} color={needs.length ? DS.warning : DS.success} />
+            <span style={{ fontSize:14, fontWeight:700, color: needs.length ? DS.warning : DS.success, flex:1 }}>Needs a register</span>
+            {needs.length > 0 && (
+              <span style={{ fontSize:12, fontWeight:700, color:DS.warning, background:DS.bg, border:`1px solid ${DS.warningBorder}`, borderRadius:20, padding:'2px 9px' }}>{needs.length}</span>
+            )}
+          </div>
+          <div style={{ padding:'9px 18px 0', fontSize:12, color: needs.length ? DS.warning : DS.muted, lineHeight:1.5 }}>
+            {needs.length
+              ? `${lapsedCount} past the late window · ${needs.length - lapsedCount} still takeable. Unlock a session to let its teacher take it late.`
+              : 'Nothing outstanding across the centre.'}
+          </div>
+          {needs.length > 0 && (
+            <div style={{ marginTop:9, maxHeight:640, overflowY:'auto' }}>
+              {needs.map(s => (
+                <SessionRow key={s.id} session={s} roster={rosterOf(s)} att={att} isAdmin={true} showDate
+                  onOpen={openPanel} onReinstate={reinstate} onGrant={grantUnlock} onRevoke={revokeUnlock} />
+              ))}
+            </div>
+          )}
+          {needs.length === 0 && <div style={{ padding:'18px' }} />}
         </div>
-        {needs.length > 0 && (
-          <div>
-            {needs.map(s => (
-              <SessionRow key={s.id} session={s} roster={rosterOf(s)} att={att} isAdmin={true} showDate
-                onOpen={openPanel} onReinstate={reinstate} onGrant={grantUnlock} onRevoke={revokeUnlock} />
-            ))}
-          </div>
-        )}
       </div>
-
-      {/* Browse — all sessions for a chosen teacher + day */}
-      <Card title="All sessions"
-        actions={
-          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-            <Select value={teacherFilter} onChange={e => setTeacherFilter(e.target.value)} style={{ width:170, fontSize:12 }}>
-              <option value="all">All teachers</option>
-              {teachers.map(t => <option key={t} value={t}>{t}</option>)}
-            </Select>
-            <button onClick={() => shiftDate(-1)} title="Previous day" style={{ display:'inline-flex', padding:6, borderRadius:6, border:`1px solid ${DS.border}`, background:DS.bg, cursor:'pointer' }}><Icon name="chevron_l" size={15} color={DS.muted} /></button>
-            <input type="date" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} style={{ padding:'5px 9px', borderRadius:6, border:`1px solid ${DS.border}`, fontSize:12.5, outline:'none', color:DS.text }} />
-            <button onClick={() => shiftDate(1)} title="Next day" style={{ display:'inline-flex', padding:6, borderRadius:6, border:`1px solid ${DS.border}`, background:DS.bg, cursor:'pointer' }}><Icon name="chevron_r" size={15} color={DS.muted} /></button>
-            {selectedDate !== todayIso && <button onClick={() => setSelectedDate(todayIso)} style={{ padding:'6px 10px', borderRadius:6, border:`1px solid ${DS.accentBorder}`, background:DS.accentLight, color:DS.accent, fontSize:12, fontWeight:600, cursor:'pointer' }}>Today</button>}
-          </div>
-        }>
-        {browse.length === 0 ? (
-          <div style={{ padding:'10px 4px' }}>
-            <EmptyState icon="calendar" title="No sessions" message="No sessions match this teacher and day." />
-          </div>
-        ) : (
-          <div>
-            {browse.map(s => (
-              <SessionRow key={s.id} session={s} roster={rosterOf(s)} att={att} isAdmin={true} showDate={false}
-                onOpen={openPanel} onReinstate={reinstate} onGrant={grantUnlock} onRevoke={revokeUnlock} />
-            ))}
-          </div>
-        )}
-      </Card>
 
       {panelSession && RegisterDrawer && (
         <RegisterDrawer key={panelSession.id} session={panelSession} roster={rosterOf(panelSession)}

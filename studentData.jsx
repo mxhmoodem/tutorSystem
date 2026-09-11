@@ -11,7 +11,7 @@
 //  "active student" (localStorage `klasio.activeStudent`, default `s2` = Oliver
 //  Chen, who is already the demo persona everywhere). Identity, enrolments (from
 //  the student's real classIds → real classes → real subjects/teachers/rooms),
-//  grades and homework all derive from `admin_store_v4` + `homework_store_v6` for
+//  grades and homework all derive from `admin_store_v4` + `homework_store_v9` for
 //  that student. Switching the active student (window.__setActiveStudent) re-points
 //  the whole surface. Per-assessment scores / class averages / attendance rows are
 //  synthesised DETERMINISTICALLY from the student's stored score/hw/attendance
@@ -30,7 +30,7 @@
 (() => {
 
 const ADMIN_KEY = 'admin_store_v4';
-const HW_KEY    = 'homework_store_v6';
+const HW_KEY    = 'homework_store_v9';
 const DEFAULT_ID = 's2';   // Oliver Chen — the persona the seed data is built around
 
 // ── Store reads (non-reactive, per call — same discipline as the metrics layers) ─
@@ -205,11 +205,18 @@ const dueInfo = (a) => {
   if (days === 1) return { due: 'Due tomorrow', overdue: false };
   return { due: `Due in ${days} days`, overdue: false };
 };
+// Assignment rows for the active student. Selection goes through the one homework
+// selector so this list and every homework count describe the same set.
 const myAssignments = () => {
-  const s = readHw(); const id = getActiveId();
+  const id = getActiveId();
+  if (window.klasioHomework) return window.klasioHomework.listAssignments({ studentId: id });
+  const s = readHw();
   if (!s || !s.assignments) return [];
   return Object.values(s.assignments).filter(a => (a.studentIds || []).includes(id) && a.status !== 'draft');
 };
+const hwCounts = () => window.klasioHomework
+  ? window.klasioHomework.getHomeworkCounts({ studentId: getActiveId() })
+  : null;
 const scoreOf = (a, id) => {
   const sub = (a.submissions || {})[id];
   if (!sub || !sub.marks) return null;
@@ -244,9 +251,10 @@ const metrics = {
     const pending = myAssignments()
       .filter(a => hwStateFor(a, id) === 'pending')
       .map(a => { const d = dueInfo(a); return { id: a.id, title: a.title, subject: a.subject, due: d.due, overdue: d.overdue, status: 'pending' }; });
+    const counts = hwCounts();
     return {
       pending,
-      pendingCount: pending.length,
+      pendingCount: counts ? counts.pending : pending.length,
       urgentCount: pending.filter(h => dueState(h) === 'due-today' || dueState(h) === 'overdue').length,
     };
   },

@@ -5,60 +5,105 @@
 (() => {
 
 // ─── Design tokens ─────────────────────────────────────────────
+// These mirror shared.jsx's DS exactly. Homework used to carry its own slate
+// palette (border #E2E8F0 vs #E5E7EB, ink #0F172A vs #111827, …), which is the
+// main reason it read as a different product to every other page in the app.
+//
+// Colour is semantic, and only semantic:
+//   • brand indigo — interactive only: primary buttons, links, focus rings,
+//     active tab/nav state, progress fill. Never decorative.
+//   • amber        — exactly one meaning: this needs your action (to mark, overdue).
+//   • danger red   — destructive actions and genuine errors. Not counts, not badges.
+//   • success green— per-question correctness in the marking/review flow, and
+//     toast confirmations. Nowhere else: a count of marked work is a count,
+//     not a success state.
+// Everything else is ink / muted ink / hairline, which is ~90% of the pixels.
 const C = {
   bg:        '#FFFFFF',
-  surface:   '#F8FAFC',
-  surface2:  '#F1F5F9',
-  border:    '#E2E8F0',
-  borderD:   '#CBD5E1',
-  text:      '#0F172A',
-  sub:       '#334155',
-  muted:     '#64748B',
-  faint:     '#94A3B8',
-  brand:     '#4F46E5',
-  brandH:    '#4338CA',
-  brandSoft: '#EEF2FF',
-  brandBorder: '#C7D2FE',
-  accent:    '#0EA5E9',
-  accentSoft:'#E0F2FE',
+  surface:   '#F9FAFB',
+  surface2:  '#F3F4F6',
+  border:    '#E5E7EB',
+  borderD:   '#D1D5DB',
+  text:      '#111827',
+  sub:       '#374151',
+  muted:     '#6B7280',
+  faint:     '#9CA3AF',
+  // Brand is a live read of the app accent, not a frozen literal. The centre
+  // accent is admin-settable (Settings → Appearance writes window.DS.accent
+  // through the __setAccent bridge in index.html), and Homework was the one
+  // module that ignored it — a centre on a green accent still got an indigo
+  // "New homework" button next to a green sidebar. Getters re-read on every
+  // render, which is exactly when the style objects are built.
+  get brand()       { return (window.DS && window.DS.accent)       || '#4F46E5'; },
+  get brandH()      { return (window.DS && window.DS.accentHover)  || '#4338CA'; },
+  get brandSoft()   { return (window.DS && window.DS.accentLight)  || '#EEF2FF'; },
+  get brandBorder() { return (window.DS && window.DS.accentBorder) || '#C7D2FE'; },
   success:   '#16A34A',
   successBg: '#F0FDF4',
   successBorder:'#BBF7D0',
-  amber:     '#D97706',
+  amber:     '#B45309',
   amberBg:   '#FFFBEB',
   amberBorder:'#FDE68A',
   danger:    '#DC2626',
   dangerBg:  '#FEF2F2',
   dangerBorder:'#FECACA',
-  shadow:    '0 1px 2px rgba(15,23,42,.04), 0 1px 1px rgba(15,23,42,.03)',
-  shadowL:   '0 4px 20px -8px rgba(15,23,42,.18)',
+  // Cards and rows are flat and bordered — no resting shadow. Elevation is
+  // reserved for true overlays (modals, popovers, tooltips) that leave the
+  // page flow; border + hairline reads as more serious in dense app UI.
+  // Pressed/hover shades of the two solid button fills.
+  textHover:   '#0B1220',
+  dangerHover: '#B91C1C',
+  // Ink on a filled (brand/ink/danger) surface.
+  inverse:     '#FFFFFF',
+  shadow:    'none',
+  shadowL:   '0 4px 20px -8px rgba(17,24,39,.18)',
 };
 
+// One radius everywhere (0.5rem). Badges are the only exception — they use
+// RADIUS_FULL. Anything else picking its own number is a bug.
+const RADIUS = 8;
+const RADIUS_FULL = 999;
+
+// Four sizes, two weights. Nothing outside this scale, nothing at 600+.
+const TS = {
+  title:   { fontSize: 24, fontWeight: 500, letterSpacing: '-0.02em' },
+  section: { fontSize: 15, fontWeight: 500 },
+  body:    { fontSize: 14, fontWeight: 400 },
+  meta:    { fontSize: 13, fontWeight: 400 },
+};
+const W = { normal: 400, medium: 500 };
+
+// Every number in the module gets tabular figures, so scores, ratios and counts
+// line up vertically in a column instead of jittering ("9/9" over "7/8").
+const NUM = { fontVariantNumeric: 'tabular-nums' };
+
 const F = {
+  // The app shell renders in Plus Jakarta Sans; Homework was the one module
+  // rendering its UI in Inter. head/body are deliberately the same stack now —
+  // the pair is kept only so the ~150 existing call sites stay valid.
   head: "'Plus Jakarta Sans', system-ui, sans-serif",
-  body: "'Inter', system-ui, sans-serif",
+  body: "'Plus Jakarta Sans', system-ui, sans-serif",
+  // Reserved for genuine code: raw LaTeX echoes. Numbers use NUM, not mono.
   mono: "'JetBrains Mono', ui-monospace, monospace",
 };
 
 const T = 'all .15s';
 const ring = (color) => `0 0 0 4px ${color}1F`;
 
-const SUBJECTS = {
-  'Math':        { color: '#4F46E5', soft: '#EEF2FF' },
-  'Mathematics': { color: '#4F46E5', soft: '#EEF2FF' },
-  'Physics':     { color: '#0EA5E9', soft: '#E0F2FE' },
-  'Chem':        { color: '#10B981', soft: '#ECFDF5' },
-  'Chemistry':   { color: '#10B981', soft: '#ECFDF5' },
-  'Biology':     { color: '#16A34A', soft: '#F0FDF4' },
-  'English':     { color: '#EC4899', soft: '#FDF2F8' },
-  'English Literature': { color: '#EC4899', soft: '#FDF2F8' },
-  'History':     { color: '#D97706', soft: '#FFFBEB' },
-  'Economics':   { color: '#0D9488', soft: '#F0FDFA' },
-};
-const subColor = (name) => SUBJECTS[name] || { color: C.muted, soft: C.surface };
+// The subject list backs the builder's subject <select>. It used to carry a
+// per-subject hue that tinted card icons, table cells and progress bars — that
+// map is gone: subject is a fact, not a status, so it renders as plain text.
+const SUBJECT_NAMES = [
+  'Math', 'Mathematics', 'Physics', 'Chem', 'Chemistry', 'Biology',
+  'English', 'English Literature', 'History', 'Economics',
+];
 
 // ─── localStorage store ────────────────────────────────────────
-const STORAGE_KEY = 'homework_store_v6';
+// v7: bulk demo library (mocks/homework.mock.jsx) + real-roster cohort fill.
+// v8: second wave of demo homework (every class group, all 11 staff) — the seed
+// only runs when the key is absent, so growing the mock library needs a bump to
+// reach anyone who already has a store. Resources.jsx bridges into this key too.
+const STORAGE_KEY = 'homework_store_v9';
 
 // Class roster, student seed roster and PDF question banks are mock data,
 // defined as globals in mocks/homework.mock.jsx (loaded before this file in
@@ -83,6 +128,66 @@ const seededRand = (str) => {
   return ((h >>> 0) % 100000) / 100000;
 };
 
+// A believable answer of the right shape for this question type — a real choice,
+// a real number, real LaTeX. `right` decides whether it should earn the marks.
+// Never a placeholder token: a demo that shows a student answering "attempt"
+// looks broken, and the marks below are derived from these answers, so a seeded
+// mark can never contradict what the marker would give.
+const plausibleAnswer = (q, right, sid) => {
+  const pick = (n, avoid) => {
+    if (n <= 1) return 0;
+    let i = Math.floor(seededRand(sid + q.id + 'w') * n);
+    if (i === avoid) i = (i + 1) % n;
+    return i;
+  };
+  if (q.type === 'mcq') {
+    const n = (q.choices || []).length || 1;
+    return right ? q.correctIndex : pick(n, q.correctIndex);
+  }
+  if (q.type === 'multi') {
+    const want = q.correctIndices || [];
+    if (right) return want.slice();
+    // A near miss: one of the right answers left off.
+    return want.length > 1 ? want.slice(0, want.length - 1) : [((want[0] || 0) + 1) % Math.max(1, (q.choices || []).length)];
+  }
+  if (q.type === 'truefalse') return right ? q.answer : !q.answer;
+  if (q.type === 'numeric') {
+    const n = typeof q.answer === 'number' ? q.answer : parseFloat(q.answer) || 0;
+    if (right) return n;
+    const off = Math.max((q.tolerance || 0) * 2, Math.abs(n) * 0.1, 1);
+    return Math.round((n + off) * 1000) / 1000;
+  }
+  if (q.type === 'math') {
+    const ans = String(q.answer == null ? '' : q.answer);
+    if (right) return ans;
+    // A sign slip — the classic wrong-but-plausible maths answer.
+    return ans.replace(/-/, '+') !== ans ? ans.replace(/-/, '+')
+      : ans.replace(/\+/, '-') !== ans ? ans.replace(/\+/, '-')
+      : ans + '+1';
+  }
+  if (q.type === 'fillblank') {
+    const blanks = q.blanks || [];
+    return right ? blanks.slice() : blanks.map((b, i) => i === 0 ? String(b) + 'x' : String(b));
+  }
+  if (q.type === 'match') {
+    const pairs = q.pairs || [];
+    const map = {};
+    pairs.forEach((_p, i) => { map[i] = right ? i : (i + 1) % Math.max(1, pairs.length); });
+    return map;
+  }
+  if (q.type === 'upload') return 'working-photo.jpg';
+  if (q.type === 'short') {
+    const model = q.answer != null && q.answer !== '' ? String(q.answer) : null;
+    if (right && model) return model;
+    return right
+      ? 'Set out each step in order and checked the result at the end.'
+      : 'I started this but ran out of time to finish the reasoning.';
+  }
+  return right
+    ? 'Worked through it step by step, showing the method and checking the final answer.'
+    : 'Made a start on the method but did not carry it all the way through.';
+};
+
 // Build a plausible submission for `sid` on assignment `a`.
 // Spreads students across graded / submitted / in-progress / not-started so the
 // review sidebar and analytics look populated without hand-writing each one.
@@ -96,23 +201,31 @@ const synthSubmission = (a, sid, i) => {
 
   const marks = {};
   const feedback = {};
-  const results = {};
+  const answers = {};
   let earned = 0;
   // Target accuracy band per student (40–98%) — the lower tail produces a
   // believable set of students who need intervention.
   const target = 0.40 + seededRand(sid + 'acc') * 0.58;
-  a.questions.forEach((q, qi) => {
+  a.questions.forEach((q) => {
     const rr = seededRand(a.id + sid + q.id);
     const good = rr < target;
     const partial = !good && rr < target + 0.18;
-    const pts = good ? q.points : partial ? Math.round(q.points * 0.5) : 0;
+    answers[q.id] = plausibleAnswer(q, good, sid);
+    // An auto-marked question takes the mark the marker actually produces for the
+    // answer above, so the seed can never claim a mark autoMark disagrees with.
+    // Only teacher-marked questions use the accuracy band.
+    const pts = isAuto(q.type)
+      ? (autoMark(q, answers[q.id]) || 0)
+      : (good ? q.points : partial ? Math.round(q.points * 0.5) : 0);
     if (inProgress || submittedOnly) {
       // Auto questions get auto-marked instantly; manual stay null until graded.
       marks[q.id] = isAuto(q.type) ? pts : null;
     } else {
       marks[q.id] = pts;
-      results[q.id] = good ? 'correct' : partial ? 'partial' : 'incorrect';
-      feedback[q.id] = good ? '' : partial ? 'On the right track — tighten the final steps.' : 'Review this topic and try again.';
+      const outcome = outcomeFor(q, pts);
+      feedback[q.id] = outcome === 'correct' ? ''
+        : outcome === 'partial' ? 'On the right track — tighten the final steps.'
+        : 'Review this topic and try again.';
       earned += pts;
     }
   });
@@ -128,8 +241,10 @@ const synthSubmission = (a, sid, i) => {
       timeSpentMins: 5 + Math.floor(seededRand(sid + 't') * 20) };
   }
   const base = {
-    answers: Object.fromEntries(a.questions.map(q => [q.id, isAuto(q.type) ? (marks[q.id] >= q.points ? 'correct' : 'attempt') : 'See working.'])),
+    answers,
     submittedAt,
+    attemptCount: 1,
+    isLate: !!a.dueAt && new Date(submittedAt) > new Date(a.dueAt),
     marks, feedback,
     timeSpentMins: 18 + Math.floor(seededRand(sid + 't') * 40),
   };
@@ -137,7 +252,7 @@ const synthSubmission = (a, sid, i) => {
   // Graded
   const pct = total ? Math.round(earned / total * 100) : 0;
   return {
-    ...base, status: 'returned', results,
+    ...base, status: 'returned',
     markedAt: dayOffset(-(ageDays - 1 > 0 ? ageDays - 1 : 0), '14:00:00'),
     classAvg: 68 + Math.floor(seededRand(a.id + 'avg') * 12),
     rank: 1 + Math.floor(seededRand(sid + a.id + 'rk') * 24), classSize: 26,
@@ -147,15 +262,29 @@ const synthSubmission = (a, sid, i) => {
   };
 };
 
+// A seed row saying "this hasn't been opened yet". `notStarted: true` means the
+// whole cohort is untouched (a homework that has only just gone out);
+// `notStarted: ['s2', …]` names the students who leave it alone while the rest of
+// the class gets on with it. Without this the only not-started students are
+// whoever synthSubmission's ~18% tail happens to land on, which is seeded random
+// per (assignment id + student id) — so no seed row could rely on it.
+const notStartedFor = (a) => {
+  if (a.notStarted === true) return () => true;
+  if (Array.isArray(a.notStarted)) return (sid) => a.notStarted.indexOf(sid) !== -1;
+  return () => false;
+};
+
 // Assign an assignment to a whole class cohort and fill in synthetic
 // submissions, preserving any hand-authored ones already present.
 const populateCohort = (a, students) => {
   const cohort = students.filter(s => !a.classLabel || s.classLabel === a.classLabel).map(s => s.id);
   const ids = Array.from(new Set([...(a.studentIds || []), ...cohort]));
   const subs = { ...(a.submissions || {}) };
+  const untouched = notStartedFor(a);
   ids.forEach((sid, i) => {
     if (subs[sid]) return; // keep hand-crafted submissions (e.g. Oliver's)
     if (a.status === 'draft') return;
+    if (untouched(sid)) return; // explicitly "not started yet"
     const s = synthSubmission(a, sid, i);
     if (s) subs[sid] = s;
   });
@@ -165,14 +294,30 @@ const populateCohort = (a, students) => {
 const seedStore = () => {
   const me = { id: 's_oliver', name: 'Oliver Chen', role: 'student', classLabel: 'Year 12 – Group A' };
   const teacher = { id: 't_clarke', name: 'Heebz A', role: 'teacher' };
+  // The other teachers whose homework the demo student also sees. Each one is a real
+  // staff record with its own id: ownership is decided by teacherId alone (isMine),
+  // and `teacherName` is a display field that participates in no filter.
+  const staff = {
+    webb:   { id: 't_webb',   name: 'Marcus Webb',   role: 'teacher' },
+    park:   { id: 't_park',   name: 'David Park',    role: 'teacher' },
+    yoo:    { id: 't_yoo',    name: 'Helen Yoo',     role: 'teacher' },
+    nair:   { id: 't_nair',   name: 'Priya Nair',    role: 'teacher' },
+    stone:  { id: 't_stone',  name: 'Rebecca Stone', role: 'teacher' },
+    mehta:  { id: 't_mehta',  name: 'Daniel Mehta',  role: 'teacher' },
+    begum:  { id: 't_begum',  name: 'Aisha Begum',   role: 'teacher' },
+    rivera: { id: 't_rivera', name: 'Tom Rivera',    role: 'teacher' },
+    dubois: { id: 't_dubois', name: 'Claire Dubois', role: 'teacher' },
+    okafor: { id: 't_okafor', name: 'James Okafor',  role: 'teacher' },
+  };
   // Current student ("me") first, then the seed roster from mocks/homework.mock.jsx.
   const students = [me, ...HW_STUDENTS];
 
   const folders = {
-    f_gcse:   { id: 'f_gcse',   name: 'GCSE Maths',    color: '#4F46E5' },
-    f_alevel: { id: 'f_alevel', name: 'A-Level Maths', color: '#EC4899' },
-    f_sci:    { id: 'f_sci',    name: 'Science',       color: '#10B981' },
-    f_hum:    { id: 'f_hum',    name: 'Humanities',    color: '#D97706' },
+    f_gcse:   { id: 'f_gcse',   name: 'GCSE Maths' },
+    f_alevel: { id: 'f_alevel', name: 'A-Level Maths' },
+    f_sci:    { id: 'f_sci',    name: 'Science' },
+    f_hum:    { id: 'f_hum',    name: 'Humanities' },
+    ...HW_EXTRA_FOLDERS,
   };
 
   // ── Open assignments (pending / in progress / submitted / overdue) ──
@@ -260,7 +405,7 @@ const seedStore = () => {
     classLabel: 'Year 9 – Group A',
     teacherName: 'Marcus Webb',
     folderId: 'f_hum',
-    teacherId: teacher.id,
+    teacherId: staff.webb.id,
     studentIds: ['s_oliver','s_emma','s_james'],
     dueAt: dayOffset(-3),
     timeLimitMins: null,
@@ -287,7 +432,7 @@ const seedStore = () => {
     classLabel: 'Year 10 – Group B',
     teacherName: 'David Park',
     folderId: 'f_sci',
-    teacherId: teacher.id,
+    teacherId: staff.park.id,
     studentIds: ['s_oliver','s_sophia','s_james'],
     dueAt: dayOffset(-5),
     timeLimitMins: 30,
@@ -316,7 +461,7 @@ const seedStore = () => {
     classLabel: 'Year 8 – Group A',
     teacherName: 'Helen Yoo',
     folderId: 'f_hum',
-    teacherId: teacher.id,
+    teacherId: staff.yoo.id,
     studentIds: ['s_oliver','s_emma','s_sophia','s_james'],
     dueAt: dayOffset(-7),
     timeLimitMins: null,
@@ -340,7 +485,7 @@ const seedStore = () => {
     classLabel: 'Year 8 – Group A',
     teacherName: 'Priya Nair',
     folderId: 'f_sci',
-    teacherId: teacher.id,
+    teacherId: staff.nair.id,
     studentIds: ['s_oliver','s_emma'],
     dueAt: dayOffset(-2),
     timeLimitMins: null,
@@ -405,7 +550,6 @@ const seedStore = () => {
         status: 'approved',
         markedAt: dayOffset(-1, '11:30:00'),
         marks: { q1: 9, q2: 5, q3: 5, q4: 12, q5: 10, q6: 0, q7: 0 },
-        results: { q1: 'correct', q2: 'correct', q3: 'partial', q4: 'correct', q5: 'partial', q6: 'incorrect', q7: 'incorrect' },
         feedback: {
           q1: 'Excellent working shown. Minor arithmetic slip in the discriminant but self-corrected. Well done.',
           q2: '',
@@ -429,7 +573,7 @@ const seedStore = () => {
     classLabel: 'Year 9 – Group B',
     teacherName: 'David Park',
     folderId: 'f_sci',
-    teacherId: teacher.id,
+    teacherId: staff.park.id,
     studentIds: ['s_oliver','s_james'],
     dueAt: dayOffset(-4),
     timeLimitMins: null,
@@ -459,7 +603,6 @@ const seedStore = () => {
         status: 'approved',
         markedAt: dayOffset(-3, '09:05:00'),
         marks: { q1: 10, q2: 8, q3: 8, q4: 3 },
-        results: { q1: 'correct', q2: 'correct', q3: 'correct', q4: 'partial' },
         feedback: {
           q1: '',
           q2: '',
@@ -480,7 +623,7 @@ const seedStore = () => {
     classLabel: 'Year 8 – Group A',
     teacherName: 'Priya Nair',
     folderId: 'f_sci',
-    teacherId: teacher.id,
+    teacherId: staff.nair.id,
     studentIds: ['s_oliver','s_emma','s_sophia'],
     dueAt: dayOffset(-5),
     timeLimitMins: null,
@@ -507,7 +650,6 @@ const seedStore = () => {
         status: 'approved',
         markedAt: dayOffset(-4, '13:15:00'),
         marks: { q1: 9, q2: 4, q3: 3 },
-        results: { q1: 'correct', q2: 'partial', q3: 'partial' },
         feedback: {
           q1: 'Clear and correctly ordered. One more detail on spindle fibres would make this perfect.',
           q2: "You described the split but didn't link it to DNA replication — that's the key point.",
@@ -527,7 +669,7 @@ const seedStore = () => {
     classLabel: 'Year 9 – Group A',
     teacherName: 'Marcus Webb',
     folderId: 'f_hum',
-    teacherId: teacher.id,
+    teacherId: staff.webb.id,
     studentIds: ['s_oliver','s_emma'],
     dueAt: dayOffset(-9),
     timeLimitMins: null,
@@ -557,7 +699,6 @@ const seedStore = () => {
         status: 'approved',
         markedAt: dayOffset(-7, '15:40:00'),
         marks: { q1: 10, q2: 9, q3: 8, q4: 4 },
-        results: { q1: 'correct', q2: 'correct', q3: 'partial', q4: 'partial' },
         feedback: {
           q1: 'Strong analysis with a well-chosen quotation.',
           q2: 'Accurate and concise.',
@@ -578,7 +719,7 @@ const seedStore = () => {
     classLabel: 'Year 12 – Group A',
     teacherName: 'Rebecca Stone',
     folderId: 'f_alevel',
-    teacherId: teacher.id,
+    teacherId: staff.stone.id,
     studentIds: ['s_oliver'],
     dueAt: dayOffset(-14),
     timeLimitMins: null,
@@ -605,7 +746,6 @@ const seedStore = () => {
         status: 'approved',
         markedAt: dayOffset(-13, '10:25:00'),
         marks: { q1: 5, q2: 6, q3: 0 },
-        results: { q1: 'partial', q2: 'correct', q3: 'incorrect' },
         feedback: {
           q1: 'Correct direction, but the diagram must show the leftward shift and label both equilibria.',
           q2: 'Textbook definition — well done.',
@@ -807,7 +947,6 @@ const seedStore = () => {
         status: 'approved',
         markedAt: dayOffset(-2, '10:40:00'),
         marks: { q1: 6, q2: 6, q3: 6, q4: 6 },
-        results: { q1: 'correct', q2: 'correct', q3: 'partial', q4: 'correct' },
         feedback: {
           q1: 'Correct — |a| = √(3² + 4²) = 5.',
           q2: 'Right: (2)(4) + (3)(1) = 11.',
@@ -821,12 +960,21 @@ const seedStore = () => {
     },
   };
 
-  const allAssignments = [a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, r1, r2, r3, r4, r5, r6]
+  // The bulk library lives in mocks/homework.mock.jsx — same shape as the
+  // hand-authored ones above, but written against the REAL class labels, so the
+  // cohort fill in loadStore() puts actual students on them.
+  const more = HW_MORE_ASSIGNMENTS({ dayOffset, teacher, staff });
+
+  const allAssignments = [a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, r1, r2, r3, r4, r5, r6, ...more]
     .map(a => normalizeAssignment(populateCohort(a, students)));
 
   return {
     currentUser: me,
-    users: { [me.id]: me, [teacher.id]: teacher, ...Object.fromEntries(students.map(s => [s.id, s])) },
+    users: {
+      [me.id]: me, [teacher.id]: teacher,
+      ...Object.fromEntries(Object.values(staff).map(t => [t.id, t])),
+      ...Object.fromEntries(students.map(s => [s.id, s])),
+    },
     folders,
     classes: CLASSES,
     assignments: Object.fromEntries(allAssignments.map(a => [a.id, a])),
@@ -845,6 +993,9 @@ const DEFAULT_SETTINGS = {
   autoGradeMcq: true,
   // Whether students see the list of questions on the start page before beginning.
   showQuestionPreview: true,
+  // A visible countdown is off unless the teacher asks for it (A7): the time limit
+  // is still enforced either way, but a ticking clock is not forced on a child.
+  showCountdown: false,
   // Student review
   allowReview: false,
   showCorrect: false,
@@ -865,7 +1016,26 @@ const normalizeAssignment = (a) => {
     if ('allowReview' in a) s.allowReview = !!a.allowReview;
   }
   if (s.availableFrom === '' && a.availableFrom) s.availableFrom = a.availableFrom;
-  return { ...a, settings: s };
+  // A date with no time means the end of that day (A10) — otherwise a bare date
+  // parses as UTC midnight and shows up as "due at 01:00".
+  const dueAt = withDefaultDueTime(a.dueAt);
+  // Question outcomes are DERIVED from marks (outcomeFor). A stored `results` map
+  // was free to drift from the marks it described — "4/4, 100%" beside "2 partial".
+  // Drop it on every load so data written by an older build cannot resurrect it.
+  let submissions = a.submissions;
+  if (submissions && Object.keys(submissions).some(sid => submissions[sid] && submissions[sid].results)) {
+    const clean = {};
+    Object.keys(submissions).forEach(sid => {
+      const sub = submissions[sid];
+      if (!sub || !sub.results) { clean[sid] = sub; return; }
+      // Explicit field copy — Babel-standalone mis-compiles object-rest here.
+      const next = {};
+      Object.keys(sub).forEach(k => { if (k !== 'results') next[k] = sub[k]; });
+      clean[sid] = next;
+    });
+    submissions = clean;
+  }
+  return { ...a, settings: s, submissions, dueAt };
 };
 
 // Migrate older shapes from localStorage (added folder support).
@@ -902,9 +1072,17 @@ const HW_ALIAS = { s_oliver: 's2', s_emma: 's1', s_sophia: 's3', s_james: 's4' }
 const hwReadAdmin = () => {
   try {
     const p = JSON.parse(localStorage.getItem('admin_store_v4') || 'null');
-    if (p && p.students) return { students: p.students, classes: p.classes || window.SEED_CLASSES || [] };
+    if (p && p.students) return {
+      students: p.students,
+      classes: p.classes || window.SEED_CLASSES || [],
+      teachers: p.teachers || window.SEED_TEACHERS || [],
+    };
   } catch (e) {}
-  return { students: window.SEED_STUDENTS || [], classes: window.SEED_CLASSES || [] };
+  return {
+    students: window.SEED_STUDENTS || [],
+    classes: window.SEED_CLASSES || [],
+    teachers: window.SEED_TEACHERS || [],
+  };
 };
 
 const reconcileWithAdmin = (store) => {
@@ -919,10 +1097,19 @@ const reconcileWithAdmin = (store) => {
   };
   const remap = (id) => HW_ALIAS[id] || id;
 
-  // users: teachers from the existing store + EVERY real admin student. Legacy demo
-  // students are dropped entirely so the assign picker is exactly the real roster.
+  // Staff are reconciled the same way students are — ONE staff universe. The seed's
+  // t_* ids are matched to the real admin teacher records by name ONCE, here at the
+  // store boundary. After this every assignment carries a real teacherId, and
+  // ownership is decided by id alone (isMine) — never by name, at any call site.
+  const teacherRemap = {};
   const users = {};
-  Object.values(store.users || {}).forEach(u => { if (u.role === 'teacher') users[u.id] = u; });
+  Object.values(store.users || {}).forEach(u => {
+    if (u.role !== 'teacher') return;
+    const real = (admin.teachers || []).find(t => t.name === u.name);
+    const id = (real && real.id) || u.id;
+    teacherRemap[u.id] = id;
+    users[id] = { id, name: u.name, role: 'teacher' };
+  });
   (admin.students || []).forEach(s => {
     users[s.id] = { id: s.id, name: `${s.firstName || ''} ${s.lastName || ''}`.trim() || s.id, role: 'student', classLabel: labelFor(s) };
   });
@@ -935,7 +1122,14 @@ const reconcileWithAdmin = (store) => {
     const studentIds = Array.from(new Set((a.studentIds || []).map(remap))).filter(id => users[id]);
     const submissions = {};
     Object.keys(a.submissions || {}).forEach(sid => { const r = remap(sid); if (users[r]) submissions[r] = a.submissions[sid]; });
-    assignments[aid] = { ...a, studentIds, submissions };
+    // A `notStarted` list is student ids like any other, so it goes through the
+    // same remap — otherwise fillDemoCohorts (which runs after this) would look
+    // for seed ids on a roster that only holds admin ones and synthesise a
+    // submission for the very student the seed said hadn't started.
+    const notStarted = Array.isArray(a.notStarted)
+      ? Array.from(new Set(a.notStarted.map(remap))).filter(id => users[id])
+      : a.notStarted;
+    assignments[aid] = { ...a, studentIds, submissions, notStarted, teacherId: teacherRemap[a.teacherId] || a.teacherId };
   });
 
   // currentUser follows the active student (default s2) so a bare read is sane;
@@ -946,6 +1140,18 @@ const reconcileWithAdmin = (store) => {
   return { ...store, users, assignments, currentUser };
 };
 
+// The signed-in teacher (F4 principal). Resolved through teacherMetrics so the
+// homework surface and every other teacher screen agree on who "me" is; the store
+// lookup is by the reconciled id, so ownership stays an id comparison throughout.
+const hwPrincipal = (store) => {
+  const p = window.teacherMetrics && window.teacherMetrics.getPrincipal
+    ? window.teacherMetrics.getPrincipal() : null;
+  const users = store.users || {};
+  if (p && users[p.id]) return users[p.id];
+  if (p) return { id: p.id, name: p.name, role: 'teacher' };
+  return Object.values(users).find(u => u.role === 'teacher') || { id: 't_clarke', name: 'Heebz A', role: 'teacher' };
+};
+
 // Resolve the homework identity for the student surface = the active admin student.
 const hwActiveMe = (store) => {
   const id = (window.__getActiveStudent && window.__getActiveStudent())
@@ -953,15 +1159,36 @@ const hwActiveMe = (store) => {
   return (store.users && store.users[id]) || store.currentUser || { id, name: 'Student', role: 'student' };
 };
 
+// Seed-time only: put the REAL roster on the seeded assignments.
+// The seed cohorts are written against the mock roster, and reconcile drops
+// every id that is not a real admin student — which would leave each demo
+// assignment with the four aliased students on it. Re-running populateCohort
+// against the reconciled users fills each class with the students who are
+// actually in it and synthesises their submissions.
+//
+// This runs ONLY on a fresh seed (see loadStore). Doing it on every load would
+// mean a teacher who unassigns a student gets them silently re-added on reload.
+const fillDemoCohorts = (s) => {
+  const students = Object.values(s.users || {}).filter(u => u.role === 'student');
+  const assignments = {};
+  Object.keys(s.assignments || {}).forEach(id => {
+    assignments[id] = normalizeAssignment(populateCohort(s.assignments[id], students));
+  });
+  return { ...s, assignments };
+};
+
 const loadStore = () => {
   let s;
+  let fresh = false;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    s = raw ? migrate(JSON.parse(raw)) : seedStore();
+    if (raw) { s = migrate(JSON.parse(raw)); }
+    else { s = seedStore(); fresh = true; }
   } catch (e) {
-    s = seedStore();
+    s = seedStore(); fresh = true;
   }
   s = reconcileWithAdmin(s);
+  if (fresh) s = fillDemoCohorts(s);
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); } catch (e) {}
   return s;
 };
@@ -1025,29 +1252,146 @@ const Pill = ({ children, tone = 'default', icon }) => {
     success: { bg: C.successBg,  fg: C.success,bd: C.successBorder },
     amber:   { bg: C.amberBg,    fg: C.amber,  bd: C.amberBorder },
     danger:  { bg: C.dangerBg,   fg: C.danger, bd: C.dangerBorder },
-    info:    { bg: C.accentSoft, fg: C.accent, bd: '#BAE6FD' },
+    info:    { bg: C.surface,    fg: C.sub,   bd: C.border },
   };
   const t = tones[tone] || tones.default;
   return (
     <span style={{
       display:'inline-flex', alignItems:'center', gap:5,
       padding:'2px 8px', borderRadius:999, fontFamily:F.body,
-      fontSize:11, fontWeight:600, letterSpacing:'.02em',
+      fontSize:12, fontWeight:W.medium,
       background:t.bg, color:t.fg, border:`1px solid ${t.bd}`,
     }}>{icon}{children}</span>
   );
 };
+
+// ─── StatusBadge ────────────────────────────────────────────────
+// THE status component. Every homework status on every screen renders through
+// this — teacher and student, grid and table, list row and detail panel.
+// It replaced five separate mechanisms: HwStatusTag (uppercase + leading dot),
+// HwStatusPill (icon + border), bare coloured text in the assigned-students
+// panel and in the table's overdue/marked lines, and naked dots in the builder
+// outline. Those disagreed on casing, colour and vocabulary for the same states.
+//
+// Tone rules live in the map below, not at the call sites:
+//   • amber   — and only amber — means "this needs your action" (to mark, overdue)
+//   • danger  — genuine failure states only
+//   • neutral — everything else, which is most of them
+// Sentence case, no leading dot, no icon.
+const HW_STATUS = {
+  // needs action
+  tomark:      { label: 'To mark',          tone: 'amber'   },
+  overdue:     { label: 'Overdue',          tone: 'amber'   },
+  // neutral facts
+  live:        { label: 'Live',             tone: 'neutral' },
+  draft:       { label: 'Draft',            tone: 'neutral' },
+  closed:      { label: 'Closed',           tone: 'neutral' },
+  scheduled:   { label: 'Scheduled',        tone: 'neutral' },
+  marked:      { label: 'Marked',           tone: 'neutral' },
+  graded:      { label: 'Graded',           tone: 'neutral' },
+  allin:       { label: 'All submitted',    tone: 'neutral' },
+  submitted:   { label: 'Submitted',        tone: 'neutral' },
+  awaiting:    { label: 'Awaiting marking', tone: 'neutral' },
+  pending:     { label: 'Not started',      tone: 'neutral' },
+  inprogress:  { label: 'In progress',      tone: 'neutral' },
+  late:        { label: 'Late',             tone: 'neutral' },
+};
+const HW_STATUS_TONES = {
+  neutral: { bg: C.surface2, fg: C.sub },
+  amber:   { bg: C.amberBg,  fg: C.amber },
+  danger:  { bg: C.dangerBg, fg: C.danger },
+};
+// `status` picks a preset; `children` overrides the label (e.g. "3 to mark")
+// while keeping the preset's tone. `tone` forces a tone for the rare caller
+// that knows better than the preset.
+const StatusBadge = ({ status, tone, children }) => {
+  const preset = HW_STATUS[status] || null;
+  const t = HW_STATUS_TONES[tone || (preset && preset.tone) || 'neutral'] || HW_STATUS_TONES.neutral;
+  const label = children != null ? children : (preset ? preset.label : status);
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', flexShrink: 0,
+      padding: '2px 8px', borderRadius: RADIUS_FULL,
+      background: t.bg, color: t.fg,
+      fontFamily: F.body, fontSize: 12, fontWeight: W.medium,
+      lineHeight: 1.5, whiteSpace: 'nowrap', ...NUM,
+    }}>{label}</span>
+  );
+};
+
+// ─── MetaLine ───────────────────────────────────────────────────
+// The middot-separated fact line: "Year 10 · Group A · GCSE Maths",
+// "4 questions · 4 pts · Due 6 Sept". Falsy entries are dropped, so a caller can
+// pass conditionals inline without assembling an array first.
+//
+// Deliberately carries no per-fact icons. The list/target/calendar glyphs that
+// used to sit beside each fact were noise at this density — three icons
+// labelling three facts that already label themselves.
+const MetaLine = ({ children, items, style = {} }) => {
+  const parts = (items || React.Children.toArray(children)).filter(x =>
+    x !== null && x !== undefined && x !== false && x !== '');
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', minWidth: 0,
+      fontFamily: F.body, fontSize: TS.meta.fontSize, fontWeight: W.normal,
+      color: C.muted, ...NUM, ...style,
+    }}>
+      {/* The separator is rendered inside the following item rather than
+          between the two, so a line that wraps never strands a "·" at the end
+          of the previous line. */}
+      {parts.map((p, i) => (
+        <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+          {i > 0 && <span aria-hidden="true" style={{ color: C.borderD }}>·</span>}
+          <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p}</span>
+        </span>
+      ))}
+    </div>
+  );
+};
+
+// ─── StatStrip ──────────────────────────────────────────────────
+// One horizontal band of label/value pairs split by hairline dividers, ~72px
+// tall. Replaces the rows of bordered stat cards (large numerals, tinted icon
+// circles) on the assignment detail page and the student Results page — four
+// cards to carry four short numbers spent most of the vertical budget above
+// the fold on the least of the content.
+//
+// `emphasis` marks the one value that earns visual size; everything else sits
+// at the same weight, because everything else is equally unremarkable.
+const StatStrip = ({ items = [], style = {} }) => (
+  <div style={{
+    display: 'flex', alignItems: 'stretch', flexWrap: 'wrap',
+    background: C.bg, border: `1px solid ${C.border}`, borderRadius: RADIUS,
+    overflow: 'hidden', ...style,
+  }}>
+    {items.filter(Boolean).map((s, i) => (
+      <div key={s.label} style={{
+        flex: '1 1 0', minWidth: 120, padding: '16px 20px',
+        borderLeft: i === 0 ? 'none' : `1px solid ${C.border}`,
+      }}>
+        <div style={{
+          fontFamily: F.body, fontSize: TS.meta.fontSize, fontWeight: W.normal,
+          color: C.muted, marginBottom: 4,
+        }}>{s.label}</div>
+        <div style={{
+          fontFamily: F.head, fontSize: 20, fontWeight: W.medium,
+          color: s.emphasis ? C.text : C.sub, lineHeight: 1.2, ...NUM,
+        }}>{s.value}</div>
+      </div>
+    ))}
+  </div>
+);
 
 // ─── Btn ────────────────────────────────────────────────────────
 const Btn = ({ variant = 'primary', children, icon, onClick, disabled, small, type = 'button', style = {} }) => {
   const [hov, setHov] = React.useState(false);
   const [foc, setFoc] = React.useState(false);
   const variants = {
-    primary: { bg: hov ? '#0F172A' : C.text, fg: '#fff', bd: 'transparent', ring: C.text },
-    brand:   { bg: hov ? C.brandH : C.brand, fg: '#fff', bd: 'transparent', ring: C.brand },
+    primary: { bg: hov ? C.textHover : C.text, fg: C.inverse, bd: 'transparent', ring: C.text },
+    brand:   { bg: hov ? C.brandH : C.brand, fg: C.inverse, bd: 'transparent', ring: C.brand },
     ghost:   { bg: hov ? C.surface : 'transparent', fg: C.sub, bd: 'transparent', ring: C.muted },
     soft:    { bg: hov ? C.surface2 : C.surface, fg: C.sub, bd: C.border, ring: C.muted },
-    danger:  { bg: hov ? '#B91C1C' : C.danger, fg: '#fff', bd: 'transparent', ring: C.danger },
+    danger:  { bg: hov ? C.dangerHover : C.danger, fg: C.inverse, bd: 'transparent', ring: C.danger },
   };
   const s = variants[variant] || variants.primary;
   return (
@@ -1063,7 +1407,7 @@ const Btn = ({ variant = 'primary', children, icon, onClick, disabled, small, ty
         borderRadius:8, border:`1px solid ${s.bd}`,
         background: disabled ? C.surface2 : s.bg,
         color: disabled ? C.faint : s.fg,
-        fontFamily: F.body, fontSize: small ? 12 : 13, fontWeight:600,
+        fontFamily: F.body, fontSize: small ? 13 : 14, fontWeight:W.medium,
         cursor: disabled ? 'not-allowed' : 'pointer', whiteSpace:'nowrap',
         transition: T, opacity: disabled ? 0.7 : 1,
         boxShadow: foc ? ring(s.ring) : 'none',
@@ -1083,8 +1427,12 @@ const Card = ({ children, style = {}, hoverable, onClick }) => {
       onClick={onClick}
       style={{
         background: C.bg, border: `1px solid ${hov ? C.borderD : C.border}`,
-        borderRadius: 12, transition: T,
-        boxShadow: hov ? C.shadowL : C.shadow,
+        borderRadius: RADIUS,
+        // Flat and bordered. A card used to carry a resting shadow AND a
+        // border, then lift onto a 20px shadow on hover — together that is
+        // what made a page of them feel heavy and floaty. The border firming
+        // up is the whole hover affordance now.
+        transition: 'border-color .15s',
         cursor: onClick ? 'pointer' : 'default',
         ...style,
       }}>{children}</div>
@@ -1094,7 +1442,7 @@ const Card = ({ children, style = {}, hoverable, onClick }) => {
 // ─── Label ──────────────────────────────────────────────────────
 const Label = ({ children, htmlFor, hint }) => (
   <label htmlFor={htmlFor} style={{
-    display:'block', fontFamily:F.body, fontSize:12, fontWeight:600,
+    display:'block', fontFamily:F.body, fontSize:13, fontWeight:W.medium,
     color:C.sub, marginBottom:6, letterSpacing:'.01em',
   }}>
     {children}
@@ -1132,7 +1480,7 @@ const SettingRow = ({ title, desc, checked, onChange, disabled }) => (
     gap: 16, padding: '14px 0', borderBottom: `1px solid ${C.surface2}`,
   }}>
     <div style={{ minWidth: 0 }}>
-      <div style={{ fontFamily: F.body, fontSize: 13.5, fontWeight: 600, color: disabled ? C.faint : C.text }}>{title}</div>
+      <div style={{ fontFamily: F.body, ...TS.body, fontWeight: W.medium, color: disabled ? C.faint : C.text }}>{title}</div>
       {desc && <div style={{ fontFamily: F.body, fontSize: 12, color: C.muted, marginTop: 2, lineHeight: 1.45 }}>{desc}</div>}
     </div>
     <Toggle checked={checked} onChange={onChange} disabled={disabled} />
@@ -1190,19 +1538,49 @@ const Input = React.forwardRef(({ value, onChange, placeholder, type = 'text', m
 });
 
 // ─── Math display & editor ──────────────────────────────────────
+// Does KaTeX understand this? Asked in strict mode — the lenient mode used for
+// rendering swallows errors and emits a red-flecked glyph pile instead. Used to
+// stop unrenderable LaTeX being stored in the first place.
+const latexParses = (tex) => {
+  const src = tex == null ? '' : String(tex);
+  if (!src.trim()) return true;
+  if (!window.katex || !window.katex.renderToString) return true;
+  try {
+    window.katex.renderToString(src, { throwOnError: true, displayMode: false });
+    return true;
+  } catch (e) {
+    return false;
+  }
+};
+
 const MathDisplay = ({ tex, inline, style }) => {
   const ref = React.useRef(null);
+  // When KaTeX can't render it, show the raw string in a mono chip. A student
+  // reading their own answer back gets something legible instead of broken markup.
+  const [failed, setFailed] = React.useState(false);
   React.useEffect(() => {
     if (!ref.current) return;
+    if (!latexParses(tex)) { setFailed(true); return; }
+    setFailed(false);
     try {
       const html = window.katex && window.katex.renderToString
         ? window.katex.renderToString(tex || '', { throwOnError: false, displayMode: !inline })
         : '';
       ref.current.innerHTML = html;
     } catch (e) {
-      if (ref.current) ref.current.innerText = tex || '';
+      setFailed(true);
     }
-  }, [tex, inline]);
+  }, [tex, inline, failed]);
+  if (failed) {
+    return (
+      <span style={{
+        display: 'inline-block', padding: '2px 8px', borderRadius: 6,
+        background: C.surface2, border: `1px solid ${C.border}`,
+        fontFamily: F.mono, fontSize: 13, color: C.sub, whiteSpace: 'pre-wrap',
+        ...style,
+      }}>{tex == null ? '' : String(tex)}</span>
+    );
+  }
   return <span ref={ref} style={{ fontFamily: F.mono, color: C.text, ...style }} />;
 };
 
@@ -1331,31 +1709,39 @@ const MathEditor = ({ value, onChange, placeholder = 'Enter math…' }) => {
       })}
       {/* LaTeX toolbar: open the on-screen math keyboard or tap a common symbol */}
       <div style={{
-        display:'flex', alignItems:'center', flexWrap:'wrap', gap: 6,
+        display:'flex', alignItems:'center', flexWrap:'wrap', gap: 2,
         padding: '6px 8px', borderTop: `1px solid ${C.border}`, background: C.surface,
       }}>
+        {/* The keyboard toggle is a mode, not an insert — it keeps the border
+            and the pressed state so it never reads as a twelfth symbol. */}
         <button type="button"
           onMouseDown={(e) => { e.preventDefault(); toggleKeyboard(); }}
           title={kbOpen ? 'Hide math keyboard' : 'Show math keyboard'}
+          aria-pressed={kbOpen}
           style={{
             display:'inline-flex', alignItems:'center', gap: 6,
-            padding: '5px 9px', borderRadius: 7, cursor:'pointer',
+            padding: '5px 9px', borderRadius: RADIUS - 2, cursor:'pointer',
             border: `1px solid ${kbOpen ? C.brand : C.border}`,
             background: kbOpen ? C.brandSoft : C.bg,
-            color: kbOpen ? C.brand : C.sub, fontFamily: F.body, fontSize: 12, fontWeight: 600,
-            transition: T,
+            color: kbOpen ? C.brand : C.sub, fontFamily: F.body, ...TS.meta, fontWeight: W.medium,
+            transition: T, marginRight: 6,
           }}>
           <Ico name="keyboard" size={14} color={kbOpen ? C.brand : C.muted} />
           Keyboard
         </button>
-        <span style={{ width: 1, height: 18, background: C.border, margin: '0 2px' }} />
+        <span style={{ width: 1, height: 16, background: C.border, margin: '0 6px 0 0' }} />
+        {/* Symbol inserts are ghost buttons — one repeated action, so they
+            group as a run rather than eleven separate bordered controls. */}
         {MATH_CHIPS.map((ch, i) => (
           <button key={i} type="button"
             onMouseDown={(e) => { e.preventDefault(); insert(ch.tex); }}
             title={`Insert ${ch.lbl}`}
+            aria-label={`Insert ${ch.lbl}`}
+            onMouseEnter={e => { e.currentTarget.style.background = C.surface2; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
             style={{
-              minWidth: 30, padding: '4px 8px', borderRadius: 7, cursor:'pointer',
-              border: `1px solid ${C.border}`, background: C.bg, color: C.text,
+              minWidth: 28, padding: '4px 7px', borderRadius: RADIUS - 2, cursor:'pointer',
+              border: '1px solid transparent', background: 'transparent', color: C.sub,
               fontFamily: F.mono, fontSize: 13, lineHeight: 1.2, transition: T,
             }}>
             {ch.lbl}
@@ -1530,6 +1916,16 @@ const fmtDate = (iso) => {
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
 };
+// A due date the teacher picks without touching the time means end of that day,
+// not one in the morning — which is what the browser's datetime-local hands back.
+const DEFAULT_DUE_TIME = '23:59';
+const withDefaultDueTime = (v) => {
+  if (!v) return v;
+  const str = String(v);
+  if (str.length === 10) return `${str}T${DEFAULT_DUE_TIME}`;      // date only
+  if (/T00:00(:00)?$/.test(str)) return str.slice(0, 10) + `T${DEFAULT_DUE_TIME}`;
+  return str;
+};
 const daysUntil = (iso) => {
   if (!iso) return 0;
   const ms = new Date(iso).getTime() - Date.now();
@@ -1563,6 +1959,202 @@ const autoScore = (asn, sub) => {
 const fullyMarked = (asn, sub) => {
   if (!sub) return false;
   return asn.questions.every(q => typeof sub.marks?.[q.id] === 'number');
+};
+
+// ─── Ownership ─────────────────────────────────────────────────
+// THE ownership predicate. Id equality only: names break on shared surnames and
+// on anyone who changes theirs. `teacherName` survives on the assignment purely
+// as a display string and must never appear in a filter.
+const isMine = (a, user) => !!a && !!user && a.teacherId === user.id;
+
+// ─── Question outcome ──────────────────────────────────────────
+// Outcomes are derived from the mark, never stored, so the outcome and the mark
+// cannot disagree. `null` (unmarked) is deliberately distinct from 0 (marked
+// wrong) — fullyMarked() depends on that distinction.
+const outcomeFor = (question, mark) => {
+  if (typeof mark !== 'number') return null;
+  if (mark >= (question.points || 0)) return 'correct';
+  if (mark <= 0) return 'incorrect';
+  return 'partial';
+};
+
+// ─── Availability, lateness and release ────────────────────────
+// The rules behind the settings a teacher switches on. Every screen asks these
+// questions here, so a setting means the same thing on the student's Start button
+// as it does on the teacher's status chip.
+const settingsOf = (a) => (a && a.settings) || {};
+
+// "Available from" — before this moment the assignment is visible but not startable.
+const opensAt = (a) => settingsOf(a).availableFrom || null;
+const isScheduled = (a) => {
+  const o = opensAt(a);
+  if (!o) return false;
+  const t = new Date(o).getTime();
+  return !Number.isNaN(t) && t > Date.now();
+};
+
+const isPastDue = (a) => {
+  if (!a.dueAt) return false;
+  const t = new Date(a.dueAt).getTime();
+  return !Number.isNaN(t) && t < Date.now();
+};
+// After the due date a student may only work on it if late submissions are allowed.
+const acceptsSubmissions = (a) => !isScheduled(a) && (!isPastDue(a) || !!settingsOf(a).allowLate);
+
+// Attempts. `attemptCount` lives on the submission (A9); a submission written
+// before this field existed counts as one attempt.
+const attemptsAllowed = (a) => Math.max(1, parseInt(settingsOf(a).attemptsAllowed, 10) || 1);
+const attemptsUsed = (sub) => {
+  if (!sub) return 0;
+  return typeof sub.attemptCount === 'number' ? sub.attemptCount : (hasSubmitted(sub) ? 1 : 0);
+};
+const attemptsLeft = (a, sub) => Math.max(0, attemptsAllowed(a) - attemptsUsed(sub));
+
+// Has the teacher released these marks to the student? When either hold-back
+// setting is on, marks stay hidden until the teacher explicitly releases them —
+// so the setting actually withholds something. Otherwise returning the work
+// releases it, which is what teachers already expect.
+const marksReleased = (a, sub) => {
+  if (!sub || !isGraded(sub)) return false;
+  const s = settingsOf(a);
+  if (s.hideMarksUntilReleased || s.releaseAfterApproval) return !!sub.marksReleasedAt;
+  return true;
+};
+// Graded work whose marks this teacher still has to release.
+const heldBack = (a, sub) => isGraded(sub) && !marksReleased(a, sub);
+
+// A submission that arrived after the due date.
+const isLateSub = (a, sub) => {
+  if (!sub) return false;
+  if (typeof sub.isLate === 'boolean') return sub.isLate;
+  return !!sub.submittedAt && !!a.dueAt && new Date(sub.submittedAt) > new Date(a.dueAt);
+};
+
+// ─── The homework counting selector ────────────────────────────
+// ONE place that counts homework. Every badge, tile, header and pill reads this,
+// so no two surfaces can report different numbers for the same thing. Nothing is
+// stored: everything derives from the store at call time.
+//
+// `scope` is applied BEFORE counting, never after:
+//   { teacherId } assignments this teacher owns
+//   { studentId } assignments assigned to this student (drafts excluded)
+//   { classId } | { classLabel } assignments set for one class
+//   {} centre-wide
+//
+// `toMark` counts SUBMISSIONS awaiting a mark; `assignmentsToMark` counts
+// ASSIGNMENTS holding at least one. Different units — deliberately separate.
+const awaitingMark = (sub) => !!sub && sub.status === 'submitted';
+// A started-but-unsent attempt is NOT a submission — it must not inflate the
+// submission rate, and it still counts as work the student owes.
+const hasSubmitted = (sub) => !!sub && (!!sub.submittedAt || sub.status === 'submitted' || isGraded(sub));
+
+const scopeAssignments = (store, scope) => {
+  const sc = scope || {};
+  let list = Object.values(store.assignments || {});
+  if (sc.teacherId) list = list.filter(a => a.teacherId === sc.teacherId);
+  if (sc.studentId) list = list.filter(a => (a.studentIds || []).includes(sc.studentId) && a.status !== 'draft');
+  let label = sc.classLabel;
+  if (!label && sc.classId) {
+    const cls = (store.classes || []).find(c => c.id === sc.classId);
+    label = cls && cls.label;
+  }
+  // Tolerant class match ("Year 10 – Group A" ↔ "Yr 10 Group A") so the class
+  // workspaces and this selector always select the same rows.
+  if (label) {
+    const key = classKey(label);
+    list = key ? list.filter(a => classKey(a.classLabel) === key)
+               : list.filter(a => a.classLabel === label);
+  }
+  if (sc.folderId === 'unfiled') list = list.filter(a => !a.folderId);
+  else if (sc.folderId) list = list.filter(a => a.folderId === sc.folderId);
+  if (sc.subject) list = list.filter(a => a.subject === sc.subject);
+  return list;
+};
+
+const getHomeworkCounts = (store, scope) => {
+  const sc = scope || {};
+  const list = scopeAssignments(store, sc);
+  // A student scope counts only their own row on each assignment; every other
+  // scope counts the whole cohort.
+  const rowsFor = (a) => sc.studentId ? [sc.studentId] : (a.studentIds || []);
+
+  let toMark = 0, assignmentsToMark = 0, overdue = 0;
+  let assigned = 0, submittedRows = 0, pending = 0, marked = 0;
+
+  list.forEach(a => {
+    const ids = rowsFor(a);
+    const subs = ids.map(sid => (a.submissions || {})[sid]);
+    const n = subs.filter(awaitingMark).length;
+    toMark += n;
+    if (n > 0) assignmentsToMark++;
+
+    if (a.status !== 'draft') {
+      assigned += ids.length;
+      submittedRows += subs.filter(hasSubmitted).length;
+      pending += subs.filter(s => !hasSubmitted(s)).length;
+      marked += subs.filter(s => isGraded(s) && marksReleased(a, s)).length;
+    }
+    // Past its due date with work still outstanding.
+    const isOverdue = a.status === 'active' && a.dueAt && daysUntil(a.dueAt) < 0
+      && subs.some(s => !hasSubmitted(s));
+    if (isOverdue) overdue++;
+  });
+
+  return {
+    active: list.filter(a => a.status === 'active').length,
+    toMark,
+    assignmentsToMark,
+    drafts: list.filter(a => a.status === 'draft').length,
+    closed: list.filter(a => a.status === 'closed').length,
+    overdue,
+    submissionRate: assigned ? Math.round((submittedRows / assigned) * 100) : 0,
+    // Extensions beyond the original seven — added so consumers that needed one
+    // more number extend this selector instead of counting locally.
+    total: list.length,
+    assigned,
+    submitted: submittedRows,
+    pending,
+    marked,
+  };
+};
+
+// Assignment rows for one class group, for the teacher and admin class-detail
+// workspaces. Both used to read a separate seed list; they now read the same store
+// as everything else, so a class page and the Homework page cannot disagree.
+// Rows keep the field names those tabs already render.
+const classKey = (label) => {
+  const year = (String(label || '').match(/\d+/) || [])[0];
+  const group = (String(label || '').match(/Group\s+([A-Za-z])/i) || [])[1];
+  return year && group ? `${year}|${group.toUpperCase()}` : null;
+};
+
+const listClassHomework = (classLabel) => {
+  const key = classKey(classLabel);
+  if (!key) return [];
+  const store = loadStore();
+  return Object.values(store.assignments || {})
+    .filter(a => a.status !== 'draft' && classKey(a.classLabel) === key)
+    .map(a => {
+      const subs = (a.studentIds || []).map(sid => (a.submissions || {})[sid]);
+      const graded = subs.filter(isGraded);
+      const pts = totalPoints(a);
+      const scores = pts ? graded.map(s => Math.round((submissionScore(a, s) / pts) * 100)) : [];
+      const toMark = subs.filter(awaitingMark).length;
+      return {
+        id: a.id,
+        title: a.title,
+        class: a.classLabel,
+        subject: a.subject,
+        set: fmtDate(a.createdAt),
+        due: fmtDate(a.dueAt),
+        submitted: subs.filter(Boolean).length,
+        total: (a.studentIds || []).length,
+        marked: graded.length,
+        avgScore: scores.length ? Math.round(scores.reduce((x, y) => x + y, 0) / scores.length) : null,
+        status: a.status === 'closed' ? 'complete' : toMark > 0 ? 'marking' : 'open',
+      };
+    })
+    .sort((x, y) => String(y.id).localeCompare(String(x.id)));
 };
 
 // ════════════════════════════════════════════════════════════════
@@ -1649,9 +2241,13 @@ const PdfImportModal = ({ open, onClose, onImport }) => {
   };
 
   const importNow = () => {
+    // Explicit field copy — Babel-standalone mis-compiles `const { id, ...rest }`
+    // here and silently drops fields, so every key is copied by hand.
     const chosen = parsed.filter(q => picked[q.id]).map(q => {
-      const { id, ...rest } = q;
-      return { ...rest, id: 'q_' + Math.random().toString(36).slice(2, 8) };
+      const out = {};
+      Object.keys(q).forEach(k => { if (k !== 'id') out[k] = q[k]; });
+      out.id = 'q_' + Math.random().toString(36).slice(2, 8);
+      return out;
     });
     onImport(chosen);
     onClose();
@@ -2124,21 +2720,57 @@ const QuestionAnswerDisplay = ({ question, answer }) => {
   );
 };
 
+// ─── Destructive confirmations ──────────────────────────────────
+// Deleting homework goes through the shared Modal, not a browser confirm().
+// Once students have submitted, deleting destroys their work, so the teacher has
+// to type the title back — a click cannot do it by accident.
+const DeleteAssignmentModal = ({ a, onCancel, onConfirm }) => {
+  const [typed, setTyped] = React.useState('');
+  React.useEffect(() => { setTyped(''); }, [a && a.id]);
+  if (!a) return null;
+  const n = Object.values(a.submissions || {}).filter(hasSubmitted).length;
+  const title = a.title || 'Untitled homework';
+  const needsTyping = n > 0;
+  const ready = !needsTyping || typed.trim() === title.trim();
+  return (
+    <Modal
+      open
+      onClose={onCancel}
+      icon="trash"
+      iconColor={C.danger}
+      title="Delete this homework?"
+      subtitle={needsTyping
+        ? `${n} student${n === 1 ? ' has' : 's have'} submitted work. Deleting removes their answers, marks and feedback for good.`
+        : 'No one has submitted yet. This cannot be undone.'}
+      footer={<>
+        <Btn variant="soft" onClick={onCancel}>Cancel</Btn>
+        <Btn variant="danger" disabled={!ready} onClick={onConfirm}>Delete homework</Btn>
+      </>}
+    >
+      {needsTyping && (
+        <div>
+          <Label>Type <strong style={{ color: C.text }}>{title}</strong> to confirm</Label>
+          <Input value={typed} onChange={setTyped} placeholder={title} autoFocus />
+        </div>
+      )}
+    </Modal>
+  );
+};
+
 // ════════════════════════════════════════════════════════════════
 // TEACHER MODULE
 // ════════════════════════════════════════════════════════════════
 const TeacherHomework = ({ section }) => {
   const [store, update] = useStore();
   const [view, setView] = React.useState({ name: 'list' }); // list | builder | review
-  const me = Object.values(store.users).find(u => u.role === 'teacher') || { id: 't_clarke', name: 'Heebz A' };
+  const [pendingDelete, setPendingDelete] = React.useState(null);
+  const toast = useToast();
+  const me = hwPrincipal(store);
 
-  // (D1) Teacher-scoped: the teacher only sees homework for the subjects/classes
-  // they actually teach. The shared store also holds this student's other-subject
-  // homework (for the student view); scope by the canonical teacherName so those
-  // don't leak onto the teacher's list/analytics. Fallback to teacherId keeps any
-  // teacher-authored item created in-session (which stamps teacherName) visible.
-  const myAssignments = Object.values(store.assignments).filter(a =>
-    a.teacherName ? a.teacherName === me.name : a.teacherId === me.id);
+  // (D1) Teacher-scoped: the teacher only sees homework they own. The shared store
+  // also holds this student's other-subject homework (for the student view), set by
+  // other staff — isMine keeps it off this teacher's list, badge and analytics.
+  const myAssignments = Object.values(store.assignments).filter(a => isMine(a, me));
   const folders = Object.values(store.folders || {});
 
   const createFolder = (name) => {
@@ -2223,47 +2855,84 @@ const TeacherHomework = ({ section }) => {
     />;
   }
 
+  // Send held-back marks out to every student whose work is graded but unreleased.
+  const releaseResults = (id) => {
+    const asn = store.assignments[id];
+    if (!asn) return;
+    const stamp = new Date().toISOString();
+    const ids = Object.keys(asn.submissions).filter(sid => heldBack(asn, asn.submissions[sid]));
+    if (ids.length === 0) return;
+    update(s => {
+      const a2 = { ...s.assignments[id] };
+      a2.submissions = { ...a2.submissions };
+      ids.forEach(sid => { a2.submissions[sid] = { ...a2.submissions[sid], marksReleasedAt: stamp }; });
+      return { ...s, assignments: { ...s.assignments, [id]: a2 } };
+    });
+    toast(`Released results to ${ids.length} student${ids.length === 1 ? '' : 's'}`, 'success');
+  };
+
   const deleteAssignment = (id) => {
-    if (!confirm('Delete this assignment?')) return false;
     update(s => {
       const next = { ...s.assignments };
       delete next[id];
       return { ...s, assignments: next };
     });
-    return true;
+    setPendingDelete(null);
+    if (view.id === id) setView({ name: 'list' });
+    toast('Homework deleted', 'success');
   };
 
+  const deleteDialog = (
+    <DeleteAssignmentModal
+      a={pendingDelete ? store.assignments[pendingDelete] : null}
+      onCancel={() => setPendingDelete(null)}
+      onConfirm={() => deleteAssignment(pendingDelete)}
+    />
+  );
+
   if (view.name === 'overview' && store.assignments[view.id]) {
-    return <TeacherOverview
-      a={store.assignments[view.id]}
-      users={store.users}
-      folders={folders}
-      onBack={() => setView({ name: 'list' })}
-      onEdit={() => setView({ name: 'builder', id: view.id })}
-      onReview={() => setView({ name: 'review', id: view.id })}
-      onDuplicate={() => duplicateAssignment(view.id)}
-      onMove={(folderId) => moveAssignment(view.id, folderId)}
-      onDelete={() => { if (deleteAssignment(view.id)) setView({ name: 'list' }); }}
-    />;
+    return (
+      <>
+        <TeacherOverview
+          a={store.assignments[view.id]}
+          users={store.users}
+          folders={folders}
+          onBack={() => setView({ name: 'list' })}
+          onEdit={() => setView({ name: 'builder', id: view.id })}
+          onReview={() => setView({ name: 'review', id: view.id })}
+          onDuplicate={() => duplicateAssignment(view.id)}
+          onMove={(folderId) => moveAssignment(view.id, folderId)}
+          onRelease={() => releaseResults(view.id)}
+          onDelete={() => setPendingDelete(view.id)}
+        />
+        {deleteDialog}
+      </>
+    );
   }
 
-  return <TeacherList
-    section={section}
-    assignments={myAssignments}
-    folders={folders}
-    users={store.users}
-    classes={store.classes || CLASSES}
-    onNew={(folderId) => setView({ name: 'builder', folderId: folderId || null })}
-    onOpen={(id) => setView({ name: 'overview', id })}
-    onCreateFolder={createFolder}
-    onRenameFolder={renameFolder}
-    onDeleteFolder={deleteFolder}
-  />;
+  return (
+    <>
+      <TeacherList
+        section={section}
+        countsFor={(extra) => getHomeworkCounts(store, Object.assign({ teacherId: me.id }, extra || {}))}
+        assignments={myAssignments}
+        folders={folders}
+        users={store.users}
+        classes={store.classes || CLASSES}
+        onNew={(folderId) => setView({ name: 'builder', folderId: folderId || null })}
+        onOpen={(id) => setView({ name: 'overview', id })}
+        onCreateFolder={createFolder}
+        onRenameFolder={renameFolder}
+        onDeleteFolder={deleteFolder}
+      />
+      {deleteDialog}
+    </>
+  );
 };
 
 // ─── Teacher list view ──────────────────────────────────────────
 const TeacherList = ({
-  section, assignments, folders = [], users = {}, classes = [],
+  section, countsFor, assignments, folders = [], users = {}, classes = [],
   onNew, onOpen, onCreateFolder, onRenameFolder, onDeleteFolder,
 }) => {
   const toast = useToast();
@@ -2275,23 +2944,18 @@ const TeacherList = ({
   const [newFolderName, setNewFolderName] = React.useState('');
   const [renamingId, setRenamingId] = React.useState(null);
   const [renameValue, setRenameValue] = React.useState('');
+  const [pendingFolder, setPendingFolder] = React.useState(null);
   // Cards vs list for the assignment grid — remembered across visits.
   const [viewMode, setViewMode] = React.useState(() => {
     try { return localStorage.getItem('klasio.homework.view') === 'list' ? 'list' : 'grid'; } catch (e) { return 'grid'; }
   });
   const setView = (v) => { setViewMode(v); try { localStorage.setItem('klasio.homework.view', v); } catch (e) {} };
 
-  // Counts (computed across all assignments — independent of folder/tab filters)
-  const counts = {
-    all: assignments.length,
-    active: assignments.filter(a => a.status === 'active').length,
-    marking: assignments.filter(a =>
-      a.status === 'active' &&
-      Object.values(a.submissions).some(s => s.status === 'submitted')
-    ).length,
-    draft: assignments.filter(a => a.status === 'draft').length,
-    closed: assignments.filter(a => a.status === 'closed').length,
-  };
+  // Counts come from the one selector (scoped to this teacher upstream). `counts`
+  // is the whole list — the page header and the Overview rail; `tabCounts` is the
+  // same selector narrowed to the open folder, for the tab pills.
+  const counts = countsFor();
+  const tabCounts = countsFor({ folderId: folderId === 'all' ? null : folderId });
 
   const folderCount = (fid) => {
     if (fid === 'all') return assignments.length;
@@ -2310,13 +2974,11 @@ const TeacherList = ({
     if (tab === 'active') return a.status === 'active';
     if (tab === 'draft') return a.status === 'draft';
     if (tab === 'closed') return a.status === 'closed';
-    if (tab === 'marking') return a.status === 'active' && Object.values(a.submissions).some(s => s.status === 'submitted');
+    // Matches assignmentsToMark in the selector, so the pill count and the list
+    // length can never differ.
+    if (tab === 'marking') return Object.values(a.submissions).some(awaitingMark);
     return true;
   });
-
-  const totalAssigned = assignments.reduce((s, a) => s + a.studentIds.length, 0);
-  const totalSubmitted = assignments.reduce((s, a) => s + Object.values(a.submissions).length, 0);
-  const submissionRate = totalAssigned ? Math.round(totalSubmitted / totalAssigned * 100) : 0;
 
   const activeFolder = folders.find(f => f.id === folderId);
   const folderLabel = folderId === 'all' ? 'All assignments'
@@ -2347,11 +3009,11 @@ const TeacherList = ({
       <div style={{ ...pageFrame(), fontFamily: F.body, color: C.text }}>
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom: 22, gap: 20 }}>
           <div>
-            <h1 style={{ fontFamily: F.head, fontSize: 26, fontWeight: 700, margin: 0, letterSpacing: '-0.4px' }}>Homework</h1>
-            <p style={{ fontSize: 14, color: C.muted, margin: '6px 0 0' }}>Performance &amp; submission insights</p>
+            <h1 style={{ fontFamily: F.head, ...TS.title, margin: 0 }}>Homework</h1>
+            <p style={{ ...TS.meta, color: C.muted, margin: '4px 0 0' }}>Performance and submission insights</p>
           </div>
         </div>
-        <HomeworkAnalytics assignments={assignments} users={users} classes={classes} />
+        <HomeworkAnalytics assignments={assignments} countsFor={countsFor} users={users} classes={classes} />
       </div>
     );
   }
@@ -2359,12 +3021,11 @@ const TeacherList = ({
   return (
     <div style={{ ...pageFrame(), fontFamily: F.body, color: C.text }}>
       {/* Header */}
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom: 28, gap: 20 }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom: 24, gap: 20 }}>
         <div>
-          <h1 style={{ fontFamily: F.head, fontSize: 26, fontWeight: 700, margin: 0, letterSpacing: '-0.4px' }}>Homework</h1>
-          <p style={{ fontSize: 14, color: C.muted, margin: '6px 0 0' }}>
-            {counts.active} active · {counts.marking} awaiting marking
-          </p>
+          {/* No subtitle: "N active · N awaiting marking" repeated the filter
+              tab counts below, which are the actionable copy of the same fact. */}
+          <h1 style={{ fontFamily: F.head, ...TS.title, margin: 0 }}>Homework</h1>
         </div>
         <div style={{ display:'flex', gap: 12, alignItems:'center' }}>
           <Btn variant="brand" icon={<Ico name="plus" size={14} color="#fff" />}
@@ -2379,37 +3040,15 @@ const TeacherList = ({
         {/* Left rail — overview stats then folders, stacked in one sticky column */}
         <div style={{ display:'flex', flexDirection:'column', gap: 16, position:'sticky', top: 20 }}>
 
-        {/* Overview stats */}
-        <Card style={{ padding: 12 }}>
-          <div style={{
-            padding:'4px 6px 8px', borderBottom:`1px solid ${C.border}`, marginBottom: 8,
-          }}>
-            <span style={{ fontFamily: F.head, fontSize: 12, fontWeight: 700, color: C.muted, textTransform:'uppercase', letterSpacing:'.06em' }}>Overview</span>
-          </div>
-          <div style={{ display:'flex', flexDirection:'column', gap: 2 }}>
-            {[
-              { label: 'Active', value: counts.active, icon: 'flame', tone: 'brand' },
-              { label: 'Awaiting marking', value: counts.marking, icon: 'clock', tone: 'amber' },
-              { label: 'Drafts', value: counts.draft, icon: 'pencil', tone: 'default' },
-              { label: 'Submission rate', value: `${submissionRate}%`, icon: 'sparkle', tone: 'success' },
-            ].map(s => {
-              const tones = {
-                brand: { bg: C.brandSoft, fg: C.brand },
-                amber: { bg: C.amberBg, fg: C.amber },
-                success: { bg: C.successBg, fg: C.success },
-                default: { bg: C.surface, fg: C.muted },
-              };
-              const t = tones[s.tone];
-              return (
-                <div key={s.label} style={{ display:'flex', alignItems:'center', gap: 10, padding:'7px 8px', borderRadius: 8 }}>
-                  <span style={{ width: 30, height: 30, borderRadius: 8, flexShrink: 0, background: t.bg, color: t.fg, display:'flex', alignItems:'center', justifyContent:'center' }}>
-                    <Ico name={s.icon} size={14} color={t.fg} />
-                  </span>
-                  <span style={{ flex: 1, fontFamily: F.body, fontSize: 12.5, fontWeight: 500, color: C.sub, minWidth: 0 }}>{s.label}</span>
-                  <span style={{ fontFamily: F.head, fontSize: 17, fontWeight: 700, color: C.text }}>{s.value}</span>
-                </div>
-              );
-            })}
+        {/* Overview — was four rows (Active / Awaiting marking / Drafts /
+            Submission rate) behind tinted icon chips. Active, awaiting and
+            drafts are all in the filter tabs a few pixels to the right, so
+            only submission rate survives: it is the one figure this page
+            states nowhere else. */}
+        <Card style={{ padding: 16 }}>
+          <div style={{ ...TS.meta, color: C.muted, marginBottom: 4 }}>Submission rate</div>
+          <div style={{ fontFamily: F.head, fontSize: 20, fontWeight: W.medium, color: C.text, ...NUM }}>
+            {counts.submissionRate}%
           </div>
         </Card>
 
@@ -2419,7 +3058,7 @@ const TeacherList = ({
             display:'flex', alignItems:'center', justifyContent:'space-between',
             padding:'4px 6px 8px', borderBottom:`1px solid ${C.border}`, marginBottom: 8,
           }}>
-            <span style={{ fontFamily: F.head, fontSize: 12, fontWeight: 700, color: C.muted, textTransform:'uppercase', letterSpacing:'.06em' }}>Folders</span>
+            <span style={{ fontFamily: F.head, ...TS.section, color: C.text }}>Folders</span>
             <button onClick={() => { setCreatingFolder(true); setNewFolderName(''); }}
               title="New folder"
               style={{
@@ -2459,15 +3098,7 @@ const TeacherList = ({
                 onSubmitRename={tryRename}
                 onCancelRename={() => { setRenamingId(null); setRenameValue(''); }}
                 onStartRename={() => { setRenamingId(f.id); setRenameValue(f.name); }}
-                onDelete={() => {
-                  const n = folderCount(f.id);
-                  const msg = n > 0
-                    ? `Delete "${f.name}"? ${n} assignment${n === 1 ? '' : 's'} will become unfiled.`
-                    : `Delete "${f.name}"?`;
-                  if (!confirm(msg)) return;
-                  onDeleteFolder && onDeleteFolder(f.id);
-                  if (folderId === f.id) setFolderId('all');
-                }}
+                onDelete={() => setPendingFolder(f)}
               />
             ))}
 
@@ -2495,37 +3126,31 @@ const TeacherList = ({
           {/* Tabs + folder header */}
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: 16, gap: 12, flexWrap:'wrap' }}>
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontFamily: F.head, fontSize: 16, fontWeight: 700, color: C.text }}>{folderLabel}</div>
-              <div style={{ fontFamily: F.body, fontSize: 12, color: C.muted, marginTop: 2 }}>
-                {filtered.length} assignment{filtered.length === 1 ? '' : 's'}
-              </div>
+              <div style={{ fontFamily: F.head, ...TS.section, color: C.text }}>{folderLabel}</div>
             </div>
 
             <div style={{ display:'flex', alignItems:'center', gap: 10, flexWrap:'wrap' }}>
-              <div style={{ display:'flex', gap: 4, padding: 4, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10 }}>
+              <div style={{ display:'flex', gap: 4, padding: 4, background: C.surface, border: `1px solid ${C.border}`, borderRadius: RADIUS }}>
                 {[
-                  ['all', 'All', inFolder.length],
-                  ['active', 'Active', inFolder.filter(a => a.status === 'active').length],
-                  ['marking', 'Marking', inFolder.filter(a => a.status === 'active' && Object.values(a.submissions).some(s => s.status === 'submitted')).length],
-                  ['draft', 'Draft', inFolder.filter(a => a.status === 'draft').length],
-                  ['closed', 'Closed', inFolder.filter(a => a.status === 'closed').length],
+                  ['all', 'All', tabCounts.total],
+                  ['active', 'Active', tabCounts.active],
+                  ['marking', 'Marking', tabCounts.assignmentsToMark],
+                  ['draft', 'Draft', tabCounts.drafts],
+                  ['closed', 'Closed', tabCounts.closed],
                 ].map(([id, lab, n]) => {
                   const on = tab === id;
                   return (
                     <button key={id} onClick={() => setTab(id)} style={{
-                      padding: '7px 14px', border: 'none', cursor:'pointer',
-                      borderRadius: 7, background: on ? C.bg : 'transparent',
-                      boxShadow: on ? C.shadow : 'none',
-                      fontFamily: F.body, fontSize: 13, fontWeight: on ? 600 : 500,
+                      padding: '6px 12px', cursor:'pointer',
+                      borderRadius: RADIUS - 2,
+                      background: on ? C.bg : 'transparent',
+                      border: `1px solid ${on ? C.border : 'transparent'}`,
+                      fontFamily: F.body, ...TS.meta, fontWeight: on ? W.medium : W.normal,
                       color: on ? C.text : C.muted, transition: T,
                       display:'inline-flex', alignItems:'center', gap: 6,
                     }}>
                       {lab}
-                      <span style={{
-                        fontSize: 11, padding: '1px 7px', borderRadius: 999,
-                        background: on ? C.brandSoft : C.surface2,
-                        color: on ? C.brand : C.muted,
-                      }}>{n}</span>
+                      <span style={{ color: on ? C.sub : C.muted, ...NUM }}>{n}</span>
                     </button>
                   );
                 })}
@@ -2536,11 +3161,11 @@ const TeacherList = ({
 
           {/* Assignments — cards or list */}
           {filtered.length === 0 ? (
-            <Card style={{ padding: '60px 20px', textAlign:'center' }}>
-              <div style={{ fontFamily: F.head, fontSize: 16, fontWeight: 600, color: C.text, marginBottom: 6 }}>
+            <Card style={{ padding: '48px 24px', textAlign:'center' }}>
+              <div style={{ fontFamily: F.head, ...TS.section, color: C.text, marginBottom: 4 }}>
                 {folderId === 'all' ? 'No assignments yet' : `Nothing in ${folderLabel}`}
               </div>
-              <div style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>
+              <div style={{ ...TS.meta, color: C.muted, marginBottom: 16 }}>
                 {folderId === 'all' ? 'Create one to get started.' : 'Create one or move existing assignments here.'}
               </div>
               <Btn variant="brand" small icon={<Ico name="plus" size={13} color="#fff" />}
@@ -2549,13 +3174,9 @@ const TeacherList = ({
               </Btn>
             </Card>
           ) : viewMode === 'list' ? (
-            <Card style={{ overflow:'hidden' }}>
-              {filtered.map((a, i) => (
-                <TeacherListRow key={a.id} a={a} folders={folders} onOpen={onOpen} last={i === filtered.length - 1} />
-              ))}
-            </Card>
+            <TeacherTable rows={filtered} folders={folders} onOpen={onOpen} />
           ) : (
-            <div style={{ display:'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
+            <div style={{ display:'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 16 }}>
               {filtered.map(a => (
                 <TeacherListCard key={a.id} a={a} folders={folders} onOpen={onOpen} />
               ))}
@@ -2563,6 +3184,26 @@ const TeacherList = ({
           )}
         </div>
       </div>
+
+      {/* Deleting a folder never deletes homework — it unfiles it. */}
+      <Modal
+        open={!!pendingFolder}
+        onClose={() => setPendingFolder(null)}
+        icon="trash"
+        iconColor={C.danger}
+        title={pendingFolder ? `Delete "${pendingFolder.name}"?` : ''}
+        subtitle={pendingFolder && folderCount(pendingFolder.id) > 0
+          ? `${folderCount(pendingFolder.id)} assignment${folderCount(pendingFolder.id) === 1 ? '' : 's'} will move to Unfiled. Nothing is deleted.`
+          : 'This folder is empty.'}
+        footer={<>
+          <Btn variant="soft" onClick={() => setPendingFolder(null)}>Cancel</Btn>
+          <Btn variant="danger" onClick={() => {
+            onDeleteFolder && onDeleteFolder(pendingFolder.id);
+            if (folderId === pendingFolder.id) setFolderId('all');
+            setPendingFolder(null);
+          }}>Delete folder</Btn>
+        </>}
+      />
     </div>
   );
 };
@@ -2603,21 +3244,18 @@ const FolderRailItem = ({
         transition: T, cursor:'pointer',
       }}
     >
+      {/* The per-folder colour dot is gone: folder colour was assigned from a
+          rotating palette at creation time, so it identified nothing — the name
+          already does that. Name left, muted count right. */}
       <button onClick={onClick} style={{
         flex: 1, display:'flex', alignItems:'center', gap: 8,
         background: 'transparent', border: 'none', cursor: 'pointer',
-        padding: 0, fontFamily: F.body, fontSize: 13, fontWeight: active ? 600 : 500,
+        padding: 0, fontFamily: F.body, ...TS.meta, fontWeight: active ? W.medium : W.normal,
         color: active ? C.brand : C.sub, textAlign:'left', minWidth: 0,
       }}>
-        {color
-          ? <span style={{ width: 10, height: 10, borderRadius: 3, background: color, flexShrink: 0 }} />
-          : <Ico name={icon} size={14} color={active ? C.brand : C.muted} />}
+        {icon && <Ico name={icon} size={14} color={active ? C.brand : C.muted} />}
         <span style={{ flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{label}</span>
-        <span style={{
-          fontFamily: F.mono, fontSize: 11, color: active ? C.brand : C.faint,
-          padding: '0 6px', borderRadius: 999,
-          background: active ? C.bg : 'transparent',
-        }}>{count}</span>
+        <span style={{ ...TS.meta, color: active ? C.brand : C.muted, ...NUM }}>{count}</span>
       </button>
 
       {(onStartRename || onDelete) && (
@@ -2642,24 +3280,28 @@ const FolderRailItem = ({
 
 // Shared derivation for an assignment card/row — a single status indicator, the
 // submission tallies and the due-date text. Used by both TeacherListCard (grid)
-// and TeacherListRow (list) so the two presentations can never drift.
+// and TeacherTableRow (list) so the two presentations can never drift.
 const hwRowModel = (a, folders = []) => {
-  const subc = subColor(a.subject);
-  const submitted = Object.values(a.submissions).length;
+  const submitted = Object.values(a.submissions).filter(hasSubmitted).length;
   const graded = Object.values(a.submissions).filter(isGraded).length;
-  const awaitingMark = Object.values(a.submissions).filter(s => s.status === 'submitted').length;
+  const toMark = Object.values(a.submissions).filter(awaitingMark).length;
   const total = a.studentIds.length;
   const pct = total ? Math.round((submitted / total) * 100) : 0;
   const dDays = daysUntil(a.dueAt);
   const folder = a.folderId ? folders.find(f => f.id === a.folderId) : null;
   const overdue = a.status === 'active' && a.dueAt && dDays < 0;
 
+  // A StatusBadge key plus an optional label override — the tone lives in
+  // HW_STATUS, so a row can never invent its own colour for a status.
   let status;
-  if (a.status === 'draft')                       status = { label: 'Draft',            tone: 'default', dot: C.faint };
-  else if (a.status === 'closed')                 status = { label: 'Closed',           tone: 'default', dot: C.faint };
-  else if (awaitingMark > 0)                      status = { label: `${awaitingMark} to mark`, tone: 'amber',  dot: C.amber };
-  else if (submitted === total && total > 0)      status = { label: 'All submitted',    tone: 'success', dot: C.success };
-  else                                            status = { label: 'Active',           tone: 'brand',   dot: C.brand };
+  if (a.status === 'draft')                       status = { key: 'draft' };
+  else if (a.status === 'closed')                 status = { key: 'closed' };
+  else if (isScheduled(a))                        status = { key: 'scheduled' };
+  else if (toMark > 0)                            status = { key: 'tomark', label: `${toMark} to mark` };
+  // Everything in and returned — the assignment is done with.
+  else if (total > 0 && graded === total)         status = { key: 'marked' };
+  else if (submitted === total && total > 0)      status = { key: 'allin' };
+  else                                            status = { key: 'live' };
 
   const dueText = a.dueAt
     ? (overdue ? `Overdue · ${fmtDate(a.dueAt)}`
@@ -2667,19 +3309,35 @@ const hwRowModel = (a, folders = []) => {
       : `Due ${fmtDate(a.dueAt)}`)
     : 'No due date';
 
-  return { subc, submitted, graded, awaitingMark, total, pct, dDays, folder, overdue, status, dueText };
+  return { submitted, graded, toMark, total, pct, dDays, folder, overdue, status, dueText };
+};
+
+// HwStatusTag lived here: an uppercase, 700-weight, dot-prefixed pill with its
+// own five-tone colour map. It is now StatusBadge, shared with every other
+// homework screen. hwRowModel returns { key, label? } for it.
+const RowStatus = ({ status }) => (
+  <StatusBadge status={status.key}>{status.label}</StatusBadge>
+);
+
+// "Wed 29 Jul" — the due column wants the weekday, which fmtDate omits.
+const fmtDueDay = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
 };
 
 // Cards vs list switch — matches the tab-pill container so it sits beside the tabs.
 const HwViewToggle = ({ value, onChange }) => (
-  <div style={{ display:'flex', gap: 4, padding: 4, background: C.surface, border:`1px solid ${C.border}`, borderRadius: 10 }}>
+  <div style={{ display:'flex', gap: 4, padding: 4, background: C.surface, border:`1px solid ${C.border}`, borderRadius: RADIUS }}>
     {[{ id:'grid', icon:'grid', title:'Card view' }, { id:'list', icon:'list', title:'List view' }].map(o => {
       const on = value === o.id;
       return (
         <button key={o.id} onClick={() => onChange(o.id)} title={o.title} aria-label={o.title} aria-pressed={on}
           style={{
-            width: 34, height: 30, borderRadius: 7, border:'none', cursor:'pointer',
-            background: on ? C.bg : 'transparent', boxShadow: on ? C.shadow : 'none',
+            width: 32, height: 28, borderRadius: RADIUS - 2, cursor:'pointer',
+            background: on ? C.bg : 'transparent',
+            border: `1px solid ${on ? C.border : 'transparent'}`,
             color: on ? C.brand : C.muted, display:'flex', alignItems:'center', justifyContent:'center', transition: T,
           }}>
           <Ico name={o.icon} size={15} color={on ? C.brand : C.muted} />
@@ -2689,8 +3347,45 @@ const HwViewToggle = ({ value, onChange }) => (
   </div>
 );
 
-// Row presentation of an assignment (the list view — see the view toggle).
-const TeacherListRow = ({ a, folders = [], onOpen, last }) => {
+// ─── Assignment table (the list view — see the view toggle) ──────
+// One grid template shared by the header and every row so the columns line up.
+// The Folder column is gone — the folder rail on the left is the folder
+// affordance, and the cell was "—" for every unfiled assignment.
+const HW_COLS = 'minmax(220px, 2.2fr) 1fr 1.2fr 132px 1fr 116px';
+const hwCell = {
+  minWidth: 0, fontFamily: F.body, ...TS.meta, color: C.sub,
+  overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', ...NUM,
+};
+// One fixed row height so a screenful is a predictable number of rows.
+const HW_ROW_H = 48;
+
+const TeacherTable = ({ rows, folders = [], onOpen }) => (
+  <Card style={{ overflow:'hidden', padding: 0 }}>
+    <div style={{ overflowX:'auto' }}>
+      <div style={{ minWidth: 760 }}>
+        {/* Header */}
+        <div style={{
+          display:'grid', gridTemplateColumns: HW_COLS, gap: 16,
+          padding: '10px 16px', background: C.surface,
+          borderBottom: `1px solid ${C.border}`,
+          fontFamily: F.body, ...TS.meta, fontWeight: W.medium, color: C.muted,
+        }}>
+          <span>Title</span>
+          <span>Subject</span>
+          <span>Class</span>
+          <span>Submissions</span>
+          <span>Due</span>
+          <span>Status</span>
+        </div>
+        {rows.map((a, i) => (
+          <TeacherTableRow key={a.id} a={a} folders={folders} onOpen={onOpen} last={i === rows.length - 1} />
+        ))}
+      </div>
+    </div>
+  </Card>
+);
+
+const TeacherTableRow = ({ a, folders = [], onOpen, last }) => {
   const m = hwRowModel(a, folders);
   const [hov, setHov] = React.useState(false);
   return (
@@ -2699,127 +3394,85 @@ const TeacherListRow = ({ a, folders = [], onOpen, last }) => {
       onMouseEnter={() => setHov(true)}
       onMouseLeave={() => setHov(false)}
       style={{
-        display:'flex', alignItems:'center', gap: 14, padding: '13px 18px', cursor:'pointer',
+        display:'grid', gridTemplateColumns: HW_COLS, gap: 16, alignItems:'center',
+        height: HW_ROW_H, padding: '0 16px', cursor:'pointer',
         borderBottom: last ? 'none' : `1px solid ${C.border}`,
+        // There was no row hover state at all — on a table you click through
+        // all afternoon, that is the one affordance worth having.
         background: hov ? C.surface : 'transparent', transition: T,
       }}>
-      <span style={{
-        width: 38, height: 38, borderRadius: 9, flexShrink: 0,
-        background: m.subc.soft, color: m.subc.color,
-        display:'flex', alignItems:'center', justifyContent:'center',
-      }}>
-        <Ico name="book" size={17} color={m.subc.color} />
+      {/* Title only. The question/points count moved out of the row: it is on
+          the assignment the moment you open it, and it was what forced two
+          lines per row. */}
+      <div style={{
+        fontFamily: F.head, ...TS.body, fontWeight: W.medium, color: C.text,
+        minWidth: 0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
+      }}>{a.title}</div>
+
+      {/* Subject as plain muted text — it used to render in a per-subject hue,
+          which read as twelve links stacked down the column. */}
+      <span style={{ ...hwCell, color: C.muted }}>{a.subject}</span>
+      <span style={hwCell}>{a.classLabel || <span style={{ color: C.faint }}>—</span>}</span>
+
+      {/* One line: "9/9 · 6 marked". "marked" is a count, so it is muted text,
+          not green — green promised a success state it never meant. */}
+      <span style={{ ...hwCell }}>
+        <span style={{ color: C.text }}>{m.submitted}/{m.total}</span>
+        {m.graded > 0 && <span style={{ color: C.muted }}>{' · '}{m.graded} marked</span>}
       </span>
 
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontFamily: F.head, fontSize: 14, fontWeight: 700, color: C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{a.title}</div>
-        <div style={{ display:'flex', alignItems:'center', gap: 7, marginTop: 3, fontFamily: F.body, fontSize: 12, color: C.muted, flexWrap:'wrap' }}>
-          <span style={{ color: m.subc.color, fontWeight: 600 }}>{a.subject}</span>
-          {a.classLabel && <><span style={{ color: C.border }}>•</span><span>{a.classLabel}</span></>}
-          {m.folder && <><span style={{ color: C.border }}>•</span><span>{m.folder.name}</span></>}
-        </div>
-      </div>
-
-      {/* Facts */}
-      <div style={{ display:'flex', alignItems:'center', gap: 16, flexShrink: 0, fontFamily: F.body, fontSize: 12, color: C.sub }}>
-        <span style={{ display:'inline-flex', alignItems:'center', gap: 5 }}><Ico name="list" size={13} color={C.faint} />{a.questions.length}</span>
-        <span style={{ display:'inline-flex', alignItems:'center', gap: 5 }}><Ico name="target" size={13} color={C.faint} />{totalPoints(a)} pts</span>
-        <span style={{ display:'inline-flex', alignItems:'center', gap: 5, color: m.overdue ? C.danger : C.sub }}><Ico name="calendar" size={13} color={m.overdue ? C.danger : C.faint} />{m.dueText}</span>
-      </div>
-
-      {/* Submissions tally */}
-      <div style={{ width: 110, flexShrink: 0, textAlign:'right', fontFamily: F.body, fontSize: 12, color: C.muted }}>
-        <span style={{ fontWeight: 700, color: C.text }}>{m.submitted}</span> / {m.total}
-        {m.graded > 0 && <span style={{ color: C.success, fontWeight: 600, marginLeft: 6 }}>{m.graded} graded</span>}
-      </div>
-
-      {/* Status */}
-      <span style={{
-        flexShrink: 0, display:'inline-flex', alignItems:'center', gap: 6,
-        padding:'4px 10px', borderRadius: 999,
-        background: C.surface, border:`1px solid ${C.border}`,
-        fontFamily: F.body, fontSize: 11.5, fontWeight: 600, color: C.sub, whiteSpace:'nowrap',
-      }}>
-        <span style={{ width: 6, height: 6, borderRadius: '50%', background: m.status.dot }} />
-        {m.status.label}
+      {/* Overdue reads on the Status badge, so the date cell stays one line. */}
+      <span style={{ ...hwCell, color: m.overdue ? C.amber : C.sub }}>
+        {a.dueAt ? fmtDueDay(a.dueAt) : <span style={{ color: C.faint }}>No due date</span>}
       </span>
+
+      <span><RowStatus status={m.status} /></span>
     </div>
   );
 };
 
 const TeacherListCard = ({ a, folders = [], onOpen }) => {
-  const { subc, submitted, graded, total, pct, folder, overdue, status, dueText } = hwRowModel(a, folders);
+  const { submitted, graded, total, pct, folder, overdue, status, dueText } = hwRowModel(a, folders);
 
   return (
-    <Card hoverable onClick={() => onOpen(a.id)} style={{ overflow:'hidden' }}>
-      <div style={{ padding: 20, display:'flex', flexDirection:'column', gap: 16 }}>
-        {/* Header: subject badge + title, status on the right */}
-        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap: 14 }}>
-          <div style={{ display:'flex', gap: 13, alignItems:'flex-start', minWidth: 0 }}>
-            <span style={{
-              width: 40, height: 40, borderRadius: 10, flexShrink: 0,
-              background: subc.soft, color: subc.color,
-              display:'flex', alignItems:'center', justifyContent:'center',
-            }}>
-              <Ico name="book" size={19} color={subc.color} />
-            </span>
-            <div style={{ minWidth: 0 }}>
-              <div style={{
-                fontFamily: F.head, fontSize: 15.5, fontWeight: 700, color: C.text,
-                lineHeight: 1.3, marginBottom: 4,
-                overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
-              }}>{a.title}</div>
-              <div style={{
-                display:'flex', alignItems:'center', gap: 7, flexWrap:'wrap',
-                fontFamily: F.body, fontSize: 12.5, color: C.muted,
-              }}>
-                <span style={{ color: subc.color, fontWeight: 600 }}>{a.subject}</span>
-                {a.classLabel && <><span style={{ color: C.border }}>•</span><span>{a.classLabel}</span></>}
-                {folder && <><span style={{ color: C.border }}>•</span><span>{folder.name}</span></>}
-              </div>
-            </div>
+    // The only hover affordance is the border firming up. The card used to
+    // lift on a 20px shadow, which is what made a grid of them feel floaty.
+    <Card hoverable onClick={() => onOpen(a.id)}>
+      <div style={{ padding: 16, display:'flex', flexDirection:'column', gap: 12 }}>
+        {/* The 40px book icon chip that led this row is gone — every card had
+            the identical glyph, so it distinguished nothing and cost the title
+            53px of its width. */}
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap: 12 }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{
+              fontFamily: F.head, fontSize: 15, fontWeight: W.medium, color: C.text,
+              lineHeight: 1.35, marginBottom: 2,
+              overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
+            }}>{a.title}</div>
+            <MetaLine items={[a.subject, a.classLabel, folder && folder.name]} />
           </div>
-          <span style={{
-            display:'inline-flex', alignItems:'center', gap: 6, flexShrink: 0,
-            padding: '4px 10px', borderRadius: 999,
-            background: C.surface, border: `1px solid ${C.border}`,
-            fontFamily: F.body, fontSize: 11.5, fontWeight: 600, color: C.sub,
-          }}>
-            <span style={{ width: 6, height: 6, borderRadius: '50%', background: status.dot }} />
-            {status.label}
-          </span>
+          <RowStatus status={status} />
         </div>
 
-        {/* Meta row: clean, evenly spaced facts */}
-        <div style={{
-          display:'flex', alignItems:'center', gap: 18,
-          fontFamily: F.body, fontSize: 12.5, color: C.sub,
-        }}>
-          <span style={{ display:'inline-flex', alignItems:'center', gap: 6 }}>
-            <Ico name="list" size={14} color={C.faint} />
-            {a.questions.length} question{a.questions.length === 1 ? '' : 's'}
-          </span>
-          <span style={{ display:'inline-flex', alignItems:'center', gap: 6 }}>
-            <Ico name="target" size={14} color={C.faint} />
-            {totalPoints(a)} pts
-          </span>
-          <span style={{ display:'inline-flex', alignItems:'center', gap: 6, color: overdue ? C.danger : C.sub }}>
-            <Ico name="calendar" size={14} color={overdue ? C.danger : C.faint} />
-            {dueText}
-          </span>
-        </div>
+        {/* One meta line, no per-fact icons. Due date carries amber only when
+            it is overdue — i.e. only when it needs the teacher to act. */}
+        <MetaLine
+          items={[
+            `${a.questions.length} question${a.questions.length === 1 ? '' : 's'}`,
+            `${totalPoints(a)} pts`,
+            <span style={{ color: overdue ? C.amber : C.muted }}>{dueText}</span>,
+          ]}
+        />
 
-        {/* Progress */}
-        <div style={{ borderTop: `1px solid ${C.surface2}`, paddingTop: 14 }}>
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom: 8 }}>
-            <span style={{ fontFamily: F.body, fontSize: 12, fontWeight: 600, color: C.sub }}>Submissions</span>
-            <span style={{ fontFamily: F.body, fontSize: 12, color: C.muted }}>
-              <span style={{ fontWeight: 700, color: C.text }}>{submitted}</span> / {total}
-              {graded > 0 && <span style={{ color: C.success, fontWeight: 600, marginLeft: 8 }}>{graded} graded</span>}
-            </span>
+        {/* Submissions: the label row is gone (the bar is self-evident) and
+            "N marked" is muted, not green. */}
+        <div style={{ display:'flex', flexDirection:'column', gap: 6 }}>
+          <div style={{ fontFamily: F.body, ...TS.meta, color: C.muted, ...NUM }}>
+            <span style={{ color: C.text }}>{submitted}/{total}</span>
+            {graded > 0 && <span>{' · '}{graded} marked</span>}
           </div>
-          <div style={{ height: 6, background: C.surface2, borderRadius: 999, overflow:'hidden' }}>
-            <div style={{ height:'100%', width: `${pct}%`, background: subc.color, borderRadius: 999, transition: 'width .3s' }} />
+          <div style={{ height: 4, background: C.surface2, borderRadius: RADIUS_FULL, overflow:'hidden' }}>
+            <div style={{ height:'100%', width: `${pct}%`, background: C.brand, borderRadius: RADIUS_FULL, transition: 'width .3s' }} />
           </div>
         </div>
       </div>
@@ -2935,7 +3588,7 @@ const Donut = ({ segments = [], size = 150 }) => {
   );
 };
 
-const HomeworkAnalytics = ({ assignments, users = {}, classes = [] }) => {
+const HomeworkAnalytics = ({ assignments, countsFor, users = {}, classes = [] }) => {
   const [subjectF, setSubjectF] = React.useState('All');
   const [classF, setClassF] = React.useState('All');
 
@@ -2943,6 +3596,12 @@ const HomeworkAnalytics = ({ assignments, users = {}, classes = [] }) => {
     (subjectF === 'All' || a.subject === subjectF) &&
     (classF === 'All' || a.classLabel === classF)
   );
+  // The KPI tiles read the shared selector, narrowed by the same two filters that
+  // narrow the charts — so the tiles and the assignments list always agree.
+  const kpiCounts = countsFor({
+    classLabel: classF === 'All' ? null : classF,
+    subject: subjectF === 'All' ? null : subjectF,
+  });
 
   // ── Aggregate submission rows across the filtered set ──
   const subs = [];
@@ -2955,20 +3614,19 @@ const HomeworkAnalytics = ({ assignments, users = {}, classes = [] }) => {
     });
   });
 
-  const submittedRows = subs.filter(s => s.sub);
+  const submittedRows = subs.filter(s => hasSubmitted(s.sub));
   const gradedRows = subs.filter(s => s.sub && isGraded(s.sub));
-  const lateRows = subs.filter(s => s.sub && s.a.dueAt && new Date(s.sub.submittedAt) > new Date(s.a.dueAt));
+  const lateRows = subs.filter(s => isLateSub(s.a, s.sub));
   const inProgressN = subs.filter(s => s.sub && s.sub.status === 'submitted').length;
-  const notStartedN = subs.filter(s => !s.sub).length;
+  const notStartedN = subs.filter(s => !hasSubmitted(s.sub)).length;
   // "Pending review" counts SUBMISSIONS awaiting a mark; "Awaiting marking" counts
-  // ASSIGNMENTS that still have any unmarked submission — two different units, kept
-  // labelled distinctly (Homework Analytics P0).
-  const pendingReview = submittedRows.filter(s => !isGraded(s.sub)).length;
-  const awaitingMarking = filtered.filter(a =>
-    a.studentIds.some(sid => { const sub = a.submissions[sid]; return sub && !isGraded(sub); })).length;
+  // ASSIGNMENTS that still hold at least one — two different units, both from the
+  // one selector, kept labelled distinctly (Homework Analytics P0).
+  const pendingReview = kpiCounts.toMark;
+  const awaitingMarking = kpiCounts.assignmentsToMark;
 
-  const totalAssigned = subs.length;
-  const completionRate = totalAssigned ? Math.round(submittedRows.length / totalAssigned * 100) : 0;
+  const totalAssigned = kpiCounts.assigned;
+  const completionRate = kpiCounts.submissionRate;
   const scored = gradedRows.filter(s => s.pct != null);
   const avgScore = scored.length ? Math.round(scored.reduce((n, s) => n + s.pct, 0) / scored.length) : 0;
   // (D7) "Avg time spent" removed — the per-submission timing field is synthetic,
@@ -3001,7 +3659,7 @@ const HomeworkAnalytics = ({ assignments, users = {}, classes = [] }) => {
     (subjAgg[s.a.subject] = subjAgg[s.a.subject] || []).push(s.pct);
   });
   const subjectRows = Object.entries(subjAgg).map(([label, arr]) => ({
-    label, value: Math.round(arr.reduce((a, b) => a + b, 0) / arr.length), color: subColor(label).color,
+    label, value: Math.round(arr.reduce((a, b) => a + b, 0) / arr.length), color: C.brand,
   })).sort((a, b) => b.value - a.value);
 
   // ── Grade distribution (canonical scale · F3) ──
@@ -3080,7 +3738,7 @@ const HomeworkAnalytics = ({ assignments, users = {}, classes = [] }) => {
 
   const kpi = (icon, tone, value, label, sub) => {
     const tones = { brand:{bg:C.brandSoft,fg:C.brand}, success:{bg:C.successBg,fg:C.success},
-      amber:{bg:C.amberBg,fg:C.amber}, info:{bg:C.accentSoft,fg:C.accent}, danger:{bg:C.dangerBg,fg:C.danger} };
+      amber:{bg:C.amberBg,fg:C.amber}, info:{bg:C.surface,fg:C.sub}, danger:{bg:C.dangerBg,fg:C.danger} };
     const t = tones[tone] || tones.brand;
     return (
       <Card style={{ padding: 16 }}>
@@ -3113,14 +3771,14 @@ const HomeworkAnalytics = ({ assignments, users = {}, classes = [] }) => {
 
       {/* KPI rows */}
       <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap: 12 }}>
-        {kpi('book', 'brand', filtered.length, 'Total Assigned', `Across ${classOptions.length - 1 || 1} classes`)}
-        {kpi('target', 'success', `${completionRate}%`, 'Completion Rate', `${submittedRows.length} / ${totalAssigned} students`)}
-        {kpi('trend', 'brand', `${avgScore}%`, 'Average Score', 'Across graded work')}
-        {kpi('clip', 'amber', awaitingMarking, 'Awaiting Marking', 'Assignments with unmarked work')}
+        {kpi('book', 'brand', kpiCounts.total, 'Total Assigned', `Across ${classOptions.length - 1 || 1} classes`)}
+        {kpi('target', 'success', `${completionRate}%`, 'Completion Rate', `${kpiCounts.submitted} / ${totalAssigned} students`)}
+        {kpi('trend', 'brand', `${avgScore}%`, 'Average Score', `Across ${scored.length} graded submission${scored.length === 1 ? '' : 's'}`)}
+        {kpi('clip', 'amber', awaitingMarking, 'Assignments To Mark', 'Assignments holding unmarked work')}
       </div>
       <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap: 12 }}>
         {kpi('alertCircle', 'danger', lateRows.length, 'Late Submissions', `${totalAssigned ? Math.round(lateRows.length/totalAssigned*100) : 0}% of all`)}
-        {kpi('file', 'info', pendingReview, 'Pending Review', 'Submissions to mark')}
+        {kpi('file', 'info', pendingReview, 'Submissions To Mark', 'Individual pieces awaiting a mark')}
         {kpi('award', 'success', highest ? `${highest.pct}%` : '—', 'Highest Score', highest ? (users[highest.sid]?.name || '') : '')}
         {kpi('alertCircle', 'amber', flaggedN, 'Students Flagged', 'Need intervention')}
       </div>
@@ -3264,6 +3922,7 @@ const TeacherBuilder = ({ assignment, students, folders = [], classes = [], defa
     ? JSON.parse(JSON.stringify(assignment))
     : blankAssignment('t_clarke', defaultFolderId)));
   const [tab, setTab] = React.useState('questions'); // questions | settings
+  usePageTrail([{ label: assignment ? (assignment.title || 'Edit homework') : 'New homework' }]);
   const [pdfOpen, setPdfOpen] = React.useState(false);
   const [newFolderOpen, setNewFolderOpen] = React.useState(false);
   const [newFolderName, setNewFolderName] = React.useState('');
@@ -3355,13 +4014,11 @@ const TeacherBuilder = ({ assignment, students, folders = [], classes = [], defa
   return (
     <div style={{ ...pageFrame(), fontFamily: F.body, color: C.text }}>
       {/* Top bar */}
+      <BackLink onClick={onCancel} label="Assignments" />
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: 20, gap: 12 }}>
-        <div style={{ display:'flex', alignItems:'center', gap: 10 }}>
-          <Btn variant="ghost" small icon={<Ico name="arrowL" size={13} />} onClick={onCancel}>Back</Btn>
-          <span style={{ fontFamily: F.head, fontSize: 20, fontWeight: 700 }}>
-            {assignment ? 'Edit homework' : 'New homework'}
-          </span>
-        </div>
+        <span style={{ fontFamily: F.head, ...TS.title }}>
+          {assignment ? 'Edit homework' : 'New homework'}
+        </span>
         <div style={{ display:'flex', alignItems:'center', gap: 12 }}>
           <SegTabs
             active={tab}
@@ -3384,7 +4041,7 @@ const TeacherBuilder = ({ assignment, students, folders = [], classes = [], defa
             <>
               {/* Basic information */}
               <Card style={{ padding: 22 }}>
-                <div style={{ fontFamily: F.head, fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 16 }}>Basic Information</div>
+                <div style={{ fontFamily: F.head, ...TS.section, color: C.text, marginBottom: 16 }}>Basic information</div>
                 <div style={{ display:'flex', flexDirection:'column', gap: 16 }}>
                   <div>
                     <Label htmlFor="t-title">Title</Label>
@@ -3394,7 +4051,7 @@ const TeacherBuilder = ({ assignment, students, folders = [], classes = [], defa
                     <div>
                       <Label>Subject</Label>
                       <select value={a.subject} onChange={e => setField('subject', e.target.value)} style={selectStyle}>
-                        {Object.keys(SUBJECTS).map(s => <option key={s} value={s}>{s}</option>)}
+                        {SUBJECT_NAMES.map(s => <option key={s} value={s}>{s}</option>)}
                       </select>
                     </div>
                     <div>
@@ -3448,7 +4105,7 @@ const TeacherBuilder = ({ assignment, students, folders = [], classes = [], defa
 
               {/* Schedule & limits */}
               <Card style={{ padding: 22 }}>
-                <div style={{ fontFamily: F.head, fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 16 }}>Schedule &amp; Limits</div>
+                <div style={{ fontFamily: F.head, ...TS.section, color: C.text, marginBottom: 16 }}>Schedule &amp; limits</div>
                 <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 14 }}>
                   <div>
                     <Label>Available From</Label>
@@ -3456,7 +4113,8 @@ const TeacherBuilder = ({ assignment, students, folders = [], classes = [], defa
                   </div>
                   <div>
                     <Label>Due Date</Label>
-                    <Input type="datetime-local" value={a.dueAt} onChange={(v) => setField('dueAt', v)} />
+                    <Input type="datetime-local" value={a.dueAt}
+                      onChange={(v) => setField('dueAt', withDefaultDueTime(v))} />
                   </div>
                   <div>
                     <Label>Time Limit (minutes)</Label>
@@ -3467,11 +4125,17 @@ const TeacherBuilder = ({ assignment, students, folders = [], classes = [], defa
                     <Input type="number" value={a.settings.attemptsAllowed} onChange={(v) => setSetting('attemptsAllowed', Math.max(1, parseInt(v, 10) || 1))} />
                   </div>
                 </div>
+                <div style={{ marginTop: 4 }}>
+                  <SettingRow title="Show a countdown to students"
+                    desc="Off by default. The time limit still applies either way — this only decides whether students watch the clock."
+                    checked={a.settings.showCountdown} onChange={(v) => setSetting('showCountdown', v)}
+                    disabled={!a.timeLimitMins} />
+                </div>
               </Card>
 
               {/* Submission options */}
               <Card style={{ padding: '8px 22px 14px' }}>
-                <div style={{ fontFamily: F.head, fontSize: 15, fontWeight: 700, color: C.text, margin: '14px 0 2px' }}>Submission Options</div>
+                <div style={{ fontFamily: F.head, ...TS.section, color: C.text, margin: '14px 0 2px' }}>Submission options</div>
                 <SettingRow title="Allow Late Submissions" desc="Students can submit after the due date"
                   checked={a.settings.allowLate} onChange={(v) => setSetting('allowLate', v)} />
                 <SettingRow title="Randomize Questions" desc="Each student sees questions in a different order"
@@ -3485,8 +4149,8 @@ const TeacherBuilder = ({ assignment, students, folders = [], classes = [], defa
               {/* Student review settings */}
               <Card style={{ padding: '8px 22px 14px' }}>
                 <div style={{ margin: '14px 0 2px' }}>
-                  <div style={{ fontFamily: F.head, fontSize: 15, fontWeight: 700, color: C.text }}>Student Review Settings</div>
-                  <div style={{ fontFamily: F.body, fontSize: 12, color: C.muted, marginTop: 2 }}>Control what students see after submission</div>
+                  <div style={{ fontFamily: F.head, ...TS.section, color: C.text }}>Student review settings</div>
+                  <div style={{ fontFamily: F.body, ...TS.meta, color: C.muted, marginTop: 2 }}>Control what students see after submission</div>
                 </div>
                 <SettingRow title="Allow Students to Review Homework" desc="Students can open and review their submitted homework"
                   checked={a.settings.allowReview} onChange={(v) => setSetting('allowReview', v)} />
@@ -3507,11 +4171,11 @@ const TeacherBuilder = ({ assignment, students, folders = [], classes = [], defa
               {/* Assigned students */}
               <Card style={{ padding: 22 }}>
                 <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: 6 }}>
-                  <div style={{ fontFamily: F.head, fontSize: 15, fontWeight: 700, color: C.text }}>Assigned Students</div>
+                  <div style={{ fontFamily: F.head, ...TS.section, color: C.text }}>Assigned students</div>
                   {classStudents.length > 0 && (
                     <button onClick={selectAllInClass} style={{
                       border: 'none', background: 'transparent', cursor: 'pointer',
-                      fontFamily: F.body, fontSize: 12, fontWeight: 600, color: C.brand,
+                      fontFamily: F.body, ...TS.meta, fontWeight: W.medium, color: C.brand,
                     }}>{allClassSelected ? 'Clear all' : 'Select all in class'}</button>
                   )}
                 </div>
@@ -3543,11 +4207,11 @@ const TeacherBuilder = ({ assignment, students, folders = [], classes = [], defa
           ) : (
             /* Questions tab */
             <Card style={{ padding: 20 }}>
+              {/* Import lives in the add panel below — one place to add questions. */}
               <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: 14 }}>
-                <div style={{ fontFamily: F.head, fontSize: 15, fontWeight: 700, color: C.text }}>
-                  Questions <span style={{ color: C.muted, fontWeight: 500 }}>({a.questions.length})</span>
+                <div style={{ fontFamily: F.head, ...TS.section, color: C.text }}>
+                  Questions <span style={{ color: C.muted, fontWeight: W.normal, ...NUM }}>({a.questions.length})</span>
                 </div>
-                <Btn variant="soft" small icon={<Ico name="upload" size={13} />} onClick={() => setPdfOpen(true)}>Import from PDF</Btn>
               </div>
               <div style={{ display:'flex', flexDirection:'column', gap: 14 }}>
                 {a.questions.map((q, i) => (
@@ -3559,31 +4223,13 @@ const TeacherBuilder = ({ assignment, students, folders = [], classes = [], defa
                     onUp={() => moveQ(q.id, -1)}
                     onDown={() => moveQ(q.id, 1)} />
                 ))}
-                {a.questions.length === 0 && (
-                  <div style={{ padding: '24px 0', textAlign:'center', color: C.muted, fontSize: 13 }}>
-                    No questions yet — add one below.
-                  </div>
-                )}
               </div>
 
-              {/* Add palette */}
-              <div style={{ marginTop: 18, paddingTop: 18, borderTop: `1px dashed ${C.border}` }}>
-                <div style={{ display:'flex', flexWrap:'wrap', gap: 8 }}>
-                  {QTYPES.map(t => (
-                    <button key={t.type} onClick={() => addQ(t.type)} style={{
-                      display:'inline-flex', alignItems:'center', gap: 6,
-                      padding: '9px 14px', borderRadius: 999,
-                      border: `1px solid ${C.border}`, background: C.bg,
-                      cursor:'pointer', transition: T,
-                      fontFamily: F.body, fontSize: 13, fontWeight: 600, color: C.text,
-                    }}
-                      onMouseEnter={e => { e.currentTarget.style.background = C.surface; e.currentTarget.style.borderColor = C.borderD; }}
-                      onMouseLeave={e => { e.currentTarget.style.background = C.bg; e.currentTarget.style.borderColor = C.border; }}>
-                      <Ico name="plus" size={13} color={C.muted} /> {t.short}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              {/* Add palette — dashed drop-zone panel, centred type chips */}
+              <AddQuestionPanel
+                first={a.questions.length === 0}
+                onAdd={addQ}
+                onImport={() => setPdfOpen(true)} />
             </Card>
           )}
         </div>
@@ -3591,69 +4237,70 @@ const TeacherBuilder = ({ assignment, students, folders = [], classes = [], defa
         {/* RIGHT — outline */}
         <div style={{ display:'flex', flexDirection:'column', gap: 12, position:'sticky', top: 20, alignSelf:'start' }}>
           <Card style={{ padding: 18 }}>
-            <div style={{ fontFamily: F.head, fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 12 }}>Outline</div>
+            <div style={{ fontFamily: F.head, ...TS.section, color: C.text, marginBottom: 10 }}>Outline</div>
             {a.questions.length === 0
-              ? <div style={{ fontSize: 12, color: C.muted }}>No questions yet</div>
+              ? <div style={{ ...TS.meta, color: C.muted }}>No questions yet</div>
               : (
-                <div style={{ display:'flex', flexDirection:'column', gap: 6 }}>
-                  {a.questions.map((q, i) => {
-                    const m = qtypeMeta(q.type);
-                    return (
-                      <button key={q.id} onClick={() => setTab('questions')} style={{
+                <div style={{ display:'flex', flexDirection:'column' }}>
+                  {/* The auto/teacher-marked dot is gone — it encoded the same
+                      fact as the Marks split bar directly below, in a colour
+                      (amber) reserved for work needing action. */}
+                  {a.questions.map((q, i) => (
+                    <button key={q.id} onClick={() => setTab('questions')}
+                      onMouseEnter={e => { e.currentTarget.style.background = C.surface; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+                      style={{
                         display:'flex', alignItems:'center', gap: 8, width:'100%', textAlign:'left',
-                        padding: '6px 8px', borderRadius: 6, background: C.surface,
-                        border:'none', cursor:'pointer',
+                        padding: '6px 8px', borderRadius: RADIUS - 2, background: 'transparent',
+                        border:'none', cursor:'pointer', transition: T,
                       }}>
-                        <span style={{ fontFamily: F.mono, fontSize: 11, color: C.muted, width: 18 }}>Q{i + 1}</span>
-                        <span style={{
-                          width: 6, height: 6, borderRadius:'50%',
-                          background: m.marker === 'auto' ? C.brand : C.amber,
-                        }} />
-                        <span style={{ fontFamily: F.body, fontSize: 12, color: C.sub, flex: 1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                          {q.prompt || <em style={{ color: C.faint }}>Untitled</em>}
-                        </span>
-                        <span style={{ fontFamily: F.mono, fontSize: 11, color: C.muted }}>{q.points}p</span>
-                      </button>
-                    );
-                  })}
+                      <span style={{ fontFamily: F.body, ...TS.meta, color: C.muted, width: 22, ...NUM }}>Q{i + 1}</span>
+                      <span style={{ fontFamily: F.body, ...TS.meta, color: C.sub, flex: 1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                        {q.prompt || <em style={{ color: C.faint }}>Untitled</em>}
+                      </span>
+                      <span style={{ fontFamily: F.body, ...TS.meta, color: C.muted, ...NUM }}>{q.points}p</span>
+                    </button>
+                  ))}
                 </div>
               )
             }
           </Card>
 
           <Card style={{ padding: 18 }}>
-            <div style={{ fontFamily: F.head, fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 12 }}>Marks</div>
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom: 14 }}>
-              <span style={{ fontSize: 12, color: C.muted }}>Total points</span>
-              <span style={{ fontFamily: F.head, fontSize: 26, fontWeight: 700, color: C.text }}>{totalPoints(a)}</span>
+            <div style={{ fontFamily: F.head, ...TS.section, color: C.text, marginBottom: 10 }}>Marks</div>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom: 12 }}>
+              <span style={{ ...TS.meta, color: C.muted }}>Total points</span>
+              <span style={{ fontFamily: F.head, fontSize: 20, fontWeight: W.medium, color: C.text, ...NUM }}>{totalPoints(a)}</span>
             </div>
-            <div style={{ display:'flex', flexDirection:'column', gap: 8 }}>
+            <div style={{ display:'flex', flexDirection:'column', gap: 6 }}>
               <div style={{ display:'flex', alignItems:'center', gap: 8 }}>
-                <span style={{ width: 8, height: 8, borderRadius:'50%', background: C.brand }} />
-                <span style={{ fontSize: 12, color: C.sub, flex: 1 }}>Auto-marked</span>
-                <span style={{ fontFamily: F.mono, fontSize: 12, fontWeight: 600, color: C.text }}>{autoTotal(a)}p</span>
+                <span style={{ width: 8, height: 8, borderRadius: 2, background: C.brand, flexShrink: 0 }} />
+                <span style={{ ...TS.meta, color: C.sub, flex: 1 }}>Auto-marked</span>
+                <span style={{ ...TS.meta, color: C.text, ...NUM }}>{autoTotal(a)}p</span>
               </div>
               <div style={{ display:'flex', alignItems:'center', gap: 8 }}>
-                <span style={{ width: 8, height: 8, borderRadius:'50%', background: C.amber }} />
-                <span style={{ fontSize: 12, color: C.sub, flex: 1 }}>Teacher-marked</span>
-                <span style={{ fontFamily: F.mono, fontSize: 12, fontWeight: 600, color: C.text }}>{manualTotal(a)}p</span>
+                <span style={{ width: 8, height: 8, borderRadius: 2, background: C.borderD, flexShrink: 0 }} />
+                <span style={{ ...TS.meta, color: C.sub, flex: 1 }}>Teacher-marked</span>
+                <span style={{ ...TS.meta, color: C.text, ...NUM }}>{manualTotal(a)}p</span>
               </div>
             </div>
-            {/* split bar */}
+            {/* Split bar kept — it is the one place the auto/manual ratio is
+                legible at a glance. Teacher-marked is a neutral hairline grey,
+                not amber: nothing here needs marking yet. */}
             {totalPoints(a) > 0 && (
-              <div style={{ height: 6, marginTop: 14, borderRadius: 999, overflow:'hidden', display:'flex' }}>
+              <div style={{ height: 6, marginTop: 12, borderRadius: RADIUS_FULL, overflow:'hidden', display:'flex' }}>
                 <div style={{ flex: autoTotal(a), background: C.brand }} />
-                <div style={{ flex: manualTotal(a), background: C.amber }} />
+                <div style={{ flex: manualTotal(a), background: C.borderD }} />
               </div>
             )}
           </Card>
 
           {errors.length > 0 && (
             <Card style={{ padding: 14, background: C.amberBg, borderColor: C.amberBorder }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: C.amber, marginBottom: 6, display:'flex', alignItems:'center', gap: 6 }}>
+              <div style={{ ...TS.meta, fontWeight: W.medium, color: C.amber, marginBottom: 6, display:'flex', alignItems:'center', gap: 6 }}>
                 <Ico name="info" size={12} color={C.amber} /> {errors.length} issue{errors.length > 1 ? 's' : ''} to fix
               </div>
-              <ul style={{ margin: 0, padding:'0 0 0 18px', fontSize: 12, color: C.sub, lineHeight: 1.6 }}>
+              <ul style={{ margin: 0, padding:'0 0 0 18px', ...TS.meta, color: C.sub, lineHeight: 1.6 }}>
                 {errors.slice(0, 4).map((e, i) => <li key={i}>{e}</li>)}
               </ul>
             </Card>
@@ -3666,13 +4313,128 @@ const TeacherBuilder = ({ assignment, students, folders = [], classes = [], defa
   );
 };
 
+// Add-question affordance: a dashed panel that reads as a slot at the end of the
+// question list rather than a toolbar. Type chips sit inside it so choosing a
+// type IS the add action — no separate "add then pick type" step.
+// The four types that actually get used, in the order a teacher reaches for
+// them. The other six stay one click away under "More types" rather than
+// spending eleven equal-weight buttons on a decision that is usually MCQ.
+const QTYPES_COMMON = ['mcq', 'short', 'math', 'truefalse'];
+
+const AddQuestionPanel = ({ first, onAdd, onImport }) => {
+  const [moreOpen, setMoreOpen] = React.useState(false);
+  const moreRef = React.useRef(null);
+
+  // Close the overflow menu on an outside click, like every other menu here.
+  React.useEffect(() => {
+    if (!moreOpen) return;
+    const onDoc = (e) => { if (moreRef.current && !moreRef.current.contains(e.target)) setMoreOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [moreOpen]);
+
+  const common = QTYPES_COMMON.map(t => qtypeMeta(t));
+  const rest = QTYPES.filter(t => QTYPES_COMMON.indexOf(t.type) === -1);
+
+  const typeBtn = (t) => (
+    <button key={t.type} onClick={() => onAdd(t.type)}
+      onMouseEnter={e => { e.currentTarget.style.borderColor = C.borderD; }}
+      onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; }}
+      style={{
+        display:'inline-flex', alignItems:'center', gap: 6,
+        padding: '8px 14px', borderRadius: RADIUS,
+        border: `1px solid ${C.border}`, background: C.bg,
+        cursor:'pointer', transition: T,
+        fontFamily: F.body, ...TS.body, fontWeight: W.medium, color: C.text,
+      }}>{t.short}</button>
+  );
+
+  return (
+    <div style={{
+      marginTop: first ? 0 : 16,
+      padding: '24px 20px',
+      borderRadius: RADIUS,
+      border: `1px dashed ${C.borderD}`,
+      background: C.bg,
+      textAlign: 'center',
+    }}>
+      {/* Copy points at the next action rather than describing the screen. */}
+      <div style={{ fontFamily: F.head, ...TS.section, color: C.text }}>
+        {first ? 'Add your first question' : 'Add another question'}
+      </div>
+      <div style={{ fontFamily: F.body, ...TS.meta, color: C.muted, marginTop: 4 }}>
+        {first ? 'Pick a type to start writing — you can change it later.' : 'Pick a type, or bring one in from a PDF.'}
+      </div>
+
+      <div style={{ display:'flex', flexWrap:'wrap', justifyContent:'center', alignItems:'center', gap: 8, marginTop: 16 }}>
+        {common.map(typeBtn)}
+
+        <div ref={moreRef} style={{ position: 'relative' }}>
+          <button onClick={() => setMoreOpen(o => !o)}
+            aria-haspopup="menu" aria-expanded={moreOpen}
+            onMouseEnter={e => { e.currentTarget.style.background = C.surface; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+            style={{
+              display:'inline-flex', alignItems:'center', gap: 6,
+              padding: '8px 12px', borderRadius: RADIUS,
+              border: '1px solid transparent', background: 'transparent',
+              cursor:'pointer', transition: T,
+              fontFamily: F.body, ...TS.body, fontWeight: W.medium, color: C.sub,
+            }}>
+            More types
+            <Ico name="chevD" size={13} color={C.muted} />
+          </button>
+          {moreOpen && (
+            <div role="menu" style={{
+              position:'absolute', top:'calc(100% + 4px)', left: 0, zIndex: 20,
+              minWidth: 172, padding: 4, textAlign: 'left',
+              background: C.bg, border: `1px solid ${C.border}`, borderRadius: RADIUS,
+              boxShadow: C.shadowL,
+            }}>
+              {rest.map(t => (
+                <button key={t.type} role="menuitem"
+                  onClick={() => { setMoreOpen(false); onAdd(t.type); }}
+                  onMouseEnter={e => { e.currentTarget.style.background = C.surface; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+                  style={{
+                    display:'block', width:'100%', textAlign:'left',
+                    padding: '7px 10px', borderRadius: RADIUS - 2,
+                    border:'none', background:'transparent', cursor:'pointer', transition: T,
+                    fontFamily: F.body, ...TS.meta, color: C.sub,
+                  }}>{t.label}</button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Import is a different kind of action from "write a question", so it
+            sits after a divider instead of pretending to be a twelfth type. */}
+        <span style={{ width: 1, height: 20, background: C.border, margin: '0 4px' }} />
+        <button onClick={onImport}
+          onMouseEnter={e => { e.currentTarget.style.background = C.surface; }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+          style={{
+            display:'inline-flex', alignItems:'center', gap: 6,
+            padding: '8px 12px', borderRadius: RADIUS,
+            border: '1px solid transparent', background: 'transparent',
+            cursor:'pointer', transition: T,
+            fontFamily: F.body, ...TS.body, fontWeight: W.medium, color: C.sub,
+          }}>
+          <Ico name="upload" size={13} color={C.muted} />
+          Import from PDF
+        </button>
+      </div>
+    </div>
+  );
+};
+
 const QuestionEditor = ({ q, index, total = 1, onChange, onChangeType, onDelete, onDuplicate, onUp, onDown }) => {
   const m = qtypeMeta(q.type);
   const [collapsed, setCollapsed] = React.useState(false);
 
   const headBtn = (icon, title, onClick, color = C.muted, disabled) => (
-    <button onClick={onClick} title={title} disabled={disabled} style={{
-      width: 28, height: 28, borderRadius: 7, border: 'none', background: 'transparent',
+    <button onClick={onClick} title={title} aria-label={title} disabled={disabled} style={{
+      width: 28, height: 28, borderRadius: RADIUS - 2, border: 'none', background: 'transparent',
       cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.35 : 1,
       display:'flex', alignItems:'center', justifyContent:'center', transition: T,
     }}
@@ -3684,28 +4446,36 @@ const QuestionEditor = ({ q, index, total = 1, onChange, onChangeType, onDelete,
 
   return (
     <div style={{
-      border: `1px solid ${C.border}`, borderRadius: 12, overflow:'hidden',
-      background: C.bg, boxShadow: C.shadow,
+      border: `1px solid ${C.border}`, borderRadius: RADIUS, overflow:'hidden',
+      background: C.bg,
     }}>
-      {/* Header */}
+      {/* One quiet toolbar. The type select and the marks input drop their
+          borders until hover/focus so they stop competing with each other and
+          with the icon actions; the bar itself is white, not filled grey. */}
       <div style={{
-        padding: '10px 12px', background: C.surface,
+        padding: '8px 10px', background: C.bg,
         borderBottom: collapsed ? 'none' : `1px solid ${C.border}`,
-        display:'flex', alignItems:'center', gap: 8,
+        display:'flex', alignItems:'center', gap: 6,
       }}>
         <span title="Drag to reorder" style={{ display:'flex', cursor:'grab', color: C.faint }}><Ico name="grip" size={16} color={C.faint} /></span>
-        <span style={{ fontFamily: F.mono, fontSize: 12, fontWeight: 700, color: C.sub }}>Q{index + 1}</span>
-        <select value={q.type} onChange={e => onChangeType && onChangeType(e.target.value)} style={{
-          padding: '6px 10px', borderRadius: 8,
-          border: `1px solid ${C.border}`, background: C.bg, color: C.text,
-          fontFamily: F.body, fontSize: 12.5, fontWeight: 600, cursor:'pointer',
-        }}>
+        <span style={{ fontFamily: F.body, ...TS.meta, fontWeight: W.medium, color: C.sub, ...NUM }}>Q{index + 1}</span>
+        <select value={q.type} onChange={e => onChangeType && onChangeType(e.target.value)}
+          aria-label="Question type"
+          onMouseEnter={e => { e.currentTarget.style.borderColor = C.border; }}
+          onMouseLeave={e => { if (document.activeElement !== e.currentTarget) e.currentTarget.style.borderColor = 'transparent'; }}
+          onFocus={e => { e.currentTarget.style.borderColor = C.brand; }}
+          onBlur={e => { e.currentTarget.style.borderColor = 'transparent'; }}
+          style={{
+            padding: '5px 8px', borderRadius: RADIUS - 2,
+            border: '1px solid transparent', background: 'transparent', color: C.text,
+            fontFamily: F.body, ...TS.meta, cursor:'pointer', transition: T, outline: 'none',
+          }}>
           {QTYPES.map(t => <option key={t.type} value={t.type}>{t.label}</option>)}
         </select>
         <div style={{ flex: 1 }} />
-        <span style={{ fontFamily: F.body, fontSize: 12, color: C.muted }}>Marks</span>
+        <label style={{ fontFamily: F.body, ...TS.meta, color: C.muted }} htmlFor={`q-marks-${q.id}`}>Marks</label>
         <Input type="number" value={q.points} onChange={(v) => onChange({ points: parseInt(v, 10) || 0 })}
-          style={{ width: 54, padding: '6px 8px', textAlign:'center' }} />
+          style={{ width: 48, padding: '5px 6px', textAlign:'center', ...NUM }} />
         {onDuplicate && headBtn('copy', 'Duplicate', onDuplicate)}
         {headBtn(collapsed ? 'chevD' : 'chevU', collapsed ? 'Expand' : 'Collapse', () => setCollapsed(c => !c))}
         {headBtn('trash', 'Delete', onDelete, C.danger)}
@@ -3713,13 +4483,17 @@ const QuestionEditor = ({ q, index, total = 1, onChange, onChangeType, onDelete,
 
       {collapsed ? (
         <div style={{ padding: '10px 14px', display:'flex', alignItems:'center', gap: 8 }}>
-          <Pill tone={m.marker === 'auto' ? 'brand' : 'amber'}>{m.label}</Pill>
-          <span style={{ fontFamily: F.body, fontSize: 13, color: C.sub, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+          <span style={{
+            flexShrink: 0, padding: '1px 8px', borderRadius: RADIUS_FULL,
+            border: `1px solid ${C.border}`, color: C.muted,
+            fontFamily: F.body, fontSize: 12, fontWeight: W.normal, whiteSpace: 'nowrap',
+          }}>{m.label}</span>
+          <span style={{ fontFamily: F.body, ...TS.meta, color: C.sub, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
             {q.prompt || <em style={{ color: C.faint }}>Untitled question</em>}
           </span>
         </div>
       ) : (
-      <div style={{ padding: 16, display:'flex', flexDirection:'column', gap: 14 }}>
+      <div style={{ padding: 16, display:'flex', flexDirection:'column', gap: 12 }}>
         {/* Reorder row */}
         <div style={{ display:'flex', alignItems:'center', gap: 6 }}>
           {headBtn('chevU', 'Move up', onUp, C.muted, index === 0)}
@@ -3847,10 +4621,10 @@ const QuestionEditor = ({ q, index, total = 1, onChange, onChangeType, onDelete,
                 const on = q.answer === v;
                 return (
                   <button key={String(v)} onClick={() => onChange({ answer: v })} style={{
-                    padding: '8px 22px', borderRadius: 8, cursor:'pointer',
+                    padding: '8px 22px', borderRadius: RADIUS, cursor:'pointer',
                     border:`1px solid ${on ? C.brand : C.border}`,
-                    background: on ? C.brand : C.bg, color: on ? '#fff' : C.sub,
-                    fontFamily: F.body, fontSize: 13, fontWeight: 600, transition: T,
+                    background: on ? C.brand : C.bg, color: on ? C.inverse : C.sub,
+                    fontFamily: F.body, ...TS.meta, fontWeight: W.medium, transition: T,
                   }}>{v ? 'True' : 'False'}</button>
                 );
               })}
@@ -3915,7 +4689,7 @@ const QuestionEditor = ({ q, index, total = 1, onChange, onChangeType, onDelete,
 
         <div style={{ display:'flex', alignItems:'center', gap: 8, paddingTop: 4 }}>
           <Toggle checked={q.required !== false} onChange={(v) => onChange({ required: v })} />
-          <span style={{ fontFamily: F.body, fontSize: 12.5, fontWeight: 600, color: C.sub }}>Required</span>
+          <span style={{ fontFamily: F.body, ...TS.meta, color: C.sub }}>Required</span>
         </div>
       </div>
       )}
@@ -3931,38 +4705,41 @@ const iconBtnStyle = () => ({
 });
 
 // ─── Teacher overview hub (opened by clicking a homework card) ──
-const TeacherOverview = ({ a, users = {}, folders = [], onBack, onEdit, onReview, onDuplicate, onMove, onDelete }) => {
-  const subc = subColor(a.subject);
+const TeacherOverview = ({ a, users = {}, folders = [], onBack, onEdit, onReview, onDuplicate, onMove, onDelete, onRelease }) => {
+  usePageTrail([{ label: a.title }]);
   const total = a.studentIds.length;
-  const submitted = Object.values(a.submissions).length;
+  const submitted = Object.values(a.submissions).filter(hasSubmitted).length;
   const graded = Object.values(a.submissions).filter(isGraded).length;
-  const awaitingMark = Object.values(a.submissions).filter(s => s.status === 'submitted').length;
+  const toMark = Object.values(a.submissions).filter(awaitingMark).length;
+  // Marked work this teacher is still holding back from students.
+  const toRelease = Object.values(a.submissions).filter(s => heldBack(a, s)).length;
   const pct = total ? Math.round(submitted / total * 100) : 0;
 
   const scores = Object.values(a.submissions).filter(isGraded)
     .map(s => totalPoints(a) ? Math.round(submissionScore(a, s) / totalPoints(a) * 100) : 0);
   const avg = scores.length ? Math.round(scores.reduce((x, y) => x + y, 0) / scores.length) : null;
 
-  const statusTone = a.status === 'draft' ? 'default' : a.status === 'closed' ? 'default' : awaitingMark > 0 ? 'amber' : 'brand';
-  const statusLabel = a.status === 'draft' ? 'Draft' : a.status === 'closed' ? 'Closed' : awaitingMark > 0 ? `${awaitingMark} to mark` : 'Active';
-
-  const stat = (label, value, color) => (
-    <Card key={label} style={{ padding: '14px 16px' }}>
-      <div style={{ fontFamily: F.body, fontSize: 11, fontWeight: 600, color: C.muted, textTransform:'uppercase', letterSpacing:'.05em', marginBottom: 8 }}>{label}</div>
-      <div style={{ fontFamily: F.head, fontSize: 22, fontWeight: 700, color: color || C.text }}>{value}</div>
-    </Card>
-  );
+  const statusKey = a.status === 'draft' ? 'draft' : a.status === 'closed' ? 'closed'
+    : isScheduled(a) ? 'scheduled' : toMark > 0 ? 'tomark' : 'live';
+  const statusLabel = toMark > 0 && a.status === 'active' && !isScheduled(a) ? `${toMark} to mark` : null;
 
   return (
     <div style={{ ...pageFrame(), fontFamily: F.body, color: C.text }}>
-      {/* Top bar */}
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: 12, marginBottom: 20 }}>
-        <Btn variant="ghost" small icon={<Ico name="arrowL" size={13} />} onClick={onBack}>Back to list</Btn>
+      {/* Top bar — back sits on its own line above the actions, like every other
+          nested screen; this row is for actions on the assignment. */}
+      <BackLink onClick={onBack} label="Assignments" />
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'flex-end', gap: 12, marginBottom: 20 }}>
         <div style={{ display:'flex', gap: 8 }}>
           <Btn variant="brand" small icon={<Ico name="edit" size={13} color="#fff" />} onClick={onEdit}>Edit</Btn>
           <Btn variant="soft" small icon={<Ico name="eye" size={13} />} onClick={onReview}>
-            Review submissions{awaitingMark > 0 ? ` (${awaitingMark})` : ''}
+            Review submissions{toMark > 0 ? ` (${toMark})` : ''}
           </Btn>
+          {/* Shown only while this assignment is actually holding marks back. */}
+          {toRelease > 0 && (
+            <Btn variant="brand" small icon={<Ico name="send" size={13} color="#fff" />} onClick={onRelease}>
+              Release results ({toRelease})
+            </Btn>
+          )}
           <Btn variant="soft" small icon={<Ico name="copy" size={13} />} onClick={onDuplicate}>Duplicate</Btn>
           <Btn variant="soft" small icon={<Ico name="trash" size={13} color={C.danger} />} onClick={onDelete} style={{ color: C.danger }}>Delete</Btn>
         </div>
@@ -3970,58 +4747,79 @@ const TeacherOverview = ({ a, users = {}, folders = [], onBack, onEdit, onReview
 
       {/* Header card */}
       <Card style={{ overflow:'hidden', marginBottom: 16 }}>
-        <div style={{ height: 4, background: subc.color }} />
-        <div style={{ padding: 22 }}>
-          <div style={{ display:'flex', gap: 6, alignItems:'center', marginBottom: 8, flexWrap:'wrap' }}>
-            <Pill tone="default" icon={<span style={{ width:6, height:6, background:subc.color, borderRadius:'50%' }} />}>{a.subject}</Pill>
-            {a.classLabel && <Pill tone="default">{a.classLabel}</Pill>}
-            <Pill tone={statusTone}>{statusLabel}</Pill>
+        <div style={{ padding: 20 }}>
+          {/* Subject and class were pills, which made two plain facts look like
+              two statuses. They are facts, so they read on the meta line below;
+              only the actual status keeps a badge. */}
+          <div style={{ display:'flex', gap: 12, alignItems:'flex-start', justifyContent:'space-between' }}>
+            <h1 style={{ fontFamily: F.head, ...TS.title, margin: 0 }}>{a.title || 'Untitled homework'}</h1>
+            <StatusBadge status={statusKey}>{statusLabel}</StatusBadge>
           </div>
-          <h1 style={{ fontFamily: F.head, fontSize: 24, fontWeight: 800, margin: 0, letterSpacing:'-0.4px' }}>{a.title || 'Untitled homework'}</h1>
-          <div style={{ fontFamily: F.body, fontSize: 13, color: C.muted, marginTop: 6 }}>
-            {a.questions.length} questions · {totalPoints(a)} marks
-            {a.dueAt && <> · Due {fmtDateTime(a.dueAt)}</>}
-            {a.timeLimitMins ? ` · ${a.timeLimitMins} min limit` : ''}
-          </div>
+          <MetaLine
+            style={{ marginTop: 6 }}
+            items={[
+              a.subject,
+              a.classLabel,
+              `${a.questions.length} question${a.questions.length === 1 ? '' : 's'}`,
+              `${totalPoints(a)} marks`,
+              a.dueAt && `Due ${fmtDateTime(a.dueAt)}`,
+              a.timeLimitMins ? `${a.timeLimitMins} min limit` : null,
+            ]}
+          />
           {a.instructions && (
             <div style={{ display:'flex', gap: 10, padding: '12px 14px', marginTop: 16,
-              background: C.brandSoft, border: `1px solid ${C.brandBorder}`, borderRadius: 10, alignItems:'flex-start' }}>
-              <Ico name="info" size={14} color={C.brand} />
-              <span style={{ fontSize: 13, color: C.sub, lineHeight: 1.5 }}>{a.instructions}</span>
+              background: C.surface, border: `1px solid ${C.border}`, borderRadius: RADIUS, alignItems:'flex-start' }}>
+              <Ico name="info" size={14} color={C.muted} />
+              <span style={{ ...TS.meta, color: C.sub, lineHeight: 1.5 }}>{a.instructions}</span>
             </div>
           )}
         </div>
       </Card>
 
-      {/* Stats */}
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
-        {stat('Submitted', `${submitted} / ${total}`)}
-        {stat('Graded', graded, C.success)}
-        {stat('Awaiting marking', awaitingMark, awaitingMark > 0 ? C.amber : C.text)}
-        {stat('Class average', avg != null ? `${avg}%` : '—', C.brand)}
-      </div>
+      {/* Was four bordered cards with 22px numerals. "Submitted" also appeared
+          in the progress card below and "Awaiting marking" in the Review button
+          above, so the strip is the only place each number is stated now. */}
+      <StatStrip
+        style={{ marginBottom: 16 }}
+        items={[
+          { label: 'Submitted', value: `${submitted}/${total}` },
+          { label: 'Graded', value: graded },
+          { label: 'Awaiting marking', value: toMark },
+          { label: `Class average${scores.length ? ` (${scores.length} graded)` : ''}`,
+            value: avg != null ? `${avg}%` : '—', emphasis: true },
+        ]}
+      />
 
       <div style={{ display:'grid', gridTemplateColumns:'1fr 300px', gap: 16, alignItems:'start' }}>
         {/* Questions */}
         <Card style={{ padding: 20 }}>
-          <div style={{ fontFamily: F.head, fontSize: 15, fontWeight: 700, marginBottom: 14 }}>Questions</div>
-          <div style={{ display:'flex', flexDirection:'column', gap: 8 }}>
+          <div style={{ fontFamily: F.head, ...TS.section, color: C.text, marginBottom: 12 }}>Questions</div>
+          <div style={{ display:'flex', flexDirection:'column' }}>
             {a.questions.map((q, i) => {
               const m = qtypeMeta(q.type);
               return (
-                <div key={q.id} style={{ display:'flex', alignItems:'center', gap: 10, padding: '10px 12px', background: C.surface, borderRadius: 8 }}>
-                  <span style={{ width: 24, height: 24, borderRadius:'50%', background: C.bg, border: `1px solid ${C.border}`,
-                    fontFamily: F.mono, fontSize: 11, fontWeight: 700, color: C.muted,
-                    display:'flex', alignItems:'center', justifyContent:'center', flexShrink: 0 }}>{i + 1}</span>
-                  <Pill tone={m.marker === 'auto' ? 'brand' : 'amber'}>{m.label}</Pill>
-                  <span style={{ flex: 1, fontFamily: F.body, fontSize: 13, color: C.sub, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                <div key={q.id} style={{
+                  display:'flex', alignItems:'center', gap: 12, padding: '8px 0',
+                  borderBottom: i === a.questions.length - 1 ? 'none' : `1px solid ${C.border}`,
+                }}>
+                  <span style={{ ...TS.meta, color: C.muted, width: 20, flexShrink: 0, ...NUM }}>{i + 1}</span>
+                  {/* Type badge was brand-filled for auto-marked and amber for
+                      teacher-marked, which spent the "needs your action" colour
+                      on a property of the question rather than a state of the
+                      work. Outline + muted for both. */}
+                  <span style={{
+                    flexShrink: 0, padding: '1px 8px', borderRadius: RADIUS_FULL,
+                    border: `1px solid ${C.border}`, color: C.muted,
+                    fontFamily: F.body, fontSize: 12, fontWeight: W.normal, whiteSpace: 'nowrap',
+                  }}>{m.label}</span>
+                  <span style={{ flex: 1, fontFamily: F.body, ...TS.meta, color: C.sub, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
                     {q.prompt || <em style={{ color: C.faint }}>Untitled</em>}
                   </span>
-                  <span style={{ fontFamily: F.mono, fontSize: 12, color: C.muted }}>{q.points}p</span>
+                  <span style={{ ...TS.meta, color: C.muted, textAlign: 'right', flexShrink: 0, ...NUM }}>{q.points}p</span>
                 </div>
               );
             })}
-            {a.questions.length === 0 && <div style={{ fontSize: 13, color: C.muted }}>No questions yet.</div>}
+            {a.questions.length === 0 && <div style={{ ...TS.meta, color: C.muted }}>No questions yet.</div>}
           </div>
         </Card>
 
@@ -4029,35 +4827,40 @@ const TeacherOverview = ({ a, users = {}, folders = [], onBack, onEdit, onReview
         <div style={{ display:'flex', flexDirection:'column', gap: 16 }}>
           {/* Submission progress */}
           <Card style={{ padding: 18 }}>
-            <div style={{ fontFamily: F.head, fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Submission progress</div>
-            <div style={{ display:'flex', justifyContent:'space-between', fontSize: 12, color: C.muted, marginBottom: 6 }}>
-              <span>{pct}% submitted</span><span>{submitted}/{total}</span>
-            </div>
-            <div style={{ height: 8, background: C.surface2, borderRadius: 999, overflow:'hidden' }}>
-              <div style={{ height:'100%', width: `${pct}%`, background: subc.color }} />
+            <div style={{ fontFamily: F.head, ...TS.section, color: C.text, marginBottom: 10 }}>Submission progress</div>
+            {/* The "9/9" half of this row is in the StatStrip above; the bar and
+                its percentage are what this card adds. */}
+            <div style={{ ...TS.meta, color: C.muted, marginBottom: 6, ...NUM }}>{pct}% submitted</div>
+            <div style={{ height: 4, background: C.surface2, borderRadius: RADIUS_FULL, overflow:'hidden' }}>
+              <div style={{ height:'100%', width: `${pct}%`, background: C.brand }} />
             </div>
           </Card>
 
           {/* Assigned students */}
           <Card style={{ padding: 18 }}>
-            <div style={{ fontFamily: F.head, fontSize: 14, fontWeight: 700, marginBottom: 12 }}>
-              Assigned students <span style={{ color: C.muted, fontWeight: 500 }}>({total})</span>
+            <div style={{ fontFamily: F.head, ...TS.section, color: C.text, marginBottom: 10 }}>
+              Assigned students <span style={{ color: C.muted, fontWeight: W.normal, ...NUM }}>({total})</span>
             </div>
-            <div style={{ display:'flex', flexDirection:'column', gap: 8 }}>
-              {a.studentIds.map(sid => {
+            <div style={{ display:'flex', flexDirection:'column' }}>
+              {a.studentIds.map((sid, i) => {
                 const sub = a.submissions[sid];
-                const st = !sub ? { t:'Not started', c:C.muted } : isGraded(sub) ? { t:'Graded', c:C.success } : { t:'Submitted', c:C.brand };
+                // Was bare coloured text (grey / green / indigo) — one of the
+                // five status mechanisms this pass collapsed into StatusBadge.
+                const key = !sub ? 'pending' : isGraded(sub) ? 'graded' : 'submitted';
                 return (
-                  <div key={sid} style={{ display:'flex', alignItems:'center', gap: 8 }}>
+                  <div key={sid} style={{
+                    display:'flex', alignItems:'center', gap: 8, padding: '6px 0',
+                    borderBottom: i === a.studentIds.length - 1 ? 'none' : `1px solid ${C.border}`,
+                  }}>
                     <Avatar name={users[sid]?.name || sid} size={24} />
-                    <span style={{ flex: 1, fontFamily: F.body, fontSize: 12.5, color: C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                    <span style={{ flex: 1, fontFamily: F.body, ...TS.meta, color: C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
                       {users[sid]?.name || sid}
                     </span>
-                    <span style={{ fontFamily: F.body, fontSize: 11, fontWeight: 600, color: st.c }}>{st.t}</span>
+                    <StatusBadge status={key} />
                   </div>
                 );
               })}
-              {total === 0 && <div style={{ fontSize: 12, color: C.muted }}>No students assigned. Edit to assign.</div>}
+              {total === 0 && <div style={{ ...TS.meta, color: C.muted }}>No students assigned. Edit to assign.</div>}
             </div>
           </Card>
 
@@ -4073,11 +4876,11 @@ const TeacherOverview = ({ a, users = {}, folders = [], onBack, onEdit, onReview
 
           {/* Folder */}
           <Card style={{ padding: 18 }}>
-            <div style={{ fontFamily: F.head, fontSize: 14, fontWeight: 700, marginBottom: 10 }}>Folder</div>
+            <div style={{ fontFamily: F.head, ...TS.section, color: C.text, marginBottom: 10 }}>Folder</div>
             <select value={a.folderId || ''} onChange={e => onMove(e.target.value || null)} style={{
-              width: '100%', padding: '9px 12px', borderRadius: 8,
+              width: '100%', padding: '9px 12px', borderRadius: RADIUS,
               border: `1px solid ${C.border}`, background: C.bg, color: C.text,
-              fontFamily: F.body, fontSize: 13, cursor:'pointer',
+              fontFamily: F.body, ...TS.meta, cursor:'pointer',
             }}>
               <option value="">Unfiled</option>
               {folders.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
@@ -4095,19 +4898,14 @@ const reviewStatus = (asn, sid) => {
   if (!sub) return { key: 'not_started', label: 'Not Started', tone: 'default', fg: C.muted };
   if (isGraded(sub)) return { key: 'graded', label: 'Graded', tone: 'success', fg: C.success };
   if (sub.status === 'in_progress') return { key: 'in_progress', label: 'In Progress', tone: 'amber', fg: C.amber };
-  const late = asn.dueAt && new Date(sub.submittedAt) > new Date(asn.dueAt);
-  return { key: 'submitted', label: late ? 'Late' : 'Submitted', tone: late ? 'danger' : 'info', fg: late ? C.danger : C.accent };
+  const late = isLateSub(asn, sub);
+  return { key: 'submitted', label: late ? 'Late' : 'Submitted', tone: late ? 'danger' : 'info', fg: late ? C.danger : C.sub };
 };
 
-// Auto-mark verdict for a single question (auto types only): correct / incorrect / partial.
-const autoVerdict = (q, sub) => {
-  if (!isAuto(q.type)) return null;
-  const m = sub?.marks?.[q.id];
-  if (typeof m !== 'number') return null;
-  if (m >= (q.points || 0)) return 'correct';
-  if (m <= 0) return 'incorrect';
-  return 'partial';
-};
+// Auto-mark verdict for a single question (auto types only) — same derivation as
+// everywhere else, just restricted to the types the machine marks.
+const autoVerdict = (q, sub) =>
+  isAuto(q.type) ? outcomeFor(q, sub?.marks?.[q.id]) : null;
 
 // Shared marking controls — student's answer + (auto) correct answer + marks + feedback.
 // Reused when marking by student (iterating questions) and by question (iterating students).
@@ -4158,6 +4956,7 @@ const AnswerMarkControls = ({ q, sub, sid, onSetMark, onSetFb }) => {
 
 const TeacherReview = ({ assignment, users, onClose, onUpdateSubmission }) => {
   const toast = useToast();
+  usePageTrail([{ label: assignment.title, onClick: onClose }, { label: 'Review submissions' }]);
   const allStudents = assignment.studentIds;
   const total = totalPoints(assignment);
   const [mode, setMode] = React.useState('student'); // 'student' | 'question'
@@ -4244,9 +5043,7 @@ const TeacherReview = ({ assignment, users, onClose, onUpdateSubmission }) => {
   if (allStudents.length === 0) {
     return (
       <div style={{ ...pageFrame(), fontFamily: F.body }}>
-        <div style={{ marginBottom: 20 }}>
-          <Btn variant="ghost" small icon={<Ico name="arrowL" size={13} />} onClick={onClose}>Back to list</Btn>
-        </div>
+        <BackLink onClick={onClose} label={assignment.title} />
         <Card style={{ padding: 60, textAlign:'center' }}>
           <div style={{ fontFamily: F.head, fontSize: 18, fontWeight: 600, marginBottom: 6 }}>No students assigned</div>
           <div style={{ fontSize: 13, color: C.muted }}>Assign students to {assignment.title} to start reviewing.</div>
@@ -4271,9 +5068,12 @@ const TeacherReview = ({ assignment, users, onClose, onUpdateSubmission }) => {
 
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%', fontFamily: F.body, boxSizing:'border-box' }}>
-      {/* Top bar: back + title + mark-by toggle */}
+      {/* Top bar: back + title + mark-by toggle. This pane owns the full viewport
+          (no page gutter), so the back control leads the bar rather than a title. */}
       <div style={{ display:'flex', alignItems:'center', gap: 12, padding: '12px 16px' }}>
-        <Btn variant="ghost" small icon={<Ico name="arrowL" size={13} />} onClick={onClose}>Back to list</Btn>
+        {/* The pane's own title names the assignment right beside this, so the
+            control names the screen it returns to instead of repeating it. */}
+        <BackLink onClick={onClose} label="Overview" style={{ marginBottom: 0 }} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontFamily: F.head, fontSize: 15, fontWeight: 700, color: C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
             {assignment.title}
@@ -4458,9 +5258,9 @@ const TeacherReview = ({ assignment, users, onClose, onUpdateSubmission }) => {
                   </div>
 
                   {/* Per-student overall feedback */}
-                  <Card style={{ padding: 18, marginTop: 14, background: '#F5F3FF', borderColor: '#DDD6FE' }}>
+                  <Card style={{ padding: 18, marginTop: 14, background: C.surface }}>
                     <div style={{ display:'flex', alignItems:'center', gap: 8, marginBottom: 4 }}>
-                      <Ico name="chat" size={14} color="#7C3AED" />
+                      <Ico name="chat" size={14} color={C.muted} />
                       <span style={{ fontFamily: F.head, fontSize: 14, fontWeight: 700, color: C.text }}>Feedback for {student.name}</span>
                     </div>
                     <div style={{ fontFamily: F.body, fontSize: 12, color: C.muted, marginBottom: 10 }}>
@@ -4550,14 +5350,12 @@ const TeacherReview = ({ assignment, users, onClose, onUpdateSubmission }) => {
 
 const Avatar = ({ name = '', size = 28 }) => {
   const initials = (name || '').split(' ').slice(0, 2).map(s => s[0] || '').join('').toUpperCase();
-  const palette = ['#818CF8','#6EE7B7','#FCD34D','#F9A8D4','#93C5FD','#A5B4FC'];
-  const idx = (name.charCodeAt(0) || 0) % palette.length;
   return (
     <span style={{
-      width: size, height: size, borderRadius:'50%', background: palette[idx],
-      color: '#fff', fontFamily: F.head, fontSize: size * 0.42, fontWeight: 700,
+      width: size, height: size, borderRadius:'50%',
+      background: C.surface2, color: C.muted,
+      fontFamily: F.body, fontSize: size * 0.42, fontWeight: W.medium,
       display:'inline-flex', alignItems:'center', justifyContent:'center', flexShrink: 0,
-      letterSpacing: '.02em',
     }}>{initials || '?'}</span>
   );
 };
@@ -4585,48 +5383,46 @@ const fmtDateTime = (iso) => {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ', '
     + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 };
+// "Mon 14 Jul, 9:00am" — the opening time on a scheduled assignment.
+const fmtOpens = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const day = d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+  const time = d.toLocaleTimeString('en-GB', { hour: 'numeric', minute: '2-digit', hour12: true })
+    .replace(/\s/g, '').toLowerCase();
+  return `${day}, ${time}`;
+};
 
 const gradeFor = (pct) => pct >= 90 ? 'A*' : pct >= 80 ? 'A' : pct >= 70 ? 'B' : pct >= 60 ? 'C' : pct >= 50 ? 'D' : 'E';
-const gradePalette = (g) => {
-  if (g === 'A*' || g === 'A') return { bg: C.successBg, fg: C.success, bd: C.successBorder };
-  if (g === 'B')               return { bg: C.accentSoft, fg: '#0284C7', bd: '#BAE6FD' };
-  if (g === 'C')               return { bg: C.amberBg, fg: C.amber, bd: C.amberBorder };
-  return { bg: C.dangerBg, fg: C.danger, bd: C.dangerBorder };
-};
-const scoreColor = (pct) => pct >= 80 ? C.success : pct >= 55 ? C.amber : C.danger;
+// One neutral treatment for every grade, for the same reason as scoreColor.
+const gradePalette = () => ({ bg: C.surface2, fg: C.sub, bd: C.border });
+// A score used to render green / amber / red by band. That spent three of the
+// four semantic colours on one number, and put "needs your action" amber on a
+// 60% that needs nothing. Scores are ink; the grade letter beside them is what
+// carries the judgement.
+const scoreColor = () => C.text;
 
 const draftStarted = (draft) =>
   !!draft && (!!draft.startedAt || Object.keys(draft.answers || {}).length > 0);
 
 const hwState = (a, me, drafts) => {
   const sub = a.submissions[me.id];
-  if (sub) return isGraded(sub) ? 'marked' : 'submitted';
-  if (a.dueAt && daysUntil(a.dueAt) < 0) return 'overdue';
+  // A started-but-unsent attempt is not a submission — same rule the counts use.
+  // Marks the teacher is holding back keep the row in Submitted, not Results (A8).
+  if (hasSubmitted(sub)) return marksReleased(a, sub) ? 'marked' : 'submitted';
+  if (isScheduled(a)) return 'scheduled';
+  if (isPastDue(a)) return 'overdue';
   if (draftStarted(drafts ? drafts[a.id] : null)) return 'inprogress';
   return 'pending';
-};
-
-// Has the teacher released marks for this submission to the student?
-// Honours "hide marks until released" — only graded submissions are released.
-const marksReleased = (a, sub) => {
-  if (!sub) return false;
-  const s = a.settings || {};
-  if (s.hideMarksUntilReleased || s.releaseAfterApproval) return isGraded(sub);
-  return true;
 };
 
 const teacherNameFor = (a, store) =>
   a.teacherName || (a.teacherId && store.users[a.teacherId] && store.users[a.teacherId].name) || '—';
 
-const qResult = (q, sub) => {
-  const explicit = sub.results && sub.results[q.id];
-  if (explicit) return explicit;
-  const m = sub.marks ? sub.marks[q.id] : null;
-  if (typeof m !== 'number') return 'pending';
-  if (m >= (q.points || 0)) return 'correct';
-  if (m <= 0) return 'incorrect';
-  return 'partial';
-};
+// Presentation wrapper over outcomeFor: an unmarked question reads as "Pending".
+const qResult = (q, sub) =>
+  outcomeFor(q, sub && sub.marks ? sub.marks[q.id] : null) || 'pending';
 
 const correctAnswerText = (q) => {
   if (q.type === 'mcq') return q.choices && q.choices[q.correctIndex];
@@ -4642,28 +5438,11 @@ const correctAnswerText = (q) => {
 };
 
 // ─── Student UI primitives ─────────────────────────────────────
-const HwStatusPill = ({ state }) => {
-  const map = {
-    pending:    { label: 'Pending',          bg: C.surface,    fg: C.muted,   bd: C.border,        icon: 'clock' },
-    inprogress: { label: 'In Progress',      bg: C.amberBg,    fg: C.amber,   bd: C.amberBorder,   icon: 'clock' },
-    submitted:  { label: 'Submitted',        bg: C.accentSoft, fg: '#0284C7', bd: '#BAE6FD',       icon: 'send' },
-    awaiting:   { label: 'Awaiting marking', bg: C.accentSoft, fg: '#0284C7', bd: '#BAE6FD',       icon: 'clock' },
-    overdue:    { label: 'Overdue',          bg: C.dangerBg,   fg: C.danger,  bd: C.dangerBorder,  icon: 'alertCircle' },
-    marked:     { label: 'Marked',           bg: C.successBg,  fg: C.success, bd: C.successBorder, icon: 'check' },
-  };
-  const t = map[state] || map.pending;
-  return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: 5,
-      padding: '4px 10px', borderRadius: 999, whiteSpace: 'nowrap',
-      background: t.bg, color: t.fg, border: `1px solid ${t.bd}`,
-      fontFamily: F.body, fontSize: 11.5, fontWeight: 600,
-    }}>
-      <Ico name={t.icon} size={12} color={t.fg} />
-      {t.label}
-    </span>
-  );
-};
+// Was its own bordered, icon-prefixed pill with a seven-state colour map —
+// "In Progress" title-cased, "Marked" green, "Overdue" red. Now a thin adapter
+// onto StatusBadge so the student sees exactly the vocabulary and tones the
+// teacher does. Kept as a component because ~12 call sites pass `state`.
+const HwStatusPill = ({ state }) => <StatusBadge status={state} />;
 
 const Ring = ({ pct, size = 52, stroke = 5, color, track = C.surface2, children }) => {
   const r = (size - stroke) / 2;
@@ -4684,15 +5463,15 @@ const Ring = ({ pct, size = 52, stroke = 5, color, track = C.surface2, children 
 };
 
 const SegTabs = ({ tabs, active, onChange }) => (
-  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 2, padding: 4, background: C.surface2, borderRadius: 10 }}>
+  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 2, padding: 4, background: C.surface, border: `1px solid ${C.border}`, borderRadius: RADIUS }}>
     {tabs.map(t => {
       const on = t.id === active;
       return (
         <button key={t.id} onClick={() => onChange(t.id)} style={{
-          padding: '7px 14px', borderRadius: 8, border: 'none', cursor: 'pointer',
+          padding: '6px 12px', borderRadius: RADIUS - 2, cursor: 'pointer',
           background: on ? C.bg : 'transparent',
-          boxShadow: on ? '0 1px 2px rgba(15,23,42,.08)' : 'none',
-          fontFamily: F.body, fontSize: 13, fontWeight: 600,
+          border: `1px solid ${on ? C.border : 'transparent'}`,
+          fontFamily: F.body, ...TS.meta, fontWeight: on ? W.medium : W.normal,
           color: on ? C.text : C.muted, transition: T, whiteSpace: 'nowrap',
         }}>{t.label}</button>
       );
@@ -4700,21 +5479,8 @@ const SegTabs = ({ tabs, active, onChange }) => (
   </div>
 );
 
-const BackBtn = ({ onClick }) => {
-  const [hov, setHov] = React.useState(false);
-  return (
-    <button onClick={onClick} aria-label="Back"
-      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
-      style={{
-        width: 34, height: 34, borderRadius: '50%', border: 'none',
-        background: hov ? C.surface2 : 'transparent', cursor: 'pointer',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        transition: T, flexShrink: 0, marginTop: 2,
-      }}>
-      <Ico name="arrowL" size={16} color={C.sub} />
-    </button>
-  );
-};
+// Homework's screens use the platform back control (shared.jsx) like every other
+// nested page — a labelled pill above the title, not a bare round arrow beside it.
 
 const HwSearch = ({ value, onChange }) => {
   const [foc, setFoc] = React.useState(false);
@@ -4726,9 +5492,9 @@ const HwSearch = ({ value, onChange }) => {
       <input value={value} onChange={e => onChange(e.target.value)} placeholder="Search..."
         onFocus={() => setFoc(true)} onBlur={() => setFoc(false)}
         style={{
-          width: '100%', boxSizing: 'border-box', padding: '11px 14px 11px 40px',
-          borderRadius: 10, border: `1px solid ${foc ? C.brand : C.border}`,
-          background: C.bg, fontFamily: F.body, fontSize: 13, color: C.text,
+          width: '100%', boxSizing: 'border-box', padding: '9px 14px 9px 38px',
+          borderRadius: RADIUS, border: `1px solid ${foc ? C.brand : C.border}`,
+          background: C.bg, fontFamily: F.body, ...TS.meta, color: C.text,
           outline: 'none', boxShadow: foc ? ring(C.brand) : 'none', transition: T,
         }} />
     </div>
@@ -4736,7 +5502,7 @@ const HwSearch = ({ value, onChange }) => {
 };
 
 const hwSelectStyle = {
-  padding: '11px 34px 11px 14px', borderRadius: 10, border: `1px solid ${C.border}`,
+  padding: '9px 32px 9px 14px', borderRadius: RADIUS, border: `1px solid ${C.border}`,
   background: C.bg, fontSize: 13, color: C.text, cursor: 'pointer', fontFamily: F.body,
   appearance: 'none', WebkitAppearance: 'none', MozAppearance: 'none',
   backgroundImage: `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748B' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>")`,
@@ -4745,8 +5511,8 @@ const hwSelectStyle = {
 
 const HwEmpty = ({ text }) => (
   <div style={{
-    textAlign: 'center', padding: '56px 24px', color: C.faint, fontSize: 13.5,
-    background: C.surface, borderRadius: 12, border: `1px dashed ${C.border}`,
+    textAlign: 'center', padding: '48px 24px', color: C.muted, ...TS.meta,
+    background: C.surface, borderRadius: RADIUS, border: `1px dashed ${C.border}`,
   }}>{text}</div>
 );
 
@@ -4789,12 +5555,37 @@ const StudentHomework = ({ section, onNav }) => {
   const openAssignment = (a) => {
     const state = hwState(a, me, store.drafts);
     if (state === 'marked') { setView({ name: 'result', id: a.id }); return; }
-    if (state === 'submitted') { openSubmitted(a); return; }
+    if (state === 'submitted') {
+      // A student with attempts left goes back to the start page, where the
+      // button offers the next attempt; otherwise there is only the review.
+      if (attemptsLeft(a, a.submissions[me.id]) > 0 && acceptsSubmissions(a)) {
+        setView({ name: 'detail', id: a.id });
+        return;
+      }
+      openSubmitted(a);
+      return;
+    }
     setView({ name: 'detail', id: a.id });
   };
 
   const submit = (id, answers) => {
     const asn = store.assignments[id];
+    const prev = asn.submissions[me.id];
+    // The settings are enforced here, not just in the UI: a student who reaches
+    // this call another way still cannot submit past a closed due date or beyond
+    // their allowed attempts.
+    if (isScheduled(asn)) {
+      toast(`This homework opens ${fmtOpens(opensAt(asn))}`, 'warn');
+      return;
+    }
+    if (isPastDue(asn) && !settingsOf(asn).allowLate) {
+      toast('The due date has passed — this homework is closed', 'danger');
+      return;
+    }
+    if (attemptsUsed(prev) >= attemptsAllowed(asn)) {
+      toast('You have used all your attempts on this homework', 'warn');
+      return;
+    }
     const marks = {};
     const feedback = {};
     asn.questions.forEach(q => {
@@ -4803,11 +5594,14 @@ const StudentHomework = ({ section, onNav }) => {
     });
     const startedAt = store.drafts && store.drafts[id] && store.drafts[id].startedAt;
     const elapsed = startedAt ? Math.round((Date.now() - new Date(startedAt).getTime()) / 60000) : null;
+    const submittedAt = new Date().toISOString();
     const sub = {
       answers,
-      submittedAt: new Date().toISOString(),
+      submittedAt,
       status: 'submitted',
       marks, feedback,
+      attemptCount: attemptsUsed(prev) + 1,
+      isLate: !!asn.dueAt && new Date(submittedAt) > new Date(asn.dueAt),
       timeSpentMins: elapsed != null ? Math.max(1, Math.min(elapsed, 999)) : null,
     };
     update(s => {
@@ -4826,9 +5620,10 @@ const StudentHomework = ({ section, onNav }) => {
 
   if (view.name === 'detail' && current) {
     return <HwDetail
-      a={current} store={store}
+      a={current} me={me} store={store}
       draft={store.drafts ? store.drafts[view.id] : null}
       onBack={() => goHome('assignments')}
+      onReview={() => openSubmitted(current)}
       onStart={() => {
         update(s => {
           const prev = (s.drafts && s.drafts[view.id]) || {};
@@ -4845,7 +5640,7 @@ const StudentHomework = ({ section, onNav }) => {
 
   if (view.name === 'attempt' && current) {
     return <HwAttempt
-      a={current}
+      a={current} me={me}
       draft={(store.drafts && store.drafts[view.id]) || {}}
       onUpdateDraft={(d) => update(s => ({ ...s, drafts: { ...s.drafts, [view.id]: d } }))}
       onBack={() => setView({ name: 'detail', id: view.id })}
@@ -4864,8 +5659,13 @@ const StudentHomework = ({ section, onNav }) => {
     return <HwSubmissionReview a={current} me={me} store={store} onBack={() => goHome('submitted')} />;
   }
 
+  // The result screen is unreachable until the teacher releases the marks (A8) —
+  // held-back work falls back to the submitted view.
   if (view.name === 'result' && current && current.submissions[me.id]) {
-    return <HwResultReview a={current} me={me} store={store} onBack={() => goHome('results')} />;
+    if (marksReleased(current, current.submissions[me.id])) {
+      return <HwResultReview a={current} me={me} store={store} onBack={() => goHome('results')} />;
+    }
+    return <HwSubmissionReview a={current} me={me} store={store} onBack={() => goHome('submitted')} />;
   }
 
   return <HwHome
@@ -4915,21 +5715,15 @@ const HwHome = ({ store, me, section, setSection, assignments, onOpen, onOpenSub
 
   const visible = open.filter(inTab).filter(matches);
 
-  const subtitle =
-    section === 'assignments' ? `${open.length} assignment${open.length === 1 ? '' : 's'}` :
-    section === 'submitted' ? `${submitted.length} awaiting marking` :
-    `${marked.length} marked`;
 
   return (
     <div style={{ ...pageFrame(), fontFamily: F.body, color: C.text }}>
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 18, flexWrap: 'wrap' }}>
-        <div>
-          <h1 style={{ fontFamily: F.head, fontSize: 28, fontWeight: 800, margin: 0, letterSpacing: '-0.6px' }}>
-            {section === 'submitted' ? 'Submitted' : section === 'results' ? 'Results' : 'Homework'}
-          </h1>
-          <p style={{ fontSize: 13, color: C.muted, margin: '6px 0 0' }}>{subtitle}</p>
-        </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
+        {/* The subtitle counted the rows immediately below it. */}
+        <h1 style={{ fontFamily: F.head, ...TS.title, margin: 0 }}>
+          {section === 'submitted' ? 'Submitted' : section === 'results' ? 'Results' : 'Homework'}
+        </h1>
       </div>
 
       {section === 'assignments' && (
@@ -4989,35 +5783,36 @@ const HwListRow = ({ a, state, store, onOpen }) => {
   const danger = state === 'overdue';
   const days = a.dueAt ? daysUntil(a.dueAt) : null;
   const showDays = (state === 'pending' || state === 'inprogress') && days != null && days >= 0;
+  // When the student can't work on it yet — or can't any more — say so on the row.
+  const note = state === 'scheduled' ? `Opens ${fmtOpens(opensAt(a))}`
+    : (isPastDue(a) && !settingsOf(a).allowLate) ? `Closed — due ${fmtShort(a.dueAt)}`
+    : null;
   return (
     <div onClick={onOpen}
       onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
       style={{
-        display: 'flex', alignItems: 'center', gap: 14, padding: '16px 18px',
-        background: C.bg, border: `1px solid ${hov ? C.borderD : C.border}`, borderRadius: 12,
-        cursor: 'pointer', transition: T, boxShadow: hov ? C.shadowL : C.shadow,
+        display: 'flex', alignItems: 'center', gap: 12, padding: '0 16px', minHeight: 60,
+        background: C.bg, border: `1px solid ${hov ? C.borderD : C.border}`, borderRadius: RADIUS,
+        cursor: 'pointer', transition: 'border-color .15s',
       }}>
-      <div style={{
-        width: 42, height: 42, borderRadius: 11, flexShrink: 0,
-        background: danger ? C.dangerBg : C.brandSoft,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}>
-        <Ico name="book" size={18} color={danger ? C.danger : C.brand} />
-      </div>
+      {/* The 42px tinted book tile is gone: it was the same glyph on every row,
+          and it turned "overdue" into a red block the row already says in words. */}
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 14.5, fontWeight: 700, color: C.text, marginBottom: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        <div style={{ ...TS.body, fontWeight: W.medium, color: C.text, marginBottom: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {a.title}
         </div>
-        <div style={{ fontSize: 12.5, color: C.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {a.subject} · {teacherNameFor(a, store)} · {a.questions.length} question{a.questions.length === 1 ? '' : 's'}
-        </div>
+        <MetaLine items={[
+          a.subject,
+          teacherNameFor(a, store),
+          `${a.questions.length} question${a.questions.length === 1 ? '' : 's'}`,
+        ]} />
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexShrink: 0 }}>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: C.muted }}>
-          <Ico name="calendar" size={13} color={C.faint} />
-          {a.dueAt ? fmtShort(a.dueAt) : 'No date'}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+        {/* One date fact, no calendar/lock glyph beside it. */}
+        <span style={{ ...TS.meta, color: C.muted, ...NUM }}>
+          {note ? note : (a.dueAt ? fmtShort(a.dueAt) : 'No date')}
+          {showDays && !note && <span style={{ color: C.faint }}>{` · ${days}d`}</span>}
         </span>
-        {showDays && <span style={{ fontSize: 12, color: C.faint, fontWeight: 600 }}>{days}d</span>}
         <HwStatusPill state={state} />
       </div>
     </div>
@@ -5028,40 +5823,41 @@ const HwListRow = ({ a, state, store, onOpen }) => {
 const HwSubmittedRow = ({ a, sub, store, onOpen }) => {
   const [hov, setHov] = React.useState(false);
   const canReview = (a.settings?.allowReview ?? a.allowReview) || a.settings?.showAutoImmediately;
+  // Marked, but the teacher hasn't released the marks yet — the row stays here
+  // rather than jumping to Results, and says so plainly.
+  const waiting = heldBack(a, sub);
+  const late = isLateSub(a, sub);
   return (
     <div onClick={onOpen}
       onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
       style={{
-        display: 'flex', alignItems: 'center', gap: 14, padding: '16px 18px',
-        background: C.bg, border: `1px solid ${hov ? C.borderD : C.border}`, borderRadius: 12,
-        cursor: 'pointer', transition: T, boxShadow: hov ? C.shadowL : C.shadow,
+        display: 'flex', alignItems: 'center', gap: 12, padding: '0 16px', minHeight: 60,
+        background: C.bg, border: `1px solid ${hov ? C.borderD : C.border}`, borderRadius: RADIUS,
+        cursor: 'pointer', transition: 'border-color .15s',
       }}>
-      <div style={{
-        width: 42, height: 42, borderRadius: 11, flexShrink: 0,
-        background: C.accentSoft, display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}>
-        <Ico name="send" size={17} color="#0284C7" />
-      </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 14.5, fontWeight: 700, color: C.text, marginBottom: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {a.title}
+      <div style={{ flex: 1, minWidth: 0, padding: '10px 0' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+          <span style={{ ...TS.body, fontWeight: W.medium, color: C.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {a.title}
+          </span>
+          {late && <StatusBadge status="late" />}
         </div>
-        <div style={{ fontSize: 12.5, color: C.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {a.subject} · {teacherNameFor(a, store)} · Submitted {fmtDateTime(sub && sub.submittedAt)}
-        </div>
+        <MetaLine items={[
+          a.subject,
+          teacherNameFor(a, store),
+          `Submitted ${fmtDateTime(sub && sub.submittedAt)}`,
+          waiting && 'Marked — your teacher will release results soon',
+        ]} />
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexShrink: 0 }}>
-        <HwStatusPill state="awaiting" />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+        <HwStatusPill state={waiting ? 'marked' : 'awaiting'} />
         {canReview ? (
           <Btn variant="soft" small icon={<Ico name="eye" size={13} />}
             onClick={(e) => { e.stopPropagation(); onOpen(); }}>
             Review
           </Btn>
         ) : (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, color: C.faint }}>
-            <Ico name="lock" size={12} color={C.faint} />
-            Review locked
-          </span>
+          <span style={{ ...TS.meta, color: C.faint }}>Review locked</span>
         )}
       </div>
     </div>
@@ -5083,26 +5879,18 @@ const HwResultsSection = ({ me, marked, onOpen }) => {
   const avg = rows.length ? Math.round(rows.reduce((s, r) => s + r.pct, 0) / rows.length) : 0;
   const best = rows.length ? Math.max(...rows.map(r => r.pct)) : 0;
 
-  const stat = (icon, value, label, chipBg, chipFg, valueColor) => (
-    <Card key={label} style={{ padding: '22px 16px', textAlign: 'center' }}>
-      <div style={{
-        width: 40, height: 40, borderRadius: '50%', background: chipBg,
-        display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 10px',
-      }}>
-        <Ico name={icon} size={17} color={chipFg} />
-      </div>
-      <div style={{ fontFamily: F.head, fontSize: 24, fontWeight: 800, color: valueColor, letterSpacing: '-0.4px' }}>{value}</div>
-      <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{label}</div>
-    </Card>
-  );
-
   return (
     <div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 18 }}>
-        {stat('trend', `${avg}%`, 'Overall Average', C.successBg, C.success, scoreColor(avg))}
-        {stat('award', `${best}%`, 'Best Score', C.successBg, C.success, scoreColor(best))}
-        {stat('target', rows.length, 'Completed', C.brandSoft, C.brand, C.text)}
-      </div>
+      {/* Three 100px cards with decorative tinted icon circles, for three
+          short numbers. Sentence case, and the average is the one that leads. */}
+      <StatStrip
+        style={{ marginBottom: 16 }}
+        items={[
+          { label: 'Overall average', value: `${avg}%`, emphasis: true },
+          { label: 'Best score', value: `${best}%` },
+          { label: 'Completed', value: rows.length },
+        ]}
+      />
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {rows.length === 0 && <HwEmpty text="No marked homework yet. Results will appear here once your teacher marks your work." />}
@@ -5114,37 +5902,35 @@ const HwResultsSection = ({ me, marked, onOpen }) => {
 
 const HwResultRow = ({ a, sub, pct, onOpen }) => {
   const [hov, setHov] = React.useState(false);
-  const col = scoreColor(pct);
   const g = sub.grade || gradeFor(pct);
-  const gp = gradePalette(g);
   return (
     <div onClick={onOpen}
       onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
       style={{
-        display: 'flex', alignItems: 'center', gap: 16, padding: '16px 18px',
-        background: C.bg, border: `1px solid ${hov ? C.borderD : C.border}`, borderRadius: 12,
-        cursor: 'pointer', transition: T, boxShadow: hov ? C.shadowL : C.shadow,
+        display: 'flex', alignItems: 'center', gap: 12, padding: '0 16px', minHeight: 60,
+        background: C.bg, border: `1px solid ${hov ? C.borderD : C.border}`, borderRadius: RADIUS,
+        cursor: 'pointer', transition: 'border-color .15s',
       }}>
-      <Ring pct={pct} size={56} stroke={5} color={col}>
-        <span style={{ fontFamily: F.head, fontSize: 12.5, fontWeight: 800, color: col }}>{pct}%</span>
-      </Ring>
+      {/* The donut ring is gone. It rendered the same percentage that sits at
+          the end of the row, so each result stated its score three times
+          (ring label, right-hand figure, grade letter) in 90px of row. */}
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 14.5, fontWeight: 700, color: C.text, marginBottom: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        <div style={{ ...TS.body, fontWeight: W.medium, color: C.text, marginBottom: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {a.title}
         </div>
-        <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 3 }}>
-          {a.subject}{a.classLabel ? ` · ${a.classLabel}` : ''}
-        </div>
-        <div style={{ fontSize: 12, color: C.faint }}>
-          Marked {fmtLong(sub.markedAt || sub.submittedAt)}{sub.timeSpentMins != null ? ` · ${sub.timeSpentMins}m` : ''}
-        </div>
+        <MetaLine items={[
+          a.subject,
+          a.classLabel,
+          `Marked ${fmtLong(sub.markedAt || sub.submittedAt)}`,
+          sub.timeSpentMins != null ? `${sub.timeSpentMins}m` : null,
+        ]} />
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, flexShrink: 0 }}>
-        <span style={{ fontFamily: F.head, fontSize: 18, fontWeight: 800, color: col }}>{pct}%</span>
-        <span style={{
-          padding: '2px 9px', borderRadius: 999, fontSize: 11, fontWeight: 700,
-          background: gp.bg, color: gp.fg, border: `1px solid ${gp.bd}`,
-        }}>{g}</span>
+      {/* Both columns are fixed-width and right-aligned so the percentages line
+          up down the page — a variable-width grade badge (A* vs D) was enough
+          to push each score to a different x. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+        <span style={{ fontFamily: F.head, fontSize: 15, fontWeight: W.medium, color: C.text, minWidth: 44, textAlign: 'right', ...NUM }}>{pct}%</span>
+        <span style={{ minWidth: 34, display: 'flex', justifyContent: 'flex-end' }}><StatusBadge>{g}</StatusBadge></span>
       </div>
     </div>
   );
@@ -5153,9 +5939,25 @@ const HwResultRow = ({ a, sub, pct, onOpen }) => {
 // ════════════════════════════════════════════════════════════════
 // Student — assignment detail
 // ════════════════════════════════════════════════════════════════
-const HwDetail = ({ a, store, draft, onBack, onStart }) => {
+const HwDetail = ({ a, me, store, draft, onBack, onStart, onReview, backLabel = 'Assignments' }) => {
+  usePageTrail([{ label: a.title }]);
   const totalM = totalPoints(a);
   const started = draftStarted(draft);
+  const sub = a.submissions[me.id];
+  const scheduled = isScheduled(a);
+  const closed = isPastDue(a) && !settingsOf(a).allowLate;
+  const allowed = attemptsAllowed(a);
+  const used = attemptsUsed(sub);
+  const outOfAttempts = used >= allowed;
+  const canStart = !scheduled && !closed && !outOfAttempts;
+  // Why the button is off, in the student's terms — never the mechanism.
+  const blockedNote = scheduled ? `Opens ${fmtOpens(opensAt(a))}`
+    : closed ? `Closed — due ${fmtShort(a.dueAt)}`
+    : outOfAttempts ? `You've used all ${allowed} attempt${allowed === 1 ? '' : 's'}`
+    : null;
+  const startLabel = allowed > 1 && !outOfAttempts
+    ? `Attempt ${used + 1} of ${allowed}`
+    : started ? 'Continue Homework' : 'Start Homework';
 
   const infoCard = (icon, label, value) => (
     <Card key={label} style={{ padding: '16px 18px', minWidth: 0 }}>
@@ -5169,13 +5971,11 @@ const HwDetail = ({ a, store, draft, onBack, onStart }) => {
 
   return (
     <div style={{ ...pageFrame({ narrow: true }), fontFamily: F.body, color: C.text }}>
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 24 }}>
-        <BackBtn onClick={onBack} />
-        <div>
-          <h1 style={{ fontFamily: F.head, fontSize: 24, fontWeight: 800, margin: 0, letterSpacing: '-0.4px' }}>{a.title}</h1>
-          <div style={{ fontSize: 13, color: C.muted, marginTop: 4 }}>
-            {a.subject}{a.classLabel ? ` · ${a.classLabel}` : ''}
-          </div>
+      <div style={{ marginBottom: 24 }}>
+        <BackLink onClick={onBack} label={backLabel} />
+        <h1 style={{ fontFamily: F.head, fontSize: 24, fontWeight: 800, margin: 0, letterSpacing: '-0.4px' }}>{a.title}</h1>
+        <div style={{ fontSize: 13, color: C.muted, marginTop: 4 }}>
+          {a.subject}{a.classLabel ? ` · ${a.classLabel}` : ''}
         </div>
       </div>
 
@@ -5224,11 +6024,27 @@ const HwDetail = ({ a, store, draft, onBack, onStart }) => {
         </Card>
       )}
 
-      <div style={{ display: 'flex', justifyContent: 'center' }}>
-        <Btn variant="brand" icon={<Ico name="play" size={14} color="#fff" />} onClick={onStart}
-          style={{ padding: '12px 26px', fontSize: 14, borderRadius: 10 }}>
-          {started ? 'Continue Homework' : 'Start Homework'}
-        </Btn>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+        {/* At the attempt limit the Start button gives way to the review the student
+            already has — never a dead button with no way forward. */}
+        {outOfAttempts && sub && onReview ? (
+          <Btn variant="soft" icon={<Ico name="eye" size={14} />} onClick={onReview}
+            style={{ padding: '12px 26px', fontSize: 14, borderRadius: 10 }}>
+            Review your answers
+          </Btn>
+        ) : (
+          <Btn variant="brand" icon={<Ico name="play" size={14} color="#fff" />} onClick={onStart}
+            disabled={!canStart}
+            style={{ padding: '12px 26px', fontSize: 14, borderRadius: 10 }}>
+            {startLabel}
+          </Btn>
+        )}
+        {blockedNote && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: C.muted }}>
+            <Ico name={scheduled ? 'calendar' : 'lock'} size={13} color={C.faint} />
+            {blockedNote}
+          </span>
+        )}
       </div>
     </div>
   );
@@ -5247,40 +6063,119 @@ const HwAnswerInput = ({ question, value, onChange }) =>
 const HwAnswerDisplay = ({ question, answer }) =>
   <QuestionAnswerDisplay question={question} answer={answer} />;
 
-const HwAttempt = ({ a, draft, onUpdateDraft, onBack, onSubmit }) => {
+// Deterministic shuffle seeded on student + assignment: two students get different
+// orders, and the same student gets the same order every time they come back — a
+// refresh mid-attempt never reshuffles the paper under them. Presentation only:
+// marking, review and results always show the canonical order.
+const shuffledQuestions = (a, studentId) => {
+  if (!settingsOf(a).randomize) return a.questions;
+  return a.questions
+    .map((q, i) => ({ q, i, r: seededRand(`${studentId}|${a.id}|${q.id}`) }))
+    .sort((x, y) => x.r - y.r || x.i - y.i)
+    .map(x => x.q);
+};
+
+const HwAttempt = ({ a, me, draft, onUpdateDraft, onBack, onSubmit }) => {
+  usePageTrail([{ label: a.title, onClick: onBack }, { label: 'Attempt' }]);
   const [answers, setAnswers] = React.useState(() => draft.answers || {});
   const [flags, setFlags] = React.useState(() => draft.flags || {});
   const [idx, setIdx] = React.useState(0);
   const [confirming, setConfirming] = React.useState(false);
+  const [invalid, setInvalid] = React.useState({});
   const startedAt = React.useRef(draft.startedAt || new Date().toISOString());
+
+  // Question order the student works through. Memoised on the student so it is
+  // stable for the whole attempt.
+  const questions = React.useMemo(
+    () => shuffledQuestions(a, me ? me.id : ''), [a.id, me && me.id]);
 
   React.useEffect(() => {
     onUpdateDraft({ answers, flags, startedAt: startedAt.current });
   }, [answers, flags]);
 
-  const total = a.questions.length;
-  const q = a.questions[idx];
+  // ── Time limit (A7) ────────────────────────────────────────────
+  // Elapsed time is measured from when the attempt was started, not from when
+  // this screen mounted, so closing the tab does not hand back extra minutes.
+  const limitMs = a.timeLimitMins ? a.timeLimitMins * 60000 : null;
+  const deadline = limitMs ? new Date(startedAt.current).getTime() + limitMs : null;
+  const [now, setNow] = React.useState(() => Date.now());
+  const [graceLeft, setGraceLeft] = React.useState(null);
+  const submittedRef = React.useRef(false);
+
+  React.useEffect(() => {
+    if (!deadline) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [deadline]);
+
+  const msLeft = deadline ? Math.max(0, deadline - now) : null;
+  const timeUp = deadline != null && msLeft === 0;
+
+  // At zero the student gets a 30-second grace to finish the sentence they are on;
+  // nothing is taken away from them before it elapses.
+  React.useEffect(() => {
+    if (!timeUp || graceLeft != null) return;
+    setGraceLeft(30);
+  }, [timeUp]);
+
+  React.useEffect(() => {
+    if (graceLeft == null) return;
+    if (graceLeft <= 0) {
+      if (!submittedRef.current) { submittedRef.current = true; onSubmit(answers); }
+      return;
+    }
+    const t = setTimeout(() => setGraceLeft(g => g - 1), 1000);
+    return () => clearTimeout(t);
+  }, [graceLeft, answers]);
+
+  const showCountdown = !!settingsOf(a).showCountdown && msLeft != null;
+  const finalMinute = msLeft != null && msLeft <= 60000;
+  const clock = msLeft == null ? '' :
+    `${Math.floor(msLeft / 60000)}:${String(Math.floor((msLeft % 60000) / 1000)).padStart(2, '0')}`;
+
+  const total = questions.length;
+  const q = questions[idx];
   const hasAnswer = (qq) => { const v = answers[qq.id]; return v !== undefined && v !== null && v !== ''; };
-  const answered = a.questions.filter(hasAnswer).length;
+  // Canonical question numbers of any maths that won't render — the student sees
+  // the numbers they'd see on the paper, not the shuffled position.
+  const badMath = a.questions
+    .map((qq, i) => (qq.type === 'math' && answers[qq.id] && !latexParses(answers[qq.id])) ? i + 1 : null)
+    .filter(Boolean);
+  const answered = questions.filter(hasAnswer).length;
 
   return (
     <div style={{ ...pageFrame({ narrow: true }), fontFamily: F.body, color: C.text }}>
       {/* Header */}
+      <BackLink onClick={onBack} label={a.title} style={{ marginBottom: 10 }} />
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-        <BackBtn onClick={onBack} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontFamily: F.head, fontSize: 19, fontWeight: 800, letterSpacing: '-0.3px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {a.title}
           </div>
           <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{answered}/{total} answered · auto-saved</div>
         </div>
+        {/* A quiet countdown, and only if the teacher asked for one. Neutral until
+            the last minute — no colour escalation before then. */}
+        {showCountdown && (
+          <span style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+            padding: '6px 11px', borderRadius: 999,
+            background: finalMinute ? C.amberBg : C.surface,
+            border: `1px solid ${finalMinute ? C.amberBorder : C.border}`,
+            color: finalMinute ? C.amber : C.sub,
+            fontFamily: F.mono, fontSize: 12.5, fontWeight: 600,
+          }}>
+            <Ico name="clock" size={13} color={finalMinute ? C.amber : C.muted} />
+            {clock}
+          </span>
+        )}
         <Btn variant="brand" icon={<Ico name="send" size={13} color="#fff" />} onClick={() => setConfirming(true)}>
           Submit
         </Btn>
       </div>
 
       {/* Progress */}
-      <div style={{ height: 6, borderRadius: 999, background: '#E9E5FB', overflow: 'hidden', marginBottom: 20 }}>
+      <div style={{ height: 4, borderRadius: RADIUS_FULL, background: C.surface2, overflow: 'hidden', marginBottom: 20 }}>
         <div style={{ width: `${(answered / total) * 100}%`, height: '100%', background: C.brand, borderRadius: 999, transition: 'width .3s' }} />
       </div>
 
@@ -5298,7 +6193,7 @@ const HwAttempt = ({ a, draft, onUpdateDraft, onBack, onSubmit }) => {
 
       {/* Question chips */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
-        {a.questions.map((qq, i) => {
+        {questions.map((qq, i) => {
           const on = i === idx;
           const done = hasAnswer(qq);
           const flagged = !!flags[qq.id];
@@ -5333,7 +6228,22 @@ const HwAttempt = ({ a, draft, onUpdateDraft, onBack, onSubmit }) => {
 
         <PromptText text={q.prompt} style={{ display: 'block', fontFamily: F.head, fontSize: 17, fontWeight: 700, color: C.text, lineHeight: 1.45, marginBottom: 18 }} />
 
-        <HwAnswerInput question={q} value={answers[q.id]} onChange={(v) => setAnswers(prev => ({ ...prev, [q.id]: v }))} />
+        <HwAnswerInput question={q} value={answers[q.id]}
+          onChange={(v) => {
+            setAnswers(prev => ({ ...prev, [q.id]: v }));
+            // Maths the renderer can't read would be stored as an unreadable
+            // answer — catch it as they type, not after they submit.
+            if (q.type === 'math') setInvalid(prev => ({ ...prev, [q.id]: !!v && !latexParses(v) }));
+          }} />
+
+        {invalid[q.id] && (
+          <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'flex-start', padding: '10px 12px', background: C.dangerBg, border: `1px solid ${C.dangerBorder}`, borderRadius: 8 }}>
+            <Ico name="alertCircle" size={13} color={C.danger} />
+            <span style={{ fontSize: 12.5, color: C.sub, lineHeight: 1.5 }}>
+              This answer can't be read yet — check for an unfinished bracket or fraction before you submit.
+            </span>
+          </div>
+        )}
 
         {q.hint && (
           <div style={{ marginTop: 14, display: 'flex', gap: 8, alignItems: 'flex-start', padding: '10px 12px', background: C.amberBg, border: `1px solid ${C.amberBorder}`, borderRadius: 8 }}>
@@ -5361,6 +6271,32 @@ const HwAttempt = ({ a, draft, onUpdateDraft, onBack, onSubmit }) => {
         )}
       </div>
 
+      {/* Time's up — a plain statement plus a short grace, not a slammed door. */}
+      {graceLeft != null && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(15,23,42,.5)', zIndex: 320,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+        }}>
+          <div style={{
+            width: '100%', maxWidth: 420, background: C.bg, borderRadius: 14,
+            border: `1px solid ${C.border}`, boxShadow: C.shadowL, padding: 24, textAlign: 'center',
+          }}>
+            <div style={{
+              width: 44, height: 44, borderRadius: '50%', background: C.amberBg,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px',
+            }}>
+              <Ico name="clock" size={18} color={C.amber} />
+            </div>
+            <div style={{ fontFamily: F.head, fontSize: 17, fontWeight: 800, marginBottom: 6 }}>
+              Time's up — submitting your answers
+            </div>
+            <div style={{ fontSize: 13, color: C.sub, lineHeight: 1.55 }}>
+              Finishing up in {graceLeft} second{graceLeft === 1 ? '' : 's'}. Everything you've written is saved.
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Confirm modal */}
       {confirming && (
         <div onClick={() => setConfirming(false)} style={{
@@ -5384,9 +6320,18 @@ const HwAttempt = ({ a, draft, onUpdateDraft, onBack, onSubmit }) => {
                 : `You've answered all ${total} questions. `}
               You won't be able to change your answers after submitting.
             </div>
+            {badMath.length > 0 && (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '10px 12px', marginBottom: 14, background: C.dangerBg, border: `1px solid ${C.dangerBorder}`, borderRadius: 8 }}>
+                <Ico name="alertCircle" size={13} color={C.danger} />
+                <span style={{ fontSize: 12.5, color: C.sub, lineHeight: 1.5 }}>
+                  Question{badMath.length === 1 ? '' : 's'} {badMath.join(', ')} can't be read yet. Fix {badMath.length === 1 ? 'it' : 'them'} before you submit.
+                </span>
+              </div>
+            )}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
               <Btn variant="soft" onClick={() => setConfirming(false)}>Cancel</Btn>
-              <Btn variant="brand" icon={<Ico name="send" size={13} color="#fff" />} onClick={() => onSubmit(answers)}>
+              <Btn variant="brand" disabled={badMath.length > 0} icon={<Ico name="send" size={13} color="#fff" />}
+                onClick={() => onSubmit(answers)}>
                 Submit
               </Btn>
             </div>
@@ -5431,27 +6376,26 @@ const HwDone = ({ onBackToHomework, onGoHome }) => (
 // ════════════════════════════════════════════════════════════════
 // Student — review a submission awaiting marking
 // ════════════════════════════════════════════════════════════════
-const HwSubmissionReview = ({ a, me, store, onBack }) => {
+const HwSubmissionReview = ({ a, me, store, onBack, backLabel = 'Submitted' }) => {
   const sub = a.submissions[me.id];
   const showAuto = !!(a.settings && a.settings.showAutoImmediately);
+  usePageTrail([{ label: a.title }]);
   return (
     <div style={{ ...pageFrame({ narrow: true }), fontFamily: F.body, color: C.text }}>
+      <BackLink onClick={onBack} label={backLabel} />
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 18 }}>
-        <BackBtn onClick={onBack} />
         <div style={{ flex: 1 }}>
-          <h1 style={{ fontFamily: F.head, fontSize: 22, fontWeight: 800, margin: 0, letterSpacing: '-0.4px' }}>{a.title}</h1>
-          <div style={{ fontSize: 13, color: C.muted, marginTop: 3 }}>
-            {a.subject}{a.classLabel ? ` · ${a.classLabel}` : ''}
-          </div>
+          <h1 style={{ fontFamily: F.head, ...TS.title, margin: 0 }}>{a.title}</h1>
+          <MetaLine style={{ marginTop: 4 }} items={[a.subject, a.classLabel]} />
         </div>
         <HwStatusPill state="awaiting" />
       </div>
 
       <div style={{
         display: 'flex', gap: 10, alignItems: 'flex-start', padding: '12px 14px',
-        background: C.accentSoft, border: '1px solid #BAE6FD', borderRadius: 10, marginBottom: 22,
+        background: C.surface, border: `1px solid ${C.border}`, borderRadius: RADIUS, marginBottom: 22,
       }}>
-        <Ico name="info" size={14} color="#0284C7" />
+        <Ico name="info" size={14} color={C.muted} />
         <span style={{ fontSize: 13, color: C.sub, lineHeight: 1.5 }}>
           Submitted {fmtDateTime(sub.submittedAt)}. Your teacher will mark it soon — you can review your answers below, but they can't be changed.
           {showAuto && ' Auto-marked questions are graded instantly and shown below.'}
@@ -5462,8 +6406,9 @@ const HwSubmissionReview = ({ a, me, store, onBack }) => {
         {a.questions.map((q, i) => {
           const autoQ = showAuto && isAuto(q.type);
           const m = autoQ ? sub.marks?.[q.id] : null;
-          const correct = autoQ && typeof m === 'number' && m >= (q.points || 0);
-          const wrong = autoQ && typeof m === 'number' && m <= 0;
+          const outcome = autoQ ? outcomeFor(q, m) : null;
+          const correct = outcome === 'correct';
+          const wrong = outcome === 'incorrect';
           return (
             <Card key={q.id} style={{ padding: '18px 20px' }}>
               <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: 10, marginBottom: 6 }}>
@@ -5475,13 +6420,13 @@ const HwSubmissionReview = ({ a, me, store, onBack }) => {
                     {correct ? <Pill tone="success" icon={<Ico name="check" size={10} />}>Correct</Pill>
                       : wrong ? <Pill tone="danger" icon={<Ico name="x" size={10} />}>Incorrect</Pill>
                       : <Pill tone="amber">Partial</Pill>}
-                    <span style={{ fontFamily: F.head, fontSize: 13, fontWeight: 800, color: C.text }}>{m}/{q.points}</span>
+                    <span style={{ fontFamily: F.head, ...TS.meta, fontWeight: W.medium, color: C.text, ...NUM }}>{m}/{q.points}</span>
                   </span>
                 )}
               </div>
-              <PromptText text={q.prompt} style={{ display: 'block', fontSize: 15, fontWeight: 700, color: C.text, lineHeight: 1.45, marginBottom: 14 }} />
+              <PromptText text={q.prompt} style={{ display: 'block', ...TS.section, color: C.text, lineHeight: 1.45, marginBottom: 14 }} />
               <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: '12px 14px' }}>
-                <div style={{ fontSize: 10.5, fontWeight: 700, color: C.muted, letterSpacing: '.07em', marginBottom: 7 }}>YOUR ANSWER</div>
+                <div style={{ ...TS.meta, fontWeight: W.medium, color: C.muted, marginBottom: 6 }}>Your answer</div>
                 <HwAnswerDisplay question={q} answer={sub.answers ? sub.answers[q.id] : null} />
               </div>
             </Card>
@@ -5495,9 +6440,10 @@ const HwSubmissionReview = ({ a, me, store, onBack }) => {
 // ════════════════════════════════════════════════════════════════
 // Student — marked result review
 // ════════════════════════════════════════════════════════════════
-const HwResultReview = ({ a, me, store, onBack }) => {
+const HwResultReview = ({ a, me, store, onBack, backLabel = 'Results' }) => {
   const sub = a.submissions[me.id];
   const S = a.settings || {};
+  usePageTrail([{ label: a.title }]);
   // What the teacher allows this student to see.
   const released = marksReleased(a, sub);
   const showMarks = released;
@@ -5551,13 +6497,11 @@ const HwResultReview = ({ a, me, store, onBack }) => {
   return (
     <div style={{ ...pageFrame({ narrow: true }), fontFamily: F.body, color: C.text }}>
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 22 }}>
-        <BackBtn onClick={onBack} />
-        <div>
-          <h1 style={{ fontFamily: F.head, fontSize: 22, fontWeight: 800, margin: 0, letterSpacing: '-0.4px' }}>{a.title}</h1>
-          <div style={{ fontSize: 13, color: C.muted, marginTop: 3 }}>
-            {a.subject}{a.classLabel ? ` · ${a.classLabel}` : ''}
-          </div>
+      <div style={{ marginBottom: 22 }}>
+        <BackLink onClick={onBack} label={backLabel} />
+        <h1 style={{ fontFamily: F.head, fontSize: 22, fontWeight: 800, margin: 0, letterSpacing: '-0.4px' }}>{a.title}</h1>
+        <div style={{ fontSize: 13, color: C.muted, marginTop: 3 }}>
+          {a.subject}{a.classLabel ? ` · ${a.classLabel}` : ''}
         </div>
       </div>
 
@@ -5593,9 +6537,9 @@ const HwResultReview = ({ a, me, store, onBack }) => {
 
       {/* Overall teacher feedback */}
       {showComments && sub.overallFeedback && (
-        <div style={{ background: '#F5F3FF', border: '1px solid #DDD6FE', borderRadius: 12, padding: '18px 20px', marginBottom: 26 }}>
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: RADIUS, padding: '18px 20px', marginBottom: 26 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Ico name="chat" size={14} color="#7C3AED" />
+            <Ico name="chat" size={14} color={C.muted} />
             <span style={{ fontFamily: F.head, fontSize: 13.5, fontWeight: 700, color: C.text }}>Overall Teacher Feedback</span>
           </div>
           <div style={{ fontSize: 11.5, color: C.muted, margin: '3px 0 10px 22px' }}>From your teacher</div>
@@ -5656,26 +6600,26 @@ const HwResultReview = ({ a, me, store, onBack }) => {
                 </div>
               </div>
 
-              <PromptText text={q.prompt} style={{ display: 'block', fontSize: 15, fontWeight: 700, color: C.text, lineHeight: 1.45, marginBottom: 14 }} />
+              <PromptText text={q.prompt} style={{ display: 'block', ...TS.section, color: C.text, lineHeight: 1.45, marginBottom: 14 }} />
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: '12px 14px' }}>
-                  <div style={{ fontSize: 10.5, fontWeight: 700, color: C.muted, letterSpacing: '.07em', marginBottom: 7 }}>YOUR ANSWER</div>
+                  <div style={{ ...TS.meta, fontWeight: W.medium, color: C.muted, marginBottom: 6 }}>Your answer</div>
                   <HwAnswerDisplay question={q} answer={sub.answers ? sub.answers[q.id] : null} />
                 </div>
 
                 {showCorrect && correctTxt != null && (
                   <div style={{ background: C.successBg, border: `1px solid ${C.successBorder}`, borderRadius: 10, padding: '12px 14px' }}>
-                    <div style={{ fontSize: 10.5, fontWeight: 700, color: C.success, letterSpacing: '.07em', marginBottom: 7 }}>CORRECT ANSWER</div>
+                    <div style={{ ...TS.meta, fontWeight: W.medium, color: C.success, marginBottom: 6 }}>Correct answer</div>
                     <div style={{ fontSize: 13.5, color: C.text, lineHeight: 1.5 }}>{correctTxt}</div>
                   </div>
                 )}
 
                 {showComments && fb && (
-                  <div style={{ background: '#F5F3FF', border: '1px solid #DDD6FE', borderRadius: 10, padding: '12px 14px' }}>
+                  <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: RADIUS, padding: '12px 14px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 7 }}>
-                      <Ico name="chat" size={11} color="#7C3AED" />
-                      <span style={{ fontSize: 10.5, fontWeight: 700, color: '#7C3AED', letterSpacing: '.07em' }}>TEACHER COMMENT</span>
+                      <Ico name="chat" size={11} color={C.muted} />
+                      <span style={{ fontSize: TS.meta.fontSize, fontWeight: W.medium, color: C.sub }}>Teacher comment</span>
                     </div>
                     <div style={{ fontSize: 13, color: C.sub, lineHeight: 1.55, fontStyle: 'italic' }}>“{fb}”</div>
                   </div>
@@ -5698,29 +6642,33 @@ const StudentHomeworkRoot = (props) => (
 );
 
 // ─── Helpers exposed for nav badges ────────────────────────────
+// The bell badge counts the signed-in teacher's OWN work awaiting marking — the
+// same number the dashboard tile, the class Homework tab and the Homework page
+// header show, because all four read getHomeworkCounts.
 const getHomeworkBadges = () => {
   const s = loadStore();
   const me = hwActiveMe(s);
-  const teacher = Object.values(s.users).find(u => u.role === 'teacher');
-  const teacherToMark = teacher
-    ? Object.values(s.assignments).filter(a => a.teacherId === teacher.id)
-        .flatMap(a => Object.values(a.submissions))
-        .filter(sub => sub.status === 'submitted').length
-    : 0;
-  const studentUnreadFeedback = me
-    ? Object.values(s.assignments).filter(a =>
-        a.studentIds.includes(me.id) &&
-        isGraded(a.submissions[me.id])
-      ).length
-    : 0;
-  return { teacherToMark, studentUnreadFeedback };
+  const teacher = hwPrincipal(s);
+  return {
+    teacherToMark: getHomeworkCounts(s, { teacherId: teacher.id }).toMark,
+    studentUnreadFeedback: me ? getHomeworkCounts(s, { studentId: me.id }).marked : 0,
+  };
 };
 
 // ─── Export to window ──────────────────────────────────────────
+// `klasioHomework` is the read API every other module goes through — no screen
+// outside this file may recount homework from raw records.
 Object.assign(window, {
   TeacherHomework: TeacherHomeworkRoot,
   StudentHomework: StudentHomeworkRoot,
   getHomeworkBadges,
+  klasioHomework: {
+    getHomeworkCounts: (scope) => getHomeworkCounts(loadStore(), scope),
+    listAssignments: (scope) => scopeAssignments(loadStore(), scope),
+    listClassHomework,
+    isMine,
+    outcomeFor,
+  },
 });
 
 })();

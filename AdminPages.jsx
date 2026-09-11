@@ -48,12 +48,11 @@ const useAdminStore = () => {
           yearGroups: parsed.yearGroups || SEED_YEAR_GROUPS,
           levels:     parsed.levels     || SEED_LEVELS,
           examBoards: parsed.examBoards || SEED_EXAM_BOARDS,
-          attendance: parsed.attendance || {},   // { 'teacherId|YYYY-MM-DD': 'present'|'absent'|'late' }
           holidays:   parsed.holidays   || {},   // { teacherId: [{ id, from, to, reason }] }
         };
       }
     } catch (e) { /* ignore */ }
-    return { teachers: SEED_TEACHERS, classes: SEED_CLASSES, students: SEED_STUDENTS, subjects: SEED_SUBJECTS, yearGroups: SEED_YEAR_GROUPS, levels: SEED_LEVELS, examBoards: SEED_EXAM_BOARDS, attendance: {}, holidays: {} };
+    return { teachers: SEED_TEACHERS, classes: SEED_CLASSES, students: SEED_STUDENTS, subjects: SEED_SUBJECTS, yearGroups: SEED_YEAR_GROUPS, levels: SEED_LEVELS, examBoards: SEED_EXAM_BOARDS, holidays: {} };
   };
   const [store, setStore] = React.useState(read);
 
@@ -162,14 +161,12 @@ const useAdminStore = () => {
     return id;
   };
 
-  const setAttendance = (teacherId, date, value) =>
-    persist({ ...store, attendance: { ...store.attendance, [`${teacherId}|${date}`]: value } });
   const addHoliday = (teacherId, holiday) =>
     persist({ ...store, holidays: { ...store.holidays, [teacherId]: [{ ...holiday, id: 'h' + Date.now() }, ...(store.holidays[teacherId] || [])] } });
   const removeHoliday = (teacherId, holidayId) =>
     persist({ ...store, holidays: { ...store.holidays, [teacherId]: (store.holidays[teacherId] || []).filter(h => h.id !== holidayId) } });
 
-  return { ...store, addTeacher, addTeachers, updateTeacher, removeTeacher, addClass, updateClass, setCover, clearCover, setCoversForClasses, clearCoverForTeacher, createClassWithRoster, enrolStudentsInClass, removeFromClass, addStudent, addStudents, updateStudent, removeStudent, addSubject, updateSubject, removeSubject, addSubjectInline, addYearGroup, addLevel, addExamBoard, setAttendance, addHoliday, removeHoliday };
+  return { ...store, addTeacher, addTeachers, updateTeacher, removeTeacher, addClass, updateClass, setCover, clearCover, setCoversForClasses, clearCoverForTeacher, createClassWithRoster, enrolStudentsInClass, removeFromClass, addStudent, addStudents, updateStudent, removeStudent, addSubject, updateSubject, removeSubject, addSubjectInline, addYearGroup, addLevel, addExamBoard, addHoliday, removeHoliday };
 };
 
 // ─── Admin sub-navigation ───────────────────────────────────────────────────────
@@ -182,22 +179,30 @@ const adminNav = (page, param = null) => {
 };
 const adminParam = () => window.__adminParam || null;
 
+// Post to a class from wherever the admin is looking at it. Announcements have ONE
+// composer (Communications) — permissions, audience resolution, reach counting and
+// the safeguarding rules all live there, and a second inline composer on the Classes
+// page would be a second set of those rules to keep in step. So this hands the class
+// over as a prefill and jumps to it: the admin lands in the real composer with the
+// class already selected. Class scope is an admin scope (canAnnounce), so no extra
+// permission is implied by the entry point.
+const announceToClass = (cls) => {
+  if (!cls) return;
+  window.__commsPrefill = { mode: 'class', classIds: [cls.id] };
+  if (window.__navigate) window.__navigate('admin', 'comms:announcements');
+};
+
 const YEAR_GROUPS = ['Yr 7','Yr 8','Yr 9','Yr 10','Yr 11','Yr 12','Yr 13'];
 const studentName = s => s.name || `${s.firstName || ''} ${s.lastName || ''}`.trim();
 
 // ─── Multi-step flow chrome (shared by enrol-student / add-teacher / add-class) ──
-const FlowHeader = ({ title, subtitle, onBack }) => (
-  <div style={{ display:'flex', alignItems:'flex-start', gap:14, marginBottom:24 }}>
-    <button onClick={onBack} title="Back" style={{
-      background:'none', border:`1px solid ${DS.border}`, borderRadius:8, cursor:'pointer',
-      color:DS.muted, width:34, height:34, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0,
-    }}>
-      <Icon name="chevron_r" size={16} color={DS.muted} strokeWidth={2} />
-    </button>
-    <div>
-      <h1 style={{ fontSize:22, fontWeight:700, color:DS.text, margin:0, letterSpacing:'-0.4px' }}>{title}</h1>
-      <p style={{ fontSize:14, color:DS.muted, margin:'4px 0 0' }}>{subtitle}</p>
-    </div>
+// The back control is the shared BackLink on its own line above the title (same
+// placement as every other nested screen), and `backLabel` names where it goes.
+const FlowHeader = ({ title, subtitle, onBack, backLabel = 'Back' }) => (
+  <div style={{ marginBottom:24 }}>
+    {onBack && <BackLink onClick={onBack} label={backLabel} />}
+    <h1 style={{ fontSize:22, fontWeight:700, color:DS.text, margin:0, letterSpacing:'-0.4px' }}>{title}</h1>
+    {subtitle && <p style={{ fontSize:14, color:DS.muted, margin:'4px 0 0' }}>{subtitle}</p>}
   </div>
 );
 
@@ -267,6 +272,14 @@ const AdminStudentsPage = () => {
   const students = store.students.filter(cm.isActiveStudent);
   // ONE at-risk definition (§2/§6) — threshold breach OR staff flag, explainable.
   const atRiskCount = students.filter(cm.isAtRisk).length;
+  // Page-level averages, derived from the same filtered roster the table shows.
+  const mean = (key) => students.length
+    ? Math.round(students.reduce((a, st) => a + (st[key] || 0), 0) / students.length) : 0;
+  const avgAttendance = mean('attendance'), avgHw = mean('hw'), avgScore = mean('score');
+  // Enrolments come from the ONE selector the Dashboard and Classes page use — a
+  // second count of the same concept here (summing each student's classIds) gave a
+  // different answer on the same screenful of data.
+  const enrolments = cm.getClassEnrolments();
 
   const filtered = students.filter(s => {
     const name = studentName(s).toLowerCase();
@@ -303,6 +316,21 @@ const AdminStudentsPage = () => {
         ]}
       />
 
+      {/* Headline numbers as ONE inline band rather than a row of tiles — the table
+          below is the content of this page, so the stats stay a strip, not a wall. */}
+      <StatBand variant="plain" stats={[
+        { label: 'Active students', value: students.length, sub: `${enrolments} enrolments` },
+        { label: 'Avg attendance', value: `${avgAttendance}%`, sub: 'across active students',
+          tone: avgAttendance < 90 ? DS.warning : undefined },
+        { label: 'Avg homework', value: `${avgHw}%`, sub: 'completion rate',
+          tone: avgHw < 70 ? DS.warning : undefined },
+        { label: 'Avg score', value: `${avgScore}%`, sub: 'latest assessments' },
+        { label: 'At risk', value: atRiskCount, sub: atRiskCount ? 'need a look' : 'none flagged',
+          tone: atRiskCount ? DS.danger : DS.success,
+          onClick: () => setFilter('at-risk'),
+          hint: 'Attendance or progress below threshold, or flagged by staff' },
+      ]} />
+
       {/* Filters + search */}
       <div style={{ display:'flex', gap:12, marginBottom:20, alignItems:'center' }}>
         <SearchInput value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name or subject…" />
@@ -319,39 +347,39 @@ const AdminStudentsPage = () => {
       <div style={{ display:'grid', gridTemplateColumns: selected ? '1fr 360px' : '1fr', gap:20 }}>
         <Card>
           <Table
-            cols={['Student','Year','Subjects','Attendance','HW %','Avg Score','Status',{ label:'Actions', align:'right' }]}
-            rows={filtered.map(s => [
-              <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
-                <span onClick={() => setSelected(s.id === (selected && selected.id) ? null : s)} style={{ fontSize:13, fontWeight:600, color:DS.text, cursor:'pointer' }}>{studentName(s)}</span>
-                <span style={{ fontSize:11.5, color:DS.faint }}>Last seen {s.lastSeen}</span>
-              </div>,
-              <span style={{ fontSize:13, color:DS.muted }}>{s.year}</span>,
-              <div style={{ display:'flex', flexWrap:'wrap', gap:4 }}>
-                {(s.subjects || []).slice(0,2).map(sub => (
-                  <span key={sub} style={{ fontSize:11, padding:'2px 6px', background:DS.surface, border:`1px solid ${DS.border}`, borderRadius:4, color:DS.sub }}>{sub}</span>
-                ))}
-                {(s.subjects || []).length > 2 && <span style={{ fontSize:11, color:DS.faint }}>+{s.subjects.length-2}</span>}
-              </div>,
-              // Colour + an icon cue for the danger tier, so "below threshold" doesn't
-              // rely on colour alone (§8 accessibility). Numbers are the text backup.
-              <span style={{ display:'inline-flex', alignItems:'center', justifyContent:'flex-end', gap:3, fontSize:13, fontWeight:600, color: s.attendance < 80 ? DS.danger : s.attendance < 90 ? DS.warning : DS.success }}>
-                {s.attendance < 80 && <Icon name="alert" size={11} />}{s.attendance}%
-              </span>,
-              <span style={{ display:'inline-flex', alignItems:'center', justifyContent:'flex-end', gap:3, fontSize:13, fontWeight:600, color: s.hw < 50 ? DS.danger : s.hw < 70 ? DS.warning : DS.success }}>
-                {s.hw < 50 && <Icon name="alert" size={11} />}{s.hw}%
-              </span>,
-              <ScorePill score={s.score} />,
-              // At-risk is explainable on hover (the reason travels with the pill) —
-              // advisory, never opaque (Children's-Code Part D).
-              <span title={cm.isAtRisk(s) ? cm.atRiskReason(s) : 'On track'}>
-                <StatusPill status={cm.isAtRisk(s) ? 'At risk' : 'On track'} />
-              </span>,
-              <RowActionsMenu items={[
-                { label:'View profile', icon:'user', onClick:() => setSelected(s.id === (selected && selected.id) ? null : s) },
-                { label:'Message', icon:'message', onClick:() => {} },
-                { label:'Resend invite', icon:'send', onClick:() => {} },
-              ]} />,
-            ])}
+            cols={['Student','Year','Subjects','Attendance','HW %','Avg Score','Status']}
+            rows={filtered.map(s => ({
+              // The whole row is the target — a row that opens one thing doesn't need
+              // a menu offering that same one thing.
+              onClick: () => setSelected(s.id === (selected && selected.id) ? null : s),
+              cells: [
+                <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
+                  <span style={{ fontSize:13, fontWeight:600, color:DS.text }}>{studentName(s)}</span>
+                  <span style={{ fontSize:11.5, color:DS.faint }}>Last seen {s.lastSeen}</span>
+                </div>,
+                <span style={{ fontSize:13, color:DS.muted }}>{s.year}</span>,
+                <div style={{ display:'flex', flexWrap:'wrap', gap:4 }}>
+                  {(s.subjects || []).slice(0,2).map(sub => (
+                    <span key={sub} style={{ fontSize:11, padding:'2px 6px', background:DS.surface, border:`1px solid ${DS.border}`, borderRadius:4, color:DS.sub }}>{sub}</span>
+                  ))}
+                  {(s.subjects || []).length > 2 && <span style={{ fontSize:11, color:DS.faint }}>+{s.subjects.length-2}</span>}
+                </div>,
+                // Colour + an icon cue for the danger tier, so "below threshold" doesn't
+                // rely on colour alone (§8 accessibility). Numbers are the text backup.
+                <span style={{ display:'inline-flex', alignItems:'center', justifyContent:'flex-end', gap:3, fontSize:13, fontWeight:600, color: s.attendance < 80 ? DS.danger : s.attendance < 90 ? DS.warning : DS.success }}>
+                  {s.attendance < 80 && <Icon name="alert" size={11} />}{s.attendance}%
+                </span>,
+                <span style={{ display:'inline-flex', alignItems:'center', justifyContent:'flex-end', gap:3, fontSize:13, fontWeight:600, color: s.hw < 50 ? DS.danger : s.hw < 70 ? DS.warning : DS.success }}>
+                  {s.hw < 50 && <Icon name="alert" size={11} />}{s.hw}%
+                </span>,
+                <ScorePill score={s.score} />,
+                // At-risk is explainable on hover (the reason travels with the pill) —
+                // advisory, never opaque (Children's-Code Part D).
+                <span title={cm.isAtRisk(s) ? cm.atRiskReason(s) : 'On track'}>
+                  <StatusPill status={cm.isAtRisk(s) ? 'At risk' : 'On track'} />
+                </span>,
+              ],
+            }))}
           />
         </Card>
 
@@ -422,6 +450,11 @@ const EnrolStudentPage = () => {
 
   const next = () => { setTouched(true); if (!stepValid(step)) return; setTouched(false); setStep(s => Math.min(s + 1, STUDENT_STEPS.length - 1)); };
   const back = () => step === 0 ? adminNav('students') : setStep(s => s - 1);
+  // A wizard step is a page inside the flow: Students › Enrol student › Guardian Info.
+  usePageTrail([
+    { label: 'Enrol student', onClick: step === 0 ? null : () => setStep(0) },
+    { label: STUDENT_STEPS[step] },
+  ]);
 
   const submit = () => {
     setTouched(true);
@@ -440,7 +473,8 @@ const EnrolStudentPage = () => {
 
   return (
     <div style={pageFrame({ narrow: true })}>
-      <FlowHeader title="Enrol New Student" subtitle="Complete all sections to register a new student" onBack={back} />
+      <FlowHeader title="Enrol New Student" subtitle="Complete all sections to register a new student"
+        onBack={back} backLabel={step === 0 ? 'Students' : STUDENT_STEPS[step - 1]} />
       <StepTabs steps={STUDENT_STEPS} current={step} onJump={setStep} />
 
       <Card>
@@ -877,6 +911,9 @@ const StudentAnalyticsView = ({ student, enrolledClasses, role = 'admin' }) => {
     { id:'fees',       label:'Fees',               icon:'invoice' },
     { id:'account',    label:'Account',            icon:'lock' },
   ];
+  // Layer 1 of the header trail — the profile page itself owns layer 0 (the
+  // student's name), this adds the tab you're reading inside it.
+  usePageTrail([{ label: (TABS.find(t => t.id === tab) || {}).label }], 1);
   const gridCols = { display:'grid', gridTemplateColumns:'minmax(0,1fr) minmax(0,1fr)', gap:18, alignItems:'start' };
 
   // ── LEFT (fixed): the most-referenced identity info, kept to hand while the
@@ -1262,6 +1299,11 @@ const StudentProfilePage = ({ role = 'admin' } = {}) => {
 
   React.useEffect(() => { if (student && !form) setForm({ ...student, subjects: student.subjects || [], classIds: student.classIds || [] }); }, [student]);
 
+  // Students › <name> — the profile is a page inside the Students list, and the
+  // teacher lens reaches the same screen from *their* students list.
+  const backToList = () => isTeacher ? (window.__navigate && window.__navigate('teacher', 'students')) : adminNav('students');
+  usePageTrail([{ label: student ? studentName(student) : 'Student', onClick: null }]);
+
   if (!student) return (
     <div style={pageFrame()}>
       <EmptyState icon="user" title="Student not found" message="This student may have been removed." action={<Btn variant="primary" onClick={() => adminNav('students')}>Back to Students</Btn>} />
@@ -1286,7 +1328,8 @@ const StudentProfilePage = ({ role = 'admin' } = {}) => {
 
   const header = (
     <>
-      <FlowHeader title={studentName(student)} subtitle={`${student.year} · ${(student.subjects||[]).join(', ') || 'No subjects'}`} onBack={() => isTeacher ? (window.__navigate && window.__navigate('teacher','students')) : adminNav('students')} />
+      <FlowHeader title={studentName(student)} subtitle={`${student.year} · ${(student.subjects||[]).join(', ') || 'No subjects'}`}
+        onBack={backToList} backLabel={isTeacher ? 'My Students' : 'Students'} />
       <Card style={{ marginBottom: editing ? 20 : 16 }}>
         <div style={{ padding:'22px 24px', display:'flex', alignItems:'center', gap:18 }}>
           <Avatar name={studentName(student)} size={64} />
@@ -1619,57 +1662,147 @@ const subjectRollup = (store, sub) => ({
   students: store.students.filter(s => matchesSubject(sub, s.subjects || [])),
 });
 
-// ─── Subjects view (table — rolls up classes / teachers / students per subject) ──
-const SubjectsView = ({ store, search }) => {
+// ─── Subjects ────────────────────────────────────────────────────────────────────
+// A subject is a container, not a record: what an admin wants from this page is
+// "what do we teach, who teaches it, and is any of it unstaffed or empty" — which
+// a row of thin numeric columns answers badly. So it's a card grid keyed on the
+// subject's own colour, with the three rollups that matter on each card and the
+// problem states (no classes, no teacher) called out on the card itself.
+
+// One subject tile. The whole card opens the subject; the kebab carries only the
+// actions the card itself doesn't perform.
+const SubjectCard = ({ sub, rollup, onOpen, onEdit, onRemove }) => {
+  const [hov, setHov] = React.useState(false);
+  const color = sub.color || subjectColor(sub.name);
+  const empty = rollup.classes.length === 0;
+  const unstaffed = !empty && rollup.teachers.length === 0;
+  return (
+    <div
+      onClick={onOpen}
+      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+      style={{
+        position: 'relative', cursor: 'pointer', borderRadius: 12, overflow: 'hidden',
+        background: DS.card, boxShadow: hov ? DS.cardShadowHover || DS.cardShadow : DS.cardShadow,
+        border: `1px solid ${hov ? color + '66' : DS.cardBorder}`,
+        transform: hov ? 'translateY(-1px)' : 'none',
+        transition: 'border-color 0.14s ease, transform 0.14s ease',
+      }}
+    >
+      {/* Colour band — the subject's identity, carried through to classes and the timetable */}
+      <div style={{ height: 4, background: `linear-gradient(90deg, ${color}, ${shadeColor(color, -22)})` }} />
+
+      <div style={{ padding: '16px 18px 18px' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+          <div style={{
+            width: 38, height: 38, borderRadius: 10, flexShrink: 0,
+            background: color + '18', color,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <Icon name="book" size={18} />
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 14.5, fontWeight: 700, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sub.name}</div>
+            <div style={{ fontSize: 12, color: DS.muted, marginTop: 2 }}>{sub.level || 'All levels'}</div>
+          </div>
+          <span onClick={e => e.stopPropagation()}>
+            <RowActionsMenu items={[
+              { label: 'Edit', icon: 'edit', onClick: onEdit },
+              { label: 'Remove', icon: 'trash', danger: true, onClick: onRemove },
+            ]} />
+          </span>
+        </div>
+
+        {sub.description && (
+          <div style={{
+            fontSize: 12.5, color: DS.muted, lineHeight: 1.5, marginTop: 12,
+            display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+          }}>{sub.description}</div>
+        )}
+
+        {/* The three rollups, as one hairline-divided strip rather than three columns
+            of icons and numbers scattered across a table row. */}
+        <div style={{
+          display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', marginTop: 16,
+          borderTop: `1px solid ${DS.border}`, paddingTop: 14,
+        }}>
+          {[['Classes', rollup.classes.length], ['Teachers', rollup.teachers.length], ['Students', rollup.students.length]]
+            .map(([label, value], i) => (
+              <div key={label} style={{ borderLeft: i === 0 ? 'none' : `1px solid ${DS.border}`, paddingLeft: i === 0 ? 0 : 14 }}>
+                <div style={{ fontSize: 20, fontWeight: 700, color: DS.text, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{value}</div>
+                <div style={{ fontSize: 11, color: DS.faint, marginTop: 5, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>{label}</div>
+              </div>
+            ))}
+        </div>
+
+        {(empty || unstaffed) && (
+          <div style={{ marginTop: 14 }}>
+            <StatusPill tone="warning" dot>{empty ? 'No classes yet' : 'No teacher assigned'}</StatusPill>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const SubjectsPage = ({ store }) => {
+  const [search, setSearch] = React.useState('');
   const [modalOpen, setModalOpen] = React.useState(false);
   const [editing, setEditing] = React.useState(null);
 
   const q = search.trim().toLowerCase();
-  const subjects = store.subjects.filter(s =>
+  const all = store.subjects;
+  const subjects = all.filter(s =>
     !q || s.name.toLowerCase().includes(q) || (s.level || '').toLowerCase().includes(q));
 
+  const rollups = {};
+  all.forEach(s => { rollups[s.id] = subjectRollup(store, s); });
+  const taughtBy = new Set();
+  all.forEach(s => rollups[s.id].teachers.forEach(t => taughtBy.add(t)));
+  const emptyCount = all.filter(s => rollups[s.id].classes.length === 0).length;
+  const classCount = all.reduce((a, s) => a + rollups[s.id].classes.length, 0);
+
   const handleSave = data => { editing ? store.updateSubject(editing.id, data) : store.addSubject(data); };
-  const openAdd  = () => { setEditing(null); setModalOpen(true); };
+  const openAdd = () => { setEditing(null); setModalOpen(true); };
   const openEdit = s => { setEditing(s); setModalOpen(true); };
-  const remove   = s => { if (window.confirm(`Remove “${s.name}”? Classes and students keep their data — only the subject entry is deleted.`)) store.removeSubject(s.id); };
+  const remove = s => { if (window.confirm(`Remove “${s.name}”? Classes and students keep their data — only the subject entry is deleted.`)) store.removeSubject(s.id); };
 
   return (
-    <div>
-      <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:16 }}>
-        <Btn variant="primary" icon="plus" small onClick={openAdd}>Add Subject</Btn>
+    <div style={pageFrame()}>
+      <PageHeader
+        title="Subjects"
+        subtitle={`${all.length} subjects · ${classCount} classes · taught by ${taughtBy.size} teachers`}
+        actions={[<Btn key="add" variant="primary" icon="plus" small onClick={openAdd}>Add Subject</Btn>]}
+      />
+
+      <StatBand variant="plain" stats={[
+        { label: 'Subjects', value: all.length, sub: 'offered by this centre' },
+        { label: 'Classes', value: classCount, sub: 'across every subject' },
+        { label: 'Teaching staff', value: taughtBy.size, sub: 'teach at least one' },
+        { label: 'Without classes', value: emptyCount, sub: emptyCount ? 'nothing scheduled yet' : 'all are taught',
+          tone: emptyCount ? DS.warning : DS.success,
+          hint: 'Subjects on the list that no class currently uses' },
+      ]} />
+
+      <div style={{ display:'flex', gap:12, marginBottom:20, alignItems:'center' }}>
+        <SearchInput value={search} onChange={e => setSearch(e.target.value)} placeholder="Search subjects…" />
       </div>
 
-      <Card>
-        {subjects.length === 0 ? (
-          <EmptyState icon="book" title="No subjects found" message={q ? `No subjects match “${search}”.` : 'Add your first subject to group classes and students.'} action={!q && <Btn variant="primary" icon="plus" onClick={openAdd}>Add Subject</Btn>} />
-        ) : (
-          <Table
-            cols={['Subject','Level','Classes','Teachers','Students',{ label:'', align:'right' }]}
-            rows={subjects.map(sub => {
-              const { classes, teachers, students } = subjectRollup(store, sub);
-              const color = sub.color || subjectColor(sub.name);
-              return [
-                <button onClick={() => adminNav('subject_detail', sub.id)} style={{ display:'flex', alignItems:'center', gap:11, background:'none', border:'none', padding:0, cursor:'pointer', textAlign:'left' }}>
-                  <div style={{ width:32, height:32, borderRadius:9, background:color+'18', color, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}><Icon name="book" size={16} /></div>
-                  <div>
-                    <div style={{ fontSize:13.5, fontWeight:600, color:DS.accent }}>{sub.name}</div>
-                    {sub.description && <div style={{ fontSize:11.5, color:DS.faint, maxWidth:340, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{sub.description}</div>}
-                  </div>
-                </button>,
-                <Badge variant="default">{sub.level}</Badge>,
-                <span style={{ fontSize:13, color:DS.sub, display:'inline-flex', alignItems:'center', gap:6 }}><Icon name="book" size={13} color={DS.faint} />{classes.length}</span>,
-                <span style={{ fontSize:13, color:DS.sub, display:'inline-flex', alignItems:'center', gap:6 }}><Icon name="users" size={13} color={DS.faint} />{teachers.length}</span>,
-                <span style={{ fontSize:13, color:DS.sub, display:'inline-flex', alignItems:'center', gap:6 }}><Icon name="graduation" size={13} color={DS.faint} />{students.length}</span>,
-                <RowActionsMenu items={[
-                  { label:'View subject', icon:'eye', onClick:() => adminNav('subject_detail', sub.id) },
-                  { label:'Edit', icon:'edit', onClick:() => openEdit(sub) },
-                  { label:'Remove', icon:'trash', danger:true, onClick:() => remove(sub) },
-                ]} />,
-              ];
-            })}
-          />
-        )}
-      </Card>
+      {subjects.length === 0 ? (
+        <Card>
+          <EmptyState icon="book" title="No subjects found"
+            message={q ? `No subjects match “${search}”.` : 'Add your first subject to group classes and students.'}
+            action={!q && <Btn variant="primary" icon="plus" onClick={openAdd}>Add Subject</Btn>} />
+        </Card>
+      ) : (
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(268px, 1fr))', gap:16 }}>
+          {subjects.map(sub => (
+            <SubjectCard key={sub.id} sub={sub} rollup={rollups[sub.id]}
+              onOpen={() => adminNav('subject_detail', sub.id)}
+              onEdit={() => openEdit(sub)}
+              onRemove={() => remove(sub)} />
+          ))}
+        </div>
+      )}
 
       <SubjectFormModal open={modalOpen} onClose={() => setModalOpen(false)} onSave={handleSave} editing={editing} />
     </div>
@@ -1682,6 +1815,7 @@ const SubjectDetailPage = () => {
   const id = adminParam();
   const sub = store.subjects.find(s => s.id === id);
   const [modalOpen, setModalOpen] = React.useState(false);
+  usePageTrail([{ label: sub ? sub.name : 'Subject' }]);
 
   if (!sub) return (
     <div style={pageFrame()}>
@@ -1705,7 +1839,7 @@ const SubjectDetailPage = () => {
 
   return (
     <div style={pageFrame()}>
-      <FlowHeader title={sub.name} subtitle={sub.level} onBack={() => adminNav('subjects')} />
+      <FlowHeader title={sub.name} subtitle={sub.level} onBack={() => adminNav('subjects')} backLabel="Subjects" />
 
       {/* Hero */}
       <Card style={{ marginBottom:20 }}>
@@ -1815,6 +1949,8 @@ const AdminClassesPage = ({ section }) => {
   const totalSeats = classes.reduce((s, c) => s + c.capacity, 0);
   const filledSeats = classes.reduce((s, c) => s + c.students, 0);
   const avgFill = totalSeats ? Math.round((filledSeats / totalSeats) * 100) : 0;
+  const unstaffed = classes.filter(c => !c.teacher).length;
+  const full = classes.filter(c => c.capacity && c.students >= c.capacity).length;
 
   const filtered = classes.filter(c => {
     const q = search.toLowerCase();
@@ -1823,71 +1959,90 @@ const AdminClassesPage = ({ section }) => {
 
   const handleSave = data => { if (editing) store.updateClass(editing.id, data); };
 
+  // Subjects is its own page now, not a second mode of this one.
+  if (view === 'subjects') return <SubjectsPage store={store} />;
+
   return (
     <div style={pageFrame()}>
       <PageHeader
-        title={view === 'subjects' ? 'Subjects' : 'Classes'}
-        subtitle={`${classes.length} classes · ${store.subjects.length} subjects · ${filledSeats} enrolments · ${avgFill}% avg capacity`}
-        actions={[view === 'classes'
-          ? <Btn key="new" variant="primary" icon="plus" small onClick={() => adminNav('classes_add')}>Add Class</Btn>
-          : null]}
+        title="Classes"
+        subtitle={`${classes.length} classes · ${filledSeats} enrolments · ${avgFill}% average capacity`}
+        actions={[<Btn key="new" variant="primary" icon="plus" small onClick={() => adminNav('classes_add')}>Add Class</Btn>]}
       />
 
-      {/* Summary KPIs */}
-      <div style={{ display:'flex', gap:16, marginBottom:24 }}>
-        <KPICard label="Total Classes" value={classes.length} sub="scheduled" icon="book" iconBg={DS.accentLight} accent={DS.accent} />
-        <KPICard label="Subjects"      value={store.subjects.length} sub="offered" icon="clip" iconBg={DS.accentLight} accent="#7C3AED" />
-        <KPICard label="Students"      value={filledSeats}    sub="enrolled"  icon="graduation" iconBg={DS.infoBg} accent={DS.info} />
-        <KPICard label="Avg Fill"      value={avgFill + '%'}  sub={`${filledSeats}/${totalSeats} seats`} icon="chart" iconBg={DS.warningBg} accent={DS.warning} />
-      </div>
+      <StatBand style={{ marginBottom: 22 }} stats={[
+        { label: 'Classes', value: classes.length, sub: `across ${store.subjects.length} subjects` },
+        { label: 'Enrolments', value: filledSeats, sub: `${Math.max(0, totalSeats - filledSeats)} seats free` },
+        { label: 'Capacity used', value: `${avgFill}%`, sub: `${filledSeats}/${totalSeats} seats`,
+          tone: avgFill >= 95 ? DS.warning : undefined },
+        { label: 'Full classes', value: full, sub: full ? 'at or over capacity' : 'all have room',
+          tone: full ? DS.warning : undefined },
+        { label: 'Unstaffed', value: unstaffed, sub: unstaffed ? 'no teacher assigned' : 'all assigned',
+          tone: unstaffed ? DS.danger : DS.success },
+      ]} />
 
       {/* Toolbar — search (Classes/Subjects split lives in the sidebar nav) */}
       <div style={{ display:'flex', gap:12, marginBottom:20, alignItems:'center' }}>
-        <SearchInput value={search} onChange={e => setSearch(e.target.value)} placeholder={view === 'classes' ? 'Search classes, subjects or teachers…' : 'Search subjects…'} />
+        <SearchInput value={search} onChange={e => setSearch(e.target.value)} placeholder="Search classes, subjects or teachers…" />
       </div>
 
-      {view === 'subjects' ? (
-        <SubjectsView store={store} search={search} />
-      ) : (
       <Card>
         {filtered.length === 0 ? (
           <EmptyState icon="book" title="No classes found" message={search ? `No classes match “${search}”.` : 'Create your first class to start scheduling sessions.'} action={!search && <Btn variant="primary" icon="plus" onClick={() => adminNav('classes_add')}>Add Class</Btn>} />
         ) : (
           <Table
-            cols={['Class','Subject','Teacher','Students','Schedule','Room',{ label:'', align:'right' }]}
+            cols={['Class','Teacher','Schedule','Room','Enrolment',{ label:'', align:'right', width:44 }]}
             rows={filtered.map(cls => {
               const color = subjectColor(cls.name);
               const fill = cls.capacity ? Math.min(100, Math.round((cls.students / cls.capacity) * 100)) : 0;
               const fillColor = fill >= 100 ? DS.danger : fill >= 85 ? DS.warning : DS.success;
-              const teacher = store.teachers.find(t => t.name === cls.teacher);
-              return [
-                <button onClick={() => adminNav('class_detail', cls.id)} style={{ display:'flex', alignItems:'center', gap:10, background:'none', border:'none', padding:0, cursor:'pointer', textAlign:'left' }}>
-                  <span style={{ width:9, height:9, borderRadius:'50%', background:color, flexShrink:0 }} />
-                  <div>
-                    <div style={{ fontSize:13.5, fontWeight:600, color:DS.accent }}>{cls.name}</div>
-                    <div style={{ fontSize:11.5, color:DS.faint }}>{cls.group}</div>
-                  </div>
-                </button>,
-                <span style={{ fontSize:11.5, padding:'3px 9px', background:color+'14', color, borderRadius:14, fontWeight:500 }}>{cls.name.replace(/^(GCSE|A-Level)\s/, '')}</span>,
-                <span style={{ fontSize:13, color:DS.sub }}>{cls.teacher}</span>,
-                <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                  <div style={{ width:54, height:6, background:DS.surface, borderRadius:3, overflow:'hidden' }}>
-                    <div style={{ width:`${fill}%`, height:'100%', background:fillColor }} />
-                  </div>
-                  <span style={{ fontSize:12.5, fontWeight:600, color:DS.sub, fontVariantNumeric:'tabular-nums' }}>{cls.students}/{cls.capacity}</span>
-                </div>,
-                <span style={{ fontSize:12.5, color:DS.muted, display:'inline-flex', alignItems:'center', gap:5 }}><Icon name="clock" size={13} color={DS.faint} />{cls.day} {cls.time}</span>,
-                <span style={{ fontSize:12.5, color:DS.muted, display:'inline-flex', alignItems:'center', gap:5 }}><Icon name="pin" size={13} color={DS.faint} />{cls.room || '—'}</span>,
-                <RowActionsMenu items={[
-                  { label:'View class', icon:'eye', onClick:() => adminNav('class_detail', cls.id) },
-                  { label:'Edit', icon:'edit', onClick:() => { setEditing(cls); setModalOpen(true); } },
-                ]} />,
-              ];
+              const onCover = coverActive(cls);
+              return {
+                onClick: () => adminNav('class_detail', cls.id),
+                cells: [
+                  // Colour spine + group line — the same class identity the teacher's
+                  // own list uses, so an admin and a teacher looking at one class are
+                  // looking at the same object.
+                  <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+                    <span style={{ width:4, alignSelf:'stretch', minHeight:34, borderRadius:2, background:color, flexShrink:0 }} />
+                    <div style={{ minWidth:0 }}>
+                      <div style={{ fontSize:13.5, fontWeight:600, color:DS.text }}>{cls.name}</div>
+                      <div style={{ fontSize:11.5, color:DS.faint }}>{cls.group}</div>
+                    </div>
+                  </div>,
+                  // Cover is operational truth: who is actually taking this class now,
+                  // not just whose name sits on the timetable.
+                  cls.teacher ? (
+                    <div style={{ minWidth:0 }}>
+                      <div style={{ fontSize:13, color:DS.sub, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                        {onCover ? onCover.teacher : cls.teacher}
+                      </div>
+                      {onCover && <div style={{ fontSize:11, color:DS.warning, marginTop:2 }}>covering {cls.teacher}</div>}
+                    </div>
+                  ) : <StatusPill tone="danger">Unstaffed</StatusPill>,
+                  <span style={{ fontSize:12.5, color:DS.muted, display:'inline-flex', alignItems:'center', gap:5, whiteSpace:'nowrap' }}><Icon name="clock" size={13} color={DS.faint} />{cls.day} {cls.time}</span>,
+                  <span style={{ fontSize:12.5, color:DS.muted, display:'inline-flex', alignItems:'center', gap:5 }}><Icon name="pin" size={13} color={DS.faint} />{cls.room || '—'}</span>,
+                  <div style={{ display:'flex', alignItems:'center', gap:9 }}>
+                    <div style={{ width:56, height:6, background:DS.surface, borderRadius:3, overflow:'hidden' }}>
+                      <div style={{ width:`${fill}%`, height:'100%', background:fillColor }} />
+                    </div>
+                    <span style={{ fontSize:12.5, fontWeight:600, color:DS.sub, fontVariantNumeric:'tabular-nums', whiteSpace:'nowrap' }}>{cls.students}/{cls.capacity}</span>
+                  </div>,
+                  // The row opens the class, so the kebab only carries what the row
+                  // does NOT do — edit in place, post to this class, jump to the grid.
+                  <span onClick={e => e.stopPropagation()}>
+                    <RowActionsMenu items={[
+                      { label:'Edit details', icon:'edit', onClick:() => { setEditing(cls); setModalOpen(true); } },
+                      { label:'Post announcement', icon:'megaphone', onClick:() => announceToClass(cls) },
+                      { label:'Open schedule', icon:'calendar', onClick:() => window.__navigate && window.__navigate('admin', 'schedule') },
+                    ]} />
+                  </span>,
+                ],
+              };
             })}
           />
         )}
       </Card>
-      )}
 
       <ClassFormModal open={modalOpen} onClose={() => setModalOpen(false)} onSave={handleSave} store={store} teachers={store.teachers} editing={editing} />
     </div>
@@ -1939,6 +2094,10 @@ const AddClassPage = () => {
   const stepValid = i => !Object.values(stepErrs[i]).some(Boolean);
   const next = () => { setTouched(true); if (!stepValid(step)) return; setTouched(false); setStep(s => Math.min(s + 1, CLASS_STEPS.length - 1)); };
   const back = () => step === 0 ? adminNav('classes') : setStep(s => s - 1);
+  usePageTrail([
+    { label: 'Create a class', onClick: step === 0 ? null : () => setStep(0) },
+    { label: CLASS_STEPS[step] },
+  ]);
 
   const submit = () => {
     setTouched(true);
@@ -1969,7 +2128,8 @@ const AddClassPage = () => {
 
   return (
     <div style={pageFrame({ narrow: true })}>
-      <FlowHeader title="Create New Class" subtitle="Set up a new class group" onBack={back} />
+      <FlowHeader title="Create New Class" subtitle="Set up a new class group"
+        onBack={back} backLabel={step === 0 ? 'Classes' : CLASS_STEPS[step - 1]} />
       <StepTabs steps={CLASS_STEPS} current={step} onJump={setStep} />
 
       {/* Live preview chip */}
@@ -2347,18 +2507,12 @@ const ClassDetailPage = () => {
   const attendance = roster.length ? Math.round(roster.reduce((a, s) => a + (s.attendance || 0), 0) / roster.length) : 0;
 
   // Homework set for this class — the SAME source the teacher class workspace reads
-  // (window.homeworkFull), matched by year number + group letter, so admin and teacher
-  // never disagree. Read-only: the admin views but never authors an assignment.
-  const yr  = (cls.group.match(/\d+/) || [])[0];
-  const grp = (cls.group.match(/Group\s+([A-Za-z])/i) || [])[1];
-  const classHw = (window.homeworkFull || []).filter(h => {
-    const hy = (h.class.match(/\d+/) || [])[0];
-    const hg = (h.class.match(/Group\s+([A-Za-z])/i) || [])[1];
-    return hy === yr && grp && hg === grp;
-  });
-  const hwSubmitted = classHw.reduce((a, h) => a + h.submitted, 0);
-  const hwTotal     = classHw.reduce((a, h) => a + h.total, 0);
-  const hwCompletion = hwTotal ? Math.round((hwSubmitted / hwTotal) * 100) : 0;
+  // (the homework store, via window.klasioHomework), so admin and teacher never
+  // disagree. Read-only: the admin views but never authors an assignment.
+  const classHw = window.klasioHomework ? window.klasioHomework.listClassHomework(cls.group) : [];
+  const hwCompletion = window.klasioHomework
+    ? window.klasioHomework.getHomeworkCounts({ classLabel: cls.group }).submissionRate
+    : 0;
 
   // Lesson plans recorded for this class — read straight from the plans store, keyed
   // by class group. Read-only (D2). State derives from the plan date vs today.
@@ -2413,6 +2567,7 @@ const ClassDetailPage = () => {
 
   const bannerActions = (
     <div style={{ display:'flex', gap:8 }}>
+      <Btn variant="secondary" icon="megaphone" small onClick={() => announceToClass(cls)}>Post announcement</Btn>
       <Btn variant="secondary" icon="message" small onClick={() => window.__navigate && window.__navigate('admin', 'comms:messages')}>Message class</Btn>
       <Btn variant="secondary" icon="edit" small onClick={() => setModalOpen(true)}>Edit class</Btn>
     </div>
@@ -2776,6 +2931,10 @@ const AddTeacherPage = () => {
   const stepValid = i => !Object.values(stepErrs[i]).some(Boolean);
   const next = () => { setTouched(true); if (!stepValid(step)) return; setTouched(false); setStep(s => Math.min(s + 1, TEACHER_STEPS.length - 1)); };
   const back = () => step === 0 ? adminNav('teachers') : setStep(s => s - 1);
+  usePageTrail([
+    { label: 'Register a teacher', onClick: step === 0 ? null : () => setStep(0) },
+    { label: TEACHER_STEPS[step] },
+  ]);
 
   const submit = () => {
     setTouched(true);
@@ -2797,7 +2956,8 @@ const AddTeacherPage = () => {
 
   return (
     <div style={pageFrame({ narrow: true })}>
-      <FlowHeader title="Register New Teacher" subtitle="Complete all sections to onboard a new teacher" onBack={back} />
+      <FlowHeader title="Register New Teacher" subtitle="Complete all sections to onboard a new teacher"
+        onBack={back} backLabel={step === 0 ? 'Staff' : TEACHER_STEPS[step - 1]} />
       <StepTabs steps={TEACHER_STEPS} current={step} onJump={setStep} />
 
       <Card>
@@ -2857,19 +3017,8 @@ const AddTeacherPage = () => {
 };
 
 // ─── Teacher attendance helpers ──────────────────────────────────────────────────
-const ATT_META = {
-  present: { label:'Present', color:DS.success, bg:DS.successBg, border:DS.successBorder },
-  late:    { label:'Late',    color:DS.warning, bg:DS.warningBg, border:DS.warningBorder },
-  absent:  { label:'Absent',  color:DS.danger,  bg:DS.dangerBg,  border:DS.dangerBorder },
-};
 const isoDate = d => d.toISOString().slice(0, 10);
 const todayISO = () => isoDate(new Date());
-// Last N weekdays (most recent first), for the attendance register.
-const recentWeekdays = (n = 10) => {
-  const out = []; const d = new Date();
-  while (out.length < n) { if (d.getDay() !== 0 && d.getDay() !== 6) out.push(isoDate(d)); d.setDate(d.getDate() - 1); }
-  return out;
-};
 const fmtDay = iso => new Date(iso + 'T00:00:00').toLocaleDateString('en-GB', { weekday:'short', day:'numeric', month:'short' });
 const fmtRange = (from, to) => from && to ? `${fmtDay(from)} → ${fmtDay(to)}` : (from ? `from ${fmtDay(from)}` : to ? `until ${fmtDay(to)}` : 'no dates set');
 
@@ -2892,20 +3041,117 @@ const effectiveTeacher = (cls, dateISO = todayISO()) => {
   return cv ? cv.teacher : cls.teacher;
 };
 
-// Small present/late/absent toggle used by both admin and teacher self-service.
-const AttendanceToggle = ({ value, onSet }) => (
-  <div style={{ display:'inline-flex', gap:6 }}>
-    {['present','late','absent'].map(k => {
-      const m = ATT_META[k]; const on = value === k;
-      return (
-        <button key={k} onClick={() => onSet(on ? null : k)} style={{
-          padding:'5px 11px', borderRadius:7, cursor:'pointer', fontSize:12, fontWeight:600,
-          border:`1px solid ${on ? m.border : DS.border}`, background: on ? m.bg : DS.bg, color: on ? m.color : DS.muted,
-        }}>{m.label}</button>
-      );
-    })}
-  </div>
-);
+// ─── Teacher attendance — DERIVED from the class register ───────────────────────
+// Staff attendance is not a second, parallel register an admin ticks off each
+// morning. It is a consequence of whether a teacher's rostered sessions actually
+// ran with them in the room — and the class register already records exactly that:
+// attendance.jsx stores `submittedBy`, the delivering adult chosen when a register
+// is confirmed. Reading it back means there is ONE record of who taught what, and
+// no way for the two to contradict each other.
+//
+// Per session on a teacher's classes:
+//   taught     — a register exists and this teacher delivered it
+//   covered    — a register exists but a colleague delivered it, or a cover was
+//                active on that class that day
+//   leave      — the date sits inside a booked holiday → excluded entirely
+//   no_record  — the session passed with no register at all
+//
+// Rate = taught / (taught + covered): of the sessions we hold evidence for, how
+// many did this teacher take. A missing register is NOT scored as an absence — we
+// don't know what happened, and inferring one from the centre's own paperwork gap
+// would put a mark on a teacher's record that nothing supports. It surfaces
+// separately, as a gap for the admin to chase.
+const TEACHER_ATT_WINDOW = 35;   // days of history the rate is computed over
+
+const TEACHER_ATT_OUTCOME = {
+  taught:    { label: 'Taught',      tone: 'success' },
+  covered:   { label: 'Covered',     tone: 'warning' },
+  leave:     { label: 'On leave',    tone: 'info'    },
+  no_record: { label: 'No register', tone: 'danger'  },
+  upcoming:  { label: 'Upcoming',    tone: 'default' },
+  cancelled: { label: 'Cancelled',   tone: 'default' },
+};
+
+// One pass over every centre session, bucketed by the ROSTERED teacher — so the
+// Teachers list costs the same as a single profile rather than one materialisation
+// per row. Returns { [teacherId]: record }.
+const teacherAttendanceMap = (store, att, now) => {
+  const out = {};
+  (store.teachers || []).forEach(t => {
+    out[t.id] = { pct: null, taught: 0, covered: 0, leave: 0, noRecord: 0, upcoming: 0, evidence: 0, rows: [] };
+  });
+  if (!att || !window.materialiseSessions) return out;
+
+  const byName = {};
+  (store.teachers || []).forEach(t => { byName[t.name] = t; });
+  const nameById = {};
+  (store.teachers || []).forEach(t => { nameById[t.id] = t.name; });
+
+  const classes = (store.classes || []).filter(c => c.status !== 'archived' && byName[c.teacher]);
+  if (!classes.length) return out;
+
+  const sessions = window.materialiseSessions(classes, window.REGISTER_SETTINGS, now, att,
+    { backDays: TEACHER_ATT_WINDOW, fwdDays: 7 });
+
+  sessions.forEach(s => {
+    const teacher = byName[s.teacher];
+    if (!teacher) return;
+    const rec = out[teacher.id];
+    const holidays = store.holidays[teacher.id] || [];
+    const onLeave = holidays.some(h => (!h.from || s.dateISO >= h.from) && (!h.to || s.dateISO <= h.to));
+    const state = s.derived.state;
+
+    let outcome, deliveredBy = null;
+    if (state === 'cancelled')                          outcome = 'cancelled';
+    else if (state === 'upcoming' || state === 'open_live') outcome = 'upcoming';
+    else if (onLeave)                                   outcome = 'leave';
+    else if (state === 'recorded') {
+      const by = s.register_submitted_by;
+      const cover = coverActive(s.cls, s.dateISO);
+      const colleague = (by && by !== teacher.id) || (cover && cover.teacher !== teacher.name);
+      outcome = colleague ? 'covered' : 'taught';
+      deliveredBy = colleague ? ((by && nameById[by]) || (cover && cover.teacher) || 'A colleague') : teacher.name;
+    } else outcome = 'no_record';                        // awaiting or lapsed
+
+    rec.rows.push({ session: s, outcome, deliveredBy });
+    if (outcome === 'taught') rec.taught++;
+    else if (outcome === 'covered') rec.covered++;
+    else if (outcome === 'leave') rec.leave++;
+    else if (outcome === 'no_record') rec.noRecord++;
+    else if (outcome === 'upcoming') rec.upcoming++;
+  });
+
+  Object.values(out).forEach(rec => {
+    rec.evidence = rec.taught + rec.covered;
+    rec.pct = rec.evidence ? Math.round((rec.taught / rec.evidence) * 100) : null;
+    rec.rows.sort((a, b) => b.session.starts_at - a.session.starts_at);
+  });
+  return out;
+};
+
+// The store/clock plumbing every caller of the map needs, in one hook. attendance.jsx
+// loads AFTER this file, so both globals are read at render time, never at load.
+const useTeacherAttendance = (store) => {
+  const att = window.useAttendanceStore ? window.useAttendanceStore() : null;
+  const now = window.getNow ? window.getNow() : Date.now();
+  return React.useMemo(() => teacherAttendanceMap(store, att, now),
+    [store.teachers, store.classes, store.holidays, att && att.submissions, now]);
+};
+
+// A teacher's rate as display text — never a bare 0% when there's simply nothing on
+// record, which would read as "never turns up" rather than "nothing to show yet".
+const teacherAttPct = (rec) => (rec && rec.pct != null) ? `${rec.pct}%` : '—';
+const teacherAttTone = (rec) => {
+  if (!rec || rec.pct == null) return DS.muted;
+  return rec.pct >= 95 ? DS.success : rec.pct >= 85 ? DS.warning : DS.danger;
+};
+const teacherAttHint = (rec) => {
+  if (!rec || !rec.evidence) return 'No registers on record for this teacher yet';
+  const bits = [`${rec.taught} taught`, rec.covered ? `${rec.covered} covered by a colleague` : null,
+    rec.leave ? `${rec.leave} on leave` : null, rec.noRecord ? `${rec.noRecord} with no register` : null];
+  return `Last ${TEACHER_ATT_WINDOW} days — ` + bits.filter(Boolean).join(' · ');
+};
+
 
 // ─── Teacher profile / details — schedule, attendance, holidays, edit ────────────
 // Same underline tab strip + fixed two-pane shell as the student profile and
@@ -2928,8 +3174,18 @@ const TeacherProfilePage = () => {
   const [holiday, setHoliday] = React.useState({ from:'', to:'', reason:'' });
   const [coverOpen, setCoverOpen] = React.useState(false);
   const [offboardOpen, setOffboardOpen] = React.useState(false);
+  // Attendance is READ from the class register, never written into a second staff
+  // register (see teacherAttendanceMap). Called before the not-found / not-loaded
+  // early returns below, because a hook may not run conditionally.
+  const attByTeacher = useTeacherAttendance(store);
 
   React.useEffect(() => { if (teacher && !form) setForm({ ...teacher, subjects: teacherSubjects(teacher) }); }, [teacher]);
+
+  // Staff › <name> › <tab>. The name crumb returns to the profile's own landing tab.
+  usePageTrail([
+    { label: teacher ? teacher.name : 'Staff member', onClick: editing ? () => setEditing(false) : () => setTab('overview') },
+    { label: editing ? 'Edit' : ((TEACHER_PROFILE_TABS.find(t => t.id === tab) || {}).label) },
+  ]);
 
   if (!teacher) return (
     <div style={pageFrame()}>
@@ -2943,10 +3199,9 @@ const TeacherProfilePage = () => {
   const save = () => { store.updateTeacher(teacher.id, { ...form, subject: form.subjects.join(' / ') }); setEditing(false); };
   const cancel = () => { setForm({ ...teacher, subjects: teacherSubjects(teacher) }); setEditing(false); };
 
+  const attRec = attByTeacher[teacher.id] || { rows: [], evidence: 0, pct: null, taught: 0, covered: 0, leave: 0, noRecord: 0 };
   const teacherClasses = store.classes.filter(c => c.teacher === teacher.name);
   const holidays = store.holidays[teacher.id] || [];
-  const days = recentWeekdays(10);
-  const present = days.filter(d => (store.attendance[`${teacher.id}|${d}`] || 'present') === 'present').length;
 
   // Cover across this teacher's classes — each class can have its OWN stand-in, so
   // we summarise the set rather than assume one cover teacher.
@@ -2976,7 +3231,7 @@ const TeacherProfilePage = () => {
   // ── Header — back + hero card, shared by view and edit modes ──
   const header = (
     <>
-      <FlowHeader title={teacher.name} subtitle={teacherSubjects(teacher).join(' · ') || 'No subjects'} onBack={() => adminNav('teachers')} />
+      <FlowHeader title={teacher.name} subtitle={teacherSubjects(teacher).join(' · ') || 'No subjects'} onBack={() => adminNav('teachers')} backLabel="Staff" />
       <Card style={{ marginBottom: editing ? 20 : 16 }}>
         <div style={{ padding:'22px 24px', display:'flex', alignItems:'center', gap:18 }}>
           <Avatar name={teacher.name} size={64} color={teacher.color} />
@@ -3064,15 +3319,29 @@ const TeacherProfilePage = () => {
         <div style={{ padding:'16px 20px', display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(130px,1fr))', gap:12 }}>
           {profileKpiTile('Classes', teacherClasses.length)}
           {profileKpiTile('Students', teacher.students || 0, DS.info)}
-          {profileKpiTile('Attendance', (teacher.attendance || 0) + '%', (teacher.attendance || 0) < 90 ? DS.warning : DS.success)}
+          {profileKpiTile('Sessions taught', teacherAttPct(attRec), teacherAttTone(attRec))}
           {profileKpiTile('Holidays booked', holidays.length)}
         </div>
       </Card>
 
-      <Card title="Today's Register" icon="check" accent={DS.success}>
-        <div style={{ padding:'16px 20px', display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, flexWrap:'wrap' }}>
-          <div style={{ fontSize:13, color:DS.sub }}>{fmtDay(todayISO())}</div>
-          <AttendanceToggle value={store.attendance[`${teacher.id}|${todayISO()}`] || null} onSet={val => store.setAttendance(teacher.id, todayISO(), val)} />
+      <Card title="Register record" icon="check" accent={DS.success}
+        actions={<span style={{ fontSize:12, color:DS.muted }}>last {TEACHER_ATT_WINDOW} days</span>}>
+        <div style={{ padding:'16px 20px' }}>
+          {attRec.evidence ? (
+            <div style={{ display:'flex', gap:18, flexWrap:'wrap' }}>
+              {[['Taught', attRec.taught, DS.success], ['Covered', attRec.covered, attRec.covered ? DS.warning : DS.muted],
+                ['On leave', attRec.leave, DS.muted], ['No register', attRec.noRecord, attRec.noRecord ? DS.danger : DS.muted]].map(([l, v, c]) => (
+                <div key={l}>
+                  <div style={{ fontSize:22, fontWeight:700, color:c, lineHeight:1, fontVariantNumeric:'tabular-nums' }}>{v}</div>
+                  <div style={{ fontSize:11.5, color:DS.muted, marginTop:4 }}>{l}</div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ fontSize:13, color:DS.muted, lineHeight:1.5 }}>
+              No registers on record yet. This fills in as {teacher.name}'s sessions are taken on the Attendance screen.
+            </div>
+          )}
         </div>
       </Card>
 
@@ -3114,20 +3383,39 @@ const TeacherProfilePage = () => {
     </div>
   );
 
-  // ── Tab 3 · Attendance register ──
+  // ── Tab 3 · Attendance — the register record, read-only ──
+  // Every row traces to a real session and its register. Nothing on this tab is
+  // editable: correcting a teacher's attendance means correcting (or unlocking)
+  // the register for that session, on the Attendance screen, where it is audited.
+  const attRows = attRec.rows.filter(r => r.outcome !== 'upcoming');
   const tabAttendance = (
     <div style={gridCols}>
-      <Card title="Attendance Register" icon="calendar" accent={DS.success} style={span2} actions={<span style={{ fontSize:12, color:DS.muted }}>{present}/{days.length} present (last {days.length} days)</span>}>
-        <div style={{ padding:'8px 0' }}>
-            {days.map((d, i) => {
-              const v = store.attendance[`${teacher.id}|${d}`] || (d === todayISO() ? null : 'present');
-              return (
-                <div key={d} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'12px 24px', borderBottom: i < days.length-1 ? `1px solid ${DS.border}` : 'none' }}>
-                  <div style={{ fontSize:13.5, color:DS.text, fontWeight: d === todayISO() ? 700 : 500 }}>{fmtDay(d)}{d === todayISO() && <span style={{ fontSize:11, color:DS.accent, marginLeft:8 }}>Today</span>}</div>
-                  <AttendanceToggle value={v} onSet={val => store.setAttendance(teacher.id, d, val)} />
+      <Card title="Register record" icon="calendar" accent={DS.success} style={span2}
+        actions={<span style={{ fontSize:12, color:DS.muted }}>{teacherAttPct(attRec)} of {attRec.evidence} session{attRec.evidence === 1 ? '' : 's'} on record · last {TEACHER_ATT_WINDOW} days</span>}>
+        <div style={{ padding:'12px 20px 4px', fontSize:12.5, color:DS.muted, lineHeight:1.5 }}>
+          Derived from the class register — a session counts as taught when {teacher.name} submitted its register.
+          Sessions with no register aren’t counted against {teacher.name}; they’re a gap to chase on{' '}
+          <button onClick={() => window.__navigate && window.__navigate('admin', 'attendance')} style={{ background:'none', border:'none', padding:0, cursor:'pointer', color:DS.accent, fontSize:12.5, fontWeight:600 }}>Attendance</button>.
+        </div>
+        <div style={{ padding:'4px 0' }}>
+          {attRows.length === 0 ? (
+            <EmptyState icon="calendar" title="Nothing on record" message="No past sessions for this teacher in the last few weeks." />
+          ) : attRows.slice(0, 24).map((r, i) => {
+            const meta = TEACHER_ATT_OUTCOME[r.outcome] || TEACHER_ATT_OUTCOME.upcoming;
+            return (
+              <div key={r.session.id} style={{ display:'flex', alignItems:'center', gap:14, padding:'12px 24px', borderBottom: i < Math.min(attRows.length, 24)-1 ? `1px solid ${DS.border}` : 'none' }}>
+                <div style={{ width:96, flexShrink:0, fontSize:12.5, color:DS.sub, fontWeight:500 }}>{fmtDay(r.session.dateISO)}</div>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:13, fontWeight:600, color:DS.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{r.session.name}</div>
+                  <div style={{ fontSize:11.5, color:DS.faint }}>{r.session.group} · {window.attFmtClock ? window.attFmtClock(r.session.starts_at) : ''}</div>
                 </div>
-              );
-            })}
+                {r.outcome === 'covered' && r.deliveredBy && (
+                  <div style={{ fontSize:12, color:DS.muted, whiteSpace:'nowrap' }}>by {r.deliveredBy}</div>
+                )}
+                <StatusPill tone={meta.tone}>{meta.label}</StatusPill>
+              </div>
+            );
+          })}
         </div>
       </Card>
     </div>
@@ -3283,20 +3571,27 @@ const AdminTeachersPage = () => {
   const totalEnrolments = teachers.reduce((s, t) => s + (t.students || 0), 0);
   const totalClasses  = teachers.reduce((s, t) => s + (t.classes || 0), 0);
   const activeT = teachers.filter(t => t.status === 'active');
-  const avgAttendance = activeT.length ? Math.round(activeT.reduce((s, t) => s + (t.attendance || 0), 0) / activeT.length) : 0;
-  // Sick days = absences recorded across all teachers this term.
-  const sickDays = Object.values(store.attendance).filter(v => v === 'absent').length;
+  const invitedT = teachers.filter(t => t.status !== 'active').length;
+
+  // Staff attendance is DERIVED from the class register (see teacherAttendanceMap) —
+  // there is no separate teacher register to keep in step, and no admin ticking a
+  // second box each morning. One record of who taught what.
+  const attMap = useTeacherAttendance(store);
+  const withEvidence = activeT.filter(t => (attMap[t.id] || {}).evidence > 0);
+  const taken = withEvidence.reduce((s, t) => s + attMap[t.id].taught, 0);
+  const evidence = withEvidence.reduce((s, t) => s + attMap[t.id].evidence, 0);
+  const centreRate = evidence ? Math.round((taken / evidence) * 100) : null;
+  const coveredTotal = activeT.reduce((s, t) => s + ((attMap[t.id] || {}).covered || 0), 0);
+  const missingTotal = activeT.reduce((s, t) => s + ((attMap[t.id] || {}).noRecord || 0), 0);
 
   const filtered = teachers
     .filter(t => {
       const q = search.toLowerCase();
       return t.name.toLowerCase().includes(q) || teacherSubjects(t).join(' ').toLowerCase().includes(q) || (t.email || '').toLowerCase().includes(q);
     })
-    .sort((a, b) => sort === 'attendance' ? (b.attendance || 0) - (a.attendance || 0) : a.name.localeCompare(b.name));
-
-  // Today's attendance for the inline register column.
-  const today = todayISO();
-  const setToday = (id, val) => store.setAttendance(id, today, val);
+    .sort((a, b) => sort === 'attendance'
+      ? ((attMap[b.id] || {}).pct || -1) - ((attMap[a.id] || {}).pct || -1)
+      : a.name.localeCompare(b.name));
 
   return (
     <div style={pageFrame()}>
@@ -3306,18 +3601,26 @@ const AdminTeachersPage = () => {
         actions={[<Btn key="add" variant="primary" icon="plus" small onClick={() => adminNav('teachers_add')}>Add Teacher</Btn>]}
       />
 
-      {/* Summary KPIs */}
-      <div style={{ display:'flex', gap:16, marginBottom:24 }}>
-        <KPICard label="Teachers"       value={activeT.length}      sub="active staff" icon="users" iconBg={DS.accentLight} accent={DS.accent} />
-        <KPICard label="Avg Attendance" value={avgAttendance + '%'} sub="this term"    icon="check" iconBg={DS.successBg} accent={DS.success} />
-        <KPICard label="Sick Days (term)" value={sickDays}          sub="recorded absences" icon="alert" iconBg={DS.dangerBg} accent={DS.danger} />
-        <KPICard label="Enrolments"     value={totalEnrolments}      sub="across all classes" icon="graduation" iconBg={DS.infoBg} accent={DS.info} />
-      </div>
+      <StatBand style={{ marginBottom: 22 }} stats={[
+        { label: 'Teachers', value: activeT.length, sub: invitedT ? `${invitedT} invited, not yet active` : 'all active' },
+        { label: 'Sessions taught', value: centreRate == null ? '—' : `${centreRate}%`,
+          sub: `${taken} of ${evidence} on record`, tone: centreRate != null && centreRate < 90 ? DS.warning : undefined,
+          hint: `Of the sessions with a register in the last ${TEACHER_ATT_WINDOW} days, the share the rostered teacher took themselves.` },
+        { label: 'Covered', value: coveredTotal, sub: `delivered by a colleague`,
+          hint: 'Sessions a register shows were taken by someone other than the rostered teacher.' },
+        // A staff-record figure over the full window — distinct from the live queue on
+        // the Attendance screen, so it says which period it covers.
+        { label: 'Missing registers', value: missingTotal, sub: missingTotal ? `in the last ${TEACHER_ATT_WINDOW} days` : 'nothing outstanding',
+          tone: missingTotal ? DS.danger : DS.success,
+          onClick: () => window.__navigate && window.__navigate('admin', 'attendance'),
+          hint: 'Past sessions with no register at all — open Attendance to chase them.' },
+        { label: 'Enrolments', value: totalEnrolments, sub: `across ${totalClasses} classes` },
+      ]} />
 
       {/* Toolbar */}
       <div style={{ display:'flex', gap:12, marginBottom:20, alignItems:'center' }}>
         <SearchInput value={search} onChange={e => setSearch(e.target.value)} placeholder="Search teachers or subjects…" />
-        <Segmented value={sort} onChange={setSort} options={[{ id:'name', label:'Name' }, { id:'attendance', label:'Attendance' }]} />
+        <Segmented value={sort} onChange={setSort} options={[{ id:'name', label:'Name' }, { id:'attendance', label:'Sessions taught' }]} />
       </div>
 
       <Card>
@@ -3325,30 +3628,38 @@ const AdminTeachersPage = () => {
           <EmptyState icon="users" title="No teachers found" message={search ? `No teachers match “${search}”.` : 'Add your first teacher to get started.'} action={!search && <Btn variant="primary" icon="plus" onClick={() => adminNav('teachers_add')}>Add Teacher</Btn>} />
         ) : (
           <Table
-            cols={['Teacher','Subjects','Students','Classes',{ label:'Attendance', align:'left' },"Today's register",{ label:'', align:'right' }]}
+            cols={['Teacher','Subjects','Students','Classes','Sessions taught','Registers']}
             rows={filtered.map(t => {
               const subs = teacherSubjects(t);
-              const todayVal = store.attendance[`${t.id}|${today}`] || null;
-              return [
-                <div style={{ cursor:'pointer' }} onClick={() => adminNav('teacher_profile', t.id)}>
-                  <div style={{ fontSize:13.5, fontWeight:600, color:DS.text }}>{t.name}</div>
-                  <div style={{ fontSize:11.5, color:DS.faint, display:'flex', alignItems:'center', gap:4, marginTop:2 }}><Icon name="mail" size={11} />{t.email}</div>
-                </div>,
-                <div style={{ display:'flex', flexWrap:'wrap', gap:4 }}>
-                  {subs.slice(0,2).map(s => <span key={s} style={{ fontSize:11, padding:'2px 8px', background:DS.surface, border:`1px solid ${DS.border}`, borderRadius:14, color:DS.sub }}>{s}</span>)}
-                  {subs.length > 2 && <span style={{ fontSize:11, color:DS.faint }}>+{subs.length-2}</span>}
-                </div>,
-                <span style={{ fontSize:14, fontWeight:700, color:DS.text }}>{t.students || 0}</span>,
-                <span style={{ fontSize:14, fontWeight:700, color:DS.text }}>{t.classes || 0}</span>,
-                <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                  <div style={{ width:60, height:6, background:DS.surface, borderRadius:3, overflow:'hidden' }}>
-                    <div style={{ width:`${t.attendance || 0}%`, height:'100%', background: (t.attendance||0) >= 95 ? DS.success : DS.warning }} />
-                  </div>
-                  <span style={{ fontSize:12.5, fontWeight:600, color:DS.sub }}>{t.attendance || 0}%</span>
-                </div>,
-                <AttendanceToggle value={todayVal} onSet={val => setToday(t.id, val)} />,
-                <Btn variant="ghost" small onClick={() => adminNav('teacher_profile', t.id)}>View →</Btn>,
-              ];
+              const rec = attMap[t.id] || {};
+              return {
+                onClick: () => adminNav('teacher_profile', t.id),
+                cells: [
+                  <div>
+                    <div style={{ fontSize:13.5, fontWeight:600, color:DS.text }}>{t.name}</div>
+                    <div style={{ fontSize:11.5, color:DS.faint, display:'flex', alignItems:'center', gap:4, marginTop:2 }}><Icon name="mail" size={11} />{t.email}</div>
+                  </div>,
+                  <div style={{ display:'flex', flexWrap:'wrap', gap:4 }}>
+                    {subs.slice(0,2).map(s => <span key={s} style={{ fontSize:11, padding:'2px 8px', background:DS.surface, border:`1px solid ${DS.border}`, borderRadius:14, color:DS.sub }}>{s}</span>)}
+                    {subs.length > 2 && <span style={{ fontSize:11, color:DS.faint }}>+{subs.length-2}</span>}
+                  </div>,
+                  <span style={{ fontSize:14, fontWeight:700, color:DS.text }}>{t.students || 0}</span>,
+                  <span style={{ fontSize:14, fontWeight:700, color:DS.text }}>{t.classes || 0}</span>,
+                  // The rate carries its own explanation on hover — a staffing figure
+                  // should never be an unexplained number next to someone's name.
+                  <span title={teacherAttHint(rec)} style={{ display:'inline-flex', alignItems:'center', gap:8 }}>
+                    <div style={{ width:56, height:6, background:DS.surface, borderRadius:3, overflow:'hidden' }}>
+                      <div style={{ width:`${rec.pct || 0}%`, height:'100%', background:teacherAttTone(rec) }} />
+                    </div>
+                    <span style={{ fontSize:12.5, fontWeight:600, color:teacherAttTone(rec), fontVariantNumeric:'tabular-nums' }}>{teacherAttPct(rec)}</span>
+                  </span>,
+                  rec.noRecord
+                    ? <span title="Past sessions on this teacher's classes with no register submitted"><StatusPill tone="danger">{rec.noRecord} missing</StatusPill></span>
+                    : rec.evidence
+                      ? <StatusPill tone="success">Up to date</StatusPill>
+                      : <span style={{ fontSize:12.5, color:DS.faint }}>No sessions yet</span>,
+                ],
+              };
             })}
           />
         )}
@@ -3394,6 +3705,10 @@ const AdminSchedulePage = () => {
   // view within Schedule — no new page id (§4.4).
   const [session, setSession] = React.useState(null);
   const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+  // The session detail is a page *inside* Timetable, so it says so in the crumbs.
+  usePageTrail(session
+    ? [{ label: (store.classes.find(c => c.id === session.classId) || {}).name || 'Session' }]
+    : []);
 
   if (session && window.ResourceSessionDetail) {
     return <window.ResourceSessionDetail classId={session.classId} date={session.date} onBack={() => setSession(null)} />;
@@ -3546,4 +3861,6 @@ const AdminPages = ({ page, section }) => {
   return null;
 };
 
-Object.assign(window, { AdminPages });
+// teacherAttendanceMap is exported so other surfaces (and tests) can ask the same
+// question the Teachers page asks, rather than re-deriving staff attendance.
+Object.assign(window, { AdminPages, teacherAttendanceMap, TEACHER_ATT_WINDOW });

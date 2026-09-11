@@ -67,6 +67,79 @@ const ATT_SEED_DELIVERED = [
   { sessionId: 'c34|2026-06-29', at: '2026-06-29T10:35:00' }, // prev Mon
 ];
 
+// ── Centre-wide register history (generated, deterministic) ────────────────────
+// The hand-written rows above only cover Heebz A's eight classes, because they
+// exist to stage ONE teacher's lifecycle demo. But two admin surfaces read every
+// class in the centre — the admin Attendance screen, and the derived staff
+// attendance on the Teachers page (a teacher's attendance IS which of their
+// rostered sessions they actually delivered). With only t1 seeded, every other
+// teacher's history was empty and every one of their past sessions read as a
+// missed register.
+//
+// So: expand the past ~5 weeks into registers for every OTHER class, stamped with
+// the class's own rostered teacher as the delivering adult. A deterministic ~9%
+// are left unregistered, and one class in twelve has a session delivered by a
+// colleague, so the admin's "needs a register" queue and the cover signal are both
+// real rather than empty. Deterministic (hashed off the session id) — never
+// random, so the demo is stable across reloads.
+// Heebz A's eight classes stage the lifecycle demo above, so the RECENT end of
+// their history is hand-written and its gaps are deliberate (a lapsed register, an
+// awaiting one, a cancellation). Older than that window there is nothing to protect,
+// and leaving it blank made the one teacher the demo is about look like the worst
+// attender in the centre — so they get generated history too, just further back.
+const ATT_DEMO_CLASS_IDS = ['c1', 'c2', 'c3', 'c4', 'c34', 'c35', 'c36', 'c37'];
+const ATT_DEMO_PROTECT_DAYS = 12;
+const ATT_HISTORY_DAYS = 35;
+
+const attSeedHash = (s) => {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+};
+const attSeedIso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+const attBuildCentreHistory = () => {
+  const classes = (window.SEED_CLASSES || []).filter(c =>
+    c.status !== 'archived' && c.status !== 'paused' && c.day);
+  // Never restate a hand-written row — those carry their own submission times.
+  const handWritten = new Set(ATT_SEED_DELIVERED.map(r => r.sessionId));
+  const teachers = window.SEED_TEACHERS || [];
+  const activeIds = teachers.filter(t => t.status === 'active').map(t => t.id);
+  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const out = [];
+
+  for (let back = 1; back <= ATT_HISTORY_DAYS; back++) {
+    const d = new Date(ATT_REFERENCE_NOW);
+    d.setDate(d.getDate() - back);
+    const dayName = dayNames[d.getDay()];
+    const iso = attSeedIso(d);
+    classes.forEach(cls => {
+      if (cls.day !== dayName) return;
+      if (ATT_DEMO_CLASS_IDS.includes(cls.id) && back <= ATT_DEMO_PROTECT_DAYS) return;
+      const sessionId = `${cls.id}|${iso}`;
+      if (handWritten.has(sessionId) || (window.ATT_SEED_CANCELLED || []).includes(sessionId)) return;
+      const h = attSeedHash(sessionId);
+      if (h % 100 < 9) return;                       // left unregistered — a real gap to chase
+      const rostered = teachers.find(t => t.name === cls.teacher);
+      // One session in twelve was delivered by a colleague — the shape a real
+      // cover/swap leaves behind, and what the staff-attendance view reads.
+      // >>> not >> : h is a full 32-bit hash, and a signed shift turns the top half
+      // of the range negative — which silently produced minute values like "-23",
+      // an unparseable timestamp, and a register that read as never taken.
+      const covered = (h >>> 7) % 12 === 0 && activeIds.length > 1;
+      const deliveredBy = covered
+        ? activeIds[(h >>> 11) % activeIds.length]
+        : (rostered ? rostered.id : activeIds[0]);
+      out.push({
+        sessionId,
+        at: `${iso}T${String(17 + (h % 3)).padStart(2, '0')}:${String((h >>> 3) % 60).padStart(2, '0')}:00`,
+        teacherId: deliveredBy,
+      });
+    });
+  }
+  return out;
+};
+
 // One cancelled session in the spread — excluded from the attendance-rate
 // denominator (Part B). Reuses the same stable sessionId scheme.
 const ATT_SEED_CANCELLED = ['c4|2026-07-03']; // prev Fri, Year 9 – Group C cancelled
@@ -82,5 +155,7 @@ const ATT_SEED_CANCELLED = ['c4|2026-07-03']; // prev Fri, Year 9 – Group C ca
 Object.assign(window, {
   ATT_MIN, ATT_REFERENCE_NOW, ATT_NOW_OFFSET_KEY,
   attNowOffset, attSetNowOffset, getNow,
-  REGISTER_SETTINGS, ATT_SEED_DELIVERED, ATT_SEED_CANCELLED,
+  REGISTER_SETTINGS, ATT_SEED_CANCELLED,
+  // The hand-written lifecycle rows first, then the generated centre-wide history.
+  ATT_SEED_DELIVERED: ATT_SEED_DELIVERED.concat(attBuildCentreHistory()),
 });

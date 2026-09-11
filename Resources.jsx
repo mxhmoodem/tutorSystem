@@ -144,7 +144,7 @@ const resTopicForContext = (contextType, contextId) => {
       return (p && p.plan && p.plan.topic) ? p.plan.topic : '';
     }
     if (contextType === 'homework') {
-      const raw = localStorage.getItem('homework_store_v6');
+      const raw = localStorage.getItem('homework_store_v9');
       if (!raw) return '';
       const s = JSON.parse(raw);
       const a = s.assignments && s.assignments[contextId];
@@ -1620,8 +1620,8 @@ const ResourceSessionDetail = ({ classId, date, onBack }) => {
   const cls = admin ? (admin.classes || []).find(c => c.id === classId) : null;
   if (!cls) return (
     <div style={pageFrame()}>
-      <Btn variant="secondary" icon="chevron_l" small onClick={onBack}>Back to schedule</Btn>
-      <div style={{ marginTop: 20 }}><EmptyState icon="calendar" title="Session not found" /></div>
+      <BackLink onClick={onBack} label="Timetable" />
+      <EmptyState icon="calendar" title="Session not found" />
     </div>
   );
 
@@ -1650,17 +1650,21 @@ const ResourceSessionDetail = ({ classId, date, onBack }) => {
   return (
     <div style={pageFrame()}>
       <div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Btn variant="secondary" icon="chevron_l" small onClick={onBack}>Back to schedule</Btn>
-          <Btn variant="secondary" icon="book" small onClick={() => { window.__adminParam = classId; window.__navigate && window.__navigate('admin', 'class_detail'); }}>View class record</Btn>
-        </div>
-        <div style={{ margin: '16px 0 6px' }}>
+        <BackLink onClick={onBack} label="Timetable" />
+        <div style={{ margin: '0 0 6px' }}>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 10px', borderRadius: 999, background: DS.surface, color: DS.muted, fontSize: 11, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
             <Icon name="calendar" size={12} /> Session · read-only
           </div>
         </div>
-        <h1 style={{ fontSize: 22, fontWeight: 700, color: DS.text, margin: '4px 0 2px', letterSpacing: '-0.4px' }}>{cls.name} — {resFmtDate(date)}</h1>
-        <p style={{ fontSize: 14, color: DS.muted, margin: '0 0 22px' }}>{cls.group} · {cls.room || 'No room'} · Taught by {cls.teacher}</p>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, margin: '0 0 22px' }}>
+          <div>
+            <h1 style={{ fontSize: 22, fontWeight: 700, color: DS.text, margin: '4px 0 2px', letterSpacing: '-0.4px' }}>{cls.name} — {resFmtDate(date)}</h1>
+            <p style={{ fontSize: 14, color: DS.muted, margin: 0 }}>{cls.group} · {cls.room || 'No room'} · Taught by {cls.teacher}</p>
+          </div>
+          {/* Sideways navigation (to the class record) is an action, not a way back —
+              it belongs with the page actions, never beside the back control. */}
+          <Btn variant="secondary" icon="book" small onClick={() => { window.__adminParam = classId; window.__navigate && window.__navigate('admin', 'class_detail'); }}>View class record</Btn>
+        </div>
 
         <Section icon="check" title="Attendance">
           {(() => {
@@ -1823,11 +1827,11 @@ window.klasioResources = {
   // relevance ranker / activity views; nothing consumes it yet by design.
   usageEvents: (resourceId) => { const s = resRead(); return (s.usage_events || []).filter(e => !resourceId || e.resource_id === resourceId); },
   lastUsedAt: (resourceId) => { const s = resRead(); const es = (s.usage_events || []).filter(e => e.resource_id === resourceId); return es.length ? es.map(e => e.at).sort().slice(-1)[0] : null; },
-  // Homework helpers — bridge into the Homework store (homework_store_v6) so the
+  // Homework helpers — bridge into the Homework store (homework_store_v9) so the
   // where-used drawer + session detail can label homework contexts. Kept defensive.
   homeworkTitle: (assignmentId) => {
     try {
-      const raw = localStorage.getItem('homework_store_v6');
+      const raw = localStorage.getItem('homework_store_v9');
       if (!raw) return null;
       const s = JSON.parse(raw);
       const a = s.assignments && s.assignments[assignmentId];
@@ -1836,7 +1840,7 @@ window.klasioResources = {
   },
   homeworkForClass: (classLabel) => {
     try {
-      const raw = localStorage.getItem('homework_store_v6');
+      const raw = localStorage.getItem('homework_store_v9');
       if (!raw) return [];
       const s = JSON.parse(raw);
       return Object.values(s.assignments || {})

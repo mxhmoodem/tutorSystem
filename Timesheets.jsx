@@ -1015,6 +1015,7 @@ const AdminTimesheetDetailPage = () => {
     setPrintData({ groups: [{ id: teacherId, name, entries: exportRows }], range, periodLabel: tsRangeLabel(range) });
     if (markExp) store.markExported(exportRows.filter(e => e.status === 'approved').map(e => e.id));
   };
+  usePageTrail(teacher ? [{ label: name }] : []);
   React.useEffect(() => {
     if (!printData) return;
     const id = setTimeout(() => window.print(), 80);
@@ -1035,13 +1036,8 @@ const AdminTimesheetDetailPage = () => {
   return (
     <div style={pageFrame()}>
       {/* Back + title + export actions */}
+      <BackLink onClick={() => adminNav('timesheets')} label="Timesheets" />
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14, marginBottom: 22 }}>
-        <button onClick={() => adminNav('timesheets')} title="Back to timesheets" style={{
-          background: 'none', border: `1px solid ${DS.border}`, borderRadius: 8, cursor: 'pointer',
-          color: DS.muted, width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-        }}>
-          <span style={{ display: 'flex', transform: 'rotate(180deg)' }}><Icon name="chevron_r" size={16} color={DS.muted} strokeWidth={2} /></span>
-        </button>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <Avatar name={name} size={40} color={teacher.color} />
           <div>

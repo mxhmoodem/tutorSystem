@@ -610,7 +610,7 @@ const InviteTeachersPage = () => {
   if (sent) {
     return (
       <div style={pageFrame({ narrow: true })}>
-        <FlowHeader title="Invites sent" subtitle={`${sent.length} teacher${sent.length === 1 ? '' : 's'} invited to ${onb.centre.name}`} onBack={() => adminNav('setup')} />
+        <FlowHeader title="Invites sent" subtitle={`${sent.length} teacher${sent.length === 1 ? '' : 's'} invited to ${onb.centre.name}`} onBack={() => adminNav('setup')} backLabel="Centre setup" />
         <Card>
           <div style={{ padding: '12px 0' }}>
             {sent.map((s, i) => (
@@ -644,7 +644,7 @@ const InviteTeachersPage = () => {
 
   return (
     <div style={pageFrame({ narrow: true })}>
-      <FlowHeader title="Invite teachers" subtitle="Each teacher gets a link to set up their own account." onBack={() => adminNav('setup')} />
+      <FlowHeader title="Invite teachers" subtitle="Each teacher gets a link to set up their own account." onBack={() => adminNav('setup')} backLabel="Centre setup" />
 
       <div style={{ display: 'flex', gap: 16, marginBottom: 22 }}>
         <SeatMeter label="Teacher seats" used={used} total={teacherSeats} icon="user" accent="#0891B2" hint="Pooled across all centres" />
@@ -776,7 +776,7 @@ const BulkImportPage = () => {
 
   return (
     <div style={pageFrame()}>
-      <FlowHeader title="Import students" subtitle="Upload your class list — we generate a username + claim slip for each student." onBack={() => adminNav('setup')} />
+      <FlowHeader title="Import students" subtitle="Upload your class list — we generate a username + claim slip for each student." onBack={() => adminNav('setup')} backLabel="Centre setup" />
 
       {/* Format help */}
       <Card title="CSV format" subtitle="Comma-separated, UTF-8, with a header row" icon="file" accent={DS.accent}
@@ -955,7 +955,7 @@ const AddSingleStudentPage = () => {
 
   return (
     <div style={pageFrame({ narrow: true })}>
-      <FlowHeader title="Add a student" subtitle="Creates one student account, ready to claim. This signs them up at the centre — assign classes separately." onBack={() => adminNav('students_import')} />
+      <FlowHeader title="Add a student" subtitle="Creates one student account, ready to claim. This signs them up at the centre — assign classes separately." onBack={() => adminNav('students_import')} backLabel="Import students" />
 
       <Card>
         <div style={{ padding: '24px 26px' }}>
@@ -1037,7 +1037,7 @@ const ClaimSlipsPage = () => {
 
   return (
     <div style={pageFrame()}>
-      <FlowHeader title="Claim slips" subtitle="Hand these to students (or parents for under-13s) to set up sign-in." onBack={() => adminNav('people')} />
+      <FlowHeader title="Claim slips" subtitle="Hand these to students (or parents for under-13s) to set up sign-in." onBack={() => adminNav('people')} backLabel="People & invites" />
 
       {slipData.length === 0 ? (
         <Card><EmptyState icon="print" title="No slips to print" message="Import or add students to generate claim slips." action={<Btn variant="primary" icon="upload" onClick={() => adminNav('students_import')}>Import students</Btn>} /></Card>
@@ -1103,7 +1103,7 @@ const ClassRosterPage = () => {
 
   return (
     <div style={pageFrame()}>
-      <FlowHeader title="Manage class roster" subtitle="Enrol already signed-up students into a class. Students can't enrol themselves." onBack={() => adminNav('classes')} />
+      <FlowHeader title="Manage class roster" subtitle="Enrol already signed-up students into a class. Students can't enrol themselves." onBack={() => adminNav('classes')} backLabel="Classes" />
 
       <Card style={{ marginBottom: 18 }}>
         <div style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
@@ -1287,8 +1287,10 @@ const PeopleInvitesPage = () => {
       <div style={{ display: 'flex', gap: 16, marginBottom: 22, flexWrap: 'wrap' }}>
         <SeatMeter label="Teacher seats" used={teachersUsed} total={teacherSeats} icon="user" accent="#0891B2" hint="Pooled across all centres" />
         <SeatMeter label="Student seats" used={studentsUsed} total={studentSeats} icon="users" accent={DS.accent} hint="Pooled across all centres" />
-        <KPICard label="Outstanding invites" value={outstanding} sub="link sent, not done" icon="send" iconBg={DS.infoBg} accent={DS.info} />
-        <KPICard label="Not yet set up" value={notSetUp} sub="awaiting credential" icon="alert" iconBg={DS.warningBg} accent={DS.warning} />
+        <StatBand variant="compact" style={{ flex: 1, minWidth: 260 }} stats={[
+          { label: 'Outstanding invites', value: outstanding, sub: 'link sent, not done' },
+          { label: 'Not yet set up', value: notSetUp, sub: 'awaiting credential', tone: notSetUp ? DS.warning : undefined },
+        ]} />
       </div>
 
       {/* Filters */}

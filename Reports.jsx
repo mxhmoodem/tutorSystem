@@ -836,6 +836,7 @@ const ReportEditor = ({ report, store, onBack, onSaved }) => {
   const readOnly = report.status === 'published' && !perms.editPublished;
   const [tab, setTab] = React.useState(readOnly ? 'preview' : 'edit'); // edit | preview
   const [gateMsg, setGateMsg] = React.useState('');
+  usePageTrail([{ label: report.studentName || 'Report' }, { label: tab === 'preview' ? 'Preview' : 'Edit' }]);
   const set = (patch) => setR(prev => ({ ...prev, ...patch }));
   const setAcad = (patch) => setR(prev => ({ ...prev, academic: { ...prev.academic, ...patch } }));
   const setTargets = (patch) => setR(prev => ({ ...prev, targets: { ...prev.targets, ...patch } }));
@@ -894,9 +895,7 @@ const ReportEditor = ({ report, store, onBack, onSaved }) => {
     <div>
       {/* sticky action bar */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 0', position: 'sticky', top: 52, background: DS.surface, zIndex: 5 }}>
-        <button onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'none', border: 'none', cursor: 'pointer', color: DS.muted, fontSize: 13 }}>
-          ← Back to reports
-        </button>
+        <BackLink onClick={onBack} label="All reports" style={{ marginBottom: 0 }} />
         {!readOnly && <Segmented options={[{ value: 'edit', label: 'Edit' }, { value: 'preview', label: 'Preview' }]} value={tab} onChange={setTab} />}
         <div style={{ flex: 1 }} />
         <Btn variant="ghost" icon="copy" small onClick={() => { store.duplicateReport(r.id); onSaved && onSaved('duplicated'); }}>Duplicate</Btn>
@@ -1353,13 +1352,12 @@ const TeacherReports = () => {
           : <Btn key="n" variant="primary" icon="plus" small onClick={() => setShowNew(true)}>New report</Btn>
       ]} />
 
-      {/* analytics */}
-      <div style={{ display: 'flex', gap: 14, marginBottom: 22 }}>
-        <KPICard label="Awaiting completion" value={drafts.length} icon="edit" iconBg={DS.warningBg} accent={DS.warning} sub="drafts to finish" />
-        <KPICard label="Due this week" value={dueThisWeek} icon="clock" iconBg={DS.accentLight} accent={DS.accent} sub={`default: ${rptFreqLabel((config.defaultRule || {}).frequency).toLowerCase()}`} />
-        <KPICard label="Recently published" value={recentlyPublished.length} icon="check" iconBg={DS.successBg} accent={DS.success} trend="this term" trendDir="up" />
-        <KPICard label="Published total" value={published.length} icon="file" iconBg={DS.accentLight} accent={DS.accent} sub={`${reports.length} reports`} />
-      </div>
+      <StatBand style={{ marginBottom: 22 }} stats={[
+        { label: 'Awaiting completion', value: drafts.length, sub: 'drafts to finish', tone: drafts.length ? DS.warning : undefined },
+        { label: 'Due this week', value: dueThisWeek, sub: `default: ${rptFreqLabel((config.defaultRule || {}).frequency).toLowerCase()}` },
+        { label: 'Recently published', value: recentlyPublished.length, sub: 'this term' },
+        { label: 'Published total', value: published.length, sub: `${reports.length} reports` },
+      ]} />
 
       <div style={{ display: 'grid', gridTemplateColumns: '232px 1fr', gap: 24, alignItems: 'start' }}>
         {/* sidebar: the filters rail, with "Reports due" as its own card underneath */}
@@ -1607,13 +1605,14 @@ const StudentReports = () => {
   // Reset to page 1 when the active filters change.
   const filterKey = `${search}|${subjectF}|${teacherF}|${sort}`;
   React.useEffect(() => { setPage(1); }, [filterKey]);
+  usePageTrail(open ? [{ label: open.title || 'Report' }] : []);
 
   if (open) {
     const r = store.store.reports[open.id] || open;
     return (
       <div style={pageFrame()}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18, maxWidth: 820, margin: '0 auto 18px' }}>
-          <button onClick={() => setOpen(null)} style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', cursor: 'pointer', color: DS.muted, fontSize: 13 }}>← Back to reports</button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, maxWidth: 820, margin: '0 auto 18px' }}>
+          <BackLink onClick={() => setOpen(null)} label="My reports" style={{ marginBottom: 0 }} />
           <div style={{ flex: 1 }} />
           <Btn variant="secondary" icon="download" small onClick={() => printReportPDF(r, store.store.config.branding)}>Download PDF</Btn>
         </div>
@@ -1987,6 +1986,7 @@ const UpcomingReports = ({ config, store, teacherName, showTeacher = false, limi
 // admin overview card. Pure presentation — reuses computeUpcomingReports.
 const UpcomingReportsPage = ({ config, store, teacherName, showTeacher = false, onBack, onOpenStudent }) => {
   const [groupBy, setGroupBy] = React.useState('none');   // none | class | subject
+  usePageTrail([{ label: 'Reports due' }]);
   const rows = computeUpcomingReports(config, store, { teacherName });
   const overdue = rows.filter(r => r.overdue).length;
   const soon = rows.filter(r => r.soon || r.dueInDays === 0).length;
@@ -2005,11 +2005,7 @@ const UpcomingReportsPage = ({ config, store, teacherName, showTeacher = false, 
 
   return (
     <div style={pageFrame()}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
-        <button onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', cursor: 'pointer', color: DS.muted, fontSize: 13 }}>
-          ← Back to reports
-        </button>
-      </div>
+      <BackLink onClick={onBack} label="Reports" />
       <PageHeader title="Reports due" subtitle={teacherName ? 'Every student you teach with a report coming up, soonest first' : 'Every student with a report coming up, soonest first'} actions={[
         overdue > 0 && <Badge key="o" variant="danger"><Icon name="flag" size={11} /> {overdue} overdue</Badge>,
         soon > 0 && <Badge key="s" variant="warning"><Icon name="clock" size={11} /> {soon} due soon</Badge>,
@@ -2275,6 +2271,7 @@ const AdminTemplateBuilder = ({ template, store, onClose, onSaved }) => {
   const withRequired = (tpl) => ({ ...tpl, sections: Array.from(new Set([...(tpl.sections || []), ...requiredSections])) });
   const [t, setT] = React.useState(withRequired(template ? { ...blankTemplate(), ...template } : blankTemplate()));
   const [newCat, setNewCat] = React.useState('');
+  usePageTrail([{ label: isNew ? 'New template' : (t.name || 'Edit template') }]);
   const set = (patch) => setT(prev => ({ ...prev, ...patch }));
   const isRequired = (s) => requiredSections.includes(s);
 
@@ -2334,7 +2331,7 @@ const AdminTemplateBuilder = ({ template, store, onClose, onSaved }) => {
     <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 40px)' }}>
       {/* top action bar */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 24px', borderBottom: `1px solid ${DS.border}`, background: DS.bg }}>
-        <button onClick={onClose} style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'none', border: 'none', cursor: 'pointer', color: DS.muted, fontSize: 13 }}>← Back to settings</button>
+        <BackLink onClick={onClose} label="Settings" style={{ marginBottom: 0 }} />
         <div>
           <div style={{ fontSize: 15, fontWeight: 700, color: DS.text }}>{isNew ? 'New report template' : 'Edit template'}</div>
           <div style={{ fontSize: 12, color: DS.muted }}>Toggle sections, ratings and categories — the preview updates live</div>
@@ -2584,13 +2581,16 @@ const AdminReportsBrowser = ({ store }) => {
   const branding = reportBrandingResolved(store.store.config.branding);   // centre identity from centreProfile (§1)
   const resetFilters = () => { setTeacher('all'); setSubject('all'); setYear('all'); setKlass('all'); setStatus('all'); setSearch(''); };
   const activeFilters = [teacher, subject, year, klass, status].filter(v => v !== 'all').length + (search.trim() ? 1 : 0);
+  usePageTrail(reading
+    ? [{ label: (store.reportsArr.find(x => x.id === reading) || reading).studentName || 'Report' }]
+    : []);
 
   if (reading) {
     const r = store.reportsArr.find(x => x.id === reading) || reading;
     return (
       <div>
+        <BackLink onClick={() => setReading(null)} label="All reports" />
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18 }}>
-          <button onClick={() => setReading(null)} style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'none', border: 'none', cursor: 'pointer', color: DS.muted, fontSize: 13 }}>← Back to all reports</button>
           <div style={{ flex: 1 }} />
           <Badge variant={RPT_STATUS_META[r.status].variant}>{RPT_STATUS_META[r.status].label}</Badge>
           <Btn variant="secondary" icon="print" small onClick={() => printReportPDF(r, branding)}>Export PDF</Btn>
@@ -3051,12 +3051,12 @@ const AdminReportsOverview = ({ store, onGenerate, onBrowse, onViewDue }) => {
 
   return (
     <div>
-      <div style={{ display: 'flex', gap: 14, marginBottom: 20, flexWrap: 'wrap' }}>
-        <KPICard label="Average score" value={avg(students, 'score') + '%'} icon="chart" iconBg={DS.accentLight} accent={DS.accent} sub={`${students.length} students`} />
-        <KPICard label="Average attendance" value={avg(students, 'attendance') + '%'} icon="check" iconBg={DS.successBg} accent={DS.success} trend="this term" trendDir="up" />
-        <KPICard label="At-risk students" value={atRisk.length} icon="alert" iconBg={DS.dangerBg} accent={DS.danger} sub="need support" />
-        <KPICard label="Outstanding fees" value={money(f.outstanding)} icon="invoice" iconBg={DS.warningBg} accent={DS.warning} sub={`${f.overdueCount} overdue`} />
-      </div>
+      <StatBand style={{ marginBottom: 20 }} stats={[
+        { label: 'Average score', value: avg(students, 'score') + '%', sub: `${students.length} students` },
+        { label: 'Average attendance', value: avg(students, 'attendance') + '%', sub: 'this term' },
+        { label: 'At-risk students', value: atRisk.length, sub: 'need support', tone: atRisk.length ? DS.danger : DS.success },
+        { label: 'Outstanding fees', value: money(f.outstanding), sub: `${f.overdueCount} overdue`, tone: f.overdueCount ? DS.warning : undefined },
+      ]} />
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 20, alignItems: 'start' }}>
         {/* Upcoming reports across all teachers — driven by the reporting rules */}

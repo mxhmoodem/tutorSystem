@@ -44,8 +44,8 @@ The page id is `<parent>:<section>` for dropdown sub-sections (e.g. `reports:bro
 | Page ID | Component | Purpose | Status |
 |---|---|---|---|
 | `dashboard` | `SuperAdminDashboard` ([:300](SuperAdmin.jsx#L300)) | Platform KPIs, growth, MRR, activity | complete |
-| `centres` | `SACentresPage` ([:515](SuperAdmin.jsx#L515)) | All tenant accounts/centres, suspend, impersonate | complete |
-| `users` | `SAUsersPage` ([:829](SuperAdmin.jsx#L829)) | Cross-platform users, role counts | complete |
+| `centres` | `SACentresPage` ([:927](SuperAdmin.jsx#L927)) | All tenant accounts/centres; rows are clickable (no action column) and every action lives in the detail popover | complete |
+| `users` | `SAUsersPage` ([:1304](SuperAdmin.jsx#L1304)) | Directory of every platform user (row → detail popover); one tabbed stat card (Overview/Roles/Security/Seat usage) | complete |
 | `revenue` | `SARevenuePage` ([:1050](SuperAdmin.jsx#L1050)) | MRR, failed payments, transactions | complete |
 | `engagement` | `SAEngagementPage` ([:1203](SuperAdmin.jsx#L1203)) | Feature usage, device split | complete (has `SAMPLE` synth) |
 | `comms` | `SACommsPage` ([:1497](SuperAdmin.jsx#L1497)) / `CommunicationsPage` | Platform announcements + support | complete |
@@ -117,7 +117,10 @@ The page id is `<parent>:<section>` for dropdown sub-sections (e.g. `reports:bro
 ### Shared primitives — [shared.jsx](shared.jsx) (design system)
 | Component | Line | Props (key) | Notes |
 |---|---|---|---|
-| `DS` (tokens object) | [:5](shared.jsx#L5) | — | accent `#4F46E5`; live-mutated by `App` on accent change |
+| `LAYOUT` (layout tokens) | [:16](shared.jsx#L16) | — | the **one** source of content-area geometry: `max` 1600 · `narrow` 900 · `gutter` 32 · `top` 32 · `bottom` 64 |
+| `pageFrame({ narrow, flush })` | [:27](shared.jsx#L27) | narrow, flush | style object for a page root — width/gutter/rhythm, capped + centred on large monitors. Every routed page root uses this; nothing else sets root padding or `maxWidth … margin:'0 auto'` |
+| `Page` | [:1033](shared.jsx#L1033) | narrow, flush, style, className | component wrapper around `pageFrame` for new pages |
+| `DS` (tokens object) | [:35](shared.jsx#L35) | — | accent `#4F46E5`; live-mutated by `App` on accent change |
 | `Icon` / `PATHS` | [:114](shared.jsx#L114) | name, size, color, strokeWidth | icon library |
 | `KlasioMark` | [:131](shared.jsx#L131) | size, color | brand logo mark |
 | `Badge` | [:149](shared.jsx#L149) | variant, size | |
@@ -137,7 +140,7 @@ The page id is `<parent>:<section>` for dropdown sub-sections (e.g. `reports:bro
 | **Forms:** `Modal`, `Field`, `Input`, `Textarea`, `Select`, `Segmented`, `Checkbox`, `Toggle` (`{on}` presentational) | [:1594-1896](shared.jsx#L1594) | | shared inputs |
 | **Misc:** `EmptyState`, `Divider`, `CustomiseModal`, `useDashboardPrefs`, `shadeColor` | [:1796-1885](shared.jsx#L1796) | | dashboard customise + empty states |
 
-Full shared export at [shared.jsx:1945](shared.jsx#L1945): `DS, Icon, Badge, StatusPill, Avatar, KPICard, StatCard, shadeColor, Sidebar, PageHeader, Btn, Card, Table, TableRow, RowActionsMenu, Checkbox, Sparkline, LineChart, BarChart, ScorePill, Divider, NAV_CONFIG, navParentId, Modal, Field, Input, Textarea, Select, Segmented, SearchInput, EmptyState, useDashboardPrefs, CustomiseModal, Toggle, termTodayISO, getCentreTerms, termStatus, resolveActiveTerm`. (Note: `KPICard`, `StatCard`, `CentreSwitcher` are used internally but **not** in this window export — available by lexical global only.)
+Full shared export at [shared.jsx:1945](shared.jsx#L1945): `DS, LAYOUT, pageFrame, Page, Icon, Badge, StatusPill, Avatar, KPICard, StatCard, shadeColor, Sidebar, PageHeader, Btn, Card, Table, TableRow, RowActionsMenu, Checkbox, Sparkline, LineChart, BarChart, ScorePill, Divider, NAV_CONFIG, navParentId, Modal, Field, Input, Textarea, Select, Segmented, SearchInput, EmptyState, useDashboardPrefs, CustomiseModal, Toggle, termTodayISO, getCentreTerms, termStatus, resolveActiveTerm`. (Note: `KPICard`, `StatCard`, `CentreSwitcher` are used internally but **not** in this window export — available by lexical global only.)
 
 ### Selector / SoT layers (not components, but shared logic)
 | Module | Global | File |
@@ -152,7 +155,7 @@ Full shared export at [shared.jsx:1945](shared.jsx#L1945): `DS, Icon, Badge, Sta
 - **Homework.jsx** (self-contained sub-app): `MathEditor`/`MathDisplay` (MathLive), `PdfImportModal`, `QuestionEditor`, `QuestionAnswerInput/Display`, `TeacherBuilder`, `TeacherReview`, `TeacherOverview`, `HomeworkAnalytics`, `TeacherList`, `HwHome`, `Ring`, `HwStatusPill`, plus its **own** `Btn`/`Card`/`Avatar`/`Toast`/`Pill`/`LineChart`/`Donut`/`BarList` (duplicated from shared).
 - **Reports.jsx**: `ReportEditor`, `ReportReadingView`, `RatingEditor`, `RichTextEditor`, `EditList`, `RptTag`, `UpcomingReports`/`computeUpcomingReports`, `printReportPDF`, `printCentreReport`.
 - **Communications.jsx**: `CommunicationsPage`, `SafeguardingPage`, `NotificationBell`, `useComms`, `commsContext`, plus permission/derivation helpers `commsUnreadCount`, `canAnnounce`, `canMessage`, `commsRecipients`, `COMMS_PRESETS`, `commsUserById`, `userById` (all window-exported; `COMMS_PRESETS` consumed by the Settings Comms tab).
-- **SuperAdmin.jsx**: `SAMetrics`, `SADonut`, `SAHBar`, `SARegionMap`, `SAStatusPill`, `SAPlanPill`, `SAChurnDot`, `SAImpersonationBanner`, `SAConfirm`, `SAFlash`.
+- **SuperAdmin.jsx**: `SAMetrics` (incl. `directory`/`directoryStats`), `SAStatBand` / `SALeadStat` / `SAStatTabs` (the one stat-surface language — every SA page opens with a single stat card, never a row of tiles), `SAStatCell`, `SASectionLabel`, `SADetailRow`, `SAActionList`, `SADonut`, `SAHBar`, `SARegionMap`, `SAStatusPill`, `SAPlanPill`, `SARolePill`, `SAChurnDot`, `SAImpersonationBanner`, `SAConfirm`, `SAFlash`.
 - **AdminPages.jsx**: `DimensionSelect` (inline add-new), `StudentProfilePage`.
 - **index.html** inline: `TopBar`, `HeaderUserMenu`, `AccountPageShell`, `AccountLocked`, `AccountBillingPage`, `AccountStoragePage`.
 
@@ -199,7 +202,7 @@ Full shared export at [shared.jsx:1945](shared.jsx#L1945): `DS, Icon, Badge, Sta
 - **Missing:** parent recipients (notifications "coming soon").
 
 ### Homework
-- **Today:** Largest module ([Homework.jsx](Homework.jsx), 266KB) — full assign→attempt→submit→mark→return loop, MathLive equation editor, PDF question import, analytics, folders. Own store `homework_store_v6` with deterministic synthetic submissions.
+- **Today:** Largest module ([Homework.jsx](Homework.jsx), 266KB) — full assign→attempt→submit→mark→return loop, MathLive equation editor, PDF question import, analytics, folders. Own store `homework_store_v9` with deterministic synthetic submissions.
 - **Pages:** `TeacherHomework`, `StudentHomework`, `HomeworkAnalytics`.
 - **Roles:** teacher, student.
 - **Missing:** its store is **separate** from `teacherMetrics.getToMark` (which reads the `homeworkFull` mock) and from `studentData.homeworkSummary` (which reads the `studentHomework` mock) — three homework truths (see §7).
@@ -258,7 +261,7 @@ Full shared export at [shared.jsx:1945](shared.jsx#L1945): `DS, Icon, Badge, Sta
 | `useStorageStore` | Storage.jsx | `tutoros.storage.v1` | files, R2 config, add-on blocks |
 | Invoices store | Invoices.jsx | `tutoros.invoices.v1` | invoices, reminders, audit, config |
 | Timesheets store | Timesheets.jsx | `tutoros.timesheets.v2` | TimeEntry upsert/approve/reject/export |
-| Homework store | Homework.jsx | `homework_store_v6` | assignments/submissions/folders |
+| Homework store | Homework.jsx | `homework_store_v9` | assignments/submissions/folders |
 | Tracking | TeacherPages.jsx | `tutoros.tracking.v1` | tracker grids |
 | SA audit / impersonation | SuperAdmin.jsx | `tutoros.saudit.v1` / `tutoros.impersonation.v1` | platform audit, view-as |
 | Dashboard prefs | AdminDashboard/TeacherDashboard | `tutoros.dash.admin.v1` / `tutoros.dash.teacher.v1` | card layout/customisation |
@@ -312,7 +315,7 @@ Entities live as `mocks/*.mock.jsx` globals (seed) → localStorage store (live)
 | **Report rule** | `id, targetType(TAG/CLASS/STUDENT), tag/classId/studentId, requirement(REQUIRED/OPTIONAL/OFF), frequency(WEEKLY/FORTNIGHTLY/MONTHLY/TERMLY), templateId, priority` | `REPORTS_CONFIG.reportRules` [:24](mocks/reports.mock.jsx#L24) | Reports policy resolution | reports store | `reports_store_v2` |
 | **SA account** | `id, name, owner, ownerEmail, planId, status, country, createdAt, churnRisk, trialEndsAt, promoCode?, centres[]{id,name,city,country,students,teachers,usage}` | `SA_ACCOUNTS` [superAdmin.mock:37](mocks/superAdmin.mock.jsx#L37) | SuperAdmin | | seed |
 | **SA analytics** | `SA_ROLE_COUNTS`, `SA_USER_GROWTH`, `SA_MRR_MOVEMENT`, `SA_ACTIVITY`, `SA_FEATURE_USAGE`, `SA_TXNS`, `SA_AUDIT`, `SA_DSAR`, `SA_SUSPICIOUS`, `SA_FLAGS`, `BRAND` | [:18-215](mocks/superAdmin.mock.jsx) | SuperAdmin | | seed |
-| **Homework assignment/submission** | assignment: `id, teacherId, classLabel, studentIds[], questions[], submissions{sid:{status,answers,marks,feedback,results,markedAt,classAvg,rank…}}, status, folderId, due` | `seedStore` [Homework.jsx:165](Homework.jsx#L165) + `HW_CLASSES`/`HW_STUDENTS`/`HW_PDF_BANKS` [homework.mock](mocks/homework.mock.jsx) | Homework | homework store | `homework_store_v6` |
+| **Homework assignment/submission** | assignment: `id, teacherId, classLabel, studentIds[], questions[], submissions{sid:{status,answers,marks,feedback,results,markedAt,classAvg,rank…}}, status, folderId, due` | `seedStore` [Homework.jsx:165](Homework.jsx#L165) + `HW_CLASSES`/`HW_STUDENTS`/`HW_PDF_BANKS`/`HW_MORE_ASSIGNMENTS` [homework.mock](mocks/homework.mock.jsx) | Homework | homework store | `homework_store_v9` |
 | **Lesson plan** | `LESSON_PLAN_SEED` (+ `window.__lessonPlans`) | [lessonPlanner.mock:14](mocks/lessonPlanner.mock.jsx#L14) | LessonPlannerPage | in-memory `window.__lessonPlans` | (in-memory) |
 | **Tracker** | `id, name, description, classGroup, columns[]{id,name,type(score/check/text),max?}, entries{studentName:{colId:val}}` | `DEFAULT_TRACKERS` [teacherPages.mock:79](mocks/teacherPages.mock.jsx#L79) | Tracking | tracking store | `tutoros.tracking.v1` |
 | **Teacher-view mock rollups** | `teacherClasses`, `homeworkFull`, `teacherAllClasses` (hardcoded counts w/ `studentList[]`) | [teacherPages.mock](mocks/teacherPages.mock.jsx) | TeacherPages, teacherMetrics(`homeworkFull`) | | seed |
@@ -339,9 +342,9 @@ This is the biggest structural risk. There are **three sanctioned selector tiers
 ⚠️ **The admin and teacher at-risk definitions deliberately disagree (75/50/55 vs 85/60)** — documented, but means "at-risk count" differs by who's looking.
 
 **Unreconciled / independent counts:**
-- **Homework "to mark" has 3 sources:** `teacherMetrics.getToMark` reads `window.homeworkFull` mock; `Homework.getHomeworkBadges` ([Homework.jsx:5324](Homework.jsx#L5324)) counts submissions in `homework_store_v6`; `studentData.homeworkSummary`/`resultsSummary` read the `studentHomework` mock. Three different homework truths.
+- **Homework "to mark" has 3 sources:** `teacherMetrics.getToMark` reads `window.homeworkFull` mock; `Homework.getHomeworkBadges` ([Homework.jsx:5324](Homework.jsx#L5324)) counts submissions in `homework_store_v9`; `studentData.homeworkSummary`/`resultsSummary` read the `studentHomework` mock. Three different homework truths.
 - **Per-teacher/class counts baked into mocks:** `SEED_TEACHERS[].classes/students/hwToMark`, `teacherClasses[].students/avgScore/attendance`, `homeworkFull[].submitted/total/marked` are hardcoded and **not** derived from the roster — they can drift from `teacherMetrics`.
-- **Student counts in SuperAdmin:** `SA_ACCOUNTS[].centres[].students/teachers/usage` and `SA_ROLE_COUNTS` are hardcoded platform figures unrelated to the `bm` roster.
+- **Student counts in SuperAdmin:** `SA_ACCOUNTS[].centres[].students/teachers/usage` are hardcoded platform figures unrelated to the `bm` roster. `SA_ROLE_COUNTS` is now *derived* from those centre rosters (parents are the only free parameter), and `SAMetrics.directory()` materialises one row per counted user from a seeded PRNG — so the Users table, the role counts and the per-centre cards always agree.
 - **Financials computed twice:** `SEED_INVOICES` (real ledger, `invAggregate`) vs `REPORTS_INVOICES` ([reports.mock:75](mocks/reports.mock.jsx#L75)) — a separate hardcoded financial list used by the admin financial report; amounts/plan names don't match the invoice ledger.
 - **AdminDashboard** revenue/at-risk sidebar mixes derived (`centreMetrics.getAtRiskStudents`) with mock (`revenueData`, `recentActivity`, `atRiskStudents`).
 
@@ -402,7 +405,7 @@ This is the biggest structural risk. There are **three sanctioned selector tiers
 See grep: [AdminDashboard.jsx:211/220](AdminDashboard.jsx#L211), [TeacherDashboard.jsx:211/267](TeacherDashboard.jsx#L211), [studentData.jsx:150](studentData.jsx#L150). (No FIXME/HACK found.)
 
 ### Inconsistencies (contradictions)
-- **Store version drift vs memory notes:** live keys are `admin_store_v4`, `tutoros.subscription.v2`, `reports_store_v2`, `tutoros.comms.v2`, `tutoros.timesheets.v2`, `homework_store_v6` — several bumped past what older architecture notes assume.
+- **Store version drift vs memory notes:** live keys are `admin_store_v4`, `tutoros.subscription.v2`, `reports_store_v2`, `tutoros.comms.v2`, `tutoros.timesheets.v2`, `homework_store_v9` — several bumped past what older architecture notes assume.
 - **Comms seed key mismatch:** [communications.mock:5](mocks/communications.mock.jsx#L5) references `tutoros.comms.v1` in a comment while the live store is `tutoros.comms.v2`.
 - **Teacher identity double-id** (`t1` vs `t_clarke`) and **student triple-id** (see §7).
 - **PLANS defined twice** (`PLANS` in onboarding.mock, `PLAN_CATALOG_SEED` in plans.mock) — comment says they "mirror" but two sources can diverge (e.g. `features[]` only on the catalogue).
