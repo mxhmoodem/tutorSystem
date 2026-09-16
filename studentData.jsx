@@ -189,9 +189,22 @@ const formatGrade = (value, qualification) => {
 
 // ─── Homework — read the REAL homework store for the active student, so what the
 //     teacher assigns is exactly what the student sees. Falls back to empty.
+// Marks a teacher has held back are NOT the student's to see: a returned paper only
+// counts as 'marked' here once the marks are released. Delegates to the homework
+// module's own predicate so there is one definition of "released".
+const hwReleased = (a, sub) => {
+  if (!sub) return false;
+  if (window.klasioHomework && window.klasioHomework.marksReleased) {
+    return window.klasioHomework.marksReleased(a, sub);
+  }
+  const s = (a && a.settings) || {};
+  const graded = sub.status === 'returned' || sub.status === 'approved';
+  if (!graded) return false;
+  return (s.hideMarksUntilReleased || s.releaseAfterApproval) ? !!sub.marksReleasedAt : true;
+};
 const hwStateFor = (a, id) => {
   const sub = (a.submissions || {})[id];
-  if (sub && (sub.status === 'marked' || sub.markedAt)) return 'marked';
+  if (sub && hwReleased(a, sub)) return 'marked';
   if (sub && (sub.status === 'submitted' || sub.submittedAt)) return 'submitted';
   return 'pending';
 };

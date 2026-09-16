@@ -1848,18 +1848,26 @@ window.klasioResources = {
         .map(a => ({ id: a.id, title: a.title || 'Untitled homework', due: a.dueAt ? String(a.dueAt).slice(0, 10) : '' }));
     } catch (e) { return []; }
   },
-  // Attendance for a materialised session (classId|date). Reads the attendance
-  // store defensively; returns null when no register exists.
+  // Attendance for a materialised session (classId|date). Reads the live register
+  // store — `tutoros.attendance.v2`, where a submitted register is
+  // submissions[`classId|date`] = { submittedAt, submittedBy, records }. Seeded
+  // historicals carry no `records` (their marks are synthesised from the roster at
+  // render time in attendance.jsx), so this returns null for them and the caller
+  // falls back to the seeded delivered list.
   attendanceForSession: (classId, date) => {
     try {
-      const raw = localStorage.getItem('tutoros.attendance.v1');
+      const raw = localStorage.getItem('tutoros.attendance.v2');
       if (!raw) return null;
       const s = JSON.parse(raw);
-      const rec = (s.registers || s.sessions || {})[`${classId}|${date}`];
-      if (!rec || !rec.marks) return null;
-      const vals = Object.values(rec.marks);
+      const rec = (s.submissions || {})[`${classId}|${date}`];
+      if (!rec || !rec.records) return null;
+      const teacher = (window.SEED_TEACHERS || []).find(t => t.id === rec.submittedBy);
+      const vals = Object.values(rec.records);
       const count = (k) => vals.filter(v => v === k).length;
-      return { by: rec.by || rec.submittedBy || null, present: count('present'), absent: count('absent'), late: count('late') };
+      return {
+        by: teacher ? teacher.name : (rec.submittedBy || null),
+        present: count('present'), absent: count('absent'), late: count('late'),
+      };
     } catch (e) { return null; }
   },
 };

@@ -6668,6 +6668,9 @@ Object.assign(window, {
     listClassHomework,
     isMine,
     outcomeFor,
+    // THE release predicate. Any surface showing a student their own marks asks
+    // here, so held-back marks can't leak through a second implementation.
+    marksReleased,
   },
 });
 

@@ -223,7 +223,7 @@ const SA_FLAGS = [
   { id: 'parent_payments',     desc: 'Parents pay invoices in-app',                             on: false, scope: 'Scale only',  coverage: '0%'   },
   { id: 'multi_currency',      desc: 'Currency support beyond GBP',                             on: true,  scope: 'global',      coverage: '100%' },
   { id: 'gradebook_export',    desc: 'Excel gradebook export',                                  on: true,  scope: 'global',      coverage: '100%' },
-  { id: 'hw_ai_grading',       desc: 'Auto-grade homework',                                     on: false, scope: 'beta cohort', coverage: '8%'   },
+  { id: 'hw_auto_marking',     desc: 'Auto-mark homework against teacher answers',              on: false, scope: 'beta cohort', coverage: '8%'   },
   { id: 'monitored_messaging', desc: 'Monitored student→staff messaging (safeguarding-routed)', on: false, scope: 'opt-in',      coverage: '12%'  },
   { id: 'mobile_offline',      desc: 'Offline homework on mobile app',                          on: true,  scope: 'beta cohort', coverage: '21%'  },
 ];
