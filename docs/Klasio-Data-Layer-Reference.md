@@ -1222,6 +1222,19 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 
 > DSL lead and deputies are `memberships.dsl_role` rows, not fields here.
 
+**Messaging eligibility.** The preset sets the four toggles above; this matrix decides who may open a thread at all, and `start_conversation` enforces it server-side. It is not a UI rule.
+
+| Initiator → recipient | Permitted |
+|---|---|
+| staff → staff, same centre | Always |
+| staff → a pupil they teach (`is_my_student()`) | Only when `student_messaging_enabled`. The thread stamps `monitored = true` and attaches DSL observers per `dsl_observer` |
+| staff → a pupil they do not teach | `centre_admin` and DSL only — a teacher cannot DM another teacher's pupil |
+| pupil → anyone | **Never.** A pupil does not open threads; they reply in threads staff started and post in class channels |
+| anyone → guardian | Never — guardians have no login (decision #13). They receive email |
+| across centres | Never, in any direction |
+
+The `locked` preset sets `student_messaging_enabled = false`, so staff↔pupil 1:1 is off entirely and a pupil reaches staff only through a class channel. `open` leaves `dsl_observer` optional; it never widens who may start a thread.
+
 #### `announcements`
 *One-to-many broadcast, resolved into receipts on publish. Multi-target audiences live in `announcement_targets`; `centre_id NULL` + platform scope = a superadmin platform-wide announcement.*
 
@@ -2046,7 +2059,7 @@ Each non-empty cell represents one or more policies to write and cover in the RL
 | staff_details | self; centre_admin; account_owner | centre_admin | centre_admin; self (own contact fields only, through `update_my_staff_profile`) | centre_admin |
 | staff_rates | self; centre_admin | centre_admin (audited) | centre_admin (audited) | centre_admin |
 | staff_leave | self; centre staff | centre_admin | centre_admin | centre_admin |
-| timesheet_entries | self (teacher); centre_admin | system (`teaching`, via submit_register); teacher (self, non-teaching types via `log_timesheet_entry`) | teacher (self, own `draft`/`submitted` non-teaching); centre_admin (approve/reject/adjust, audited) | teacher (self, own `draft`) |
+| timesheet_entries | self (teacher); centre_admin | system (`teaching`, via submit_register); teacher (self, non-teaching types via `log_timesheet_entry`) | teacher (self, own `draft`/`rejected` non-teaching — **a rejected entry must be correctable**, which is the point of `decided_reason`; `submitted` is locked while a decision is pending, and `approved`/`exported` are closed); centre_admin (approve/reject/adjust, audited) | teacher (self, own `draft`) |
 | timesheet_adjustments | self; centre_admin | centre_admin (audited) | — | — |
 | centre_timesheet_policy | centre staff | system (with centre) | centre_admin (audited) | — |
 | assignment_folders | creator | teacher | creator | creator |

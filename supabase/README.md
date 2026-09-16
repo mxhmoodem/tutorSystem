@@ -13,8 +13,11 @@
 
 - `config.toml` — local stack configuration: ports, auth settings, the mail catcher
 - `migrations/` — one timestamped migration per slice, holding that slice's tables,
-  indexes, constraints and RLS policies together. Forward-only: a mistake is corrected
-  by the next migration, never by editing one that has shipped
+  indexes, constraints and RLS policies together. Where a slice contains a foreign-key
+  cycle (`students → families → student_guardians → students`), the tables are created
+  first and the closing constraint is added by a follow-up `ALTER` in the same file.
+  Forward-only: a mistake is corrected by the next migration, never by editing one
+  that has shipped
 - `tests/` — pgTAP suites, including the two-centre RLS isolation harness (Account A vs
   Account B) that every later slice appends to
 - `seed.sql` — demo data, extended per slice
