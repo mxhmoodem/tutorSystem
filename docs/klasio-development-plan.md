@@ -64,6 +64,8 @@ migration (tables + indexes + constraints)
   → UI (routes + feature components)
 ```
 
+**Dashboards are built by accretion.** Phase 1 ships placeholder dashboards because none of the data exists yet. Every later slice that produces a figure worth surfacing ends by adding its card to the relevant role dashboard — that is how the three real dashboards get built, rather than as one phase of their own. A card whose source is not yet built renders an empty state; it is never filled with invented data.
+
 ---
 
 ## Phase 0 — Walking skeleton
@@ -100,7 +102,7 @@ Views: `v_platform_status` (the only `platform_settings` fields anon may read: m
 
 Tests: **two-centre RLS isolation harness** — Account A vs Account B denial, per-role allow/deny for every table. This harness is the foundation every later slice appends to. Explicit multi-role cases: one profile with admin + teacher rows at the same centre passes both role checks. Ownership invariants: the owner always holds a `centre_admin` membership, so ownership needs no special case in RLS; `transfer_ownership` grants that membership before repointing; `set_member_role` refuses to remove a centre's last admin or the owner's own membership. Access scope: a teacher reads only their own students — another teacher's pupil, guardian, health, result and submission rows are invisible, and cover grants access for the covered dates only; a superadmin with no support session reads nothing at all; inside a session the never-admit tables (health, emergency contacts, consents, incidents, conversations, messages, flags, safeguarding files) stay invisible. Lockout: N failures lock, lock expires, success after expiry. Signup: one transaction creates every row or none; refused when signups disabled; under-13 student cannot be set to `password`.
 
-UI: signup (centre or solo), login (staff password + TOTP; student centre-code + username + PIN/password), TOTP enrolment, **multi-role view switch** (a dual-role user flips between admin and teacher views), **multi-centre switcher** (sidebar header, primary centre default), multi-role Team management, claim-slip print flow + public claim page, People & invites tracker, per-centre setup checklist drawer, placeholder dashboards per role
+UI: signup (centre or solo), login (staff password + TOTP; student centre-code + username + PIN/password), TOTP enrolment, **multi-role view switch** (a dual-role user flips between admin and teacher views), **multi-centre switcher** (sidebar header, primary centre default), multi-role Team management, claim-slip print flow + public claim page, People & invites tracker, per-centre setup checklist drawer, placeholder dashboards per role (each later slice adds its own cards — see *Dashboards are built by accretion* above)
 
 **Exit:** a new centre admin signs up and enrols TOTP unaided; staff TOTP login works; student PIN and password login work; repeated failures lock an identifier; one profile in two centres sees correct data for each; a dual-role user switches views at one centre; ownership transfer grants a membership and repoints one field in a single transaction; RLS harness green.
 
@@ -132,13 +134,17 @@ UI: Storage as an **account-level route**, not a Settings tab — quota is an ac
 
 Tables: `subjects`, `grade_scales`, `grade_bands`, `terms` (stored `is_active` flag — documented deliberate exception to derive-don't-store), `term_breaks`, `rooms`, `class_dimensions` (configurable year groups / levels / exam boards with inline add), `classes` (incl. `kind`, `hourly_rate`), `class_settings`, `class_schedules`, `class_cover`, `class_change_requests`, `tags`, `taggables`, `waiting_list_entries`, `sessions`, `enrolments`, `attendance_records`
 
-RPCs: `set_active_term`, `enrol_student` (capacity + `plan_limit(max_students)`), `withdraw_enrolment`, `regenerate_sessions` (skips `term_breaks` — no phantom half-term sessions), `set_class_cover`, `request_class_change`, `decide_class_change_request`, `offer_waiting_list_place`
+RPCs: `set_active_term`, `enrol_student` (capacity + `plan_limit(max_students)`), `withdraw_enrolment`, `regenerate_sessions` (skips `term_breaks` — no phantom half-term sessions), `set_class_cover`, `request_class_change`, `decide_class_change_request`, `offer_waiting_list_place`, `rotate_calendar_token` (revokes every existing `.ics` subscription)
 
 Views: `v_class_summary`, `v_attendance_summary`, `v_enrolment_status`, `v_effective_teacher` (permanent teacher overridden by any covering `class_cover` row — schedule renders the cover teacher)
 
 Tests: isolation + `regenerate_sessions` skips term breaks + enrolment refused above plan student cap + class change request visible to requester and admins only
 
-UI: 3-step create-class flow with inline dimensions, class list, class detail workspace (hero banner with theme picker, tabs), enrolment management, term picker, admin schedule grid (with cover), class change request form + admin queue, cohort tags, waiting list (capability-gated)
+Railway endpoints: `GET /v1/calendar/:token.ics` — a per-user, revocable timetable feed (token on `profiles.calendar_token`), subscribable from a phone calendar. Unauthenticated by design, so it returns only session times, titles and rooms; never pupil names
+
+UI: 3-step create-class flow with inline dimensions, class list, class detail workspace (hero banner with theme picker, tabs), enrolment management, term picker, admin schedule grid (with cover), class change request form + admin queue, cohort tags, waiting list (capability-gated), **Subjects list + subject detail**, **teacher My Students**, **student My Classes**, **student Sessions** (their own timetable, with the calendar-feed link)
+
+Dashboard cards added this slice: today's sessions (admin + teacher), timetable strip (teacher), enrolment and capacity (admin)
 
 **Exit:** admin can create a class and enrol students; active term resolves to one value everywhere; a cover assignment changes the effective teacher on the schedule for its date range only; a teacher's change request lands in the admin queue.
 
@@ -165,6 +171,8 @@ Register lock/unlock model:
 Tests: keystone test — one `submit_register` call produces correct attendance rows + timesheet entry for `delivered_by`; **backfill window** (session derives `awaiting` until backfill end, submission flagged late, refused without a note when required, lapses after); settings row changes re-derive state; unlock lifecycle (grant → lapsed session derives `awaiting` → submit consumes + re-locks → expiry re-lapses; rows never deleted); pay eligibility matrix (each pay type × cover/extra × category toggle); manual `teaching` timesheet insert denied; amendment window enforced; cross-tenant denial on `register_unlocks` and `attendance_amendments`; all audited RPCs assert `audit_log` row
 
 UI: teacher Attendance (time-scoped view over derived-state sessions), register drawer (take/re-take, late reason, delivered-by, time delivered), **admin centre-wide attendance oversight** ("needs a register" list, admin backfill, unlock chooser), register settings, teacher timesheet + admin review/export (CSV + print view), pay policy settings, staff attendance derived from registers
+
+Dashboard cards added this slice: "needs a register" (admin + teacher), hours logged this period (teacher), attendance rate (admin)
 
 **Exit:** teacher submits register; timesheet entry appears derived; a lapsed register locks and an admin unlock reopens it for the teacher, then re-locks on submit; amendments are audited; audit rows exist. No separately stored metrics or session states.
 
@@ -206,6 +214,8 @@ Tests: isolation + published flag (student cannot see until published) + one at-
 
 UI: assessment creation, results entry, results published view per student, predicted/target grade editor, student profile analytics
 
+Dashboard cards added this slice: at-risk pupils from `v_student_risk` (admin + teacher — one definition, whoever is looking), progress summary (student)
+
 **Exit:** teacher enters results; students see them only after publish; predicted and target grades show on the student profile and progress views from stored rows.
 
 ---
@@ -228,6 +238,8 @@ pg_cron: due reminders (N days before instalment), overdue sweep — both respec
 Tests: isolation + status derivation unit tests (all schedule/payment combinations) + tax derivation (none / exclusive / inclusive; rate override per invoice) + family invoice covers multiple siblings' lines + reminder refused inside cooldown + send refused with no billing email + generated invoice matches delivered minutes + audited RPCs assert audit rows
 
 UI: invoice ledger, invoice detail drawer (family header, per-sibling lines, mark paid, audit), payment entry, reminders, CSV reconciliation, invoice analytics, invoicing settings
+
+Dashboard cards added this slice: outstanding and overdue invoices (admin), revenue trend (admin) — both from `v_invoice_status`, never a second financial source
 
 > **No guardian-facing screen.** Guardians never log in (decision #13); the invoice PDF emailed by `POST /v1/invoices/:id/send` *is* the guardian-facing artefact. Any future no-login view would be a signed magic-link page, and would need a token model in the reference first.
 
@@ -252,6 +264,8 @@ Tests: isolation + auto-mark unit tests for **all ten question types** (`mcq`, `
 
 UI: assignment builder (ten question types, folders rail, settings panel, PDF import), student start page + attempt view (optional countdown, off by default), teacher marking queue, mark release, returned-paper review, homework analytics
 
+Dashboard cards added this slice: to-mark queue (teacher), homework due and recent feedback (student) — all through `getHomeworkCounts`' production equivalent, never a second count
+
 **Exit:** homework set, submitted, auto-marked (objective types), teacher-marked (subjective types), released and returned to the student; a scheduled assignment cannot be started early.
 
 ---
@@ -275,7 +289,7 @@ Email templates: report published (to guardians, PDF attached), report due / ove
 
 Tests: isolation + cascade resolution (each level overrides the next; priority breaks ties; `off` and `optional` never queue) + due-engine unit tests (each frequency × existing-report combination) + publish refused below comment length / without signature / with an empty required section + each of the six permissions flips the matching policy (incl. `perm_view_others` read) + student sees `published` only + every report mutation audited + 4-tier ratings resolve through the scale tables + published report keeps its predicted grade after the target row changes
 
-UI: report rules manager (centre default + overrides), template editor, ratings taxonomy settings, standards / permissions / branding / notifications settings, teacher due/upcoming queue (shared card on teacher and admin Reports), report writer with live standards gate, folders + report tags + pinning, history drawer, published-report student view with acknowledge, PDF export
+UI: report rules manager (centre default + overrides), template editor with locking, ratings taxonomy settings, standards / permissions / branding / notifications settings, teacher due/upcoming queue (shared card on teacher and admin Reports), report writer with live standards gate, **bulk "Generate"** (open a draft for every pupil a rule has queued, from one action), folders + report tags + pinning, history drawer, published-report student view with acknowledge, PDF export
 
 **M1 exit criteria:**
 - Centre admin can self-onboard via signup (invite staff, create students, set term, create class, enrol students)
@@ -307,6 +321,8 @@ Email templates: DSL flag alert (cannot be muted), message notification (respect
 Tests: isolation + flag trigger raises every matching reason on one flag, for a message and for a class post + DSL observer auto-attached on staff↔student thread + `monitored` cannot be cleared + attachment in a student thread denied + class stream permissions (student posts only when `students_can_post`) + cross-centre message denial
 
 UI: conversation list, thread view, message composer, class channels, class Stream tab, DSL flag queue, comms settings (presets)
+
+Dashboard cards added this slice: unread messages (every role), open safeguarding flags (DSL + admin — never mutable from the card)
 
 **Exit:** staff↔student conversation has DSL observer; flagged message appears in DSL queue with all its reasons; a class stream post reaches enrolled students and is scanned the same way; cross-centre read returns empty.
 
@@ -466,7 +482,7 @@ Email templates: import job finished, SAR export ready, support session started 
 
 Tests: superadmin cannot access centre-level data outside a support session; support session expires and cannot read safeguarding/health; erasure anonymises profile but preserves safeguarding records; SAR bundle is complete; DSAR `due_at` set to one month and surfaced when close; read-only mode blocks tenant writes
 
-UI: superadmin console (dashboard, centres/accounts with detail popover, users directory, revenue + failed payments from `billing_events`, engagement), platform controls (maintenance, read-only, signups, status page, trial offer, feature flags), security page (suspicious activity from `v_suspicious_activity`, clear/block), DSAR queue with deadlines, platform audit log, impersonation banner, privacy request workflow
+UI: superadmin console (dashboard, centres/accounts with detail popover, users directory, revenue + failed payments from `billing_events`, **Engagement** — feature adoption per account, **System Health** — queue depth, webhook failures, outbox backlog, last cron run), platform controls (maintenance, read-only, signups, status page, trial offer, feature flags), security page (suspicious activity from `v_suspicious_activity`, clear/block), DSAR queue with deadlines, platform audit log, impersonation banner, privacy request workflow
 
 **M3 exit criteria:**
 - Superadmin can provision, suspend and restore accounts
@@ -630,16 +646,19 @@ Build-scope in the reference with no prototype surface. These carry design risk 
 
 **Lower risk — infrastructure the prototype fakes by nature:** email outbox, suppressions and templates; Stripe webhooks, `processed_events` and add-on purchase; the DSAR lifecycle (static mock); `notification_prefs` per kind × channel (prototype has one flat section).
 
-### Built in the prototype, scheduled in no phase
+### Prototype surfaces, and where each is now scheduled
 
-The inverse risk: working surfaces that no phase promises, so they would silently disappear in the rebuild. Each needs a phase or a decision to drop it.
+These were built before the plan described them. Each now has a phase, so nothing silently disappears in the rebuild — this table exists so you can check that claim.
 
-- **Role dashboards** — Phase 1 promises "placeholder dashboards per role", but the prototype ships full admin, teacher and student dashboards with derived stat bands. The real ones have no home; they depend on Phases 3–8 for their data and belong at the end of each of those slices.
-- **Subjects pages**, **teacher My Students**, **student My Classes** — list surfaces over Phase 3 tables that Phase 3's UI line does not mention.
-- **Sessions with ICS export** (`StudentDashboard.jsx`) — calendar feed for a student's timetable; no endpoint in the reference.
-- **Superadmin Engagement and System Health** — Phase 14's UI line covers the console and platform controls but neither of these.
-- **Reports "Generate"** — a bulk report-creation action alongside the Phase 8b writer.
-- **Remembered-device centre code** (`tutoros.lastCentre`) — prefills the centre on the login form; harmless, but it is device state nobody has specified.
+| Prototype surface | Scheduled in |
+|---|---|
+| Admin, teacher and student dashboards | Built by accretion — each slice adds its own cards (see *Slice order*); Phase 1 ships placeholders |
+| Subjects list + subject detail | Phase 3 |
+| Teacher My Students · student My Classes | Phase 3 |
+| Student Sessions + calendar feed | Phase 3, behind `GET /v1/calendar/:token.ics` |
+| Reports bulk "Generate" | Phase 8b |
+| Superadmin Engagement · System Health | Phase 14 |
+| Remembered-device centre code (`tutoros.lastCentre`) | Deliberately **not** scheduled — per-device convenience, not product state. It stays in the prototype and does not migrate |
 
 ---
 

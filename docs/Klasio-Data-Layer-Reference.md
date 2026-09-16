@@ -103,6 +103,7 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | email | text | Nullable for PIN-only student accounts |
 | phone | text | |
 | avatar_file_id | uuid FK | → files.id |
+| calendar_token | uuid | Unguessable token for the person's own `.ics` timetable feed; rotating it revokes every subscription made with the old URL |
 | locale | text | default `'en-GB'` |
 
 #### `memberships`
@@ -2166,6 +2167,12 @@ Three surfaces. Plain CRUD goes through the Supabase client (PostgREST), authori
 | POST | `/v1/files/:id/sign-download` | Permission check (entity links **and** `resource_can_open` for resource files) → short-lived presigned GET URL |
 | DELETE | `/v1/files/:id` | Refuses `archive`/`locked` categories; otherwise deletes the R2 object, tombstones the row, adjusts the rollup |
 
+#### Calendar
+
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/v1/calendar/:token.ics` | The caller's own timetable as an iCalendar feed, subscribable from a phone or desktop calendar. The token is `profiles.calendar_token` — **the URL is the credential**, so it is unguessable, rotatable (`rotate_calendar_token`) and scoped to one person. Because a calendar client sends no session, the feed carries only session times, titles and rooms: never pupil names, never marks, never anything a lost phone should not show |
+
 #### Invoicing
 
 | Method | Endpoint | Description |
@@ -2265,6 +2272,7 @@ Invoked with the caller's own JWT, so RLS still applies. **Audited** calls write
 | `enrol_student(class, student, starts_on)` | Capacity, duplicate and `plan_limit(max_students)` checks, then enrol | — |
 | `withdraw_enrolment(enrolment, ends_on)` | End-date; history preserved | — |
 | `set_active_term(centre, term)` | Single write for term context | — |
+| `rotate_calendar_token()` | Issue the caller a new `profiles.calendar_token`, revoking every existing `.ics` subscription — the "I lost my phone" action | — |
 | `regenerate_sessions(class)` | Rebuild future sessions, skipping term breaks | — |
 | `set_class_cover(class, teacher, starts_on, ends_on, reason)` | Assign temporary cover; effective teacher derives per session date | yes |
 | `decide_class_change_request(request, actioned\|declined, note)` | Close a teacher's change request | yes |
