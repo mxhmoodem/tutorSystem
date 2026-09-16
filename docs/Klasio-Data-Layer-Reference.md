@@ -45,7 +45,7 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 
 ## Part I — Database tables
 
-~116 tables across twelve domains. Columns marked **⚠ special category** hold UK GDPR Article 9 data and carry the strictest policies and full audit.
+~117 tables across twelve domains. Columns marked **⚠ special category** hold UK GDPR Article 9 data and carry the strictest policies and full audit.
 
 ---
 
@@ -1683,6 +1683,25 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | extension_reason | text NULL | |
 | completed_at | timestamptz | |
 
+#### `jobs`
+*Async work the UI polls — CSV imports, SAR and erasure exports, analytics exports. One table, so `GET /v1/jobs/:id` has exactly one place to look.*
+
+| Column | Type | Notes |
+|---|---|---|
+| id | uuid PK | |
+| account_id / centre_id | uuid FK | |
+| kind | text | `student_import` \| `invoice_import` \| `sar_export` \| `erasure` \| `analytics_export` |
+| status | text | `queued` \| `running` \| `succeeded` \| `failed` \| `cancelled` |
+| created_by | uuid FK | → profiles.id |
+| params | jsonb | The request as submitted (source file id, filters) — never results |
+| progress | int | 0–100, advisory only |
+| result_file_id | uuid FK NULL | → files.id — the export bundle or the error CSV |
+| row_errors | jsonb NULL | Per-row validation failures, surfaced in the import preview |
+| error | text NULL | Terminal failure reason |
+| data_request_id | uuid FK NULL | → data_requests.id — set when the job serves a statutory request, so the DSAR queue keeps its own clock while the UI polls one endpoint |
+| started_at / finished_at | timestamptz NULL | |
+| created_at | timestamptz | |
+
 #### `processed_events`
 *Idempotency store — what makes Stripe/webhook handling exactly-once.*
 
@@ -2061,6 +2080,7 @@ Each non-empty cell represents one or more policies to write and cover in the RL
 | support_sessions | superadmin; account_owner + centre_admin (own account) | superadmin via `start_support_session` (audited) | superadmin (end, audited) | — |
 | billing_events | superadmin; account_owner (own account) | system (Stripe webhook) | — (append-only) | — |
 | data_requests | centre_admin; account_owner; superadmin | centre_admin; superadmin | system; superadmin | — |
+| jobs | centre_admin; account_owner; superadmin | system | system | — |
 | processed_events | — (service-role only) | service-role | — | — |
 | email_outbox | — (service-role only) | system (triggers/cron) | worker (service-role) | — |
 | email_suppressions | — (service-role only) | system (webhook) | — | service-role |

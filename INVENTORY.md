@@ -1,6 +1,8 @@
 # Klasio / TutorOS — Full Repository Inventory
 
 > **Read-only discovery report.** A complete map of every role, page, component, feature, action, data shape and dangling reference in the repo as it stands. Nothing here was changed. Where I inferred intent it is labelled **(inferred)**.
+>
+> **Verified against the code: September 2026.** This file is cited by `docs/klasio-development-plan.md` as the behavioural spec, so it has to stay true. Since the first pass the comms and timesheet stores were bumped, lesson plans gained persistence, the register was rebuilt on its own store, the Materials library landed, the three homework counts were unified, and a solo-tutor demo account was added — all folded in below. Re-verify the store-key table in §5 first when in doubt; it drifts fastest.
 
 ## How the app is built (orientation)
 
@@ -183,6 +185,19 @@ Full shared export at [shared.jsx:1945](shared.jsx#L1945): `DS, LAYOUT, pageFram
 - **Roles:** admin (create/assign), teacher (log attendance, view).
 - **Missing:** nothing major; sessions are derived from `store.classes` (day/time), no per-date session records except homework/timesheet `sessionId`s.
 
+### Attendance & Register
+- **Today:** Rebuilt as a time-scoped view over materialised sessions with a **derived lifecycle** — `deriveSessionState` computes the state at read time rather than storing it. Register drawer takes and re-takes marks; admins get centre-wide oversight, backfill and time-boxed unlocks.
+- **Pages/modules:** `TeacherAttendancePage` ([TeacherPages.jsx](TeacherPages.jsx)), `AttendanceAdmin.jsx`, `attendance.jsx`, `mocks/attendance.mock.jsx`.
+- **Store:** `tutoros.attendance.v2` — `{ submissions: { "<classId>|<date>": { submittedAt, submittedBy, records, note, late, byAdmin } }, amendments, seedCancelled, unlocks, unlockLog }`. `tutoros.attendance.nowOffset.v1` shifts "now" for demoing the lifecycle.
+- **Roles:** teacher (take/amend), admin (oversee, backfill, unlock).
+- **Note:** `records` is keyed by **student name**, not id — the same fragility as `Class.teacher` (§6). A seeded session carries no `records` until a register is actually written, so readers must treat a missing `records` as "no register yet" rather than "empty register".
+
+### Resources (Materials library)
+- **Today:** Shared file library with visibility levels (centre / on-request / private), share and access-request flows, pointer links into lesson plans and homework, and usage events that survive detaching. Approver falls back to an admin when the creator is deactivated; staff offboarding releases restricted items to the centre.
+- **Pages:** `Resources.jsx` (teacher + admin), `AttachResourcesPanel` (lesson planner and homework builder).
+- **Store:** `klasio.resources.v2` (+ `klasio.resources.view` / `.sort` / `.bannerDismissed` as per-device view state).
+- **Roles:** teacher (own + shared), admin (all, with an audited override), student (only through a `student_visible` link).
+
 ### Staff & Timesheets
 - **Today:** Teachers list/profile, Roles & access (grant/revoke/transfer), timesheet capture from register + teacher timesheet + admin review/export.
 - **Pages:** `AdminTeachersPage`, `AddTeacherPage`, `TeacherProfilePage`, `AdminTeamPage`, `TeacherTimesheetPage`, `AdminTimesheetsPage`, `AdminTimesheetDetailPage`, `TimesheetCapture`.
@@ -196,7 +211,7 @@ Full shared export at [shared.jsx:1945](shared.jsx#L1945): `DS, LAYOUT, pageFram
 - **Missing:** no student/parent-facing invoice view (student `REPORTS_INVOICES` is a separate mock, see §7).
 
 ### Communications
-- **Today:** Announcements + Messages + Safeguarding/DSL; client-side keyword flagging, presets, multi-tenant isolation, live bell/badges lifted into `App`. Comms settings (safety preset, wordlist, DSL) is now the admin Settings → Communications tab (`CommsTab`), which receives the same lifted `comms` object. Store `tutoros.comms.v2` (+ pins `.pins.v1`, dismissed `.notifs.dismissed.v1`).
+- **Today:** Announcements + Messages + Safeguarding/DSL; client-side keyword flagging, presets, multi-tenant isolation, live bell/badges lifted into `App`. Comms settings (safety preset, wordlist, DSL) is now the admin Settings → Communications tab (`CommsTab`), which receives the same lifted `comms` object. Store `tutoros.comms.v3` (+ pins `tutoros.comms.pins.v1`, dismissed `tutoros.notifs.dismissed.v1`).
 - **Pages:** `CommunicationsPage`, `SafeguardingPage`, `SACommsPage`.
 - **Roles:** all; admin gets Safeguarding, superadmin gets Support (no Messages).
 - **Missing:** parent recipients (notifications "coming soon").
@@ -205,13 +220,20 @@ Full shared export at [shared.jsx:1945](shared.jsx#L1945): `DS, LAYOUT, pageFram
 - **Today:** Largest module ([Homework.jsx](Homework.jsx), 266KB) — full assign→attempt→submit→mark→return loop, MathLive equation editor, PDF question import, analytics, folders. Own store `homework_store_v9` with deterministic synthetic submissions.
 - **Pages:** `TeacherHomework`, `StudentHomework`, `HomeworkAnalytics`.
 - **Roles:** teacher, student.
-- **Missing:** its store is **separate** from `teacherMetrics.getToMark` (which reads the `homeworkFull` mock) and from `studentData.homeworkSummary` (which reads the `studentHomework` mock) — three homework truths (see §7).
+- **Resolved (was "three homework truths"):** every tier now counts through one function, `getHomeworkCounts(store, scope)` ([Homework.jsx:2074](Homework.jsx#L2074)), scoped by `teacherId`, `studentId` or `classLabel`. `teacherMetrics`, `studentData`, the badges and the admin class card all call it, so the same number appears everywhere. The `homeworkFull` and `studentHomework` mocks survive only in the unloaded `design_extract/` tree.
+- **Release gate:** `marksReleased(assignment, submission)` is exported on `window.klasioHomework` and is the **only** implementation of "may this student see their marks" — any surface showing a pupil their own result asks here rather than re-deriving it.
 
 ### Reports
 - **Today:** Student Reports & Teacher Feedback system (replaced AI feedback). Reporting rules/policy resolution, template maker, ratings (4-tier), PDF export, upcoming-reports card. Store `reports_store_v2`.
 - **Pages:** `AdminReportsConfig`/`AdminReportsSettings`/`AdminReportingRules`, `TeacherReports`, `StudentReports`, `ReportEditor`, `ReportReadingView`.
 - **Roles:** admin (config), teacher (write), student (read).
 - **Missing:** parent notification (future flag).
+
+### Tracking & Lesson Planner
+- **Today:** Teacher Tracking is a Hub → Detail structure over a spreadsheet-style grid with keyboard navigation and typed columns. Column kinds are `score / checkbox / select / rating / text / grade / date`, with a live migration from the old `number` → `score` and `check` → `checkbox` names ([TeacherPages.jsx:2613](TeacherPages.jsx#L2613)). Lesson plans persist and can pin to a session.
+- **Stores:** `tutoros.tracking.v1` (grids) + `tutoros.tracking.recents.v1` (recently opened); `klasio.lessonPlans.v1` (plans, mirrored into `window.__lessonPlans` for the in-page browser).
+- **Roles:** teacher only — trackers are internal working data and no student surface reads them.
+- **Note:** tracker cells are keyed by **student name**, like the register.
 
 ### Settings
 - **Today:** Per-role tabbed settings (`settings_store_v1`): shared Account/Notifications/Appearance + one role-specific tab (Platform/Centre/Teaching/Learning). Centre tab owns the term schedule + live accent (`window.__setAccent`). Dual Admin/Teacher view switch lives here.
@@ -232,6 +254,12 @@ Full shared export at [shared.jsx:1945](shared.jsx#L1945): `DS, LAYOUT, pageFram
 - **Pages:** Auth `LoginPage`/`SignupPage`; Onboarding `InviteTeachersPage`, `BulkImportPage`, `AddSingleStudentPage`, `ClaimSlipsPage`, `ClassRosterPage`, `PeopleInvitesPage`, `ClaimPage`.
 - **Roles:** admin (all), invitees (claim).
 - **Missing:** `CentreSetupPage` deprecated/unrouted.
+
+### Solo tutor demo account
+- **Today:** A **second demo account, not a fifth role.** `index.html` holds an `account` state (`'centre'` | `'solo'`); `window.__setAccount('solo')` swaps the whole shell, and every `__navigate` call returns to the centre demo. The solo shell has no role strip and no centre chrome.
+- **Files:** `soloCapabilities.jsx` (**the only file that knows tier ids** — `solo_free` / `solo_core` / `solo_pro` and the capability matrix), `soloData.jsx` (state + derived model, incl. its own "worth a look" at-risk rule), `Solo.jsx` (shell + pages, registers `NAV_CONFIG.solo` and exposes `SoloShell`), `mocks/solo.mock.jsx` (fixtures — a separate dataset the centre demo never reads).
+- **Documented in:** `docs/SOLO-DEMO-INVENTORY.md`; it is the behavioural spec for Phase 13b of the development plan.
+- **Roles:** the tutor alone, holding owner + admin + teacher + DSL lead at one implicit centre.
 
 ---
 
@@ -257,12 +285,18 @@ Full shared export at [shared.jsx:1945](shared.jsx#L1945): `DS, LAYOUT, pageFram
 | `usePlatformTrialStore` | Plans.jsx | `tutoros.trial.v1` | global free trial (enabled/days/planId/requireCard/onEnd) |
 | `useReportsStore` | Reports.jsx | `reports_store_v2` | report CRUD, config, templates |
 | `useSettingsStore` | Settings.jsx | `settings_store_v1` | per-role settings, centre terms |
-| `useComms` | Communications.jsx | `tutoros.comms.v2` (+pins/dismissed) | announcements/messages/flags/config |
+| `useComms` | Communications.jsx | `tutoros.comms.v3` (+ `tutoros.comms.pins.v1`, `tutoros.notifs.dismissed.v1`) | announcements/messages/flags/config |
 | `useStorageStore` | Storage.jsx | `tutoros.storage.v1` | files, R2 config, add-on blocks |
 | Invoices store | Invoices.jsx | `tutoros.invoices.v1` | invoices, reminders, audit, config |
-| Timesheets store | Timesheets.jsx | `tutoros.timesheets.v2` | TimeEntry upsert/approve/reject/export |
+| Timesheets store | Timesheets.jsx | `tutoros.timesheets.v3` | TimeEntry upsert/approve/reject/export |
 | Homework store | Homework.jsx | `homework_store_v9` | assignments/submissions/folders |
-| Tracking | TeacherPages.jsx | `tutoros.tracking.v1` | tracker grids |
+| Tracking | TeacherPages.jsx | `tutoros.tracking.v1` / `tutoros.tracking.recents.v1` | tracker grids, recently opened |
+| Attendance / register | attendance.jsx, AttendanceAdmin.jsx | `tutoros.attendance.v2` (+ `tutoros.attendance.nowOffset.v1`) | register submissions, amendments, unlocks, cancelled sessions |
+| Resources | Resources.jsx | `klasio.resources.v2` (+ `.view` / `.sort` / `.bannerDismissed`) | resources, shares, access requests, links, usage events |
+| Lesson plans | mocks/lessonPlanner.mock.jsx | `klasio.lessonPlans.v1` | saved plans (mirrored into `window.__lessonPlans`) |
+| Active student | studentData.jsx | `klasio.activeStudent` | which pupil the student demo is viewing (StudentSwitcher) |
+| Remembered centre | Auth.jsx | `tutoros.lastCentre` | prefills the centre code on the login form |
+| Homework view state | Homework.jsx | `klasio.homework.view` | per-device list/grid preference |
 | SA audit / impersonation | SuperAdmin.jsx | `tutoros.saudit.v1` / `tutoros.impersonation.v1` | platform audit, view-as |
 | Dashboard prefs | AdminDashboard/TeacherDashboard | `tutoros.dash.admin.v1` / `tutoros.dash.teacher.v1` | card layout/customisation |
 | Maintenance | SuperAdmin.jsx | `tutoros.maintenance` | maintenance flag |
@@ -316,8 +350,8 @@ Entities live as `mocks/*.mock.jsx` globals (seed) → localStorage store (live)
 | **SA account** | `id, name, owner, ownerEmail, planId, status, country, createdAt, churnRisk, trialEndsAt, promoCode?, centres[]{id,name,city,country,students,teachers,usage}` | `SA_ACCOUNTS` [superAdmin.mock:37](mocks/superAdmin.mock.jsx#L37) | SuperAdmin | | seed |
 | **SA analytics** | `SA_ROLE_COUNTS`, `SA_USER_GROWTH`, `SA_MRR_MOVEMENT`, `SA_ACTIVITY`, `SA_FEATURE_USAGE`, `SA_TXNS`, `SA_AUDIT`, `SA_DSAR`, `SA_SUSPICIOUS`, `SA_FLAGS`, `BRAND` | [:18-215](mocks/superAdmin.mock.jsx) | SuperAdmin | | seed |
 | **Homework assignment/submission** | assignment: `id, teacherId, classLabel, studentIds[], questions[], submissions{sid:{status,answers,marks,feedback,results,markedAt,classAvg,rank…}}, status, folderId, due` | `seedStore` [Homework.jsx:165](Homework.jsx#L165) + `HW_CLASSES`/`HW_STUDENTS`/`HW_PDF_BANKS`/`HW_MORE_ASSIGNMENTS` [homework.mock](mocks/homework.mock.jsx) | Homework | homework store | `homework_store_v9` |
-| **Lesson plan** | `LESSON_PLAN_SEED` (+ `window.__lessonPlans`) | [lessonPlanner.mock:14](mocks/lessonPlanner.mock.jsx#L14) | LessonPlannerPage | in-memory `window.__lessonPlans` | (in-memory) |
-| **Tracker** | `id, name, description, classGroup, columns[]{id,name,type(score/check/text),max?}, entries{studentName:{colId:val}}` | `DEFAULT_TRACKERS` [teacherPages.mock:79](mocks/teacherPages.mock.jsx#L79) | Tracking | tracking store | `tutoros.tracking.v1` |
+| **Lesson plan** | `{plan, savedAt, group, date, owner, ownerId}` keyed `group\|date`; `LESSON_PLAN_SEED` seeds it | [lessonPlanner.mock:14](mocks/lessonPlanner.mock.jsx#L14) | LessonPlannerPage, admin class card | persisted (heavy fields stripped on write), mirrored into `window.__lessonPlans` | `klasio.lessonPlans.v1` |
+| **Tracker** | `id, name, description, classGroup, columns[]{id,name,type(score/checkbox/select/rating/text/grade/date),max?,options?,gradeScaleId?}, entries{studentName:{colId:val}}` — legacy `number`/`check` types migrate on read | `DEFAULT_TRACKERS` [teacherPages.mock:79](mocks/teacherPages.mock.jsx#L79) | Tracking | tracking store | `tutoros.tracking.v1` |
 | **Teacher-view mock rollups** | `teacherClasses`, `homeworkFull`, `teacherAllClasses` (hardcoded counts w/ `studentList[]`) | [teacherPages.mock](mocks/teacherPages.mock.jsx) | TeacherPages, teacherMetrics(`homeworkFull`) | | seed |
 | **Teacher dashboard mocks** | `todaySchedule`, `homeworkItems`, `studentProgress`(scores/predicted/trend), `attendanceClass` | [teacherDashboard.mock](mocks/teacherDashboard.mock.jsx) | TeacherDashboard, teacherMetrics(`studentProgress`) | | seed |
 | **Student dashboard mocks** | `studentSelf`*, `studentHomework`, `studentSessions`* | [studentDashboard.mock](mocks/studentDashboard.mock.jsx) | StudentDashboard/studentData(`studentHomework`) | | seed |
@@ -342,7 +376,7 @@ This is the biggest structural risk. There are **three sanctioned selector tiers
 ⚠️ **The admin and teacher at-risk definitions deliberately disagree (75/50/55 vs 85/60)** — documented, but means "at-risk count" differs by who's looking.
 
 **Unreconciled / independent counts:**
-- **Homework "to mark" has 3 sources:** `teacherMetrics.getToMark` reads `window.homeworkFull` mock; `Homework.getHomeworkBadges` ([Homework.jsx:5324](Homework.jsx#L5324)) counts submissions in `homework_store_v9`; `studentData.homeworkSummary`/`resultsSummary` read the `studentHomework` mock. Three different homework truths.
+- ~~**Homework "to mark" has 3 sources**~~ — **resolved.** One function, `getHomeworkCounts(store, scope)` ([Homework.jsx:2074](Homework.jsx#L2074)), answers for every tier; `teacherMetrics`, `studentData`, the nav badges and the admin class card all call it. Separately, `marksReleased()` is the single release predicate, so a held-back paper cannot count as completed on one screen and not another.
 - **Per-teacher/class counts baked into mocks:** `SEED_TEACHERS[].classes/students/hwToMark`, `teacherClasses[].students/avgScore/attendance`, `homeworkFull[].submitted/total/marked` are hardcoded and **not** derived from the roster — they can drift from `teacherMetrics`.
 - **Student counts in SuperAdmin:** `SA_ACCOUNTS[].centres[].students/teachers/usage` are hardcoded platform figures unrelated to the `bm` roster. `SA_ROLE_COUNTS` is now *derived* from those centre rosters (parents are the only free parameter), and `SAMetrics.directory()` materialises one row per counted user from a seeded PRNG — so the Users table, the role counts and the per-centre cards always agree.
 - **Financials computed twice:** `SEED_INVOICES` (real ledger, `invAggregate`) vs `REPORTS_INVOICES` ([reports.mock:75](mocks/reports.mock.jsx#L75)) — a separate hardcoded financial list used by the admin financial report; amounts/plan names don't match the invoice ledger.
@@ -388,12 +422,12 @@ This is the biggest structural risk. There are **three sanctioned selector tiers
 - **`design_extract/` tree** (old `TutorOS.html`, `tweaks-panel.jsx`, per-role `.jsx`, `chat1.md`, a binary `design`/`design.gz`) is legacy snapshot, unreferenced by the app.
 
 ### Stubs & placeholders
-- AdminDashboard `todaySessions = []` and `outstandingInvoices = []` (TODO wire) ([AdminDashboard.jsx:211](AdminDashboard.jsx#L211),[:220](AdminDashboard.jsx#L220)).
-- TeacherDashboard `recentSubmissions = []`, `unreadMessages = 0` (TODO) ([TeacherDashboard.jsx:267](TeacherDashboard.jsx#L267),[:211](TeacherDashboard.jsx#L211)).
+- AdminDashboard `outstandingInvoices = []` (TODO wire top overdue) ([AdminDashboard.jsx:478](AdminDashboard.jsx#L478)). `todaySessions` is now derived and no longer a stub.
+- TeacherDashboard `recentSubmissions = []`, `unreadMessages = 0` (TODO) ([TeacherDashboard.jsx:303](TeacherDashboard.jsx#L303),[:252](TeacherDashboard.jsx#L252)).
 - Reports "Parent notifications — Coming soon" ([Reports.jsx:2577](Reports.jsx#L2577)); `REPORTS_CONFIG.notifications.parentNotification: false // future`.
 - `QRPlaceholder` (fake QR) used in Auth + Onboarding claim flows ([Onboarding.jsx:1008](Onboarding.jsx#L1008)).
-- Lesson plans persist only to in-memory `window.__lessonPlans` (lost on reload) — no localStorage store.
-- `studentData.homeworkSummary` carries `TODO(backend): unify with the Homework store` ([studentData.jsx:150](studentData.jsx#L150)).
+- ~~Lesson plans persist only in memory~~ — **fixed**: they save to `klasio.lessonPlans.v1` (heavy fields stripped), with `window.__lessonPlans` kept as the in-page mirror.
+- ~~`studentData.homeworkSummary` TODO: unify with the Homework store~~ — **fixed**: it delegates to `klasioHomework.getHomeworkCounts` / `marksReleased`.
 
 ### Dead / unused code
 - **`allStudents`** (adminPages.mock) — legacy flat roster mirror of `SEED_STUDENTS` with different ("Ms. Clarke") teacher naming; imported by 3 files but superseded by the store roster. Candidate for removal.
@@ -402,11 +436,11 @@ This is the biggest structural risk. There are **three sanctioned selector tiers
 - Legacy teacher-view mocks (`teacherClasses`, `homeworkFull`, `teacherAllClasses`) partly superseded by `teacherMetrics` but still consumed by some TeacherPages screens — mixed live/mock.
 
 ### Inline TODO/FIXME
-See grep: [AdminDashboard.jsx:211/220](AdminDashboard.jsx#L211), [TeacherDashboard.jsx:211/267](TeacherDashboard.jsx#L211), [studentData.jsx:150](studentData.jsx#L150). (No FIXME/HACK found.)
+Three left, all on dashboards: [AdminDashboard.jsx:478](AdminDashboard.jsx#L478), [TeacherDashboard.jsx:252](TeacherDashboard.jsx#L252) and [:303](TeacherDashboard.jsx#L303). (No FIXME/HACK found.) Both dashboards state the rule in a header comment: a card with no real source renders an empty state rather than inventing data.
 
 ### Inconsistencies (contradictions)
-- **Store version drift vs memory notes:** live keys are `admin_store_v4`, `tutoros.subscription.v2`, `reports_store_v2`, `tutoros.comms.v2`, `tutoros.timesheets.v2`, `homework_store_v9` — several bumped past what older architecture notes assume.
-- **Comms seed key mismatch:** [communications.mock:5](mocks/communications.mock.jsx#L5) references `tutoros.comms.v1` in a comment while the live store is `tutoros.comms.v2`.
+- **Store version drift:** live keys are `admin_store_v4`, `tutoros.subscription.v2`, `reports_store_v2`, `tutoros.comms.v3`, `tutoros.timesheets.v3`, `tutoros.attendance.v2`, `klasio.resources.v2`, `homework_store_v9` — check §5 rather than any older note, and never assume a version from memory.
+- **Three prefixes in one app:** `tutoros.*` (legacy), `klasio.*` (newer work) and unprefixed (`admin_store_v4`, `homework_store_v9`, `reports_store_v2`, `settings_store_v1`). The development plan resolves this as a single Phase 18 cutover, never piecemeal.
 - **Teacher identity double-id** (`t1` vs `t_clarke`) and **student triple-id** (see §7).
 - **PLANS defined twice** (`PLANS` in onboarding.mock, `PLAN_CATALOG_SEED` in plans.mock) — comment says they "mirror" but two sources can diverge (e.g. `features[]` only on the catalogue).
 - **Financials** duplicated (invoices vs `REPORTS_INVOICES`).
@@ -423,11 +457,14 @@ See grep: [AdminDashboard.jsx:211/220](AdminDashboard.jsx#L211), [TeacherDashboa
 | Dashboard | ✅ | 🟡 (TODO tiles) | 🟡 (TODO tiles) | ✅ | ⬜ |
 | Students & Enrolment | 🟡 (platform counts) | ✅ | 🟡 (read-only) | ✅ (self) | ⬜ |
 | Classes & Scheduling | ⬜ | ✅ | ✅ | 🟡 (sessions view) | ⬜ |
+| Attendance & Register | ⬜ | ✅ (oversight, backfill, unlock) | ✅ (take/amend) | 🟡 (own attendance %) | ⬜ |
 | Staff & Timesheets | 🟡 (SA users) | ✅ | ✅ | ⬜ | ⬜ |
 | Invoicing | 🟡 (SA revenue) | ✅ | ⬜ | ⬜ | ⬜ |
 | Communications | ✅ (no Messages) | ✅ (+Safeguarding) | ✅ | ✅ | ⬜ |
 | Homework | ⬜ | ⬜ | ✅ | ✅ | ⬜ |
 | Reports | ⬜ | ✅ (config) | ✅ (write) | ✅ (read) | ⬜ |
+| Resources (Materials) | ⬜ | ✅ (all + audited override) | ✅ (own + shared) | 🟡 (via student-visible link) | ⬜ |
+| Tracking & Lesson Planner | ⬜ | 🟡 (plans on class card) | ✅ | ⬜ (deliberate) | ⬜ |
 | Settings | ✅ | ✅ | ✅ | ✅ | ⬜ |
 | Storage | 🟡 (R2 platform) | ✅ (owner) | ⬜ | ⬜ | ⬜ |
 | Centres / Plans / Billing | ✅ (catalogue) | ✅ (owner only) | ⬜ | ⬜ | ⬜ |
@@ -438,7 +475,7 @@ See grep: [AdminDashboard.jsx:211/220](AdminDashboard.jsx#L211), [TeacherDashboa
 
 ## Biggest gaps to plan around
 
-1. **No unified metrics layer across tiers.** Three sanctioned selector layers (`centreMetrics` 75/50/55, `teacherMetrics` 85/60, `klasioStudent`) deliberately disagree, and *homework "to mark"*, *per-teacher counts*, *SA platform counts* and *financials* are each computed a 4th/5th independent way from hardcoded mocks. Any "single number" (student count, at-risk, revenue, homework due) can differ by screen.
+1. **No unified metrics layer across tiers.** Three sanctioned selector layers (`centreMetrics` 75/50/55, `teacherMetrics` 85/60, `klasioStudent`) deliberately disagree on at-risk, and the solo demo adds a fourth rule ("worth a look"). *Per-teacher counts*, *SA platform counts* and *financials* are still each computed independently from hardcoded mocks. Homework is the one that got fixed — `getHomeworkCounts` is now the single source — and it shows the shape of the remedy for the rest: one scoped function per figure, called by every tier.
 
 2. **Identity & tenant keys are not canonical.** Same humans carry multiple ids (`t1`/`t_clarke`, `s2`/`s_oliver`/`u_oliver`), `Class.teacher` is name-keyed while timesheets/homework are id-keyed, and tenant ids fork (`bm` vs `centre-001` vs `ctr_bm_london` vs `acc_brightminds`). Cross-module joins are fragile.
 

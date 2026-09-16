@@ -2,7 +2,7 @@
 
 **23 phases · 6 milestones · vertical slices from Phase 2 onward**
 
-Every phase from Phase 2 ships its own tables, RLS policies, RPCs, triggers, views, typegen, seeds, API endpoints, tests and UI together — end to end — before the next slice starts. This document is the authority on phase order, slice contents and locked decisions. Read alongside `docs/Klasio-Data-Layer-Reference.md` (v4), which is the authority on tables, policies and endpoints.
+Every phase from Phase 2 ships its own tables, RLS policies, RPCs, triggers, views, typegen, seeds, API endpoints, tests and UI together — end to end — before the next slice starts. This document is the authority on phase order, slice contents and locked decisions. Read alongside `docs/Klasio-Data-Layer-Reference.md` (v5), which is the authority on tables, policies and endpoints.
 
 **Behavioural spec:** the frontend prototype plus `INVENTORY.md` define expected UI behaviour. Where the prototype disagrees with this plan or the reference, **these documents win**; every known gap is listed under [Known prototype divergences](#known-prototype-divergences) so it is fixed in the prototype or ignored deliberately, never copied into production.
 
@@ -40,7 +40,7 @@ Every phase from Phase 2 ships its own tables, RLS policies, RPCs, triggers, vie
 | 26 | Report lifecycle | `draft → published → archived`. No approval step; the centre standards gate at publish is the quality check |
 | 27 | Report permissions | Six per-centre toggles in `centre_report_settings`, read inside RLS via `report_perm()` — `perm_view_others` is a read policy, not a UI filter |
 | 28 | Predicted / target grades | Stored in `student_targets` (teacher judgement); "on track" derived; published reports snapshot the predicted grade |
-| 29 | Rank exposure | Class rank shown to students only when `centre_settings.features.show_rank_to_students` (default **off**) and the student is 13+ |
+| 29 | Rank exposure | Class rank shown to students only when `privacy_flag(centre, 'show_rank_to_students')` — a typed column on `centre_privacy_settings`, default **off** — and the student meets `rank_min_age` (default 13). Not a `centre_settings.features` key: a view reads it (decision #33) |
 | 30 | Support | By **email** — no in-app ticket system. Impersonation (`support_sessions`) references the support email thread and is visible to the tenant |
 | 31 | Groups | **Deferred.** No `groups` / `group_members`; `group` removed from assignment and announcement target enums. Tags cover ad-hoc cohorts. Revisit after M1 |
 | 32 | Platform switches | `platform_settings` single-row table (maintenance, read-only, signups, status page, trial offer, defaults). `feature_flags` is only for product rollout |
@@ -121,7 +121,7 @@ Email templates: staff invitation, owner welcome, guardian approval magic link
 
 Tests: isolation (files visible only within centre), quota enforcement, suppression list check at enqueue, delete refused for `archive`/`locked` categories
 
-UI: admin + owner Storage tabs in Settings (usage by category, pooled vs split, guarded delete)
+UI: Storage as an **account-level route**, not a Settings tab — quota is an account concern, while Settings is centre-scoped or personal (usage by category, pooled vs split, guarded delete). The superadmin console keeps its own platform-wide Storage tab
 
 **Exit:** file upload/download round-trip works; invitation email lands; outbox worker processes queued rows; a locked-category delete is refused.
 
@@ -227,7 +227,9 @@ pg_cron: due reminders (N days before instalment), overdue sweep — both respec
 
 Tests: isolation + status derivation unit tests (all schedule/payment combinations) + tax derivation (none / exclusive / inclusive; rate override per invoice) + family invoice covers multiple siblings' lines + reminder refused inside cooldown + send refused with no billing email + generated invoice matches delivered minutes + audited RPCs assert audit rows
 
-UI: invoice ledger, invoice detail drawer (family header, per-sibling lines, mark paid, audit), payment entry, reminders, CSV reconciliation, invoice analytics, invoicing settings, guardian-facing read-only view
+UI: invoice ledger, invoice detail drawer (family header, per-sibling lines, mark paid, audit), payment entry, reminders, CSV reconciliation, invoice analytics, invoicing settings
+
+> **No guardian-facing screen.** Guardians never log in (decision #13); the invoice PDF emailed by `POST /v1/invoices/:id/send` *is* the guardian-facing artefact. Any future no-login view would be a signed magic-link page, and would need a token model in the reference first.
 
 **Exit:** admin creates one invoice for a family of three siblings; status derives correctly from schedule vs payments; tax computes correctly in each mode; PDF emails to the family's billing guardian; a second reminder inside the cooldown is refused; CSV export/import round-trips.
 
@@ -433,6 +435,8 @@ UI: plan picker (account owner, monthly/yearly), promo-code redemption in the bi
 
 A private tutor runs their book on the same data model as a centre (decision #24): one implicit centre, the tutor holding owner + centre_admin + teacher + DSL lead.
 
+**Behavioural spec:** the solo demo account in the prototype — `Solo.jsx` (shell and pages), `soloData.jsx` (state and derived model), `soloCapabilities.jsx` (the only file that knows tier ids) and `mocks/solo.mock.jsx` — documented in `docs/SOLO-DEMO-INVENTORY.md`.
+
 Seeds: the three solo plans — `solo_free` (3 students, 3 invoices/month, 250 MB, core only), `solo_core` (25 students, unlimited invoices, 2 GB; group lessons, lesson planner, tracking, homework, reports), `solo_pro` (60 students, 10 GB; adds homework bank, report rules, at-risk flags, payment reminders, VAT, analytics exports, waiting list)
 
 Behaviour: `provision_account` for `kind = 'solo'` creates the implicit centre, all memberships, `dsl_role = 'lead'`, `centre_register_settings.backfill_hours = 168` and `pre_open_minutes = 10`; one-to-one lessons record `delivered_minutes`; monthly invoices generated from delivered time × hourly rate; the tutor self-reopens a lapsed register with a mandatory reason; summer pause via `POST /v1/billing/pause`; concern log private to the tutor with escalation contacts; safeguarding, guardian and health records available on every tier
@@ -448,7 +452,7 @@ UI: solo shell (no role strip, no centre chrome), dashboard with "worth a look" 
 ## Phase 14 — Superadmin + privacy ⟶ Milestone M3
 **Type:** vertical slice · **Milestone M3**
 
-Tables: `support_sessions`; `audit_log` gains `actor_role`, `ip`, `support_session_id` (columns created in Phase 1, surfaced here)
+Tables: `support_sessions`, `jobs` (the one generic async-job table — the SAR and erasure exports below are the first callers, so it is created here and Phase 15 adds the import kinds); `audit_log` gains `actor_role`, `ip`, `support_session_id` (columns created in Phase 1, surfaced here)
 
 Railway endpoints: `POST /v1/admin/accounts`, `POST /v1/admin/accounts/:id/suspend`, `POST /v1/admin/accounts/:id/restore`, `POST /v1/privacy/erasure`, `POST /v1/privacy/sar-export`, `GET /v1/jobs/:id` (poll async jobs — GET, matching the reference and Phase 15)
 
@@ -477,7 +481,7 @@ UI: superadmin console (dashboard, centres/accounts with detail popover, users d
 
 Railway endpoints: `POST /v1/students/import`, `GET /v1/jobs/:id`
 
-Tables: async job tracking (extend `data_requests` or add `import_jobs`)
+Tables: extends `jobs` (created in Phase 14) with the `student_import` and `invoice_import` kinds — no new table. One generic job row (kind, status, progress, `row_errors`, result file) backs `GET /v1/jobs/:id` for every import and export; `data_requests` keeps the statutory DSAR clock and its job points back at it, so the UI polls one endpoint rather than two
 
 Tests: duplicate detection, validation error rows surfaced in job result, tenant scope enforced on all imported rows, import respects `plan_limit(max_students)`
 
@@ -563,16 +567,16 @@ A phase is not done until all of the following are true:
 
 The prototype disagrees with these documents in the places below. **The documents are correct.** Fix the prototype when the area is next touched, or leave it — but never port the prototype's version.
 
-| Area | Prototype today | Production (reference v4) |
+| Area | Prototype today | Production (reference v5) |
 |---|---|---|
 | Register backfill default | `REGISTER_SETTINGS.backfill_window` = 48h | `backfill_hours` default 72h (168h solo) |
 | Register unlocks | Grant deleted from `store.unlocks` on use/revoke; history only in `unlockLog` | `register_unlocks` rows kept with `consumed` / `revoked` / `expired` status |
 | Active term | Derived from today's date (`resolveActiveTerm`); `teacherMetrics.getCurrentTerm` reads `window.readTermIndicator`, which `index.html` never exposes, so it falls back to a hardcoded "Summer Term 2026" | Stored `terms.is_active` + `set_active_term` |
 | Cover teacher | One `cls.cover` object per class (date window, derived by `coverActive()`) | `class_cover` rows (many ranges) + `v_effective_teacher` |
 | Announcement audience | `audience{centreIds, roles, classIds}` jsonb on the row | `announcement_targets` child rows |
-| Submission status | No `marked` state; release tracked by `marksReleasedAt` | `marked` and `returned` both exist; `returned` ⇔ `marks_released_at` |
+| Submission status | No `marked` state; release tracked by `marksReleasedAt`; a legacy `approved` status is still written and read as "graded"; a second `releaseAfterApproval` setting sits beside `hideMarksUntilReleased` | `not_started \| in_progress \| submitted \| marked \| returned` — no `approved`; `returned` ⇔ `marks_released_at`, so one flag (`hide_marks_until_released`) governs release |
 | Question type names | `math`, `short`, `long` | `expression`, `short_text`, `long_text` |
-| Report rules | Mock uses uppercase rule enums (`REQUIRED`, `WEEKLY`) and no `centre_default` rule type (a separate `defaultRule` object) | Lowercase enums; `target_type = 'centre_default'` row |
+| Report rules | Mock uses uppercase rule enums (`REQUIRED`, `WEEKLY`) and no `centre_default` rule type (a separate `defaultRule` object); tag targets are matched by **label string** rather than id; `half_termly` is missing from the frequency list | Lowercase enums; `target_type = 'centre_default'` row; tag targets resolve through `taggables`; the frequency set includes `half_termly` |
 | Staff employment | Two vocabularies: `Full-time/Part-time/Hourly/Contract` (invite + add-teacher forms) and `salaried/hourly/mixed` + a single `hourlyRate` hardcoded per teacher (`TS_EMP_DEFAULTS`) | `employment_type` (legal) + `pay_type` (payroll) + `contracted_hours`, with rates in `staff_rates` (effective-dated) |
 | Staff rating | `rating` (e.g. 4.9) still seeded on every teacher and defaulted to 0 on new staff, though no screen shows it any more | Not modelled — drop the field |
 | Student at-risk | Stored `status: 'at-risk'` on the roster **and** three derived definitions (centre 75/50/55, teacher 85/60 + trend, solo "worth a look": attendance < 75, scores slipping, no homework in 21 days) | One derived `v_student_risk`; nothing stored |
@@ -586,7 +590,7 @@ The prototype disagrees with these documents in the places below. **The document
 | Groups | No UI (none to remove) | Deferred; `group` not a target type |
 | Feature flag `parent_payments` | "Parents pay invoices in-app" flag in `SA_FLAGS` | Not a feature — ledger-only invoicing and no parent role (decisions #13, #18). Remove the flag |
 | Platform switches | Split across five places: maintenance in `tutoros.maintenance`, read-only in page state, a hard-wired "New Signups" toggle with a no-op setter, the status page on System Health, defaults in `settings_store_v1.superadmin.platform` | One `platform_settings` row |
-| Financial report | `REPORTS_INVOICES` — a second hardcoded financial list that doesn't reconcile with the invoice ledger | One ledger; delete `REPORTS_INVOICES` |
+| Financial report | `REPORTS_INVOICES` — a second hardcoded financial list that doesn't reconcile with the invoice ledger — plus a third figure on the student profile's Fees tab | One ledger; every financial surface reads `v_invoice_report`; delete `REPORTS_INVOICES` and derive the Fees tab |
 | Audit | Three logs (`tutoros.audit.v1`, `tutoros.saudit.v1`, onboarding `roleLog`) plus per-module logs | One `audit_log` sink; domain history tables stay separate |
 | Families | Exist only inside the invoices mock (`SEED_FAMILIES`) with parent contact inline; no `family_id` on the roster | `students.family_id`, billing contact via `student_guardians` |
 | Session generation | Expands every matching weekday with no holiday awareness | `regenerate_sessions` skips `term_breaks` |
@@ -602,6 +606,9 @@ The prototype disagrees with these documents in the places below. **The document
 | Parent role | A "Parent" role with "View child progress / Pay invoices" in Platform Controls, parent users in the directory, a "Parent Portal" usage metric, "linked parent account" copy in student settings | No parent role at all (decisions #13, #18) — guardians are data rows and email recipients |
 | Student profile extras | Meetings/parents' evenings, teacher reviews with star ratings and per-lesson participation are synthesised for display | Not modelled — remove, or design them before they are built |
 | Seat add-ons | "Added 14 student seats" appears as a purchasable add-on in the superadmin transactions | Seats change by changing plan; only storage has an add-on |
+| Plan gating and support | A flag in `SA_FLAGS` is scoped "Scale only"; SSO appears in the audit log, the ticket queue and an archived "Enterprise" plan; impersonation starts from the console with no expiry, no stated reason and no banner for the tenant | Flags gate rollout only — plans gate surfaces through `plan_capability()` (#25); SSO is not in scope; `support_sessions` are ≤ 60 min, carry a support-email reference and show a banner to the tenant's admins (#30) |
+| Keys and data shapes | Attendance marks and tracker cells are keyed by **student name**; `submittedBy` doubles as the delivering adult; amendments carry no reason; `assignments.status` uses `active`; `classes.status` uses `paused`; report pins are stored on the report | Keyed by `student_id` throughout; `sessions.delivered_by` is its own column; `attendance_amendments.reason` is required; assignment status is `draft \| published \| closed` (`scheduled` derived); class status is `active \| archived`; pinning is per-user in `report_user_state` |
+| Lesson-plan uploads | Files attach to a lesson plan through a second upload path of its own | Lesson plans link to `resources` (Phase 12c) — one file model, one retention matrix |
 
 ---
 
@@ -621,6 +628,17 @@ Build-scope in the reference with no prototype surface. These carry design risk 
 - **Guardian approvals** beyond the under-13 consent screen (PIN reset by guardian magic link).
 
 **Lower risk — infrastructure the prototype fakes by nature:** email outbox, suppressions and templates; Stripe webhooks, `processed_events` and add-on purchase; the DSAR lifecycle (static mock); `notification_prefs` per kind × channel (prototype has one flat section).
+
+### Built in the prototype, scheduled in no phase
+
+The inverse risk: working surfaces that no phase promises, so they would silently disappear in the rebuild. Each needs a phase or a decision to drop it.
+
+- **Role dashboards** — Phase 1 promises "placeholder dashboards per role", but the prototype ships full admin, teacher and student dashboards with derived stat bands. The real ones have no home; they depend on Phases 3–8 for their data and belong at the end of each of those slices.
+- **Subjects pages**, **teacher My Students**, **student My Classes** — list surfaces over Phase 3 tables that Phase 3's UI line does not mention.
+- **Sessions with ICS export** (`StudentDashboard.jsx`) — calendar feed for a student's timetable; no endpoint in the reference.
+- **Superadmin Engagement and System Health** — Phase 14's UI line covers the console and platform controls but neither of these.
+- **Reports "Generate"** — a bulk report-creation action alongside the Phase 8b writer.
+- **Remembered-device centre code** (`tutoros.lastCentre`) — prefills the centre on the login form; harmless, but it is device state nobody has specified.
 
 ---
 

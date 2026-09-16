@@ -2,7 +2,7 @@
 //  Mock data — Communications (Announcements + Messages/threads)
 //  Loaded as a global script before Communications.jsx (see index.html).
 //
-//  Seeds the localStorage comms store (tutoros.comms.v1). Everything is
+//  Seeds the localStorage comms store (tutoros.comms.v3). Everything is
 //  multi-tenant: users/announcements/threads carry a `centreId` and the
 //  store filters every read by the active user's centre (superadmin only
 //  sees across centres). `COMMS_SELF` maps the active role → demo userId.

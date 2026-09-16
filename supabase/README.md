@@ -23,7 +23,7 @@ RPCs, triggers and views ship **inside migrations**. The `functions/` directory 
 to Supabase Edge Functions, which Klasio does not use: privileged HTTP endpoints are
 Fastify routes on Railway (decision #4).
 
-## Domains (≈116 tables across twelve domains)
+## Domains (≈117 tables across twelve domains)
 
 Tenancy & identity · Academic · Grades & assessment · Staff & pay · Homework ·
 **Student Reports & Teacher Feedback** · **Tracking & lesson planning** ·
