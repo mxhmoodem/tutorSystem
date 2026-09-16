@@ -61,10 +61,13 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | slug | text UNIQUE | URL-safe identifier |
 | kind | text | `centre` \| `solo` — a solo private-tutor account owns exactly one implicit centre and is sold `plans.audience = 'solo'` plans. Immutable after creation |
 | owner_profile_id | uuid FK NOT NULL | → profiles.id — **the single source of ownership.** Not a membership role; `transfer_ownership` repoints this one field |
-| plan | text | Denormalised current plan code (mirrors subscriptions) |
 | storage_policy | text | `pooled` \| `split` — how the account quota is shared across centres (always `pooled` for solo) |
-| status | text | `trial` \| `active` \| `past_due` \| `suspended` \| `cancelled` |
+| status | text | `active` \| `suspended` \| `cancelled` — the **platform** lifecycle only. Plan, trial and dunning state live on `subscriptions` (`trialing` / `past_due` / `paused`) and are never mirrored here, so there is exactly one answer to "what is this account paying for" |
 | billing_email | text | Where Klasio billing goes |
+| legal_name | text NULL | Registered company or trading name printed on the Klasio invoice — differs from `name` for a limited company |
+| billing_address | jsonb NULL | Address block for the Klasio invoice (`line1`, `line2`, `city`, `postcode`) |
+| vat_number | text NULL | The account's **own** VAT registration, for reverse charge and the Klasio invoice. Distinct from `centre_invoice_settings.vat_number`, which is what the centre charges its families |
+| country | text | ISO 3166-1 alpha-2, default `GB`. Drives Stripe tax behaviour and the data-residency claim |
 | created_at | timestamptz | default now() |
 
 #### `centres`
@@ -532,7 +535,7 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | class_id / student_id | uuid FK | |
 | account_id / centre_id | uuid FK | |
 | starts_on / ends_on | date | |
-| status | text | `active` \| `withdrawn` \| `waitlisted` |
+| status | text | `active` \| `withdrawn` — **not `waitlisted`**: someone waiting for a place has no enrolment row at all, they have a `waiting_list_entries` row (§2). Two models for one queue is how the counts drift apart |
 
 #### `attendance_records`
 *Per-student mark per session. Written by `submit_register`; corrected by `amend_attendance` within the amendment window.*
@@ -723,7 +726,7 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | session_id | uuid FK NULL | Set only for `teaching` entries (system-derived); null for manual types |
 | profile_id | uuid FK | The teacher — for `teaching`, `sessions.delivered_by` |
 | account_id / centre_id | uuid FK | |
-| type | text | `teaching` \| `prep` \| `marking` \| `meeting` \| `training` \| `cover` \| `other` — RLS enforces that `teaching` rows are system-inserted only. `other` is recorded but never pay-eligible |
+| type | text | `teaching` \| `prep` \| `marking` \| `meeting` \| `training` \| `cover` \| `other` — RLS enforces that `teaching` rows are system-inserted only. `other` is recorded but never pay-eligible. A register derives `teaching` for whoever delivered the session, **cover teacher included**; the `cover` type is for manually logged non-session cover (supervising a colleague's class without taking a register). Whether cover is *paid* is decided by `v_timesheet_pay` against `v_effective_teacher`, never by this column |
 | minutes | int | |
 | worked_on | date | |
 | note | text NULL | |
@@ -1238,7 +1241,7 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | announcement_id | uuid FK | |
 | account_id / centre_id | uuid FK NULL | |
 | target_type | text | `platform` \| `centre` \| `role` \| `year` \| `class` \| `subject` — year and subject resolve through classes |
-| target_ref | uuid / text NULL | Points at the matching entity; null for platform/centre-wide |
+| target_ref | uuid NULL | Points at the matching entity; null for platform/centre-wide. Always a uuid — a column that is sometimes an id and sometimes a label cannot be joined or constrained |
 
 #### `announcement_receipts`
 *Per-recipient read/ack row.*
@@ -1850,7 +1853,7 @@ Policies are expressed through a small set of `SECURITY DEFINER` helpers so pred
 | `auth_uid()` | uuid | Wraps `auth.uid()`; the calling user's profile id |
 | `is_superadmin()` | boolean | True if the JWT carries the platform-admin claim (allowlist). **Grants no tenant data on its own** — it appears only on the platform tables listed in the matrix; tenant reads go through `in_support_session()` |
 | `auth_centre_ids()` | uuid[] | Centres where the caller has an active membership — the core scoping set |
-| `auth_account_id()` | uuid | The caller's account (from membership); null for superadmin |
+| `auth_account_ids()` | uuid[] | Every account the caller holds a membership under — **an array, like `auth_centre_ids()`**. One person can teach at centres owned by two different accounts, so a single-uuid version silently hides one of them. Empty for a superadmin |
 | `has_role(centre uuid, roles text[])` | boolean | Caller holds one of the given roles in that centre — `EXISTS` over membership rows (multi-role safe) |
 | `is_account_owner(account uuid)` | boolean | `accounts.owner_profile_id = auth_uid()` — ownership check; **"account_owner" in the matrix below means this helper**, not a membership role |
 | `is_dsl(centre uuid)` | boolean | Caller's membership in that centre has `dsl_role IS NOT NULL` (lead or deputy) |
@@ -1885,6 +1888,17 @@ create policy sel_student_scoped on <table> for select using (
   or in_support_session(account_id)
 );
 ```
+
+### Cross-cutting invariants
+
+Rules the whole system depends on. Each is enforced by a constraint, a trigger or an RPC — **never by the UI alone**, because every one of them is a rule someone will eventually try to break through the API.
+
+- **Ownership is always staffed.** `accounts.owner_profile_id` must point at a profile holding a `centre_admin` membership at the account's primary centre. `transfer_ownership` grants the incoming owner that membership *before* repointing the field, so an owner always resolves through the canonical read pattern and RLS needs no owner special-case. "account_owner" in the matrix therefore grants rights *in addition to* an admin membership, never instead of one.
+- **A centre never loses its last admin.** `set_member_role` refuses to remove the final `centre_admin` membership at a centre, and refuses to remove the account owner's.
+- **Who may start a conversation.** `start_conversation` is staff-initiated and checked against the `comms_settings` preset matrix. A pupil never opens a thread. A staff↔student thread stamps `monitored = true` at creation (immutable) and attaches DSL observers per `dsl_observer`.
+- **Quiet hours never block a send.** They gate *notification delivery* and raise an `out_of_hours` flag reason. A pupil reaching out at night must always get through — the flag is what brings a human to it, and a blocked message is a safeguarding failure, not a safeguarding control.
+- **DSL is a capability, not a role.** `memberships.dsl_role` (`lead` / `deputy`), at most one lead per centre. No table stores a DSL identity and `comms_settings` holds no people — so removing someone's membership removes their DSL access in the same step.
+- **A thread with any student participant is text-only.** `messages.file_id` must be null; adding a student to an existing thread stamps `monitored` if it is not already set. `comms_settings.images_enabled` cannot override this.
 
 ### Derived views
 
@@ -1984,7 +1998,7 @@ Each non-empty cell represents one or more policies to write and cover in the RL
 
 | Table | SELECT | INSERT | UPDATE | DELETE |
 |---|---|---|---|---|
-| accounts | own account (auth_account_id); superadmin | superadmin | superadmin; account_owner (own) | superadmin |
+| accounts | own accounts (`id = any(auth_account_ids())`); account_owner; superadmin | superadmin | superadmin; account_owner (own) | superadmin |
 | centres | members of the account; superadmin | superadmin; account_owner | superadmin; account_owner; centre_admin (own centre) | superadmin; account_owner |
 | profiles | self; staff in a shared centre | self (on signup); admin (invite flow) | self; centre_admin for managed users | centre_admin |
 | memberships | self; centre_admin/owner in that centre | account_owner; centre_admin | account_owner; centre_admin (role + dsl_role changes audited) | account_owner; centre_admin |
@@ -2108,7 +2122,7 @@ Three surfaces. Plain CRUD goes through the Supabase client (PostgREST), authori
 | Method | Endpoint | Description |
 |---|---|---|
 | POST | `/v1/auth/signup` | **Public self-serve signup** (decision #22). Rate-limited per IP, idempotent on email, refused when `platform_settings.signups_enabled` is false. One transaction: account (`kind` centre or solo) + owner profile + first centre (implicit for solo) + centre code + domain settings rows + subscription with the platform trial stamped. Owner must enrol TOTP before first use |
-| POST | `/v1/invites` | Create a staff invitation; sends the email via the outbox |
+| POST | `/v1/invites` | Create a staff invitation. **The only caller of `invite_member`** — the RPC owns the transaction (row + token), the endpoint owns the side effect (queueing the email), so clients never call the RPC directly |
 | POST | `/v1/invites/:id/resend` | Re-send an unexpired invitation |
 | POST | `/v1/auth/staff/login` | Staff email + password + a Turnstile token. Checks `account_lockouts`, writes `auth_attempts`, then signs in against Supabase Auth (passing the Turnstile token through, since it is single-use) and returns the AAL1 session |
 | POST | `/v1/auth/staff/mfa/verify` | TOTP code for the pending factor. Same lockout and `auth_attempts` treatment, then raises the session to AAL2 |
@@ -2221,7 +2235,7 @@ Invoked with the caller's own JWT, so RLS still applies. **Audited** calls write
 | `invite_member(centre, email, role)` | Staff invitation | yes |
 | `set_member_role(membership, role)` | Role change (add/remove membership rows — multi-role) | yes |
 | `set_dsl_role(membership, lead\|deputy\|null)` | Assign/clear DSL lead or deputy; one lead per centre enforced | yes |
-| `transfer_ownership(account, profile)` | Repoint `accounts.owner_profile_id` — a single-field mutation. New owner must exist with their own identity + MFA first; never swap credentials | yes |
+| `transfer_ownership(account, profile)` | Grant the incoming owner a `centre_admin` membership if they lack one, then repoint `accounts.owner_profile_id` — in one transaction, in that order, so ownership is never held by someone RLS cannot see. New owner must exist with their own identity + MFA first; never swap credentials | yes |
 
 #### Centre admin
 
