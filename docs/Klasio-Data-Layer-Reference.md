@@ -87,6 +87,7 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | address_line1 / line2 / city / postcode | text | Postal address |
 | phone | text | |
 | timezone | text | default `'Europe/London'` — drives session local-time logic |
+| country | text | ISO 3166-1 alpha-2, default `GB`. The tax jurisdiction its invoices are raised in — a multi-centre account can straddle two, so this is not inherited from `accounts.country` |
 | status | text | `active` \| `archived` |
 
 > Register timing lives in `centre_register_settings`; VAT, tax mode and invoice defaults in `centre_invoice_settings` (§8). Both rows are created with the centre.
@@ -97,7 +98,8 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | Column | Type | Notes |
 |---|---|---|
 | id | uuid PK | = auth.users.id |
-| full_name | text | |
+| full_name | text | Legal name — what appears on reports, invoices and safeguarding records |
+| display_name | text NULL | What the app and other users see ("Mr Park", a preferred first name). Falls back to `full_name`. Never substituted on a legal or safeguarding document |
 | email | text | Nullable for PIN-only student accounts |
 | phone | text | |
 | avatar_file_id | uuid FK | → files.id |
@@ -733,6 +735,9 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | rate_id | uuid FK NULL | Rate in force on `worked_on` |
 | exported_amount | numeric NULL | **Snapshot** of the `v_timesheet_pay` amount taken when the entry moves to `exported`; null before. The live amount is always derived |
 | status | text | `draft` \| `submitted` \| `approved` \| `rejected` \| `exported` — `exported` marks the payroll CSV hand-off; a ledger-only platform never asserts "paid" |
+| decided_by | uuid FK NULL | → profiles.id — who approved or rejected. Pay approval without a named approver is not an audit trail |
+| decided_at | timestamptz NULL | |
+| decided_reason | text NULL | Required on `rejected` — a teacher told only "rejected" cannot fix and resubmit |
 
 #### `centre_timesheet_policy`
 *Centre pay policy. Read by `v_timesheet_pay`, so flipping a toggle re-derives every open period immediately.*
@@ -937,6 +942,7 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | name | text | |
 | structure | jsonb | Ordered sections + prompts + which rating scale each section uses |
 | shared | boolean | Visible to all centre teachers (requires `perm_share_templates` for teacher authors) |
+| locked | boolean | default false — a centre-standard template: teachers may write with it but not edit its structure. Only a `centre_admin` may lock, unlock or change a locked template |
 | created_by | uuid FK | |
 | updated_at | timestamptz | |
 
@@ -975,7 +981,9 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | template_id | uuid FK | |
 | author_id | uuid FK | The teacher |
 | folder_id | uuid FK NULL | → report_folders.id |
+| title | text NULL | Author's own heading for the report; falls back to the template name plus the period when blank |
 | report_type | text | `termly_progress` \| `quick_update` — a label independent of the template |
+| subject_id | uuid FK NULL | → subjects.id — the subject reported on. Defaults from `class_id` where one is set, but is stored because a report can cover a subject without a class |
 | period_start / period_end | date | The period covered |
 | status | text | `draft` \| `published` \| `archived` — no approval step (decision #26); the centre standards gate at publish is the quality check |
 | body | jsonb | Section content keyed to the template structure (incl. academic fields: understanding, participation, homework completion, test performance, attendance, strengths, improvements) |
@@ -1038,8 +1046,8 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | tracker_id | uuid FK | |
 | account_id / centre_id | uuid FK | |
 | name | text | |
-| kind | text | `score` (a mark out of `max_value`) \| `number` (bare number, optional `max_value` cap) \| `check` \| `text` \| `grade` (label from `grade_scale_id`) \| `select` (one of `options`) |
-| max_value | numeric NULL | For `score` (required) and `number` (optional) |
+| kind | text | `score` \| `checkbox` \| `select` (one of `options`) \| `rating` (1–5) \| `text` \| `grade` (label from `grade_scale_id`) \| `date` — **the seven kinds the prototype ships.** There is no separate `number` kind: an uncapped number is a `score` with `max_value` null |
+| max_value | numeric NULL | What a `score` column is marked out of; null means uncapped |
 | options | jsonb NULL | For `select` — ordered labels |
 | grade_scale_id | uuid FK NULL | For `grade` |
 | sort_order | int | |
