@@ -86,6 +86,7 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | accent | text NULL | Per-centre brand accent (token reference); falls back to `centre_settings.branding` |
 | address_line1 / line2 / city / postcode | text | Postal address |
 | phone | text | |
+| email | text | Public contact address for the centre — what appears on invoices, reports and claim slips. Distinct from `accounts.billing_email`, which is where Klasio bills *the account* |
 | timezone | text | default `'Europe/London'` — drives session local-time logic |
 | country | text | ISO 3166-1 alpha-2, default `GB`. The tax jurisdiction its invoices are raised in — a multi-centre account can straddle two, so this is not inherited from `accounts.country` |
 | status | text | `active` \| `archived` |
@@ -116,7 +117,7 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | centre_id | uuid FK | → centres.id |
 | account_id | uuid FK | Denormalised for RLS |
 | role | text | `centre_admin` \| `teacher` \| `student` — ownership is **not** a role (see `accounts.owner_profile_id`) |
-| dsl_role | text NULL | `lead` \| `deputy` — Designated Safeguarding Lead capability. Partial unique index: at most one `lead` per centre |
+| dsl_role | text NULL | `lead` \| `deputy` — Designated Safeguarding Lead capability. Partial unique index: at most one `lead` per centre. **CHECK: only a `centre_admin` or `teacher` row may carry it** — never a `student` row. For someone holding several roles at one centre, it lives on their **`centre_admin` row** if they have one, otherwise their `teacher` row; `is_dsl()` is an EXISTS over all their rows, so the placement never changes what they can read |
 | status | text | `active` \| `suspended` |
 | UNIQUE | (profile_id, centre_id, role) | Allows multi-role; role checks are `EXISTS` over rows, never equality on a single row |
 
@@ -133,8 +134,8 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | enrolment_status | text | `prospective` \| `active` \| `left` |
 | family_id | uuid FK NULL | → families.id — sibling grouping for family billing |
 | username | text | Unique within centre; combined with `centres.code` at login |
-| auth_method | text | `pin` \| `password` — **under-13s are always `pin`** (CHECK against `dob`). QR-badge login is not supported (decision #21) |
-| pin_hash | text NULL | Argon2 hash — never the raw PIN. Set when `auth_method = 'pin'` |
+| auth_method | text | `pin` \| `password` — **under-13s are always `pin`**. Enforced by a **trigger**, not a CHECK: age depends on `now()`, and Postgres requires CHECK expressions to be immutable, so a date-sensitive rule cannot live in one. The trigger runs on insert and update of `dob` or `auth_method`. **When `dob` is null the row is treated as under-13** — the safe default, and the prototype's habit of inferring age from year group is not a substitute. QR-badge login is not supported (decision #21) |
+| pin_hash | text NULL | Argon2 hash — never the raw PIN. Set when `auth_method = 'pin'`. **A PIN is exactly 6 digits**; the lockout after 5 failed student attempts, not the length, is what makes it safe |
 | address_line1 / address_line2 / city / postcode | text NULL | Home address. Optional — a centre that has no need for it leaves it empty; it is never shown to other students |
 | notes | text NULL | Free-text staff notes on the student (staff-only read) |
 
@@ -149,7 +150,7 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | student_id | uuid FK | → students.profile_id |
 | account_id / centre_id | uuid FK | |
 | full_name | text | |
-| relationship | text | `mother` \| `father` \| `carer` \| `other` |
+| relationship | text | `parent` \| `mother` \| `father` \| `carer` \| `other` — `parent` exists because that is what real imports and forms produce when the relationship is not broken down further; omitting it forced the prototype's CSV import to write a value outside the enum |
 | email / phone | text | Contact + comms destination |
 | is_primary | boolean | |
 | is_billing_contact | boolean | Receives invoices |
@@ -384,7 +385,9 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | exam_board | text | Sourced from `class_dimensions` (kind = exam_board) |
 | teacher_id | uuid FK | → profiles.id — the permanent teacher; temporary cover lives in `class_cover` and the effective teacher is **derived** |
 | kind | text | `group` \| `one_to_one` |
-| room_id | uuid FK | |
+| description | text NULL | What the class covers, shown on the class card and the create-class form |
+| room_id | uuid FK NULL | Null when the class has no room — see `location` |
+| location | text NULL | Where a class without a room happens: "Online", "Student's home", "Library". A private tutor has no room list, so `room_id` is meaningless to them; CHECK that at most one of `room_id` and `location` is set |
 | term_id | uuid FK | |
 | capacity | int | |
 | hourly_rate | numeric NULL | Per-student hourly fee. Drives `generate_invoices` for pay-as-you-go billing (the default for solo accounts); null when the class is billed from `fee_plans` |
@@ -399,7 +402,7 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 |---|---|---|
 | class_id | uuid PK FK | |
 | account_id / centre_id | uuid FK | |
-| banner_theme | text | `default` (derives from the subject colour) \| `indigo` \| `teal` \| `ocean` \| `forest` \| `sunset` \| `plum` \| `slate` |
+| banner_theme | text | `default` (derives from the subject colour) \| `indigo` \| `teal` \| `ocean` \| `forest` \| `sunset` \| `plum` \| `slate`. **Class-wide, not personal** — the class teacher picks it and every member sees the same banner, so colour works as a wayfinding cue. It is deliberately not a `user_preferences` key |
 | students_can_post | boolean | default false |
 | students_can_comment | boolean | default true |
 | updated_at | timestamptz | |
@@ -488,7 +491,7 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | id | uuid PK | |
 | class_id | uuid FK | |
 | account_id / centre_id | uuid FK | |
-| weekday | int | 0–6 |
+| weekday | int | **0–6, Sunday = 0** (matching `EXTRACT(DOW)`). Stated explicitly because the solo prototype numbers 1–7, and an off-by-one here moves every session by a day |
 | starts_at_local / ends_at_local | time | Centre-local wall clock |
 | room_id | uuid FK | |
 | effective_from / effective_to | date | |
@@ -2048,7 +2051,7 @@ Each non-empty cell represents one or more policies to write and cover in the RL
 | taggables | centre staff; student never | centre_admin; teacher (report tags on own reports) | — | centre_admin; teacher (own report tags) |
 | waiting_list_entries | centre_admin | centre_admin (capability `waiting_list`) | centre_admin | centre_admin |
 | centre_register_settings | centre staff | system (with centre) | centre_admin (audited) | — |
-| sessions | centre staff; enrolled students | centre_admin; system (cron) | teacher (own, via register); centre_admin | centre_admin |
+| sessions | centre staff; enrolled students | centre_admin via `regenerate_sessions` | the **effective** teacher for that date (`v_effective_teacher` — permanent teacher or an active `class_cover` row), via register; centre_admin | centre_admin |
 | enrolments | centre_admin; teacher (own classes); the student (self) | centre_admin (RPC) | centre_admin (RPC) | centre_admin |
 | attendance_records | centre_admin; teacher via `is_my_student()`; the student (self) | teacher via submit_register | teacher/centre_admin (amend, audited) | centre_admin |
 | register_unlocks | centre staff; the affected teacher | centre_admin via grant_unlock (audited) | system (consume); centre_admin via revoke_unlock (audited) | — |

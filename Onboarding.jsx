@@ -1539,7 +1539,7 @@ const StudentClaim = ({ rec, store, onExit }) => {
         Username <Mono color={DS.sub}>{a.username}</Mono>
       </div>
       <SignInMethodPicker value={method} onChange={setMethod} options={[
-        { id: 'pin', icon: 'pin', label: 'PIN', desc: 'A quick 4-digit code' },
+        { id: 'pin', icon: 'pin', label: 'PIN', desc: 'A quick 6-digit code' },
         { id: 'password', icon: 'settings', label: 'Password', desc: 'A password you remember' },
         { id: 'qr', icon: 'grid', label: 'QR / tap your name', desc: 'Scan or tap at the centre' },
       ]} />
