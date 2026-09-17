@@ -385,13 +385,15 @@ When every box is ticked, run the walking-skeleton prompt: the repo scaffold, th
 
 ## Changes to the plan and reference
 
-These decisions change the development plan, the data-layer reference and the Supabase README. Update them before Phase 0 starts:
+**All applied — September 2026.** These decisions changed the development plan, the data-layer reference and the Supabase README. Every one is now in those documents; the list stays as the record of what moved and why.
 
-- **Plan decision #8:** local development runs Supabase in Docker, and there is no cloud dev project. This also resolves the conflict with decision #5 and the Definition of Done's `supabase db reset`.
+- **Plan decision #8:** local development runs Supabase in Docker, and there is no cloud dev project. This also resolved the conflict with decision #5 and the Definition of Done's `supabase db reset`.
 - **Plan decision #9:** R2 buckets use the EU jurisdiction, not a location hint.
-- **Plan decision #6 and Phase 0:** add `packages/ui` and `e2e/`; the health check is `GET /v1/health`.
-- **Plan Phase 1 and reference Part III:** staff sign-in goes through API endpoints (password step and TOTP step) that write `auth_attempts` and enforce `account_lockouts`. Remove the dependency on Supabase Auth verification hooks.
-- **Reference conventions:** the "service-role key" becomes the Supabase secret key, and JWTs are verified with JWKS.
+- **Plan decision #6 and Phase 0:** `packages/ui` and `e2e/` added; the health check is `GET /v1/health`, with `GET /v1/version` beside it.
+- **Plan Phase 1 and reference Part III:** staff sign-in goes through API endpoints (password step and TOTP step) that write `auth_attempts` and enforce `account_lockouts`, removing the dependency on Supabase Auth verification hooks — those need the Team plan.
+- **Reference conventions:** the "service-role key" became the Supabase secret key, and JWTs are verified with JWKS.
 - **Plan Phase 17:** the tier names are settled as `starter`, `growth`, `scale` plus the solo tiers.
-- **Plan Phase 13 and the reference `plans` table:** decide where Stripe price ids live.
-- **`supabase/README.md`:** replace the local-development section and the folder layout.
+- **Plan Phase 13 and the reference `plans` table:** Stripe price ids live on `plans`, added when Phase 13 extends the table.
+- **`supabase/README.md`:** rewritten — local-development section, folder layout, access model and configuration.
+
+Since these were applied, a full audit of all three documents ran and closed roughly 150 further findings; the reference is **v5** at 117 tables. Nothing in that audit changed a Phase 0 decision, so this runbook stands as written.
