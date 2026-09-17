@@ -1368,8 +1368,11 @@ The `locked` preset sets `student_messaging_enabled = false`, so staff↔pupil 1
 |---|---|---|
 | id | uuid PK | |
 | centre_id / account_id | uuid FK | |
-| student_id | uuid FK | |
+| student_id | uuid FK NULL | The pupil the concern is about |
+| about_profile_id | uuid FK NULL | The **member of staff** the concern is about. CHECK: exactly one of `student_id` and `about_profile_id` is set. An allegation about a colleague is the hardest case a safeguarding record has to hold, and it needs somewhere to go |
 | raised_by | uuid FK | |
+| source | text | `staff_concern` (a member of staff raised it) \| `flag_escalation` (promoted from a `message_flags` row) \| `dsl_opened`. A queue cannot prioritise what it cannot tell apart |
+| restricted | boolean | default false; **set automatically when `about_profile_id` holds any `dsl_role`**. A restricted incident is readable only by the account owner — never by a DSL, including the subject of it. The §9 escalation contacts are the route out of the organisation |
 | category | text | |
 | severity | text | |
 | summary | text | |
@@ -1399,6 +1402,10 @@ The `locked` preset sets `student_messaging_enabled = false`, so staff↔pupil 1
 | name | text NULL | |
 | phone / email | text NULL | |
 | sort_order | int | |
+
+> **Raising a concern is not a DSL action.** Any member of staff can raise one, from anywhere in the app, and `raise_concern` is the only way an incident is created by a non-DSL. The raiser then keeps sight of **their own row and its status** — they must be able to evidence that they reported something — but never the `safeguarding_incident_notes` chronology, which stays with the DSL. Raising also notifies the centre's DSLs; that notification cannot be muted (§9).
+>
+> **When the concern is about a DSL**, the row is stamped `restricted` on insert and disappears from every DSL's view, including the subject's. Only the account owner sees it, and the escalation contacts below are the route to the local authority designated officer. A safeguarding system where the subject of an allegation can read it is worse than none, because it looks like a record.
 
 > **Solo accounts:** the tutor is their own DSL (`dsl_role = 'lead'` on their membership is set at provisioning). The concern log is private to the tutor; Klasio stores the record but never reviews it or escalates on the tutor's behalf. The concern log, guardian and emergency contacts, consents and health/SEN notes are available on **every** plan, including free tiers — safeguarding is never capability-gated.
 
@@ -2108,7 +2115,7 @@ Each non-empty cell represents one or more policies to write and cover in the RL
 | messages | participants; is_dsl | participant (INSERT — RLS checks membership) | sender (edit window) | — |
 | message_flags | is_dsl; centre_admin | system (trigger) | is_dsl (resolve, audited) | — |
 | flag_rules | centre_admin; is_dsl | centre_admin | centre_admin | centre_admin |
-| safeguarding_incidents | is_dsl; centre_admin only | is_dsl; teacher (raise_concern) | is_dsl (audited) | — |
+| safeguarding_incidents | is_dsl; centre_admin; **the raiser, own row only** (status, never the notes) — except `restricted`, which is `account_owner` alone | is_dsl; **any staff member via `raise_concern`** | is_dsl (audited); account_owner on `restricted` | — |
 | safeguarding_incident_notes | is_dsl; centre_admin only | is_dsl (append-only) | — (immutable) | — |
 | safeguarding_escalation_contacts | centre staff | centre_admin; is_dsl | centre_admin; is_dsl | centre_admin |
 | files | linked-entity viewers; resource viewers (`resource_can_open`); uploader; centre_admin | **service-role only** (the `sign-upload` endpoint, after its permission and quota checks) | system (confirm, archive) | uploader; centre_admin — only when the category's retention allows |
@@ -2323,7 +2330,7 @@ Invoked with the caller's own JWT, so RLS still applies. **Audited** calls write
 | `archive_report(report)` | `published → archived` (author when `perm_archive`, or centre_admin) | yes |
 | `start_conversation(kind, participants)` | Preset-checked; stamps `monitored`; attaches DSL observers per `comms_settings.dsl_observer` | — |
 | `post_to_class(class, body)` | Class stream post; permission from `class_settings` | — |
-| `raise_concern(student, summary)` | Open a safeguarding_incident from any context | yes |
+| `raise_concern(subject, summary, category, severity)` | Open a `safeguarding_incidents` row from any context, by **any** member of staff. `subject` is a pupil or a colleague; stamps `source = 'staff_concern'`, sets `restricted` when the subject holds a `dsl_role`, and notifies the centre's DSLs (or, when restricted, the account owner) | yes |
 
 #### Resources
 

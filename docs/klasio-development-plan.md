@@ -333,15 +333,17 @@ Dashboard cards added this slice: unread messages (every role), open safeguardin
 
 Tables: `safeguarding_incidents`, `safeguarding_incident_notes`, `safeguarding_escalation_contacts`
 
-RPCs: `raise_concern` (any staff, from any context), `log_safeguarding_incident`, `add_incident_note` (append-only), `resolve_incident` (all audited)
+RPCs: `raise_concern` (**any** staff, from any context — the person who notices is almost never the DSL; stamps `source`, sets `restricted` when the subject is a DSL, notifies), `log_safeguarding_incident`, `add_incident_note` (append-only), `resolve_incident` (all audited)
 
 Views: `v_open_incidents`, `v_incident_timeline`
 
 pg_cron: extends the Phase 9 retention sweep so messages and class posts linked to an open incident are never swept
 
-Tests: isolation (DSL/admin only) + append-only constraint (update/delete denied for all roles) + audit assertion on every RPC + support session cannot read incidents + retention sweep keeps incident-linked messages
+Tests: isolation + append-only constraint (update/delete denied for all roles) + audit assertion on every RPC + support session cannot read incidents + retention sweep keeps incident-linked messages. **Raiser visibility:** a teacher who raises a concern reads their own incident row and its status, and **cannot** read its notes, another teacher's incident, or anything else in the log. **Restricted:** a concern whose subject holds a `dsl_role` is invisible to every DSL — the subject included — and readable only by the account owner; a DSL listing the log does not see it, and cannot learn of it by counting
 
-UI: concern-raise button (always visible to staff), DSL incident log, incident timeline, resolve flow, where-to-escalate contacts
+UI: **concern-raise button in the app chrome, visible to every staff member on every screen** (not inside the Safeguarding page — a teacher never opens that), with the pupil or colleague pre-filled from context; "concerns I raised" list for the raiser showing status only; DSL incident log and timeline; resolve flow; where-to-escalate contacts, shown beside the log rather than buried in settings
+
+**Exit adds:** a teacher with no safeguarding role raises a concern in two clicks from a class screen; the DSL sees it immediately; the teacher can show they reported it but cannot read the DSL's notes; a concern about the DSL never appears in that DSL's log.
 
 **Exit:** teacher raises concern; DSL sees it; notes are append-only; delete attempt denied at DB level.
 
@@ -642,6 +644,7 @@ The prototype disagrees with these documents in the places below. **The document
 | Class stream | Posts are hard-deleted, authored only by teachers, and never surface to pupils | `class_posts.deleted_at` soft delete; pupils post when `students_can_post` and always read the stream |
 | Seats | `studentSeats` and `teacherSeats`, labelled "per centre" in the plan editor but counted pooled on the Centres page — the two disagree | One pooled `limits.seats` counting **staff only**; pupils are `limits.max_students` |
 | Audit trail | `tutoros.audit.v1` is capped at 500 entries, so the oldest are silently discarded | `audit_log` is append-only; only the retention sweep removes anything, and it is documented |
+| Raising a concern | The centre app's "Record a concern" button sits **inside** the Safeguarding page, which only DSLs and admins can reach — so an ordinary teacher cannot raise one at all. The solo demo has its own log with a different shape (`what` / `action` vs `reason` / `level` / `note`) | One `raise_concern` for both: a button in the app chrome for every staff member, on every screen. The raiser keeps sight of their own row and its status; the notes stay with the DSL. A concern about a DSL is `restricted` to the account owner |
 
 ---
 
