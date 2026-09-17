@@ -225,7 +225,7 @@ Dashboard cards added this slice: at-risk pupils from `v_student_risk` (admin + 
 
 Tables: `centre_invoice_settings` (currency, VAT registration, **tax mode** none/exclusive/inclusive, tax label/rate, due days, auto-send, overdue reminders, reminder cooldown), `fee_plans`, `invoice_sequences`, `invoices` (billed to a **family** — decision #18; drafts via `issued_at NULL`; per-invoice tax override; totals snapshotted at issue), `invoice_lines` (per-student + per-class attribution, `vat_rate`/`vat_amount`), `payment_schedules`, `payments`, `invoice_reminders`
 
-RPCs: `generate_invoices` (draft per family from delivered sessions × `classes.hourly_rate`), `issue_invoice` (audited; enforces `plan_limit(max_invoices_per_month)`), `send_invoice_reminder` (cooldown-checked), `record_payment` (audited), `void_invoice` (audited)
+RPCs: `generate_invoices` (draft per family from delivered sessions × `classes.hourly_rate`), `issue_invoice` (audited; enforces `plan_limit(max_invoices_per_month)`), `send_invoice_reminder` (cooldown-checked), `record_payment` (audited), `reverse_payment` (audited — receipts are hand-entered, so they will be entered wrongly; the row is marked reversed with a reason, never deleted), `void_invoice` (audited)
 
 Views: `v_invoice_status` (derived — never stored), `v_outstanding_balance`, `v_payment_schedule`
 
@@ -304,11 +304,11 @@ UI: report rules manager (centre default + overrides), template editor with lock
 ## Phase 9 — Messaging
 **Type:** vertical slice · **safeguarding-critical**
 
-Tables: `conversations` (kinds `direct` / `group` / `channel`; immutable `monitored` stamp), `conversation_participants`, `messages`, `message_flags` (multi-reason: `reasons[]`, `primary_reason`; targets either `message_id` or `class_post_id`), `flag_rules` (incl. `image`), `class_posts`, `class_post_comments` (moved from Phase 5 — they share the flag scan)
+Tables: `conversations` (kinds `direct` / `group` / `channel`; immutable `monitored` stamp), `conversation_participants`, `messages`, `message_flags` (multi-reason: `reasons[]`, `primary_reason`; targets either `message_id` or `class_post_id`), `flag_rules`, `class_posts`, `class_post_comments` (moved from Phase 5 — they share the flag scan)
 
 RPCs: `start_conversation` (enforces preset matrix, stamps `monitored`, attaches DSL observers per `dsl_observer`), `resolve_flag`, `post_to_class`
 
-Triggers: message **and class-post** INSERT → flag scan (keyword rules + built-in contact detectors + image + out-of-hours) → one `message_flags` row with every reason → Realtime broadcast to conversation channel; reject attachments in any thread with a student participant; class posts are text-only; reject updates to `monitored`
+Triggers: message **and class-post** INSERT → flag scan (keyword rules + built-in contact detectors + out-of-hours) → one `message_flags` row with every reason → Realtime broadcast to conversation channel; reject attachments in any thread with a student participant; class posts are text-only; reject updates to `monitored`
 
 pg_cron: message retention sweep per `comms_settings.message_retention` (Phase 10 extends it to spare anything linked to an open safeguarding incident)
 
@@ -632,6 +632,16 @@ The prototype disagrees with these documents in the places below. **The document
 | Grade taxonomies | Three run at once: the `klasioGrades` scales, a fixed A*–U list inside tracker grade columns, and the report 4-tier ratings | `grade_scales` + `grade_bands` are the one academic taxonomy and a tracker `grade` column names a `grade_scale_id`. Report ratings stay separate on purpose — they measure effort and engagement, not attainment |
 | Storage mode | `tutoros.storage.v1` calls it `pooled \| per_centre` | `accounts.storage_policy` is `pooled \| split` — same idea, one spelling |
 | Class banner | Stored per browser (`klasio.classBanner.<classId>`) and described as "how this class looks to you", so no two people see the same class the same way | `class_settings.banner_theme` is one class-wide row set by the class teacher — the colour is a shared wayfinding cue, not a personal preference |
+| Membership vocabulary | Role is `admin`; there is no `status`; pupils hold no membership row at all | `centre_admin`, a `status` of `active \| suspended`, and a pupil holds a `student` membership like anyone else — otherwise pupils are invisible to every role check |
+| Homework folders | Assignment folders are global to the centre | `assignment_folders.created_by` with creator-only RLS — a teacher's filing is their own, not a shared taxonomy |
+| Stored class standing | `classAvg`, `rank` and `classSize` are written onto each returned submission | `v_submission_standing` derives all three at read time, rank gated by `privacy_flag(centre, 'show_rank_to_students')` and `rank_min_age` |
+| Report lifecycle | Archived reports unarchive back to draft or published; bulk archive accepts drafts; bulk delete ignores status | `draft → published → archived` runs one way (#26). Only a published report archives, and `archive_report` is audited |
+| Announcement priority | `normal \| important \| urgent` | `normal \| high` — a third level is never applied consistently, so it only dilutes the second |
+| Message attachments | `attachments[]`, many per message | One `messages.file_id`, and null in any thread with a pupil participant |
+| Comms wordlist | A flat `wordlist[]` of keywords on the comms config | `flag_rules` rows, each carrying its own pattern type and severity |
+| Class stream | Posts are hard-deleted, authored only by teachers, and never surface to pupils | `class_posts.deleted_at` soft delete; pupils post when `students_can_post` and always read the stream |
+| Seats | `studentSeats` and `teacherSeats`, labelled "per centre" in the plan editor but counted pooled on the Centres page — the two disagree | One pooled `limits.seats` counting **staff only**; pupils are `limits.max_students` |
+| Audit trail | `tutoros.audit.v1` is capped at 500 entries, so the oldest are silently discarded | `audit_log` is append-only; only the retention sweep removes anything, and it is documented |
 
 ---
 
@@ -641,7 +651,7 @@ Build-scope in the reference with no prototype surface. These carry design risk 
 
 **High risk — special-category data, prototype before Phase 1 ships them:**
 - `student_health` (Art. 9), `emergency_contacts`, `consents` — the centre prototype has flat guardian fields, `underThirteen` and a `consentRecorded` boolean only: no SEN/EHCP, allergies, medications, emergency contact list or consent records. The solo demo goes a little further (free-text allergies and SEN notes, photo and data consent dates, a second guardian, escalation contacts), but nothing in either surface exercises the access model (centre_admin + DSL; teacher only when `privacy_flag(centre, 'teacher_reads_health')`), which needs a UI to argue with.
-- `safeguarding_incidents` / `_notes` — the prototype's concern log (`COMMS_CONCERNS`) is far thinner than the append-only chronology. The DSL flag queue is well built; the incident log is not.
+- `safeguarding_incidents` / `_notes` — the prototype's concern log (`COMMS_CONCERNS`) is far thinner than the append-only chronology. The DSL flag queue is well built; the incident log is not. **And the centre app has no "raise a concern" button at all** — only the solo demo does, so the single most important safeguarding action in the product has never been designed for the multi-staff case it exists for.
 
 **Medium risk — a model with no UI to validate it:**
 - **Assessments & results** (Phase 6) — no assessment entry screen, publish gate or per-student result rows. Every "score" today is a homework mark or a synthesised number, yet Progress, Tracking score columns, report test performance and at-risk all depend on results.

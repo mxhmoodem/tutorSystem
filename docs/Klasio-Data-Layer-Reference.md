@@ -944,7 +944,9 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | id | uuid PK | |
 | account_id / centre_id | uuid FK | |
 | name | text | |
-| structure | jsonb | Ordered sections + prompts + which rating scale each section uses |
+| structure | jsonb | Ordered written sections + their prompts |
+| rating_categories | jsonb | Ordered categories this template rates — `[{key, label, description}]`, e.g. Behaviour, Effort, Participation. **Ratings hang off categories, not written sections**, so "Effort" means the same thing wherever it appears and two pupils on different templates stay comparable |
+| rating_scale_id | uuid FK | → rating_scales.id — the one scale every category on this template is rated on |
 | shared | boolean | Visible to all centre teachers (requires `perm_share_templates` for teacher authors) |
 | locked | boolean | default false — a centre-standard template: teachers may write with it but not edit its structure. Only a `centre_admin` may lock, unlock or change a locked template |
 | created_by | uuid FK | |
@@ -958,6 +960,8 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | id | uuid PK | |
 | account_id / centre_id | uuid FK | |
 | name | text | |
+| kind | text | `levels` \| `stars` \| `percent`. Only `levels` uses `rating_levels` rows. **Stars and percent are not ordered labels** — a 1–5 star control and a 0–100 figure have no label to store, so forcing them into `rating_levels` would mean inventing five rows named "1".."5". `min_value`/`max_value` carry them instead |
+| min_value / max_value | numeric NULL | Bounds for `stars` (1–5) and `percent` (0–100); null for `levels` |
 | active | boolean | |
 
 #### `rating_levels`
@@ -991,7 +995,7 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | period_start / period_end | date | The period covered |
 | status | text | `draft` \| `published` \| `archived` — no approval step (decision #26); the centre standards gate at publish is the quality check |
 | body | jsonb | Section content keyed to the template structure (incl. academic fields: understanding, participation, homework completion, test performance, attendance, strengths, improvements) |
-| ratings | jsonb | Section → rating_level_id |
+| ratings | jsonb | Category key → value: a `rating_levels.id` when the template's scale is `levels`, a plain number when it is `stars` or `percent` |
 | predicted_grade | text NULL | **Snapshot** of `student_targets.predicted_grade` taken at publish |
 | signature | text NULL | Typed teacher signature, printed on the PDF |
 | published_at | timestamptz NULL | |
@@ -1185,10 +1189,15 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | invoice_id | uuid FK | |
 | account_id / centre_id | uuid FK | |
 | amount | numeric | |
-| method | text | `cash` \| `bank` \| `card_external` |
+| method | text | `cash` \| `bank` \| `card_external` \| `cheque` — cheques are still ordinary in UK tuition |
 | paid_on | date | |
 | reference | text | |
 | recorded_by | uuid FK | |
+| reversed_at | timestamptz NULL | Set by `reverse_payment`. The row is **never deleted or edited** — a reversed receipt stays visible with its reversal beside it, because "this payment was recorded and then withdrawn" is different from "this payment never happened" |
+| reversed_by | uuid FK NULL | |
+| reversal_reason | text NULL | Required — an unexplained reversal on a money ledger is indistinguishable from a mistake being hidden |
+
+> **Correcting a mistake.** Receipts are entered by hand, so they *will* be entered wrongly — the wrong family, twice, or the wrong amount. `reverse_payment(payment, reason)` marks the row reversed and audited; `v_invoice_status` ignores reversed rows when deriving what is paid. There is no UPDATE and no DELETE on this table, so the ledger only ever grows.
 
 #### `invoice_reminders`
 *Append-only log of reminders sent. Enforces `reminder_cooldown_hours`.*
@@ -1331,7 +1340,7 @@ The `locked` preset sets `student_messaging_enabled = false`, so staff↔pupil 1
 | message_id | uuid FK NULL | The flagged message — one flag per message, however many reasons fire |
 | class_post_id | uuid FK NULL | The flagged class post or comment. CHECK: exactly one of `message_id` and `class_post_id` is set, so the stream and the inbox share one flag queue |
 | account_id / centre_id | uuid FK | |
-| reasons | text[] | Every reason raised, ordered by severity: `external` \| `keyword` \| `image` \| `out_of_hours` |
+| reasons | text[] | Every reason raised, ordered by severity: `external` \| `keyword` \| `out_of_hours`. **There is no `image` reason** — the scan runs on threads containing a pupil, and those are text-only at the database level (`messages.file_id` must be null), so no image can ever reach one to be flagged |
 | primary_reason | text | `reasons[1]` — drives queue ordering |
 | rule_ids | uuid[] | Matching `flag_rules` rows (empty for built-in detectors) |
 | severity | text | `low` \| `medium` \| `high` — max over reasons |
@@ -1347,7 +1356,7 @@ The `locked` preset sets `student_messaging_enabled = false`, so staff↔pupil 1
 | id | uuid PK | |
 | centre_id / account_id | uuid FK | |
 | name | text | |
-| pattern_type | text | `keyword` \| `contact` \| `image` \| `out_of_hours` — `contact` (reason `external`) is three built-in detectors: phone-number pattern, social-handle pattern, meet-up phrasing |
+| pattern_type | text | `keyword` \| `contact` \| `out_of_hours` — `contact` (reason `external`) is three built-in detectors: phone-number pattern, social-handle pattern, meet-up phrasing |
 | pattern | text NULL | For `keyword` rules |
 | severity | text | |
 | active | boolean | |
@@ -1429,7 +1438,7 @@ The `locked` preset sets `student_messaging_enabled = false`, so staff↔pupil 1
 | id | uuid PK | |
 | file_id | uuid FK | |
 | account_id / centre_id | uuid FK | |
-| entity_type | text | `message` \| `assignment` \| `question` \| `answer` \| `report` \| `student` \| `incident` |
+| entity_type | text | `message` \| `assignment` \| `question` \| `answer` \| `report` \| `student` \| `incident` \| `lesson_plan` — a lesson plan attaches files the same way everything else does, rather than embedding them in its own body |
 | entity_id | uuid | |
 
 #### `storage_rollups`
@@ -1445,6 +1454,8 @@ The `locked` preset sets `student_messaging_enabled = false`, so staff↔pupil 1
 
 #### `storage_addons`
 *Purchased add-on storage blocks on top of the plan quota. Effective quota = plan limit + active add-on blocks, pooled or split per `accounts.storage_policy`.*
+
+> **What `split` means.** `pooled` (the default, and the only mode for solo) gives every centre the whole account quota to draw on, first come first served. `split` divides the effective quota **evenly across active, non-archived centres**, so one centre cannot exhaust another's room; a remainder goes to the primary centre. Switching modes or adding a centre re-derives every centre's share immediately — the split is computed, never stored, so it cannot drift from the number of centres.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -1575,7 +1586,7 @@ The `locked` preset sets `student_messaging_enabled = false`, so staff↔pupil 1
 | tagline | text NULL | Plan-card audience line |
 | price_monthly / price_yearly | numeric | Yearly may be discounted (e.g. two months free) |
 | sort_order | int | Ascending tier order — the **only** thing "upgrade/downgrade" compares |
-| limits | jsonb | Numeric caps: `seats`, `centres`, `storage_bytes`, `max_students`, `max_invoices_per_month` (null = unlimited), `storage_addon_block_gb`, `storage_addon_block_price` |
+| limits | jsonb | Numeric caps (null = unlimited): **`seats` — staff only** (distinct `profile_id`s holding a `centre_admin` or `teacher` membership anywhere on the account, counted **pooled across every centre**, so a person with two roles or two centres is one seat); `max_students` covers pupils, so the two never overlap. Plus `centres`, `storage_bytes`, `max_invoices_per_month`, `storage_addon_block_gb`, `storage_addon_block_price` |
 | capabilities | jsonb | Flat boolean keys that gate surfaces: `group_lessons`, `lesson_planner`, `tracking`, `homework`, `homework_bank`, `reports`, `report_rules`, `at_risk_flags`, `payment_reminders`, `vat`, `analytics_exports`, `waiting_list`. The materials library is core on every plan and is not gated |
 | active | boolean | |
 
@@ -2075,7 +2086,7 @@ Each non-empty cell represents one or more policies to write and cover in the RL
 | report_rules / rating_scales / rating_levels | centre staff | centre_admin | centre_admin | centre_admin |
 | report_templates | centre_admin; creator; centre teachers when `shared` | centre_admin; teacher (`shared = false`, or `shared` when `report_perm(perm_share_templates)`) | creator; centre_admin | creator; centre_admin |
 | centre_report_settings | centre staff | system (with centre) | centre_admin (audited) | — |
-| reports | author; centre_admin; other teachers when `report_perm(perm_view_others)`; student (self, `published` only — never `archived` drafts) | teacher; centre_admin | author (draft); author (published, when `perm_edit_published`); centre_admin; publish/archive via RPC (audited) | author (draft, when `perm_delete`); centre_admin (draft only) |
+| reports | author; centre_admin; other teachers when `report_perm(perm_view_others)`; student (self, `published` only — never `draft`, never `archived`) | teacher; centre_admin | author (draft); author (published, when `perm_edit_published`); centre_admin; publish/archive via RPC (audited) | author (draft, when `perm_delete`); centre_admin (draft only) |
 | report_folders | centre staff | teacher; centre_admin | creator; centre_admin | creator; centre_admin |
 | report_user_state | self | self | self | self |
 | trackers / tracker_columns / tracker_entries | teacher (own classes); centre_admin | teacher (own classes) | teacher (own classes) | teacher (own); centre_admin |
@@ -2085,7 +2096,7 @@ Each non-empty cell represents one or more policies to write and cover in the RL
 | invoices | centre_admin; account_owner | centre_admin (RPC) | centre_admin (void, audited) | — |
 | invoice_lines | centre_admin; account_owner | centre_admin | centre_admin | centre_admin |
 | payment_schedules | centre_admin; account_owner | centre_admin | centre_admin | centre_admin |
-| payments | centre_admin; account_owner | centre_admin via record_payment (audited) | — | — |
+| payments | centre_admin; account_owner | centre_admin via record_payment (audited) | centre_admin via `reverse_payment` only (sets the three reversal columns, audited) | — |
 | centre_invoice_settings | centre staff | system (with centre) | centre_admin (audited) | — |
 | invoice_reminders | centre_admin | system via `send_invoice_reminder` (cooldown-checked) | — (append-only) | — |
 | comms_settings | centre staff | centre_admin | centre_admin | — |
@@ -2286,6 +2297,7 @@ Invoked with the caller's own JWT, so RLS still applies. **Audited** calls write
 | `issue_invoice(invoice)` | Allocate number, snapshot totals, set `issued_at`; enforces `plan_limit(max_invoices_per_month)`; auto-sends when configured | yes |
 | `send_invoice_reminder(invoice)` | Cooldown-checked reminder via the outbox | — |
 | `record_payment(invoice, amount, method, paid_on)` | The manual payment toggle | yes |
+| `reverse_payment(payment, reason)` | Withdraw a receipt entered in error — stamps `reversed_at` / `reversed_by` / `reversal_reason`; never deletes or edits the row. Reason required | yes |
 | `void_invoice(invoice, reason)` | Void; number never reused | yes |
 | `set_staff_rate(profile, rate)` | New pay rate | yes |
 | `update_privacy_settings(centre, patch)` | Change `teacher_reads_health`, `show_rank_to_students` or `rank_min_age` on `centre_privacy_settings` | yes |
