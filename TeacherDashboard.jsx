@@ -2,30 +2,162 @@
 //  Klasio — Teacher Dashboard  (triage layout: today-first)
 // ══════════════════════════════════════════════════════════════
 
-// Mock data (todaySchedule, homeworkItems, studentProgress,
-// attendanceClass) lives in mocks/teacherDashboard.mock.jsx, loaded
-// before this file in index.html. Report drafts come from the shared
-// reports store (window.useReportsStore from Reports.jsx).
+// The hero reads the materialised sessions (attendance.jsx) for the teacher's
+// classes on the shared clock, the admin store's leave + cover, the homework
+// selector and the lessons store — no schedule mock. `homeworkItems` and
+// `studentProgress` (mocks/teacherDashboard.mock.jsx) remain only as the
+// fallbacks for when the metrics layer is absent. Report drafts come from the
+// shared reports store (window.useReportsStore from Reports.jsx).
 //
-// Presentation refactor only — all data sources, the live "Reports due"
-// derivation, attendance state and the lesson-planner globals are kept
-// as they were. Layout order: hero (greeting + now/next session +
-// later-today, on one dark ink panel) → stat deck (action-item band over
-// a KPI stat band, one panel) → two-up preview lists → reports due. Blocks
-// with no source
-// yet render an empty/TODO state rather than inventing data. Quick
-// actions were removed by request (every shortcut had a nav home).
+// Layout order: hero (greeting + a state machine — on leave / live / register
+// overdue / up next / done / none — plus later-today, on one dark ink panel) →
+// stat deck (action-item band over a KPI stat band, one panel) → two-up preview
+// lists → reports due. Blocks with no source yet render an empty/TODO state
+// rather than inventing data. Quick actions were removed by request (every
+// shortcut had a nav home).
 //
 // Dark-hero primitives (HERO_TXT, heroSurface, HeroSolidBtn, HeroGhostBtn,
 // HoverRow) come from shared.jsx — shared with the admin dashboard.
 
-const TODAY_ISO = '2026-04-25';
+// "Today" is the one injectable clock (window.getNow, mocks/attendance.mock.jsx)
+// that Attendance and the Timetable also read — so the hero can never disagree
+// with them about what is on, what is live and which registers are overdue.
+const tdNow = () => (window.getNow ? window.getNow() : Date.now());
+const tdIso = (ms) => (window.attIso ? window.attIso(new Date(ms)) : new Date(ms).toISOString().slice(0, 10));
 
 // ── Thresholds (brief-defined; reuse if equivalents appear later) ──
 const ABSENCE_STREAK  = 3;
 const COMPLETION_MIN  = 50;
 const SCORE_DROP      = 10;
 const UP_NEXT_WINDOW  = 120;   // minutes
+
+// ── The teacher's day — derived from the materialised sessions ─────
+// Sessions this teacher is the EFFECTIVE teacher for (own classes minus any a
+// colleague is covering, plus classes they cover), over the last week and today.
+// Cancelled sessions are kept aside rather than dropped, so the hero can say
+// "1 cancelled" instead of silently presenting fewer classes.
+const buildTeacherDay = ({ store, att, now, me }) => {
+  const todayISO = tdIso(now);
+  const eff = (cls, iso) => (typeof effectiveTeacher === 'function' ? effectiveTeacher(cls, iso) : cls.teacher);
+  const cov = (cls, iso) => (typeof coverActive === 'function' ? coverActive(cls, iso) : null);
+  const leave = ((store.holidays || {})[me.id] || []).find(h => (!h.from || todayISO >= h.from) && (!h.to || todayISO <= h.to)) || null;
+  const inLeave = (iso) => ((store.holidays || {})[me.id] || []).some(h => (!h.from || iso >= h.from) && (!h.to || iso <= h.to));
+
+  const candidates = (store.classes || []).filter(c => c.status !== 'paused' && c.status !== 'archived'
+    && (c.teacher === me.name || (c.cover && c.cover.teacher === me.name)));
+  const all = (window.materialiseSessions && att)
+    ? window.materialiseSessions(candidates, window.REGISTER_SETTINGS, now, att, { backDays: 7, fwdDays: 0 })
+    : [];
+  const mine = all.filter(s => eff(s.cls, s.dateISO) === me.name).map(s => {
+    const cv = cov(s.cls, s.dateISO);
+    return { ...s, coveringFor: (cv && s.cls.teacher !== me.name) ? s.cls.teacher : null };
+  });
+  const byStart = (a, b) => a.starts_at - b.starts_at;
+  const todayAll = mine.filter(s => s.dateISO === todayISO).sort(byStart);
+  const today = todayAll.filter(s => s.status !== 'cancelled');
+  const cancelledToday = todayAll.filter(s => s.status === 'cancelled');
+  // Overdue = a register still inside its backfill window (takeable, flagged late).
+  // Sessions inside booked leave never count as missed. Soonest-to-close first.
+  const overdue = mine.filter(s => s.derived.state === 'awaiting' && !inLeave(s.dateISO))
+    .sort((a, b) => (a.derived.backfillEnd || 0) - (b.derived.backfillEnd || 0));
+  const locked = mine.filter(s => s.derived.state === 'lapsed' && !inLeave(s.dateISO));
+  const live = today.find(s => now >= s.starts_at && now <= s.ends_at) || null;
+  const next = today.find(s => s.starts_at > now) || null;
+  // While on leave, who is taking each of this teacher's own classes that still
+  // meet before the leave ends (a one-day absence only concerns that weekday).
+  const leaveDays = new Set();
+  if (leave) {
+    for (let i = 0; i < 7; i++) {
+      const iso = tdIso(now + i * 86400000);
+      if (leave.to && iso > leave.to) break;
+      leaveDays.add(new Date(iso + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'long' }));
+    }
+  }
+  const coverage = leave ? (store.classes || [])
+    .filter(c => c.teacher === me.name && c.status !== 'paused' && c.status !== 'archived' && leaveDays.has(c.day))
+    .map(c => ({ cls: c, cover: cov(c, todayISO) || (c.cover && leave.to && c.cover.from <= leave.to && (!c.cover.to || c.cover.to >= todayISO) ? c.cover : null) })) : [];
+  return { todayISO, leave, coverage, today, cancelledToday, overdue, locked, live, next };
+};
+
+// ── Hero state machine ─────────────────────────────────────────────
+// The first state whose test matches wins. The ORDER is the product decision
+// (decision #45): a class running right now beats a register that can still be
+// backfilled for hours, but an overdue register outranks a class that starts
+// later — it is the one thing worth interrupting a teacher about.
+const HERO_STATES = [
+  { id: 'on_leave', test: d => !!d.leave },
+  { id: 'live',     test: d => !!d.live },
+  { id: 'overdue',  test: d => d.overdue.length > 0 },
+  { id: 'up_next',  test: d => !!d.next },
+  { id: 'done',     test: d => d.today.length > 0 },
+  { id: 'none',     test: () => true },
+];
+const resolveHeroState = (day) => HERO_STATES.find(s => s.test(day)).id;
+
+const tdGreeting = (ms) => { const h = new Date(ms).getHours(); return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening'; };
+const tdClock = (ms) => new Date(ms).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+const tdDayLabel = (iso, todayISO) => {
+  if (iso === todayISO) return 'today';
+  const d = new Date(iso + 'T00:00:00');
+  const t = new Date(todayISO + 'T00:00:00');
+  const diff = Math.round((t - d) / 86400000);
+  if (diff === 1) return 'yesterday';
+  return d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short' });
+};
+// "closes in 1 day 4h" / "closes in 3h" — the backfill window ticking down.
+const tdClosesIn = (endMs, now) => {
+  const mins = Math.max(0, Math.round((endMs - now) / 60000));
+  const d = Math.floor(mins / 1440), h = Math.floor((mins % 1440) / 60), m = mins % 60;
+  if (d > 0) return `${d} day${d === 1 ? '' : 's'}${h ? ` ${h}h` : ''}`;
+  if (h > 0) return `${h}h${m ? ` ${m}m` : ''}`;
+  return `${m}m`;
+};
+const tdFmtLong = (iso) => new Date(iso + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'long' });
+
+// Open the register for one session (Attendance reads window.__registerSession).
+const tdOpenRegister = (session) => {
+  if (session) window.__registerSession = session.id;
+  if (window.__navigate) window.__navigate('teacher', 'attendance');
+};
+
+// A pill in the hero ("LIVE NOW", "UP NEXT", "REGISTER OVERDUE", "ON LEAVE").
+const THeroPill = ({ tone = 'neutral', icon, pulse, children }) => {
+  const tones = {
+    live:    { bg: 'rgba(74,222,128,0.14)', bd: 'rgba(74,222,128,0.30)', fg: '#86EFAC' },
+    warn:    { bg: 'rgba(251,191,36,0.14)', bd: 'rgba(251,191,36,0.34)', fg: '#FCD34D' },
+    neutral: { bg: 'rgba(255,255,255,0.08)', bd: 'rgba(255,255,255,0.16)', fg: '#fff' },
+  };
+  const t = tones[tone] || tones.neutral;
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 7,
+      fontSize: 11.5, fontWeight: 600, padding: '4px 11px', borderRadius: 20,
+      background: t.bg, border: `1px solid ${t.bd}`, color: t.fg, letterSpacing: '0.03em',
+    }}>
+      {pulse && <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#4ADE80', animation: 'tosPulseDot 2s infinite' }} />}
+      {icon && <Icon name={icon} size={12} />}
+      {children}
+    </span>
+  );
+};
+
+// The quiet one-column hero rows (on leave / done / none): icon tile + copy + action.
+const THeroQuiet = ({ icon, iconColor = '#4ADE80', title, children, action }) => (
+  <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+    <div style={{
+      width: 44, height: 44, borderRadius: 12, flexShrink: 0,
+      background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', color: iconColor,
+    }}>
+      <Icon name={icon} size={20} />
+    </div>
+    <div style={{ flex: 1, minWidth: 180 }}>
+      <div style={{ fontSize: 16, fontWeight: 700, color: '#fff' }}>{title}</div>
+      <div style={{ fontSize: 12.5, color: HERO_TXT.faint, marginTop: 2, lineHeight: 1.5 }}>{children}</div>
+    </div>
+    {action}
+  </div>
+);
 
 // Subject → colour for session / class items. Local helper following
 // the existing per-file convention (no shared exported subjectColor).
@@ -72,11 +204,13 @@ const TLaterRow = ({ s, onClick }) => {
         border: '1px solid rgba(255,255,255,0.09)', transition: 'background 0.12s',
       }}
     >
-      <span style={{ fontSize: 12, fontWeight: 600, color: HERO_TXT.soft, width: 40, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{s.time}</span>
-      <span style={{ width: 3, height: 24, borderRadius: 2, background: shadeColor(teacherSubjectColor(s.subject), 30), flexShrink: 0 }} />
-      <div style={{ flex: 1, minWidth: 0 }}>
+      <span style={{ fontSize: 12, fontWeight: 600, color: HERO_TXT.soft, width: 40, flexShrink: 0, fontVariantNumeric: 'tabular-nums', textDecoration: s.cancelled ? 'line-through' : 'none' }}>{s.time}</span>
+      <span style={{ width: 3, height: 24, borderRadius: 2, background: s.cancelled ? 'rgba(255,255,255,0.2)' : shadeColor(teacherSubjectColor(s.subject), 30), flexShrink: 0 }} />
+      <div style={{ flex: 1, minWidth: 0, opacity: s.cancelled ? 0.6 : 1 }}>
         <div style={{ fontSize: 12.5, fontWeight: 600, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.group}</div>
-        <div style={{ fontSize: 11, color: HERO_TXT.faint, marginTop: 1 }}>{s.room} · {s.students} students</div>
+        <div style={{ fontSize: 11, color: HERO_TXT.faint, marginTop: 1 }}>
+          {s.cancelled ? 'Cancelled' : `${s.room} · ${s.students} students`}{s.coveringFor ? ` · covering for ${s.coveringFor}` : ''}
+        </div>
       </div>
     </button>
   );
@@ -195,20 +329,21 @@ const TeacherDashboard = () => {
     window.addEventListener('focus', handler);
     return () => window.removeEventListener('focus', handler);
   }, []);
-  const hasPlan = (group) => {
-    const store = window.__lessonPlans || {};
-    return !!store[`${group}__${TODAY_ISO}`];
-  };
-  const openPlanner = (group) => {
-    if (window.__openLessonPlanner) {
-      window.__openLessonPlanner(group, TODAY_ISO, hasPlan(group) ? 'view' : 'edit');
-    }
+  const now = tdNow();
+  const TODAY_ISO = tdIso(now);
+  // A delivery (planned lesson) is keyed by class id + date — never the group label.
+  const hasPlan = (classId, date = TODAY_ISO) => !!(window.klasioLessons && window.klasioLessons.deliveryFor(classId, date));
+  const openPlanner = (classId, date = TODAY_ISO) => {
+    if (window.__openLessonPlanner) window.__openLessonPlanner(classId, date, hasPlan(classId, date) ? 'view' : 'edit');
   };
   const go = (pg) => window.__navigate && window.__navigate('teacher', pg);
 
-  const [attendance, setAttendance] = React.useState(
-    Object.fromEntries(attendanceClass.students.map(s => [s.name, s.status]))
-  );
+  const adminStore = useAdminStore();
+  const att = window.useAttendanceStore ? window.useAttendanceStore() : null;
+  const principal = window.teacherMetrics ? window.teacherMetrics.getPrincipal() : { id: 't1', name: 'Heebz A' };
+  const me = (adminStore.teachers || []).find(t => t.id === principal.id) || principal;
+  const day = buildTeacherDay({ store: adminStore, att, now, me });
+  const heroState = resolveHeroState(day);
   const reportsStore = useReportsStore();
   const reportConfig = reportsStore.store.config;
   const reportDrafts = reportsStore.reportsArr.filter(r => r.status === 'draft');
@@ -224,30 +359,34 @@ const TeacherDashboard = () => {
     : [];
   const dueOverdue = reportsDue.filter(d => d.overdue).length;
 
-  // ── Today — hero (current/next) + later-today ──────────────────────
-  // todaySchedule carries status completed/current/upcoming. The hero shows
-  // the current session, else the next upcoming one. "Later" = the rest.
-  const classesToday = todaySchedule.length;
-  const currentIdx = todaySchedule.findIndex(c => c.status === 'current');
-  const heroIdx = currentIdx !== -1 ? currentIdx : todaySchedule.findIndex(c => c.status === 'upcoming');
-  const hero = heroIdx !== -1 ? todaySchedule[heroIdx] : null;
-  const laterSessions = hero
-    ? todaySchedule.filter((c, i) => i > heroIdx && c.status !== 'completed')
-    : [];
-  const heroIsNow = hero && hero.status === 'current';
+  // ── Today — the hero session + later-today rail ────────────────────
+  // The session the hero is about: the live one, else the overdue register, else
+  // the next one. "Later today" = today's sessions still to start after it
+  // (cancelled ones listed, struck through, so the count never silently shrinks).
+  const classesToday = day.today.length;
+  const heroSession = heroState === 'live' ? day.live
+    : heroState === 'overdue' ? day.overdue[0]
+    : heroState === 'up_next' ? day.next : null;
+  const toRow = (s, cancelled) => ({
+    id: s.id, classId: s.classId, time: tdClock(s.starts_at), group: s.group, subject: s.name,
+    room: s.room, students: s.cls.students, coveringFor: s.coveringFor, cancelled,
+  });
+  const laterSessions = [
+    ...day.today.filter(s => s.starts_at > now && (!heroSession || s.id !== heroSession.id)).map(s => toRow(s, false)),
+    ...day.cancelledToday.filter(s => s.starts_at > now).map(s => toRow(s, true)),
+  ].sort((a, b) => a.time.localeCompare(b.time));
 
-  // Homework due today — aggregate from homeworkItems whose due date is today.
-  const fmtToday = new Date(TODAY_ISO + 'T00:00:00').toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
-  const dueTodayHw = homeworkItems.filter(h => h.due === fmtToday);
-  const hwDueToday = dueTodayHw.reduce(
-    (acc, h) => ({ submitted: acc.submitted + h.submitted, total: acc.total + h.total }),
-    { submitted: 0, total: 0 }
-  );
+  // Homework due today for the hero class — from the one homework selector.
+  const hwForHero = heroSession && heroState !== 'overdue' && window.klasioHomework
+    ? window.klasioHomework.listClassHomework(heroSession.group).filter(h => h.dueAt && h.dueAt.slice(0, 10) === TODAY_ISO)
+    : [];
+  const hwDueToday = hwForHero.reduce((acc, h) => ({ submitted: acc.submitted + h.submitted, total: acc.total + h.total }), { submitted: 0, total: 0 });
   const hwHasDueToday = hwDueToday.total > 0;
 
   // ── Action items (4 tiles) ─────────────────────────────────────────
   const toMarkCount    = window.teacherMetrics ? window.teacherMetrics.getToMark() : homeworkItems.reduce((n, h) => n + (h.toMark || 0), 0);
-  const attendanceToDo = Object.values(attendance).filter(v => !v).length;
+  // Same list the Attendance page's "Needs register" shows: backfillable + locked.
+  const attendanceToDo = day.overdue.length + day.locked.length;
   const reportsToReview = reportDrafts.length;   // draft reports awaiting review
   const unreadMessages = 0;   // TODO: comms unread isn't passed to this page; wire when available
   const actionItems = [
@@ -289,13 +428,14 @@ const TeacherDashboard = () => {
   const needsAttention = (TM ? TM.getAtRiskStudents() : []).map(s => {
     const reason = TM.atRiskReason(s) || 'at risk';
     const tone = /Attendance|Homework/.test(reason) ? 'danger' : 'warning';
-    const predicted = window.klasioGrades ? window.klasioGrades.pctToGrade(s.score, { year: s.year }) : '—';
+    const attn = window.studentAttainment(s);
+    const predicted = (attn != null && window.klasioGrades) ? window.klasioGrades.pctToGrade(attn, { year: s.year }) : '—';
     return {
       name: `${s.firstName} ${s.lastName}`,
       predicted,
       reason: reason.toLowerCase(),
       tone,
-      scores: [typeof s.score === 'number' ? s.score : 0],
+      attainment: attn,
     };
   });
 
@@ -326,87 +466,108 @@ const TeacherDashboard = () => {
         100% { box-shadow: 0 0 0 0 rgba(74,222,128,0); }
       }`}</style>
 
-      {/* ── Hero — greeting + now/next session + later-today on one ink panel ── */}
+      {/* ── Hero — greeting + the state-machine panel on one ink surface ── */}
       <section style={{ ...heroSurface(), marginBottom: 24 }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
           <div style={{ minWidth: 0 }}>
             <div style={{
               fontSize: 11.5, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase',
               color: HERO_TXT.faint,
-            }}>Friday, 25 April 2026 · {classesToday} {classesToday === 1 ? 'class' : 'classes'} today</div>
+            }}>
+              {new Date(now).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+              {day.leave ? ' · on leave' : ` · ${classesToday} ${classesToday === 1 ? 'class' : 'classes'} today`}
+            </div>
             <h1 style={{ fontSize: 24, fontWeight: 700, color: '#fff', margin: '8px 0 0', letterSpacing: '-0.5px' }}>
-              Good morning, {TEACHER_NAME.split(' ')[0]}
+              {tdGreeting(now)}, {String(me.name || TEACHER_NAME).split(' ')[0]}
             </h1>
           </div>
           <HeroGhostBtn icon="settings" onClick={() => setCustomiseOpen(true)}>Customise</HeroGhostBtn>
         </div>
 
-        {/* Now / up next + later today. With no session left (and none later),
-            the two columns collapse into one quiet all-clear row. */}
         {show('today') && (
         <div style={{
           display: 'flex', flexWrap: 'wrap', gap: 24, marginTop: 22,
           borderTop: `1px solid ${HERO_TXT.hairline}`, paddingTop: 22,
         }}>
-          {!hero ? (
-            <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-              <div style={{
-                width: 44, height: 44, borderRadius: 12, flexShrink: 0,
-                background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#4ADE80',
-              }}>
-                <Icon name="check" size={20} />
-              </div>
-              <div style={{ flex: 1, minWidth: 180 }}>
-                <div style={{ fontSize: 16, fontWeight: 700, color: '#fff' }}>
-                  {classesToday > 0 ? 'Done for today' : 'No classes today'}
-                </div>
-                <div style={{ fontSize: 12.5, color: HERO_TXT.faint, marginTop: 2 }}>
-                  {classesToday > 0
-                    ? `All ${classesToday} ${classesToday === 1 ? 'session' : 'sessions'} wrapped up — nothing else scheduled.`
-                    : 'Your timetable is clear — enjoy the breather.'}
-                </div>
-              </div>
-              <HeroGhostBtn icon="calendar" onClick={() => go('timetable')}>View timetable</HeroGhostBtn>
-            </div>
-          ) : (
-          <>
-          {/* Current / next session */}
-          <div style={{ flex: '1.7 1 320px', minWidth: 0 }}>
-            <>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                  {heroIsNow ? (
-                    <span style={{
-                      display: 'inline-flex', alignItems: 'center', gap: 7,
-                      fontSize: 11.5, fontWeight: 600, padding: '4px 11px', borderRadius: 20,
-                      background: 'rgba(74,222,128,0.14)', border: '1px solid rgba(74,222,128,0.30)',
-                      color: '#86EFAC', letterSpacing: '0.03em',
-                    }}>
-                      <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#4ADE80', animation: 'tosPulseDot 2s infinite' }} />
-                      LIVE NOW
-                    </span>
-                  ) : (
-                    <span style={{
-                      display: 'inline-flex', alignItems: 'center', gap: 6,
-                      fontSize: 11.5, fontWeight: 600, padding: '4px 11px', borderRadius: 20,
-                      background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.16)',
-                      color: '#fff', letterSpacing: '0.03em',
-                    }}>
-                      <Icon name="clock" size={12} />
-                      UP NEXT
-                    </span>
-                  )}
-                  <span style={{ fontSize: 12.5, color: HERO_TXT.faint, fontVariantNumeric: 'tabular-nums' }}>{hero.time} · {hero.room}</span>
-                </div>
+          {heroState === 'on_leave' && (
+            <THeroQuiet icon="calendar" iconColor="#FCD34D"
+              title={day.leave.to ? `On leave until ${tdFmtLong(day.leave.to)}` : 'On leave'}
+              action={<HeroGhostBtn icon="calendar" onClick={() => go('timetable')}>View timetable</HeroGhostBtn>}>
+              {(() => {
+                if (day.coverage.length === 0) return 'Nothing on your timetable needs cover.';
+                const covered = day.coverage.filter(c => c.cover);
+                const open = day.coverage.filter(c => !c.cover).map(c => c.cls.group);
+                const list = (arr) => arr.length <= 2 ? arr.join(' and ') : `${arr.slice(0, 2).join(', ')} and ${arr.length - 2} more`;
+                return (
+                  <>
+                    {covered.slice(0, 3).map(c => (
+                      <span key={c.cls.id} style={{ display: 'block' }}>
+                        <strong style={{ color: '#fff', fontWeight: 600 }}>{c.cover.teacher}</strong> is covering {c.cls.group} ({c.cls.name})
+                      </span>
+                    ))}
+                    {covered.length > 3 && <span style={{ display: 'block' }}>+{covered.length - 3} more covered</span>}
+                    {open.length > 0 && <span style={{ display: 'block' }}>No cover arranged yet for {list(open)} — your admin assigns cover.</span>}
+                  </>
+                );
+              })()}
+            </THeroQuiet>
+          )}
 
+          {(heroState === 'done' || heroState === 'none') && (
+            <THeroQuiet icon="check"
+              title={heroState === 'done' ? 'Done for today' : 'No classes today'}
+              action={<HeroGhostBtn icon="calendar" onClick={() => go('timetable')}>View timetable</HeroGhostBtn>}>
+              {heroState === 'done'
+                ? `All ${classesToday} ${classesToday === 1 ? 'session' : 'sessions'} wrapped up — nothing else scheduled.`
+                : 'Your timetable is clear — enjoy the breather.'}
+              {day.cancelledToday.length > 0 && ` ${day.cancelledToday.length} cancelled.`}
+              {day.locked.length > 0 && ` ${day.locked.length} older register${day.locked.length === 1 ? ' is' : 's are'} locked — ask your admin to reopen.`}
+            </THeroQuiet>
+          )}
+
+          {heroSession && (
+          <>
+          <div style={{ flex: '1.7 1 320px', minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              {heroState === 'live' && <THeroPill tone="live" pulse>LIVE NOW</THeroPill>}
+              {heroState === 'up_next' && <THeroPill icon="clock">UP NEXT</THeroPill>}
+              {heroState === 'overdue' && <THeroPill tone="warn" icon="alert">REGISTER OVERDUE</THeroPill>}
+              {heroSession.coveringFor && <THeroPill>Covering for {heroSession.coveringFor}</THeroPill>}
+              <span style={{ fontSize: 12.5, color: HERO_TXT.faint, fontVariantNumeric: 'tabular-nums' }}>
+                {heroState === 'overdue' ? `${tdDayLabel(heroSession.dateISO, TODAY_ISO)} · ` : ''}{tdClock(heroSession.starts_at)}–{tdClock(heroSession.ends_at)} · {heroSession.room}
+              </span>
+            </div>
+
+            {heroState === 'overdue' ? (
+              <>
                 <div style={{ fontSize: 22, fontWeight: 700, color: '#fff', letterSpacing: '-0.5px', marginTop: 14 }}>
-                  {hero.subject}
+                  You didn&rsquo;t take the register for {heroSession.group}
                 </div>
                 <div style={{ fontSize: 13, color: HERO_TXT.soft, marginTop: 4 }}>
-                  {hero.group} · {hero.students} students
+                  {heroSession.name} · {tdDayLabel(heroSession.dateISO, TODAY_ISO)} — you can still backfill it for another{' '}
+                  <strong style={{ color: '#FCD34D' }}>{tdClosesIn(heroSession.derived.backfillEnd, now)}</strong>, then it locks.
+                </div>
+                {day.overdue.length > 1 && (
+                  <div style={{ fontSize: 12.5, color: HERO_TXT.faint, marginTop: 10 }}>
+                    +{day.overdue.length - 1} more register{day.overdue.length - 1 === 1 ? '' : 's'} still to take.
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 18 }}>
+                  <HeroSolidBtn icon="check" onClick={() => tdOpenRegister(heroSession)}>Take register now</HeroSolidBtn>
+                  <HeroGhostBtn icon="list" onClick={() => go('attendance')}>All registers</HeroGhostBtn>
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: 22, fontWeight: 700, color: '#fff', letterSpacing: '-0.5px', marginTop: 14 }}>
+                  {heroSession.name}
+                </div>
+                <div style={{ fontSize: 13, color: HERO_TXT.soft, marginTop: 4 }}>
+                  {heroSession.group} · {heroSession.cls.students} students
+                  {heroSession.derived.state === 'recorded' && ' · register taken'}
                 </div>
 
-                {/* Homework due today progress strip */}
+                {/* Homework due today for this class */}
                 {hwHasDueToday ? (
                   <div style={{
                     padding: '12px 14px', borderRadius: 10, margin: '16px 0 18px', maxWidth: 460,
@@ -431,12 +592,30 @@ const TeacherDashboard = () => {
                 )}
 
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                  <HeroSolidBtn icon="check" onClick={() => go('attendance')}>Take attendance</HeroSolidBtn>
-                  <HeroGhostBtn icon={hasPlan(hero.group) ? 'eye' : 'edit'} onClick={() => openPlanner(hero.group)}>
-                    Open lesson
+                  <HeroSolidBtn icon="check" onClick={() => tdOpenRegister(heroSession)}>
+                    {heroSession.derived.state === 'recorded' ? 'View register' : 'Take attendance'}
+                  </HeroSolidBtn>
+                  <HeroGhostBtn icon={hasPlan(heroSession.classId) ? 'eye' : 'edit'} onClick={() => openPlanner(heroSession.classId)}>
+                    {hasPlan(heroSession.classId) ? 'Open lesson' : 'Plan lesson'}
                   </HeroGhostBtn>
                 </div>
-            </>
+
+                {/* An overdue register never hides behind a live or upcoming class. */}
+                {day.overdue.length > 0 && (
+                  <button onClick={() => tdOpenRegister(day.overdue[0])} style={{
+                    display: 'flex', alignItems: 'center', gap: 8, marginTop: 14, padding: 0,
+                    border: 'none', background: 'transparent', cursor: 'pointer', fontFamily: 'inherit',
+                    fontSize: 12.5, color: '#FCD34D', textAlign: 'left',
+                  }}>
+                    <Icon name="alert" size={13} />
+                    {day.overdue.length === 1
+                      ? `Register for ${day.overdue[0].group} (${tdDayLabel(day.overdue[0].dateISO, TODAY_ISO)}) still to take — closes in ${tdClosesIn(day.overdue[0].derived.backfillEnd, now)}`
+                      : `${day.overdue.length} registers still to take — the first closes in ${tdClosesIn(day.overdue[0].derived.backfillEnd, now)}`}
+                    <Icon name="chevron_r" size={12} />
+                  </button>
+                )}
+              </>
+            )}
           </div>
 
           {/* Later today */}
@@ -444,15 +623,15 @@ const TeacherDashboard = () => {
             <div style={{
               fontSize: 11, fontWeight: 600, letterSpacing: '0.07em', textTransform: 'uppercase',
               color: HERO_TXT.faint, marginBottom: 10,
-            }}>Later today</div>
+            }}>{heroState === 'overdue' ? 'Today' : 'Later today'}</div>
             {laterSessions.length === 0 ? (
               <div style={{ fontSize: 12.5, color: HERO_TXT.faint, padding: '6px 0' }}>
                 Nothing else scheduled.
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {laterSessions.slice(0, 3).map((s, i) => (
-                  <TLaterRow key={i} s={s} onClick={() => openPlanner(s.group)} />
+                {laterSessions.slice(0, 3).map((s) => (
+                  <TLaterRow key={s.id} s={s} onClick={() => openPlanner(s.classId)} />
                 ))}
                 {laterSessions.length > 3 && (
                   <button onClick={() => go('timetable')} style={{
@@ -517,7 +696,7 @@ const TeacherDashboard = () => {
                       <div style={{ fontSize: 11.5, color: DS.muted, marginTop: 1 }}>Predicted {s.predicted}</div>
                     </div>
                     <StatusPill tone={s.tone === 'danger' ? 'negative' : 'warning'}>{s.reason}</StatusPill>
-                    <ScorePill score={s.scores[s.scores.length - 1]} />
+                    <ScorePill score={s.attainment} />
                   </HoverRow>
                 ))}
                 {needsAttention.length > 6 && <TSeeAll onClick={() => go('progress')} />}

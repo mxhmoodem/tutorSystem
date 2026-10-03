@@ -299,7 +299,9 @@ const downloadText = (filename, text, type = 'text/csv') => {
 // won't resolve — the logo needs an absolute URL.
 const LOGO_ICON_URL = new URL('assets/logo-icon.png', window.location.href).href;
 
-const printSlips = (centre, slips) => {
+// `centreCode` is printed because students type it at their first sign-in on a new
+// device — the login screen tells them to look for it on this slip.
+const printSlips = (centre, slips, centreCode) => {
   const w = window.open('', '_blank', 'width=860,height=920');
   if (!w) return;
   const esc = s => (s || '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
@@ -309,6 +311,7 @@ const printSlips = (centre, slips) => {
       <div class="name">${esc(s.name)}</div>
       <div class="muted">${esc(s.year)}${s.underThirteen ? ' · Parent/guardian completes setup (under 13)' : ''}</div>
       <div class="grid">
+        <div><label>Centre code</label><div class="mono">${esc(centreCode || '')}</div></div>
         <div><label>Username</label><div class="mono">${esc(s.username)}</div></div>
         <div><label>Sign-in email</label><div class="mono">${esc(s.syntheticEmail)}</div></div>
       </div>
@@ -327,7 +330,7 @@ const printSlips = (centre, slips) => {
       .logo{width:22px;height:22px;display:inline-block}
       .centre{font-weight:700;font-size:14px}.tag{margin-left:auto;font-size:11px;color:#6B7280;text-transform:uppercase;letter-spacing:.05em}
       .name{font-size:20px;font-weight:700}.muted{color:#6B7280;font-size:12px}.small{font-size:11px}
-      .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0}
+      .grid{display:grid;grid-template-columns:auto auto 1fr;gap:10px 18px;margin:14px 0}
       label{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#9CA3AF}
       .mono{font-family:'JetBrains Mono',monospace;font-size:13px;margin-top:2px}
       .claim{display:flex;align-items:center;gap:16px;border-top:1px solid #E5E7EB;padding-top:14px}
@@ -604,6 +607,7 @@ const InviteTeachersPage = () => {
     });
     if (newRecords.length) store.addTeachers(newRecords);
     onb.finishInvites(members);
+    if (window.markCentreSetup) window.markCentreSetup('invite');
     setSent(created);
   };
 
@@ -765,12 +769,13 @@ const BulkImportPage = () => {
       guardianName: r.data.parent_name || '', guardianRelation: 'Parent',
       guardianEmail: r.data.parent_email || '', guardianPhone: r.data.parent_phone || '',
       subjects: [], classIds: [], notes: r.data.notes || '',
-      attendance: 0, hw: 0, score: 0, status: 'active', teacher: teacherName, lastSeen: 'Not yet active',
+      attendance: 0, hw: 0, status: 'active', teacher: teacherName, lastSeen: 'Not yet active',
       centreId: onb.centreId,
       account: buildStudentAccount(r, 'csv'),
     }));
     const ids = store.addStudents(records);
     onb.finishImport(ids);
+    if (window.markCentreSetup) window.markCentreSetup('students');
     adminNav('claim_slips');
   };
 
@@ -945,11 +950,12 @@ const AddSingleStudentPage = () => {
       guardianName: form.guardianName.trim(), guardianRelation: 'Parent',
       guardianEmail: form.guardianEmail.trim(), guardianPhone: form.guardianPhone.trim(),
       subjects: [], classIds: [], notes: form.notes.trim(),
-      attendance: 0, hw: 0, score: 0, status: 'active', teacher: '—', lastSeen: 'Not yet active',
+      attendance: 0, hw: 0, status: 'active', teacher: '—', lastSeen: 'Not yet active',
       centreId: onb.centreId,
       account: buildStudentAccount(row, 'single'),
     }]);
     onb.finishProvision(ids);
+    if (window.markCentreSetup) window.markCentreSetup('students');
     adminNav('claim_slips');
   };
 
@@ -1023,7 +1029,11 @@ const QRPlaceholder = ({ size = 64 }) => (
 const ClaimSlipsPage = () => {
   const store = useAdminStore();
   const onb = useOnboardingStore();
-  const batchIds = onb.lastBatch || [];
+  // 'unclaimed' = every outstanding slip (the reprint after a centre-code change);
+  // otherwise the last provisioned batch, falling back to every unclaimed account.
+  const [scope] = React.useState(() => { const p = adminParam(); if (p === 'unclaimed') { window.__adminParam = null; return 'unclaimed'; } return 'batch'; });
+  const batchIds = scope === 'unclaimed' ? [] : (onb.lastBatch || []);
+  const centreCode = (window.centreCodeFor && window.centreCodeFor()) || onb.centre.code || '';
   const slips = (batchIds.length
     ? batchIds.map(id => store.students.find(s => s.id === id)).filter(Boolean)
     : store.students.filter(s => acctStatus(s) !== 'active' && acct(s).claimCode)
@@ -1046,7 +1056,7 @@ const ClaimSlipsPage = () => {
           <div style={{ fontSize: 13, color: DS.muted }}>{slipData.length} slip{slipData.length === 1 ? '' : 's'} · {onb.centre.name}</div>
           <div style={{ display: 'flex', gap: 10 }}>
             <Btn variant="secondary" icon="users" onClick={() => adminNav('people')}>People &amp; invites</Btn>
-            <Btn variant="primary" icon="print" onClick={() => printSlips(onb.centre.name, slipData)}>Print all</Btn>
+            <Btn variant="primary" icon="print" onClick={() => printSlips(onb.centre.name, slipData, centreCode)}>Print all</Btn>
           </div>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 16 }}>
@@ -1059,7 +1069,8 @@ const ClaimSlipsPage = () => {
               </div>
               <div style={{ fontSize: 18, fontWeight: 700, color: DS.text }}>{s.name}</div>
               <div style={{ fontSize: 12, color: DS.muted, marginBottom: 14 }}>{s.year}{s.underThirteen && ' · Parent/guardian completes setup'}</div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'auto auto minmax(0,1fr)', gap: '10px 18px', marginBottom: 14 }}>
+                <div><div style={{ fontSize: 10, color: DS.faint, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Centre code</div><Mono color={DS.text}>{centreCode}</Mono></div>
                 <div><div style={{ fontSize: 10, color: DS.faint, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Username</div><Mono color={DS.text}>{s.username}</Mono></div>
                 <div style={{ minWidth: 0 }}><div style={{ fontSize: 10, color: DS.faint, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Sign-in email</div><div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}><Mono size={11}>{s.syntheticEmail}</Mono></div></div>
               </div>
@@ -1491,6 +1502,7 @@ const TeacherClaim = ({ rec, store, onb, onExit }) => {
       account: { ...acct(rec), status: 'active', setupMethod: 'self-set', activatedOn: onbTodayIso() },
     });
     onb.finishInvites([{ email: rec.email, role: 'teacher' }]);
+    if (window.markCentreSetup) window.markCentreSetup('invite');
     setDone(true);
   };
   if (done) return <ClaimDone name={name.trim()} method="self-set" role="teacher" onExit={onExit} />;

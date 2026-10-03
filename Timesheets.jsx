@@ -77,6 +77,16 @@ const TS_PAID_CATEGORIES = [
 ];
 const TS_DEFAULT_CONFIG = {
   submissionFrequency: 'week',
+  // Decision #53 — periods are ANCHORED, not rolling. Period 1 starts on anchorDate
+  // and every period follows from it, so "this fortnight" is the same fortnight for
+  // everyone and can line up with the centre's pay run. A deadline (dueOffsetDays
+  // after the period ends, by dueTime) makes lateness exist; lockAfterDays after
+  // the period ends freezes it for staff (the timesheet twin of the register's
+  // backfill window).
+  anchorDate: '2026-01-05',     // a Monday
+  dueOffsetDays: 2,
+  dueTime: '12:00',
+  lockAfterDays: 14,
   payNonSession: true,
   paidCategories: { prep: true, marking: true, meeting: true, training: true },
 };
@@ -168,10 +178,6 @@ const tsTodayISO = () => { const d = new Date(); return `${d.getFullYear()}-${St
 // math → format) — mixing local parse with toISOString() drifts a day in +UTC zones.
 const tsParseUTC = (iso) => new Date(iso + 'T00:00:00Z');
 const tsAddDays = (iso, n) => { const d = tsParseUTC(iso); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
-const tsWeekStart = (iso) => { const d = tsParseUTC(iso); const off = (d.getUTCDay() + 6) % 7; d.setUTCDate(d.getUTCDate() - off); return d.toISOString().slice(0, 10); }; // Monday
-const tsMonthStart = (iso) => iso.slice(0, 8) + '01';
-const tsMonthEnd = (iso) => { const d = tsParseUTC(iso); d.setUTCMonth(d.getUTCMonth() + 1, 0); return d.toISOString().slice(0, 10); };
-const tsAddMonths = (iso, n) => { const d = tsParseUTC(iso); d.setUTCMonth(d.getUTCMonth() + n, 1); return d.toISOString().slice(0, 10); };
 
 const tsFmtDuration = (min) => {
   const m = Math.max(0, Math.round(min || 0));
@@ -215,18 +221,75 @@ const tsSessionRef = (sessionId) => {
 // they never pick week/fortnight/month themselves (that is the admin's policy).
 const tsDefaultPeriod = () => ({ custom: false, offset: 0 });
 
-// Window for a cadence unit (week / fortnight / month) at an offset from now.
-const tsUnitRange = (unit, offset = 0) => {
-  const t = tsTodayISO();
-  // Fortnight = a rolling 14-day window aligned to weeks (last week + this week at offset 0).
-  if (unit === 'fortnight') { const s = tsAddDays(tsAddDays(tsWeekStart(t), -7), offset * 14); return { from: s, to: tsAddDays(s, 13) }; }
-  if (unit === 'month')     { const m = tsAddMonths(tsMonthStart(t), offset); return { from: m, to: tsMonthEnd(m) }; }
-  const s = tsAddDays(tsWeekStart(t), offset * 7); return { from: s, to: tsAddDays(s, 6) };   // week (Monday-based)
+// ── Anchored periods (decision #52) ─────────────────────────────────────────────
+// Every period is derived from the centre's anchor date — never from today — so a
+// fortnight is deterministic and matches the pay cycle. Monthly periods keep the
+// anchor's day of the month (capped at the 28th so February exists).
+const tsDaysBetween = (a, b) => Math.round((tsParseUTC(b) - tsParseUTC(a)) / 86400000);
+const tsAnchorOf = (cfg) => (cfg && cfg.anchorDate) || TS_DEFAULT_CONFIG.anchorDate;
+const tsAddMonthsKeepDay = (iso, n) => {
+  const d = tsParseUTC(iso); const day = Math.min(d.getUTCDate(), 28);
+  d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + n); d.setUTCDate(day);
+  return d.toISOString().slice(0, 10);
+};
+const tsPeriodAt = (unit, anchor, idx) => {
+  if (unit === 'month') return { from: tsAddMonthsKeepDay(anchor, idx), to: tsAddDays(tsAddMonthsKeepDay(anchor, idx + 1), -1), index: idx };
+  const len = unit === 'fortnight' ? 14 : 7;
+  const from = tsAddDays(anchor, idx * len);
+  return { from, to: tsAddDays(from, len - 1), index: idx };
+};
+const tsPeriodIndexFor = (unit, anchor, iso) => {
+  if (unit === 'month') {
+    const a = tsParseUTC(anchor), d = tsParseUTC(iso);
+    let i = (d.getUTCFullYear() - a.getUTCFullYear()) * 12 + (d.getUTCMonth() - a.getUTCMonth());
+    if (iso < tsPeriodAt(unit, anchor, i).from) i -= 1;
+    return i;
+  }
+  return Math.floor(tsDaysBetween(anchor, iso) / (unit === 'fortnight' ? 14 : 7));
+};
+// Window for a cadence unit at an offset from the period that contains today.
+const tsUnitRange = (unit, offset = 0, cfg) => {
+  const anchor = tsAnchorOf(cfg);
+  return tsPeriodAt(unit, anchor, tsPeriodIndexFor(unit, anchor, tsTodayISO()) + offset);
 };
 // Resolve a period against the centre's submission frequency → { from, to }.
-const tsRangeFor = (freq, period) => period.custom
+const tsRangeFor = (freq, period, cfg) => period.custom
   ? { from: period.from, to: period.to }
-  : tsUnitRange((freq || TS_FREQ.week).mode, period.offset || 0);
+  : tsUnitRange((freq || TS_FREQ.week).mode, period.offset || 0, cfg);
+// The anchored period an entry's date falls in.
+const tsPeriodOfDate = (iso, cfg) => {
+  const unit = (TS_FREQ[(cfg || {}).submissionFrequency] || TS_FREQ.week).mode;
+  const anchor = tsAnchorOf(cfg);
+  return tsPeriodAt(unit, anchor, tsPeriodIndexFor(unit, anchor, iso));
+};
+
+// Deadline and lock for a period — derived from the policy, never stored.
+const tsNowHM = () => { const d = new Date(); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+const tsPeriodDue = (range, cfg) => ({ date: tsAddDays(range.to, (cfg && cfg.dueOffsetDays != null) ? cfg.dueOffsetDays : 2), time: (cfg && cfg.dueTime) || '12:00' });
+const tsPeriodLocksOn = (range, cfg) => tsAddDays(range.to, (cfg && cfg.lockAfterDays != null) ? cfg.lockAfterDays : 14);
+const tsIsPastDue = (range, cfg) => { const d = tsPeriodDue(range, cfg); const t = tsTodayISO(); return t > d.date || (t === d.date && tsNowHM() > d.time); };
+const tsIsLocked = (range, cfg) => tsTodayISO() > tsPeriodLocksOn(range, cfg);
+const tsIsDateLocked = (iso, cfg) => tsIsLocked(tsPeriodOfDate(iso, cfg), cfg);
+const tsDueLabel = (range, cfg) => { const d = tsPeriodDue(range, cfg); return `${tsDate(d.date)}, ${d.time}`; };
+
+// One teacher's submission state for a period (derived):
+//   'nothing'   — no entries at all          'submitted' — nothing left to send
+//   'open'      — drafts, deadline not passed 'late'      — drafts, past the deadline
+//   'locked'    — drafts left when the period froze (admin must deal with them)
+const tsSubmissionState = (entries, range, cfg) => {
+  if (!entries.length) return 'nothing';
+  const unsent = entries.filter(e => TS_TEACHER_EDITABLE.has(e.status)).length;
+  if (!unsent) return 'submitted';
+  if (tsIsLocked(range, cfg)) return 'locked';
+  return tsIsPastDue(range, cfg) ? 'late' : 'open';
+};
+const TS_SUBMIT_STATE_META = {
+  open:      { label: 'Not yet submitted', tone: 'neutral' },
+  late:      { label: 'Late',              tone: 'negative' },
+  locked:    { label: 'Locked unsent',     tone: 'negative' },
+  submitted: { label: 'Submitted',         tone: 'positive' },
+  nothing:   { label: 'No hours',          tone: 'neutral' },
+};
 
 const tsInRange = (iso, range) => iso >= range.from && iso <= range.to;
 const tsRangeLabel = (range) => `${tsDateShort(range.from)} – ${tsDateShort(range.to)} ${range.to.slice(0, 4)}`;
@@ -482,9 +545,9 @@ const TsTypeBreakdown = ({ entries }) => {
 // consecutive periods of that unit (‹ prev / next ›, never into the future) or switch
 // to a custom date range. There is deliberately NO week/fortnight/month choice here:
 // the cadence is the admin's policy, not a per-user filter.
-const TsPeriodNav = ({ freq, period, onChange }) => {
+const TsPeriodNav = ({ freq, period, onChange, config }) => {
   const f = freq || TS_FREQ.week;
-  const range = tsRangeFor(f, period);
+  const range = tsRangeFor(f, period, config);
   const offset = period.offset || 0;
   const custom = !!period.custom;
   const go = (d) => onChange({ custom: false, offset: Math.min(0, offset + d) });
@@ -518,6 +581,7 @@ const TsPeriodNav = ({ freq, period, onChange }) => {
   );
 };
 const tsNavArrow = { display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, background: 'none', border: 'none', cursor: 'pointer', padding: 0 };
+const tsPolicyLabel = { display: 'flex', flexDirection: 'column', gap: 5, fontSize: 11.5, fontWeight: 600, color: DS.muted };
 const tsDateInput = { padding: '7px 10px', borderRadius: 7, border: `1px solid ${DS.border}`, fontSize: 13, outline: 'none', fontFamily: 'inherit' };
 const tsCustomLink = { background: 'none', border: 'none', padding: '6px 4px', color: DS.accent, fontSize: 12.5, fontWeight: 600, cursor: 'pointer' };
 
@@ -695,12 +759,16 @@ const TeacherTimesheetPage = () => {
   const [adding, setAdding] = React.useState(false);
 
   const resolve = tsMakeResolve(adminStore, store.config);
-  const range = tsRangeFor(freq, period);
+  const range = tsRangeFor(freq, period, store.config);
   const mine = store.entries.filter(e => me && e.teacherId === me.id);
   const inPeriod = mine.filter(e => tsInRange(e.date, range)).sort((a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : 0);
   const { total, byType } = tsRollup(inPeriod);
   const pay = tsPaySummary(inPeriod, resolve);
-  const submittable = inPeriod.filter(e => TS_TEACHER_EDITABLE.has(e.status));
+  // A locked period is frozen for staff: nothing in it can be edited or submitted.
+  const locked = !period.custom && tsIsLocked(range, store.config);
+  const submittable = locked ? [] : inPeriod.filter(e => TS_TEACHER_EDITABLE.has(e.status));
+  const state = period.custom ? null : tsSubmissionState(inPeriod, range, store.config);
+  const [addBlocked, setAddBlocked] = React.useState('');
 
   // Group by day (newest first), each with a subtotal.
   const days = [];
@@ -720,18 +788,39 @@ const TeacherTimesheetPage = () => {
           </Btn>,
         ]} />
 
-      {/* Submission policy banner — set by the centre admin */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', background: DS.accentLight, border: `1px solid ${DS.accentBorder}`, borderRadius: 10, marginBottom: 16 }}>
-        <Icon name="calendar" size={17} color={DS.accent} />
-        <div style={{ flex: 1, fontSize: 13, color: DS.sub, lineHeight: 1.5 }}>
-          Your centre asks teachers to submit their timesheet <strong style={{ color: DS.text }}>{freq.label.toLowerCase()}</strong>. Submitting sends every draft entry in the selected period for approval.
+      {/* Submission policy banner — the period's deadline and lock, set by the centre */}
+      {(() => {
+        const tone = state === 'late' || state === 'locked' ? { bg: DS.dangerBg, bd: DS.dangerBg, ic: DS.danger } : { bg: DS.accentLight, bd: DS.accentBorder, ic: DS.accent };
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', background: tone.bg, border: `1px solid ${tone.bd}`, borderRadius: 10, marginBottom: 16 }}>
+            <Icon name={locked ? 'lock' : state === 'late' ? 'alert' : 'calendar'} size={17} color={tone.ic} />
+            <div style={{ flex: 1, fontSize: 13, color: DS.sub, lineHeight: 1.5 }}>
+              {period.custom ? (
+                <>Your centre asks for timesheets <strong style={{ color: DS.text }}>{freq.label.toLowerCase()}</strong>. Pick a period to see its deadline.</>
+              ) : locked ? (
+                <>This {freq.noun} <strong style={{ color: DS.text }}>locked on {tsDate(tsPeriodLocksOn(range, store.config))}</strong> — its entries can no longer be changed or submitted. {state === 'locked' ? 'Some were never sent: ask your admin to deal with them.' : ''}</>
+              ) : state === 'late' ? (
+                <><strong style={{ color: DS.danger }}>Late</strong> — this {freq.noun} was due <strong style={{ color: DS.text }}>{tsDueLabel(range, store.config)}</strong>. Submit now; it locks on {tsDate(tsPeriodLocksOn(range, store.config))}.</>
+              ) : state === 'submitted' ? (
+                <>Everything for this {freq.noun} is submitted. It locks on {tsDate(tsPeriodLocksOn(range, store.config))}.</>
+              ) : (
+                <>Submit this {freq.noun} by <strong style={{ color: DS.text }}>{tsDueLabel(range, store.config)}</strong>. Submitting sends every draft entry in it for approval; it locks on {tsDate(tsPeriodLocksOn(range, store.config))}.</>
+              )}
+            </div>
+            <Btn variant="secondary" small onClick={() => setPeriod(tsDefaultPeriod())}>This {freq.noun}</Btn>
+          </div>
+        );
+      })()}
+      {addBlocked && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', marginBottom: 14, background: DS.warningBg, borderRadius: 9, fontSize: 12.5, color: DS.sub }}>
+          <Icon name="lock" size={14} color={DS.warning} /> {addBlocked}
+          <button onClick={() => setAddBlocked('')} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: DS.faint }}><Icon name="x" size={13} /></button>
         </div>
-        <Btn variant="secondary" small onClick={() => setPeriod(tsDefaultPeriod())}>This {freq.noun}</Btn>
-      </div>
+      )}
 
       {/* Period navigator — one submission period at a time, or a custom range */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 18, flexWrap: 'wrap' }}>
-        <TsPeriodNav freq={freq} period={period} onChange={setPeriod} />
+        <TsPeriodNav freq={freq} period={period} onChange={setPeriod} config={store.config} />
         <span style={{ fontSize: 12.5, color: DS.muted }}>{tsRangeLabel(range)}</span>
       </div>
 
@@ -747,7 +836,7 @@ const TeacherTimesheetPage = () => {
                   <span style={{ fontSize: 12, fontWeight: 600, color: DS.muted, fontVariantNumeric: 'tabular-nums' }}>{tsFmtDuration(dTotal)}</span>
                 </div>
                 {d.entries.map((e, i) => (
-                  <TeacherEntryRow key={e.id} entry={e} store={store} resolve={resolve} isLast={i === d.entries.length - 1} />
+                  <TeacherEntryRow key={e.id} entry={e} store={store} resolve={resolve} isLast={i === d.entries.length - 1} locked={tsIsDateLocked(e.date, store.config)} />
                 ))}
               </div>
             );
@@ -781,13 +870,20 @@ const TeacherTimesheetPage = () => {
       </div>
 
       <AddEntryModal open={adding} onClose={() => setAdding(false)}
-        onAdd={(e) => store.addManual({ ...e, teacherId: me && me.id, centreId: TIMESHEET_CENTRE })} />
+        onAdd={(e) => {
+          // A frozen period takes no new entries from staff.
+          if (e.date && tsIsDateLocked(e.date, store.config)) {
+            setAddBlocked(`The period containing ${tsDate(e.date)} is locked — ask your admin to add this entry.`);
+            return;
+          }
+          store.addManual({ ...e, teacherId: me && me.id, centreId: TIMESHEET_CENTRE });
+        }} />
     </div>
   );
 };
 
-const TeacherEntryRow = ({ entry, store, resolve, isLast }) => {
-  const editable = TS_TEACHER_EDITABLE.has(entry.status);
+const TeacherEntryRow = ({ entry, store, resolve, isLast, locked }) => {
+  const editable = TS_TEACHER_EDITABLE.has(entry.status) && !locked;
   const t = TS_TYPE[entry.type] || TS_TYPE.other;
   const pay = tsPayFor(entry, (resolve && resolve(entry)) || {});
   return (
@@ -848,9 +944,16 @@ const AdminTimesheetsPage = () => {
   const setFrequency = (id) => { store.setConfig({ submissionFrequency: id }); changePeriod(tsDefaultPeriod()); };
 
   const resolve = tsMakeResolve(adminStore, store.config);
-  const range = tsRangeFor(freq, period);
+  const range = tsRangeFor(freq, period, store.config);
   const inPeriod = store.entries.filter(e => tsInRange(e.date, range));
-  const teacherRows = tsTeacherRollup(inPeriod);
+  const teacherRows = tsTeacherRollup(inPeriod).map(r => ({
+    ...r, state: period.custom ? null : tsSubmissionState(inPeriod.filter(e => e.teacherId === r.id), range, store.config),
+  }));
+  // The chase list: who still owes this period (drafts not sent), most urgent first.
+  const owing = teacherRows.filter(r => r.state === 'late' || r.state === 'locked' || r.state === 'open')
+    .sort((a, b) => ({ locked: 0, late: 1, open: 2 }[a.state] - { locked: 0, late: 1, open: 2 }[b.state]));
+  const cfg = store.config;
+  const current = tsUnitRange(freq.mode, 0, cfg);
 
   const overall = inPeriod.reduce((s, e) => s + (e.durationMinutes || 0), 0);
   const approvedMin = inPeriod.filter(tsIsApprovedLike).reduce((s, e) => s + (e.durationMinutes || 0), 0);
@@ -863,22 +966,39 @@ const AdminTimesheetsPage = () => {
 
       {/* Submission policy — admin-set, centre-wide. Sets the cadence teachers submit
           on and the unit everyone reviews by (their page tracks the same setting). */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 18px', background: DS.accentLight, border: `1px solid ${DS.accentBorder}`, borderRadius: 10, marginBottom: 18, flexWrap: 'wrap' }}>
-        <Icon name="calendar" size={18} color={DS.accent} />
-        <div style={{ flex: 1, minWidth: 220, fontSize: 13, color: DS.sub, lineHeight: 1.5 }}>
-          Staff submit their timesheets <strong style={{ color: DS.text }}>{freq.label.toLowerCase()}</strong>. This sets the period teachers see and submit — and the unit you review by below.
+      <div style={{ padding: '14px 18px', background: DS.accentLight, border: `1px solid ${DS.accentBorder}`, borderRadius: 10, marginBottom: 18 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+          <Icon name="calendar" size={18} color={DS.accent} />
+          <div style={{ flex: 1, minWidth: 220, fontSize: 13, color: DS.sub, lineHeight: 1.5 }}>
+            Current {freq.noun}: <strong style={{ color: DS.text }}>{tsRangeLabel(current)}</strong> · due <strong style={{ color: DS.text }}>{tsDueLabel(current, cfg)}</strong> · locks {tsDate(tsPeriodLocksOn(current, cfg))}
+          </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 12.5, color: DS.muted, fontWeight: 500 }}>Submission frequency</span>
-          <Select value={store.config.submissionFrequency} onChange={e => setFrequency(e.target.value)} style={{ width: 150 }}>
-            {TS_FREQUENCIES.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
-          </Select>
+        {/* The policy (decision #52): cadence + where period 1 starts + the deadline
+            and the lock. Every period is derived from these — not from today. */}
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 14, flexWrap: 'wrap', marginTop: 12 }}>
+          <label style={tsPolicyLabel}>Submit
+            <Select value={cfg.submissionFrequency} onChange={e => setFrequency(e.target.value)} style={{ width: 140 }}>
+              {TS_FREQUENCIES.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
+            </Select>
+          </label>
+          <label style={tsPolicyLabel}>Period 1 starts
+            <Input type="date" value={tsAnchorOf(cfg)} onChange={e => { if (e.target.value) { store.setConfig({ anchorDate: e.target.value }); changePeriod(tsDefaultPeriod()); } }} style={{ width: 150 }} />
+          </label>
+          <label style={tsPolicyLabel}>Due (days after period end)
+            <Input type="number" min="0" value={cfg.dueOffsetDays} onChange={e => store.setConfig({ dueOffsetDays: Math.max(0, +e.target.value || 0) })} style={{ width: 90 }} />
+          </label>
+          <label style={tsPolicyLabel}>by
+            <Input type="time" value={cfg.dueTime} onChange={e => store.setConfig({ dueTime: e.target.value || '12:00' })} style={{ width: 110 }} />
+          </label>
+          <label style={tsPolicyLabel}>Lock (days after period end)
+            <Input type="number" min="1" value={cfg.lockAfterDays} onChange={e => store.setConfig({ lockAfterDays: Math.max(1, +e.target.value || 1) })} style={{ width: 90 }} />
+          </label>
         </div>
       </div>
 
       {/* Period navigator — review one submission period at a time (or a custom range) */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 18, flexWrap: 'wrap' }}>
-        <TsPeriodNav freq={freq} period={period} onChange={changePeriod} />
+        <TsPeriodNav freq={freq} period={period} onChange={changePeriod} config={store.config} />
         {submittedIds.length > 0 && (
           <Btn variant="primary" icon="check" small onClick={() => store.approveMany(submittedIds)}>Approve all {submittedIds.length} submitted</Btn>
         )}
@@ -896,8 +1016,20 @@ const AdminTimesheetsPage = () => {
           )}
         </Card>
 
-        {/* Right rail — this-period stats */}
+        {/* Right rail — the chase list, then this-period stats */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {!period.custom && (
+            <Card title="Not yet submitted" subtitle={`${tsRangeLabel(range)} · due ${tsDueLabel(range, cfg)}`}>
+              {owing.length === 0 ? (
+                <div style={{ padding: '14px 18px', fontSize: 13, color: DS.muted }}>Everyone with hours in this {freq.noun} has submitted.</div>
+              ) : owing.map((r, i) => (
+                <button key={r.id} onClick={() => adminNav('timesheet_detail', r.id)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '11px 18px', border: 'none', borderTop: i ? `1px solid ${DS.border}` : 'none', background: 'transparent', cursor: 'pointer', textAlign: 'left' }}>
+                  <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: DS.text }}>{tsTeacherName(r.id)}</span>
+                  <StatusPill tone={TS_SUBMIT_STATE_META[r.state].tone}>{TS_SUBMIT_STATE_META[r.state].label}</StatusPill>
+                </button>
+              ))}
+            </Card>
+          )}
           {/* This period — hours, approvals, est. pay, awaiting, teacher count */}
           <Card title="This period" subtitle={tsRangeLabel(range)}>
             <TsSummaryRows rows={[
@@ -925,6 +1057,7 @@ const TeacherSummaryRow = ({ row, color, isLast, onOpen }) => {
         <div style={{ fontSize: 14, fontWeight: 600, color: DS.text }}>{tsTeacherName(row.id)}</div>
         <div style={{ fontSize: 12, color: DS.muted, marginTop: 1 }}>{row.count} entr{row.count === 1 ? 'y' : 'ies'} this period</div>
       </div>
+      {(row.state === 'late' || row.state === 'locked') && <StatusPill tone="negative">{TS_SUBMIT_STATE_META[row.state].label}</StatusPill>}
       {row.submitted > 0 && <Badge variant="info">{tsFmtDuration(row.submitted)} pending</Badge>}
       {row.approved > 0 && <span style={{ fontSize: 12, color: DS.success, fontWeight: 600 }}>{tsFmtDuration(row.approved)} approved</span>}
       <span style={{ fontSize: 14.5, fontWeight: 700, color: DS.text, fontVariantNumeric: 'tabular-nums', width: 72, textAlign: 'right' }}>{tsFmtDuration(row.total)}</span>
@@ -984,7 +1117,7 @@ const AdminTimesheetDetailPage = () => {
   const [markExp, setMarkExp] = React.useState(false);
   const [printData, setPrintData] = React.useState(null);
 
-  const range = tsRangeFor(freq, period);
+  const range = tsRangeFor(freq, period, store.config);
   const teacher = adminStore.teachers.find(t => t.id === teacherId);
   const name = tsTeacherName(teacherId);
 
@@ -1057,7 +1190,7 @@ const AdminTimesheetDetailPage = () => {
 
       {/* Period navigator + status filter */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 18, flexWrap: 'wrap' }}>
-        <TsPeriodNav freq={freq} period={period} onChange={changePeriod} />
+        <TsPeriodNav freq={freq} period={period} onChange={changePeriod} config={store.config} />
         <Select value={status} onChange={e => setStatus(e.target.value)} style={{ width: 150 }}>
           <option value="all">All statuses</option>
           {Object.keys(TS_STATUS_META).map(s => <option key={s} value={s}>{TS_STATUS_META[s].label}</option>)}

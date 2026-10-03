@@ -1,19 +1,24 @@
 // ══════════════════════════════════════════════════════════════
-//  Mock data — Lesson Planner
-//  Seeds window.__lessonPlans so the planner's saved-plans browser,
-//  class detail panels and the teacher dashboard have data on first load.
-//  Loaded as a global script before TeacherPages.jsx (see index.html).
+//  Mock data — Lesson Planner (lessons + planned deliveries, decision #47)
+//  Loaded as a global script before lessons.jsx (see index.html).
 //
-//  Store shape (keyed `${group}__${date}`):
-//    { plan: {title,topic,duration,objectives,agenda,homework,notes,resources}, savedAt, group, date }
-//  Groups match teacherClasses[].group in teacherPages.mock.jsx.
+//  Two things, not one:
+//    • a LESSON is reusable teaching content (title, topic, objectives,
+//      structure, homework to set) owned by a teacher — no class, no date;
+//    • a PLANNED LESSON (delivery) schedules a lesson for one class on one date
+//      and carries what is specific to that delivery: notes for this group and
+//      the post-lesson reflection.
+//  Edit a lesson once and every delivery gets it. Materials attach to the LESSON
+//  through resource links (context_type 'lesson'), so reusing a lesson brings
+//  its worksheets with it. Deliveries join classes by id, never by group label.
+//
+//  LESSON_PLAN_SEED below is the authored content: each entry becomes one lesson
+//  plus its first delivery; EXTRA_DELIVERIES reuse lessons on other classes/dates.
 // ══════════════════════════════════════════════════════════════
-
-window.__lessonPlans = window.__lessonPlans || {};
 
 const LESSON_PLAN_SEED = [
   {
-    group: 'Year 10 – Group A', date: '2026-04-25', savedAt: '24 Apr, 17:42',
+    lessonId: 'les_simul', classId: 'c1', group: 'Year 10 – Group A', date: '2026-04-24', savedAt: '24 Apr, 17:42',
     plan: {
       title: 'Simultaneous Equations — Elimination',
       topic: 'Algebra · Simultaneous equations',
@@ -41,7 +46,7 @@ const LESSON_PLAN_SEED = [
     },
   },
   {
-    group: 'Year 11 – Group B', date: '2026-04-25', savedAt: '23 Apr, 20:15',
+    lessonId: 'les_trig', classId: 'c2', group: 'Year 11 – Group B', date: '2026-04-24', savedAt: '23 Apr, 20:15',
     plan: {
       title: 'Sine & Cosine Rules',
       topic: 'Trigonometry · Non-right-angled triangles',
@@ -67,7 +72,7 @@ const LESSON_PLAN_SEED = [
     },
   },
   {
-    group: 'Year 12 – Group A', date: '2026-04-25', savedAt: '22 Apr, 19:03',
+    lessonId: 'les_diff', classId: 'c3', group: 'Year 12 – Group A', date: '2026-04-24', savedAt: '22 Apr, 19:03',
     plan: {
       title: 'Differentiation from First Principles',
       topic: 'Calculus · Differentiation',
@@ -93,7 +98,7 @@ const LESSON_PLAN_SEED = [
     },
   },
   {
-    group: 'Year 9 – Group C', date: '2026-04-25', savedAt: '24 Apr, 08:30',
+    lessonId: 'les_surds', classId: 'c4', group: 'Year 9 – Group C', date: '2026-04-24', savedAt: '24 Apr, 08:30',
     plan: {
       title: 'Surds & Indices',
       topic: 'Number · Surds and indices',
@@ -118,7 +123,7 @@ const LESSON_PLAN_SEED = [
     },
   },
   {
-    group: 'Year 13 – Group A', date: '2026-04-24', savedAt: '23 Apr, 21:48',
+    lessonId: 'les_de', classId: 'c35', group: 'Year 13 – Group A', date: '2026-04-22', savedAt: '23 Apr, 21:48',
     plan: {
       title: 'Differential Equations — Modelling',
       topic: 'Calculus · First-order differential equations',
@@ -145,7 +150,7 @@ const LESSON_PLAN_SEED = [
   },
   // Earlier in the week — gives the browser more than one date per term
   {
-    group: 'Year 10 – Group A', date: '2026-04-18', savedAt: '17 Apr, 18:20',
+    lessonId: 'les_prob', classId: 'c1', group: 'Year 10 – Group A', date: '2026-04-17', savedAt: '17 Apr, 18:20',
     plan: {
       title: 'Probability Trees',
       topic: 'Statistics · Probability',
@@ -169,7 +174,7 @@ const LESSON_PLAN_SEED = [
     },
   },
   {
-    group: 'Year 12 – Group A', date: '2026-04-18', savedAt: '16 Apr, 22:10',
+    lessonId: 'les_integ', classId: 'c3', group: 'Year 12 – Group A', date: '2026-04-17', savedAt: '16 Apr, 22:10',
     plan: {
       title: 'Integration as Reverse Differentiation',
       topic: 'Calculus · Integration',
@@ -194,7 +199,7 @@ const LESSON_PLAN_SEED = [
   //    rendered read-only. Groups sit outside the principal's teacherClasses so
   //    they read clearly as another teacher's lesson.
   {
-    group: 'Year 10 – Group B', date: '2026-04-25', savedAt: '24 Apr, 09:12', owner: 'David Park', ownerId: 't_david',
+    lessonId: 'les_forces', classId: 'c20', group: 'Year 12 – Group A', date: '2026-04-21', savedAt: '20 Apr, 09:12', owner: 'David Park', ownerId: 't3',
     plan: {
       title: 'Forces & Motion — Newton\'s Laws',
       topic: 'Physics · Forces',
@@ -214,7 +219,7 @@ const LESSON_PLAN_SEED = [
     },
   },
   {
-    group: 'Year 11 – Group A', date: '2026-04-24', savedAt: '23 Apr, 16:40', owner: 'Priya Nair', ownerId: 't_priya',
+    lessonId: 'les_titr', classId: 'c6', group: 'Year 11 – Group A', date: '2026-04-22', savedAt: '21 Apr, 16:40', owner: 'Priya Nair', ownerId: 't2',
     plan: {
       title: 'Titration Calculations',
       topic: 'Chemistry · Quantitative chemistry',
@@ -234,54 +239,45 @@ const LESSON_PLAN_SEED = [
   },
 ];
 
-LESSON_PLAN_SEED.forEach((entry) => {
-  const key = `${entry.group}__${entry.date}`;
-  if (!window.__lessonPlans[key]) {
-    // Carry owner/ownerId (present on other-teachers' seeds) so the planner can
-    // resolve "mine vs read-only". Absent owner ⇒ the principal's own plan.
-    window.__lessonPlans[key] = { plan: entry.plan, savedAt: entry.savedAt, group: entry.group, date: entry.date, owner: entry.owner || null, ownerId: entry.ownerId || null };
-  }
-});
 
-// ─── Persistence ────────────────────────────────────────────────────────────
-// Lesson plans previously lived only in the in-memory `window.__lessonPlans`
-// global and were lost on reload. They now persist to localStorage so a teacher's
-// saved plans survive a refresh (matching every other store in the app).
-//
-// Uploaded resources carry a base64 `dataUrl` that can be megabytes each — writing
-// those into the ~5MB localStorage quota would throw and wipe out ALL persistence.
-// We strip `dataUrl` on write (keeping name/size/type so the attachment chip still
-// renders) so the text of the plan is never lost to a quota error.
-const LESSON_PLANS_KEY = 'klasio.lessonPlans.v1';
 
-const stripHeavy = (store) => {
-  const out = {};
-  for (const k of Object.keys(store || {})) {
-    const v = store[k] || {};
-    // Copy only the lightweight metadata — explicitly, NOT via `{ dataUrl, ...rest }`
-    // rest-destructuring (Babel-standalone mis-compiles object rest patterns here).
-    const resources = ((v.plan && v.plan.resources) || []).map(r => ({
-      id: r.id, name: r.name, size: r.size, type: r.type,
-    }));
-    out[k] = { ...v, plan: { ...(v.plan || {}), resources } };
-  }
-  return out;
-};
+// Reuse — the same lesson delivered to more than one group (the case the old
+// deep-copying "Duplicate to another class" handled badly), plus this week's plans
+// around the prototype clock (Fri 10 Jul 2026) so the dashboard's live class opens
+// a real lesson. Past deliveries carry a reflection.
+const EXTRA_DELIVERIES = [
+  { lessonId: 'les_simul', classId: 'c34', date: '2026-04-27', notes: 'Group C is a set below A — start from the laminated worked examples.',
+    reflection: 'Part 2 (scaling before eliminating) was hard for this group; half needed the worked example twice. Slow that section down next time.' },
+  { lessonId: 'les_simul', classId: 'c1',  date: '2026-07-10', notes: 'Recap lesson before the end-of-term paper — quadratic/linear pairs as the stretch.', reflection: '' },
+  { lessonId: 'les_trig',  classId: 'c36', date: '2026-04-28', notes: 'Three pupils missed the SOHCAHTOA recap — pair them up.',
+    reflection: 'Cosine rule stuck better than last time; the ‘label the triangle first’ routine worked.' },
+  { lessonId: 'les_diff',  classId: 'c3',  date: '2026-07-10', notes: 'Revisit first principles before the calculus mock — 20 minutes max.', reflection: '' },
+  // shareWithClass (decision #60): this one delivery shows its title, topic and
+  // objectives to the class's pupils in their session view. Default is off.
+  { lessonId: 'les_diff',  classId: 'c37', date: '2026-07-09', notes: 'Further Maths group — push to the general proof for xⁿ.', reflection: '', shareWithClass: true },
+];
 
-window.__saveLessonPlans = () => {
-  try { localStorage.setItem(LESSON_PLANS_KEY, JSON.stringify(stripHeavy(window.__lessonPlans))); }
-  catch (e) { /* quota or serialisation issue — keep the in-memory copy for the session */ }
-};
-
-// Hydrate persisted plans over the seed. Stored plans win (a teacher may have
-// overwritten a seeded plan), but seeded-only keys remain so the demo always has
-// content on a fresh browser.
-(() => {
-  try {
-    const raw = localStorage.getItem(LESSON_PLANS_KEY);
-    if (raw) {
-      const stored = JSON.parse(raw);
-      Object.keys(stored || {}).forEach(k => { window.__lessonPlans[k] = stored[k]; });
+const LESSON_SEED = (() => {
+  const lessons = {}, deliveries = {};
+  LESSON_PLAN_SEED.forEach(e => {
+    const p = e.plan || {};
+    if (!lessons[e.lessonId]) {
+      lessons[e.lessonId] = {
+        id: e.lessonId, ownerId: e.ownerId || 't1', owner: e.owner || null,
+        title: p.title || '', topic: p.topic || '', duration: p.duration || '60',
+        objectives: p.objectives || '', agenda: p.agenda || '', homework: p.homework || '',
+        createdAt: '2026-04-01T09:00:00.000Z', updatedAt: '2026-04-2' + (e.date.slice(-1) || '0') + 'T18:00:00.000Z',
+      };
     }
-  } catch (e) { /* ignore malformed store */ }
+    const id = e.classId + '__' + e.date;
+    deliveries[id] = { id, lessonId: e.lessonId, classId: e.classId, date: e.date, notes: p.notes || '', reflection: '', createdBy: e.ownerId || 't1', updatedAt: e.date + 'T18:00:00.000Z' };
+  });
+  EXTRA_DELIVERIES.forEach(d => {
+    const id = d.classId + '__' + d.date;
+    const owner = (lessons[d.lessonId] || {}).ownerId || 't1';
+    deliveries[id] = { id, lessonId: d.lessonId, classId: d.classId, date: d.date, notes: d.notes || '', reflection: d.reflection || '', shareWithClass: !!d.shareWithClass, createdBy: owner, updatedAt: d.date + 'T18:00:00.000Z' };
+  });
+  return { lessons, deliveries };
 })();
+
+Object.assign(window, { LESSON_SEED });

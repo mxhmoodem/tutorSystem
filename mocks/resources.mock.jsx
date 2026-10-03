@@ -21,7 +21,7 @@
 //    resource_shares[]  { resource_id, staff_id, granted_by, granted_at }
 //    resource_access_requests[] { id, resource_id, requested_by, note, status,
 //                         decided_by, decided_at }
-//    resource_links[]   { id, resource_id, context_type('lesson_plan'|'homework'),
+//    resource_links[]   { id, resource_id, context_type('lesson'|'homework'),
 //                         context_id, student_visible, visible_from, attached_by, attached_at }
 //    usage_events[]     { id, resource_id, user, centre, context_type, context_id,
 //                         topic, at }   ← append-only attach history (survives detach)
@@ -104,6 +104,13 @@ const KB = 1024, MB = 1024 * 1024;
 // `url` is only set on `link` files — the one type whose contents ARE a URL. Every
 // other row is a reference to a file the prototype never stores bytes for.
 const RES_RESOURCES_SEED = [
+  // ══ Centre documents (owner_kind 'centre') ══════════════════════════════════
+  // Published by the centre, not a person: always centre-wide, managed by any
+  // admin, untouched by any staff member leaving. created_by = who uploaded it.
+  { id: 'r_centre_safeguarding', title: 'Safeguarding & Child Protection Policy 2026/27', description: 'Who the DSLs are, how to raise a concern, and what happens next. Every member of staff reads this at induction.', type: 'other', subject: '', year_group: '', level: '', exam_board: 'None', created_by: 'admin', owner_kind: 'centre', visibility: 'centre', size: 412 * KB, created_at: '2026-06-30', updated_at: '2026-06-30' },
+  { id: 'r_centre_handbook',     title: 'Staff Handbook 2026/27',                         description: 'Timings, registers, cover, homework expectations and how the centre runs day to day.',                         type: 'other', subject: '', year_group: '', level: '', exam_board: 'None', created_by: 'admin', owner_kind: 'centre', visibility: 'centre', size: 1.1 * MB, created_at: '2026-07-01', updated_at: '2026-07-01' },
+  { id: 'r_centre_online',       title: 'Online Safety & Messaging Policy',               description: 'What staff may and may not do when messaging pupils, and why monitored threads exist.',                           type: 'other', subject: '', year_group: '', level: '', exam_board: 'None', created_by: 'admin', owner_kind: 'centre', visibility: 'centre', size: 236 * KB, created_at: '2026-05-18', updated_at: '2026-06-02' },
+
   // ══ Heebz A (t1 / principal) — Mathematics ═════════════════════════════════
   { id: 'r_quad_ws',      title: 'Quadratic Equations — Worksheet',            description: 'Factorising, the quadratic formula and completing the square, with an extension set.',        type: 'worksheet',   subject: 'Mathematics', year_group: 'Year 10', exam_board: 'AQA',     created_by: 't1', visibility: 'centre',     size: 184 * KB, created_at: '2026-03-02', updated_at: '2026-04-18' },
   { id: 'r_quad_ms',      title: 'Quadratic Equations — Mark Scheme',          description: 'Full worked solutions and mark allocation for the quadratics worksheet.',                     type: 'mark_scheme', subject: 'Mathematics', year_group: 'Year 10', exam_board: 'AQA',     created_by: 't1', visibility: 'centre',     size: 96 * KB,  created_at: '2026-03-02', updated_at: '2026-03-02' },
@@ -329,7 +336,9 @@ const RES_REQUESTS_SEED = [
 // ── Attachment rows (pointers — never copies) ───────────────────────────────────
 // Two context types, both pointing at things that already exist elsewhere in the
 // app, so "Used in N places" and the where-used drawer resolve to real names:
-//   • lesson_plan — the planner's `${group}__${date}` keys (mocks/lessonPlanner.mock)
+//   • lesson — a reusable lesson id (mocks/lessonPlanner.mock, decision #47): materials
+//     attach to the LESSON, so every class it is planned for gets them. Older usage
+//     events below keep the retired 'lesson_plan' group__date context — history.
 //   • homework    — assignment ids from the homework store (Homework.jsx seeds)
 //
 // Per-attachment student visibility (D9) lives on the LINK, not the file:
@@ -343,54 +352,54 @@ const RES_REQUESTS_SEED = [
 // nowhere at all, which is also true of a real library.
 const RES_LINKS_SEED = [
   // ── Lesson plan: Year 10 – Group A, 25 Apr — Simultaneous Equations ──
-  { id: 'lnk1',  resource_id: 'r_quad_ws',       context_type: 'lesson_plan', context_id: 'Year 10 – Group A__2026-04-25', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-24' },
-  { id: 'lnk2',  resource_id: 'r_quad_ms',       context_type: 'lesson_plan', context_id: 'Year 10 – Group A__2026-04-25', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-24' },
-  { id: 'lnk3',  resource_id: 'r_simul_slides',  context_type: 'lesson_plan', context_id: 'Year 10 – Group A__2026-04-25', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-24' },
-  { id: 'lnk4',  resource_id: 'r_simul_ws',      context_type: 'lesson_plan', context_id: 'Year 10 – Group A__2026-04-25', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-24' },
-  { id: 'lnk5',  resource_id: 'r_simul_ms',      context_type: 'lesson_plan', context_id: 'Year 10 – Group A__2026-04-25', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-24' },
-  { id: 'lnk6',  resource_id: 'r_maths_starters', context_type: 'lesson_plan', context_id: 'Year 10 – Group A__2026-04-25', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-24' },
+  { id: 'lnk1',  resource_id: 'r_quad_ws',       context_type: 'lesson', context_id: 'les_simul', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-24' },
+  { id: 'lnk2',  resource_id: 'r_quad_ms',       context_type: 'lesson', context_id: 'les_simul', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-24' },
+  { id: 'lnk3',  resource_id: 'r_simul_slides',  context_type: 'lesson', context_id: 'les_simul', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-24' },
+  { id: 'lnk4',  resource_id: 'r_simul_ws',      context_type: 'lesson', context_id: 'les_simul', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-24' },
+  { id: 'lnk5',  resource_id: 'r_simul_ms',      context_type: 'lesson', context_id: 'les_simul', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-24' },
+  { id: 'lnk6',  resource_id: 'r_maths_starters', context_type: 'lesson', context_id: 'les_simul', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-24' },
 
   // ── Lesson plan: Year 10 – Group A, 18 Apr — Probability Trees ──
-  { id: 'lnk7',  resource_id: 'r_prob_trees',    context_type: 'lesson_plan', context_id: 'Year 10 – Group A__2026-04-18', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-17' },
-  { id: 'lnk8',  resource_id: 'r_prob_slides',   context_type: 'lesson_plan', context_id: 'Year 10 – Group A__2026-04-18', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-17' },
-  { id: 'lnk9',  resource_id: 'r_quad_ws',       context_type: 'lesson_plan', context_id: 'Year 10 – Group A__2026-04-18', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-17' },
+  { id: 'lnk7',  resource_id: 'r_prob_trees',    context_type: 'lesson', context_id: 'les_prob', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-17' },
+  { id: 'lnk8',  resource_id: 'r_prob_slides',   context_type: 'lesson', context_id: 'les_prob', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-17' },
+  { id: 'lnk9',  resource_id: 'r_quad_ws',       context_type: 'lesson', context_id: 'les_prob', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-17' },
 
   // ── Lesson plan: Year 11 – Group B, 25 Apr — Sine & Cosine Rules ──
-  { id: 'lnk10', resource_id: 'r_trig_ws',       context_type: 'lesson_plan', context_id: 'Year 11 – Group B__2026-04-25', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-23' },
-  { id: 'lnk11', resource_id: 'r_trig_ms',       context_type: 'lesson_plan', context_id: 'Year 11 – Group B__2026-04-25', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-23' },
-  { id: 'lnk12', resource_id: 'r_trig_slides',   context_type: 'lesson_plan', context_id: 'Year 11 – Group B__2026-04-25', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-23' },
-  { id: 'lnk13', resource_id: 'r_formula_sheet', context_type: 'lesson_plan', context_id: 'Year 11 – Group B__2026-04-25', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-23' },
+  { id: 'lnk10', resource_id: 'r_trig_ws',       context_type: 'lesson', context_id: 'les_trig', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-23' },
+  { id: 'lnk11', resource_id: 'r_trig_ms',       context_type: 'lesson', context_id: 'les_trig', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-23' },
+  { id: 'lnk12', resource_id: 'r_trig_slides',   context_type: 'lesson', context_id: 'les_trig', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-23' },
+  { id: 'lnk13', resource_id: 'r_formula_sheet', context_type: 'lesson', context_id: 'les_trig', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-23' },
 
   // ── Lesson plan: Year 12 – Group A, 25 Apr — Differentiation from First Principles ──
-  { id: 'lnk14', resource_id: 'r_calc_notes',    context_type: 'lesson_plan', context_id: 'Year 12 – Group A__2026-04-25', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-22' },
-  { id: 'lnk15', resource_id: 'r_calc_slides',   context_type: 'lesson_plan', context_id: 'Year 12 – Group A__2026-04-25', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-22' },
-  { id: 'lnk16', resource_id: 'r_calc_ws',       context_type: 'lesson_plan', context_id: 'Year 12 – Group A__2026-04-25', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-22' },
-  { id: 'lnk17', resource_id: 'r_desmos_link',   context_type: 'lesson_plan', context_id: 'Year 12 – Group A__2026-04-25', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-22' },
+  { id: 'lnk14', resource_id: 'r_calc_notes',    context_type: 'lesson', context_id: 'les_diff', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-22' },
+  { id: 'lnk15', resource_id: 'r_calc_slides',   context_type: 'lesson', context_id: 'les_diff', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-22' },
+  { id: 'lnk16', resource_id: 'r_calc_ws',       context_type: 'lesson', context_id: 'les_diff', student_visible: true,  visible_from: '2026-04-22', attached_by: 't1', attached_at: '2026-04-22' },
+  { id: 'lnk17', resource_id: 'r_desmos_link',   context_type: 'lesson', context_id: 'les_diff', student_visible: true,  visible_from: '2026-04-22', attached_by: 't1', attached_at: '2026-04-22' },
 
   // ── Lesson plan: Year 12 – Group A, 18 Apr — Integration ──
-  { id: 'lnk18', resource_id: 'r_integ_notes',   context_type: 'lesson_plan', context_id: 'Year 12 – Group A__2026-04-18', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-16' },
-  { id: 'lnk19', resource_id: 'r_integ_ws',      context_type: 'lesson_plan', context_id: 'Year 12 – Group A__2026-04-18', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-16' },
+  { id: 'lnk18', resource_id: 'r_integ_notes',   context_type: 'lesson', context_id: 'les_integ', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-16' },
+  { id: 'lnk19', resource_id: 'r_integ_ws',      context_type: 'lesson', context_id: 'les_integ', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-16' },
 
   // ── Lesson plan: Year 9 – Group C, 25 Apr — Surds & Indices ──
-  { id: 'lnk20', resource_id: 'r_surds_ws',      context_type: 'lesson_plan', context_id: 'Year 9 – Group C__2026-04-25', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-24' },
-  { id: 'lnk21', resource_id: 'r_surds_scaf',    context_type: 'lesson_plan', context_id: 'Year 9 – Group C__2026-04-25', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-24' },
-  { id: 'lnk22', resource_id: 'r_surds_ms',      context_type: 'lesson_plan', context_id: 'Year 9 – Group C__2026-04-25', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-24' },
-  { id: 'lnk23', resource_id: 'r_indices_quiz',  context_type: 'lesson_plan', context_id: 'Year 9 – Group C__2026-04-25', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-24' },
+  { id: 'lnk20', resource_id: 'r_surds_ws',      context_type: 'lesson', context_id: 'les_surds', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-24' },
+  { id: 'lnk21', resource_id: 'r_surds_scaf',    context_type: 'lesson', context_id: 'les_surds', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-24' },
+  { id: 'lnk22', resource_id: 'r_surds_ms',      context_type: 'lesson', context_id: 'les_surds', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-24' },
+  { id: 'lnk23', resource_id: 'r_indices_quiz',  context_type: 'lesson', context_id: 'les_surds', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-24' },
 
   // ── Lesson plan: Year 13 – Group A, 24 Apr — Differential Equations ──
-  { id: 'lnk24', resource_id: 'r_de_notes',      context_type: 'lesson_plan', context_id: 'Year 13 – Group A__2026-04-24', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-23' },
-  { id: 'lnk25', resource_id: 'r_de_pp',         context_type: 'lesson_plan', context_id: 'Year 13 – Group A__2026-04-24', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-23' },
+  { id: 'lnk24', resource_id: 'r_de_notes',      context_type: 'lesson', context_id: 'les_de', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-23' },
+  { id: 'lnk25', resource_id: 'r_de_pp',         context_type: 'lesson', context_id: 'les_de', student_visible: false, visible_from: null, attached_by: 't1', attached_at: '2026-04-23' },
 
   // ── Lesson plan: Year 10 – Group B, 25 Apr — Forces (David Park) ──
-  { id: 'lnk26', resource_id: 'r_forces_ws',     context_type: 'lesson_plan', context_id: 'Year 10 – Group B__2026-04-25', student_visible: false, visible_from: null, attached_by: 't_david', attached_at: '2026-04-24' },
-  { id: 'lnk27', resource_id: 'r_forces_slides', context_type: 'lesson_plan', context_id: 'Year 10 – Group B__2026-04-25', student_visible: false, visible_from: null, attached_by: 't_david', attached_at: '2026-04-24' },
-  { id: 'lnk28', resource_id: 'r_forces_ms',     context_type: 'lesson_plan', context_id: 'Year 10 – Group B__2026-04-25', student_visible: false, visible_from: null, attached_by: 't_david', attached_at: '2026-04-24' },
+  { id: 'lnk26', resource_id: 'r_forces_ws',     context_type: 'lesson', context_id: 'les_forces', student_visible: false, visible_from: null, attached_by: 't_david', attached_at: '2026-04-24' },
+  { id: 'lnk27', resource_id: 'r_forces_slides', context_type: 'lesson', context_id: 'les_forces', student_visible: false, visible_from: null, attached_by: 't_david', attached_at: '2026-04-24' },
+  { id: 'lnk28', resource_id: 'r_forces_ms',     context_type: 'lesson', context_id: 'les_forces', student_visible: false, visible_from: null, attached_by: 't_david', attached_at: '2026-04-24' },
 
   // ── Lesson plan: Year 11 – Group A, 24 Apr — Titration (Priya Nair) ──
-  { id: 'lnk29', resource_id: 'r_titration_ws',  context_type: 'lesson_plan', context_id: 'Year 11 – Group A__2026-04-24', student_visible: false, visible_from: null, attached_by: 't_priya', attached_at: '2026-04-23' },
-  { id: 'lnk30', resource_id: 'r_titration_ms',  context_type: 'lesson_plan', context_id: 'Year 11 – Group A__2026-04-24', student_visible: false, visible_from: null, attached_by: 't_priya', attached_at: '2026-04-23' },
-  { id: 'lnk31', resource_id: 'r_titr_video',    context_type: 'lesson_plan', context_id: 'Year 11 – Group A__2026-04-24', student_visible: false, visible_from: null, attached_by: 't_priya', attached_at: '2026-04-23' },
-  { id: 'lnk32', resource_id: 'r_chem_data',     context_type: 'lesson_plan', context_id: 'Year 11 – Group A__2026-04-24', student_visible: false, visible_from: null, attached_by: 't_priya', attached_at: '2026-04-23' },
+  { id: 'lnk29', resource_id: 'r_titration_ws',  context_type: 'lesson', context_id: 'les_titr', student_visible: false, visible_from: null, attached_by: 't_priya', attached_at: '2026-04-23' },
+  { id: 'lnk30', resource_id: 'r_titration_ms',  context_type: 'lesson', context_id: 'les_titr', student_visible: false, visible_from: null, attached_by: 't_priya', attached_at: '2026-04-23' },
+  { id: 'lnk31', resource_id: 'r_titr_video',    context_type: 'lesson', context_id: 'les_titr', student_visible: false, visible_from: null, attached_by: 't_priya', attached_at: '2026-04-23' },
+  { id: 'lnk32', resource_id: 'r_chem_data',     context_type: 'lesson', context_id: 'les_titr', student_visible: false, visible_from: null, attached_by: 't_priya', attached_at: '2026-04-23' },
 
   // ── Homework: Simultaneous Equations (Year 10 – Group A) ──
   { id: 'lnk33', resource_id: 'r_simul_ws',      context_type: 'homework', context_id: 'hw_simul',     student_visible: true,  visible_from: '2026-04-25', attached_by: 't1', attached_at: '2026-04-25' },
@@ -466,23 +475,23 @@ const resUse = (n, resource_id, user, context_type, context_id, topic, at) =>
 
 const RES_USAGE_SEED = [
   // Mirrors of the live links above — the attaches that produced them
-  resUse(1,  'r_simul_ws',      't1',       'lesson_plan', 'Year 10 – Group A__2026-04-25', 'Algebra · Simultaneous equations',        '2026-04-24T17:42:00.000Z'),
-  resUse(2,  'r_simul_slides',  't1',       'lesson_plan', 'Year 10 – Group A__2026-04-25', 'Algebra · Simultaneous equations',        '2026-04-24T17:41:00.000Z'),
-  resUse(3,  'r_quad_ws',       't1',       'lesson_plan', 'Year 10 – Group A__2026-04-25', 'Algebra · Simultaneous equations',        '2026-04-24T17:40:00.000Z'),
-  resUse(4,  'r_surds_ws',      't1',       'lesson_plan', 'Year 9 – Group C__2026-04-25',  'Number · Surds and indices',              '2026-04-24T08:30:00.000Z'),
-  resUse(5,  'r_surds_scaf',    't1',       'lesson_plan', 'Year 9 – Group C__2026-04-25',  'Number · Surds and indices',              '2026-04-24T08:29:00.000Z'),
-  resUse(6,  'r_forces_ws',     't_david',  'lesson_plan', 'Year 10 – Group B__2026-04-25', 'Physics · Forces',                        '2026-04-24T09:12:00.000Z'),
-  resUse(7,  'r_forces_slides', 't_david',  'lesson_plan', 'Year 10 – Group B__2026-04-25', 'Physics · Forces',                        '2026-04-24T09:11:00.000Z'),
-  resUse(8,  'r_trig_ws',       't1',       'lesson_plan', 'Year 11 – Group B__2026-04-25', 'Trigonometry · Non-right-angled triangles', '2026-04-23T20:15:00.000Z'),
-  resUse(9,  'r_trig_slides',   't1',       'lesson_plan', 'Year 11 – Group B__2026-04-25', 'Trigonometry · Non-right-angled triangles', '2026-04-23T20:14:00.000Z'),
-  resUse(10, 'r_de_notes',      't1',       'lesson_plan', 'Year 13 – Group A__2026-04-24', 'Calculus · First-order differential equations', '2026-04-23T21:48:00.000Z'),
-  resUse(11, 'r_titration_ws',  't_priya',  'lesson_plan', 'Year 11 – Group A__2026-04-24', 'Chemistry · Quantitative chemistry',      '2026-04-23T16:40:00.000Z'),
-  resUse(12, 'r_titr_video',    't_priya',  'lesson_plan', 'Year 11 – Group A__2026-04-24', 'Chemistry · Quantitative chemistry',      '2026-04-23T16:39:00.000Z'),
-  resUse(13, 'r_calc_notes',    't1',       'lesson_plan', 'Year 12 – Group A__2026-04-25', 'Calculus · Differentiation',              '2026-04-22T19:03:00.000Z'),
-  resUse(14, 'r_calc_slides',   't1',       'lesson_plan', 'Year 12 – Group A__2026-04-25', 'Calculus · Differentiation',              '2026-04-22T19:02:00.000Z'),
-  resUse(15, 'r_desmos_link',   't1',       'lesson_plan', 'Year 12 – Group A__2026-04-25', 'Calculus · Differentiation',              '2026-04-22T19:01:00.000Z'),
-  resUse(16, 'r_prob_trees',    't1',       'lesson_plan', 'Year 10 – Group A__2026-04-18', 'Statistics · Probability',                '2026-04-17T18:20:00.000Z'),
-  resUse(17, 'r_integ_ws',      't1',       'lesson_plan', 'Year 12 – Group A__2026-04-18', 'Calculus · Integration',                  '2026-04-16T22:10:00.000Z'),
+  resUse(1,  'r_simul_ws',      't1',       'lesson', 'les_simul', 'Algebra · Simultaneous equations',        '2026-04-24T17:42:00.000Z'),
+  resUse(2,  'r_simul_slides',  't1',       'lesson', 'les_simul', 'Algebra · Simultaneous equations',        '2026-04-24T17:41:00.000Z'),
+  resUse(3,  'r_quad_ws',       't1',       'lesson', 'les_simul', 'Algebra · Simultaneous equations',        '2026-04-24T17:40:00.000Z'),
+  resUse(4,  'r_surds_ws',      't1',       'lesson', 'les_surds',  'Number · Surds and indices',              '2026-04-24T08:30:00.000Z'),
+  resUse(5,  'r_surds_scaf',    't1',       'lesson', 'les_surds',  'Number · Surds and indices',              '2026-04-24T08:29:00.000Z'),
+  resUse(6,  'r_forces_ws',     't_david',  'lesson', 'les_forces', 'Physics · Forces',                        '2026-04-24T09:12:00.000Z'),
+  resUse(7,  'r_forces_slides', 't_david',  'lesson', 'les_forces', 'Physics · Forces',                        '2026-04-24T09:11:00.000Z'),
+  resUse(8,  'r_trig_ws',       't1',       'lesson', 'les_trig', 'Trigonometry · Non-right-angled triangles', '2026-04-23T20:15:00.000Z'),
+  resUse(9,  'r_trig_slides',   't1',       'lesson', 'les_trig', 'Trigonometry · Non-right-angled triangles', '2026-04-23T20:14:00.000Z'),
+  resUse(10, 'r_de_notes',      't1',       'lesson', 'les_de', 'Calculus · First-order differential equations', '2026-04-23T21:48:00.000Z'),
+  resUse(11, 'r_titration_ws',  't_priya',  'lesson', 'les_titr', 'Chemistry · Quantitative chemistry',      '2026-04-23T16:40:00.000Z'),
+  resUse(12, 'r_titr_video',    't_priya',  'lesson', 'les_titr', 'Chemistry · Quantitative chemistry',      '2026-04-23T16:39:00.000Z'),
+  resUse(13, 'r_calc_notes',    't1',       'lesson', 'les_diff', 'Calculus · Differentiation',              '2026-04-22T19:03:00.000Z'),
+  resUse(14, 'r_calc_slides',   't1',       'lesson', 'les_diff', 'Calculus · Differentiation',              '2026-04-22T19:02:00.000Z'),
+  resUse(15, 'r_desmos_link',   't1',       'lesson', 'les_diff', 'Calculus · Differentiation',              '2026-04-22T19:01:00.000Z'),
+  resUse(16, 'r_prob_trees',    't1',       'lesson', 'les_prob', 'Statistics · Probability',                '2026-04-17T18:20:00.000Z'),
+  resUse(17, 'r_integ_ws',      't1',       'lesson', 'les_integ', 'Calculus · Integration',                  '2026-04-16T22:10:00.000Z'),
   resUse(18, 'r_organic_ws',    't_priya',  'homework',    'hw_chem_fg',                    'Organic chemistry · Functional groups',   '2026-04-14T11:05:00.000Z'),
   resUse(19, 'r_mitosis_ws',    't_james',  'homework',    'hw_mitosis',                    'Cells · Mitosis',                         '2026-04-13T15:22:00.000Z'),
   resUse(20, 'r_macbeth_slides', 't_grace', 'homework',    'hw_macbeth3',                   'Macbeth · Act 3',                         '2026-04-11T09:48:00.000Z'),
@@ -511,7 +520,39 @@ const RES_USAGE_SEED = [
   resUse(40, 'r_psych_memory',  't_omar',   'lesson_plan', 'Year 12 – Group P__2025-12-11', 'Memory · Models',                         '2025-12-10T17:04:00.000Z'),
 ];
 
+// ── Versions (decision #48) ──────────────────────────────────────────────────────
+// Replacing a file keeps its history. Because attachments are pointers, every
+// lesson and homework that uses the file sees the new version at once — and shows
+// "updated since attached". Only files that have actually been replaced carry
+// rows; any other file is implicitly version 1. The last row per file is current.
+const RES_VERSIONS_SEED = [
+  { id: 'ver1', resource_id: 'r_quad_ws', version: 1, file_name: 'Quadratic-Equations-Worksheet.pdf', size: 176 * 1024, note: 'First upload', created_by: 't1', created_at: '2026-03-02' },
+  { id: 'ver2', resource_id: 'r_quad_ws', version: 2, file_name: 'Quadratic-Equations-Worksheet.pdf', size: 181 * 1024, note: 'Fixed the answer to Q7 (sign error in the discriminant)', created_by: 't1', created_at: '2026-03-20' },
+  { id: 'ver3', resource_id: 'r_quad_ws', version: 3, file_name: 'Quadratic-Equations-Worksheet.pdf', size: 184 * 1024, note: 'Added a completing-the-square extension set', created_by: 't1', created_at: '2026-04-18' },
+  { id: 'ver4', resource_id: 'r_simul_ws', version: 1, file_name: 'Simultaneous-Equations-Practice.pdf', size: 160 * 1024, note: 'First upload', created_by: 't1', created_at: '2026-04-10' },
+  { id: 'ver5', resource_id: 'r_simul_ws', version: 2, file_name: 'Simultaneous-Equations-Practice.pdf', size: 172 * 1024, note: 'Reordered: elimination before scaling', created_by: 't1', created_at: '2026-04-24' },
+  { id: 'ver6', resource_id: 'r_formula_sheet', version: 1, file_name: 'GCSE-Formula-Sheet.pdf', size: 80 * 1024, note: 'First upload', created_by: 't1', created_at: '2025-10-07' },
+  { id: 'ver7', resource_id: 'r_formula_sheet', version: 2, file_name: 'GCSE-Formula-Sheet-annotated.pdf', size: 88 * 1024, note: 'Annotated which topics each formula turns up in', created_by: 't1', created_at: '2026-02-14' },
+];
+
+// ── Personal folders (decision #48) ──────────────────────────────────────────────
+// Each teacher's own filing layer over the library — visible to them alone, and it
+// never changes a file's visibility. A folder can hold any file the owner can see,
+// including a colleague's centre-wide one.
+const RES_FOLDERS_SEED = [
+  { id: 'fld1', owner_id: 't1', name: 'Year 11 exam prep', created_at: '2026-03-01' },
+  { id: 'fld2', owner_id: 't1', name: 'Starters & plenaries', created_at: '2026-02-10' },
+];
+const RES_FOLDER_ITEMS_SEED = [
+  { folder_id: 'fld1', resource_id: 'r_formula_sheet' },
+  { folder_id: 'fld1', resource_id: 'r_trig_ws' },
+  { folder_id: 'fld1', resource_id: 'r_gcse_higher_rev' },
+  { folder_id: 'fld1', resource_id: 'r_nov_paper1' },
+  { folder_id: 'fld2', resource_id: 'r_maths_starters' },
+];
+
 Object.assign(window, {
   RES_STAFF, RES_VISIBILITY, RES_TYPES, RES_EXAM_BOARDS, RES_YEAR_GROUPS,
   RES_RESOURCES_SEED, RES_SHARES_SEED, RES_REQUESTS_SEED, RES_LINKS_SEED, RES_USAGE_SEED,
+  RES_VERSIONS_SEED, RES_FOLDERS_SEED, RES_FOLDER_ITEMS_SEED,
 });

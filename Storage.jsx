@@ -575,7 +575,24 @@ const StorageOwnerPanel = () => {
   let tableRows = rows.filter(r => acctFilter === 'all' || r.account.accountId === acctFilter);
   tableRows = tableRows.sort((a, b) => sortDesc ? b.used - a.used : a.used - b.used);
 
-  const plans = (window.getPlans && window.getPlans()) || [];
+  // Centre plans only: a solo account has one centre, so its storage is always pooled.
+  const plans = (window.getPlans && window.getPlans('centre')) || [];
+
+  // Economics per account: what its storage costs us against what it pays, and
+  // how much it added in the last 30 days — growth says more than absolute size.
+  // Both derived from file records like everything else here; nothing stored.
+  const refDay = new Date(window.STORAGE_REF_DATE || Date.now());
+  const since = new Date(refDay.getTime() - 30 * 86400000).toISOString().slice(0, 10);
+  const econ = accounts.map(a => {
+    const files = store.files.filter(f => f.accountId === a.accountId);
+    const used = stgSum(files);
+    const added = stgSum(files.filter(f => (f.createdAt || '') > since));
+    const cost = stgCostEstimate(used);
+    const plan = (window.getPlan && window.getPlan(a.planId)) || { name: a.planId, price: 0 };
+    const mrr = plan.price || 0;
+    return { a, plan, used, added, growthPct: used - added > 0 ? (added / (used - added)) * 100 : 0, cost, mrr, costPct: mrr ? (cost / mrr) * 100 : null };
+  }).sort((x, y) => (y.costPct || 0) - (x.costPct || 0));
+  const addedTotal = econ.reduce((n, e) => n + e.added, 0);
 
   return (
     <div>
@@ -583,9 +600,43 @@ const StorageOwnerPanel = () => {
       <StgSection title="Platform storage" subtitle="Derived live from all stored file records — no running total is kept" icon="chart">
         <div style={{ display: 'flex', gap: 30, flexWrap: 'wrap' }}>
           <StgStat label="Total stored" value={stgFmtBytes(total)} sub="across all accounts" />
+          <StgStat label="Added (30 days)" value={stgFmtBytes(addedTotal)} sub="new file records" />
           <StgStat label="Illustrative cost" value={stgFmtGbp(stgCostEstimate(total)) + '/mo'} sub={`@ £${STG_UNIT_COST}/GB · illustrative`} />
           <StgStat label="Accounts" value={accounts.length} sub="paying accounts" />
           <StgStat label="Centres" value={centreCount} sub="across all accounts" />
+        </div>
+      </StgSection>
+
+      {/* Cost against revenue — the account storing 400GB of video on £60/mo is
+          one we lose money on, and nothing else in the console would say so. */}
+      <StgSection title="Cost against revenue" icon="invoice"
+        subtitle="Per account: storage cost each month against what the account pays, and what it added in the last 30 days. Sorted by cost as a share of MRR.">
+        <Table
+          cols={['Account', 'Plan', 'Stored', 'Added (30d)', 'Storage cost / mo', 'MRR', 'Cost % of MRR']}
+          rows={econ.map(e => [
+            <span style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>{e.a.name}</span>,
+            <span style={{ fontSize: 12.5, color: DS.muted }}>{e.plan.name}</span>,
+            <span style={{ fontSize: 13, color: DS.sub }}>{stgFmtBytes(e.used)}</span>,
+            <span style={{ fontSize: 13, color: e.growthPct >= 20 ? DS.warning : DS.sub }}>+{stgFmtBytes(e.added)}{e.growthPct >= 1 ? ` (${Math.round(e.growthPct)}%)` : ''}</span>,
+            <span style={{ fontSize: 13, color: DS.sub }}>{stgFmtGbp(e.cost)}</span>,
+            <span style={{ fontSize: 13, color: DS.sub }}>£{e.mrr.toLocaleString()}</span>,
+            e.costPct == null ? <span style={{ color: DS.faint }}>—</span>
+              : <span style={{ fontSize: 13, fontWeight: 600, color: e.costPct >= 25 ? DS.danger : e.costPct >= 10 ? DS.warning : DS.success }}>{e.costPct < 0.1 ? '<0.1' : e.costPct.toFixed(1)}%</span>,
+          ])}
+        />
+      </StgSection>
+
+      {/* Reconciliation — the ledger above is our file records; we are billed on
+          what the bucket actually holds. A nightly job compares the two, and the
+          gap is orphaned objects (half-failed uploads, missed deletes) to sweep. */}
+      <StgSection title="Reconciliation with R2" icon="cloud"
+        subtitle="Nightly: our file records against what the bucket actually holds. We're billed on the bucket, so any gap is orphaned objects to sweep."
+        right={<Badge variant="warning"><Icon name="alert" size={11} /> Not connected (prototype)</Badge>}>
+        <div style={{ display: 'flex', gap: 30, flexWrap: 'wrap' }}>
+          <StgStat label="Ledger (file records)" value={stgFmtBytes(total)} sub="what the quotas are enforced on" />
+          <StgStat label="Bucket (R2)" value="—" sub="read nightly from R2" />
+          <StgStat label="Gap" value="—" sub="orphaned bytes · objects" />
+          <StgStat label="Last run" value="Never" sub="R2 isn't connected in the prototype" />
         </div>
       </StgSection>
 

@@ -145,8 +145,9 @@ function materialiseSessions(classes, settings, now, store, opts) {
   const to = attEndOfDay(now + fwdDays * 86400000);
   const out = [];
 
-  for (let t = from; t <= to; t += 86400000) {
-    const day = new Date(t);
+  // Step by calendar day, not by 24h, so a clock change can't repeat or skip a date.
+  for (const cursor = new Date(from); cursor.getTime() <= to; cursor.setDate(cursor.getDate() + 1)) {
+    const day = new Date(cursor);
     const dayName = ATT_DAYS[day.getDay()];
     const iso = attIso(day);
     classes.forEach(cls => {
@@ -174,6 +175,14 @@ function materialiseSessions(classes, settings, now, store, opts) {
     });
   }
   return out;
+}
+
+// The same sessions over a fixed calendar range (fromISO..toISO, inclusive) rather
+// than a window around `now` — a month on the Timetable, or a single date for one
+// session's drawer. States are still derived at `now`.
+function materialiseRange(classes, settings, now, store, fromISO, toISO) {
+  const offset = (iso) => Math.round((attStartOfDay(new Date(iso + 'T12:00:00').getTime()) - attStartOfDay(now)) / 86400000);
+  return materialiseSessions(classes, settings, now, store, { backDays: -offset(fromISO), fwdDays: offset(toISO) });
 }
 
 // Records (attendance_records) for a delivered session — stored marks if the teacher
@@ -358,8 +367,23 @@ const useAttendanceStore = () => {
 // "until 6pm" / "for 4h" style label for an unlock expiry
 const attFmtUntil = (expiresAt) => `until ${attFmtClock(expiresAt)}`;
 
+// Non-reactive read of the register store for READ-ONLY surfaces (the student's
+// sessions, marks and session drawer). Same shape the hook hands materialiseSessions
+// and attRecordsFor — submissions, unlocks, isCancelled — so a pupil's view derives
+// from exactly the registers their teacher submitted. Never writes.
+const attReadStore = () => {
+  let p = null;
+  try { const raw = localStorage.getItem(ATT_STORE_KEY); if (raw) p = JSON.parse(raw); } catch (e) { p = null; }
+  const base = p
+    ? { submissions: p.submissions || {}, seedCancelled: p.seedCancelled || (window.ATT_SEED_CANCELLED || []).slice(), unlocks: p.unlocks || {} }
+    : attSeedStore();
+  let tsCancelled = [];
+  try { const t = JSON.parse(localStorage.getItem('tutoros.timesheets.v3') || 'null'); tsCancelled = (t && t.cancelled) || []; } catch (e) {}
+  return { ...base, isCancelled: (id) => (base.seedCancelled || []).includes(id) || tsCancelled.includes(id) };
+};
+
 Object.assign(window, {
-  deriveSessionState, SESSION_STATE_META, materialiseSessions,
+  deriveSessionState, SESSION_STATE_META, materialiseSessions, materialiseRange,
   attRosterFor, attRecordsFor, attendanceRate, recentSessions,
-  useAttendanceStore, attFmtClock, attIso, attFmtUntil, attEndOfDay,
+  useAttendanceStore, attReadStore, attFmtClock, attIso, attFmtUntil, attEndOfDay,
 });

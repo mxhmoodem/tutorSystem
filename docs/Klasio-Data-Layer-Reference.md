@@ -10,6 +10,22 @@
 
 ---
 
+> **v5 · September 2026 class backgrounds** (plan decision #63). A class's background — behind its banner and its class cards — is two nullable columns on **`classes`**: `cover_preset_id` (one of 48 colour × pattern presets) and `cover_icon_id` (an icon id, or `'none'`). Only an explicit choice is stored; NULL derives the background from the subject at read time. The one write is **`PUT /v1/classes/:id/background`** (new), which validates against the shared registry: a centre admin may change any class in their centre, a teacher only their own classes, and those two columns are the only part of `classes` a teacher can write. Replaces `class_settings.banner_theme`.
+>
+> **v5 · September 2026 student-surface rulings** (plan decisions #56–#62). A pupil's comparison with classmates is now two typed flags: `centre_privacy_settings` gains **`show_class_average_to_students`** (default off), beside the existing rank flag. A planned lesson can be shared with its class (**`lesson_plans.share_with_class`**, default off), and pupils read their planned lessons through the new **`v_my_lesson_plans`**. It returns the lesson's title, topic and objectives only when shared, and never its notes or reflection. For a `lesson` context, a pupil enrolled in a class the lesson is planned for counts as a viewer of its student-visible `resource_links`. `user_preferences` loses the unbuilt accessibility and nudge columns (`text_size`, `high_contrast`, `dyslexia_font`, `streak_nudges`, `reminder_lead`) and `share_with_guardian`: the features are deferred with their design recorded, and guardian report sharing is centre policy. A pupil's `notification_prefs` are `in_app` only. Pupils aged 13+ file their own subject access request with the new RPC **`request_my_data`**, and change their own PIN or password through **`POST /v1/auth/student/credential`**.
+>
+> **v5 · September 2026 teacher-surface rulings** (plan decisions #45–#55). `class_change_requests` can now ask for a **new class** (`class_id` null, `kind = 'new_class'`) with structured `details`, and a decline must carry its reason; approving a new class prefills create-class rather than creating one. Lesson planning splits into **`lessons`** (new — reusable content a teacher owns, no class and no date) and **`lesson_plans`**, which becomes a delivery of a lesson to one class on one date (`lesson_id`, `notes`, `reflection`); materials attach to the lesson (`resource_links.context_type = 'lesson'`). Resources gain **`resource_versions`** (replacing a file keeps history) and personal **`resource_folders`** / **`resource_folder_items`**. A pupil's score is no longer anything stored: attainment comes from `results` and homework from marked submissions, kept as two series in the new **`v_student_scores`**; a tracker score column can count as an assessment (`tracker_columns.counts_as_assessment`, `assessments.tracker_column_id`). Timesheet periods are anchored (`centre_timesheet_policy.anchor_date`) with a deadline and a lock, surfaced by the new **`v_timesheet_periods`**. Teaching availability — **`staff_availability`** and **`staff_blackout_dates`** (new) — replaces `user_preferences.working_hours_*`, which is dropped. `centre_settings.grading_defaults` gains the pupil-facing grade display. New RPCs `fork_lesson`, `replace_resource_file`, `restore_resource_version`.
+>
+> **v5 · September 2026 admin-surface rulings** (plan decisions #38–#44). A centre code is a routing key, not a secret: it is unique across the platform, and changing it (`change_centre_code`) keeps the old one resolving for 30 days (`centres.previous_code` / `previous_code_until`). The setup checklist derives completion and stores only a per-centre dismissal. New `resources.owner_kind` (a document published by the centre, not a person). New `subscriptions.card_brand` / `card_last4` / `card_exp_month` / `card_exp_year` — a display-only mirror of the Stripe payment method; card details are never collected. New view `v_student_movement` (pupils joined and left per month) and a ledger-freshness column on `v_outstanding_balance`. The safeguarding record now states what happens when a concern is about the account owner, and that attendance patterns never feed it.
+>
+> **v5 · September 2026 public pages.** `platform_settings.maintenance_until` — the expected end of maintenance, shown on the maintenance screen and readable through `v_platform_status`. It is a promise, not a timer: maintenance ends only when it is switched off.
+>
+> **v5 · September 2026 pricing.** The free trial is now **one offer per audience** in a new `trial_offers` table (centre and solo), replacing the single `platform_settings.trial_*` offer — one offer pinned to one plan cannot serve two audiences. `GET /v1/plans` returns the audience's trial with its plans, so the public signup page can promise it. `update_trial_offer` is the audited write. The console edits both audiences' plans, trials and override codes on one Pricing page (plan decision #37).
+>
+> **v5 · September 2026 owner-console rulings** (plan decisions #34–#37). Maintenance and read-only are now different things, enforced in the database by one new helper, `writes_allowed()`: maintenance takes the app away from every tenant, read-only freezes writes platform-wide or for listed accounts (`platform_settings.read_only_account_ids`), and a suspended account is read-only by definition. `platform_settings` is no longer readable by every signed-in user — everyone reads it through `v_platform_status`. `feature_flags` shrinks to a master switch plus an optional account allowlist and moves to Phase 1. A superadmin announcement reaches centre admins only. `plans` gains `marketing_bullets` and the amounts of its Stripe prices, so the catalogue can tell when it and Stripe disagree, and only a plan in sync is sold. New: `storage_reconciliations` (the nightly check of our file records against the R2 bucket), `GET /v1/plans`, `POST /v1/admin/plans/:id/stripe-prices`, `GET /v1/admin/system-health`.
+>
+> **v5 · September 2026 audit follow-up.** A second-pass audit closed these: the stale sentence routing staff lockouts through a Supabase Auth hook is gone (the sign-in endpoints own them); the `is_superadmin()` table list is regenerated from the matrix, with `audit_log` narrowed to platform-level rows; `v_my_student_record` and `v_my_staff_record` carry the two column-level rules the matrix implied, and the unnamed teacher UPDATE on `students` is dropped; `plans` gains its Stripe price ids; lesson plans attach materials through `resource_links` only; `files.category` gains `claim_slips` and `exports`; `jobs` no longer claims analytics exports; `conversation_participants.pinned_at` gives per-user thread pins a home; `class_settings` and `invoice_sequences` name what creates them; `rotate_calendar_token` is a per-user action and the calendar feed is the one calendar mechanism.
+>
 > **v5 (September 2026) — access-model fixes.** Closes the findings of the September documentation audit. A superadmin now reads **no** tenant data outside a support session, and the never-admit list covers messages, conversations, flags, consents and safeguarding files. Teacher reads are scoped to their own students through `is_my_student()` (which now includes cover) instead of "centre staff"; invoices are admin-only. The two safeguarding-sensitive toggles moved out of `centre_settings.features` into the typed, audited `centre_privacy_settings` (new), read through `privacy_flag()`. `files` INSERT is service-role only. Column-level rules are named views (`v_my_submissions`, `v_my_answers`, `v_platform_status`). Adds a constraints-and-indexes convention, definitions for every view the plan builds, staff sign-in endpoints that own lockouts (Supabase's verification hooks need the Team plan), `staff_leave` (new), student address columns, `/v1/admin/accounts/:id/restore`, and a shared flag queue for class posts. Drops the ungated `resources` capability.
 >
 > **v4 (September 2026) — prototype gap closure.** Folds in everything the prototype shipped that v3 did not describe, and records the owner rulings on the open questions (plan decisions #20–#33). New domain §12 **Resources (Materials library)**. **Solo tutor accounts** (`accounts.kind = 'solo'`, implicit centre, capability-gated plans). Auth lockouts and attempts (decision #14 now has a schema). Class stream, class settings and class change requests. Tags. Predicted/target grades. Typed per-domain centre settings rows (register, timesheet, reports, invoicing). Ten homework question types and the per-assignment settings model. Report lifecycle `draft → published → archived`, centre standards, configurable report permissions. Tax modes and reminder cooldown. Comms approval workflow, retention, image flags, class channels. File categories and retention matrix. `platform_settings`, trial offer, billing events, support sessions. **Removed:** `groups` / `group_members` (deferred), class join codes, the `submitted` report status.
@@ -22,7 +38,7 @@
 
 All tenant tables carry `account_id uuid` and (where centre-scoped) `centre_id uuid` for RLS, plus `created_at timestamptz default now()`. Audited/mutable tables add `updated_at`.
 
-**Settings that an invariant, RLS policy or derived view reads are typed columns on a per-domain settings row** — `centre_register_settings`, `centre_timesheet_policy`, `centre_report_settings`, `centre_invoice_settings`, `centre_privacy_settings`, `comms_settings` — one row per centre, created with the centre. `centre_settings` keeps only presentation-level blobs (branding, setup checklist, user-facing defaults) that nothing in the database reads. A setting that gates a write (e.g. a publish standard) is enforced inside the RPC, never only in the UI.
+**Settings that an invariant, RLS policy or derived view reads are typed columns on a per-domain settings row** — `centre_register_settings`, `centre_timesheet_policy`, `centre_report_settings`, `centre_invoice_settings`, `centre_privacy_settings`, `comms_settings` — one row per centre, created with the centre by `provision_account` / `create_centre`, which also seed that centre's `invoice_sequences` row; `class_settings` is created by an INSERT trigger on `classes`. `centre_settings` keeps only presentation-level blobs (branding, setup checklist, user-facing defaults) that nothing in the database reads. A setting that gates a write (e.g. a publish standard) is enforced inside the RPC, never only in the UI.
 
 **Derive, don't store.** Metrics, statuses and lifecycle states are computed at read time in `v_*` views. The documented exceptions are business designations (`terms.is_active`) and **snapshots** — values copied at a moment so a finished document never changes later (issued invoice totals, a published report's predicted grade, a submission's `is_late`, an exported timesheet amount).
 
@@ -30,7 +46,7 @@ All tenant tables carry `account_id uuid` and (where centre-scoped) `centre_id u
 
 Every table has Row-Level Security enabled. The primary tenant boundary is **`centre_id`**, with **`account_id`** as the parent scope. Predicates in the RLS section are shorthand over the helper functions listed there. "system" and "service-role" mean the Railway service acting with the Supabase **secret key** (`sb_secret_…`) after an explicit tenant check — it bypasses RLS, so every such path re-checks the tenant itself. "—" means the operation is not permitted for any interactive role.
 
-**Column-level rules need a column-level mechanism.** RLS decides rows, not columns. Where a cell in the matrix says a role sees only *some* fields of a row — a student's released marks, a teacher's editable student fields, the two public `platform_settings` columns — it is implemented as a named `v_*` view (or an RPC), never as a SELECT policy that pretends to filter columns.
+**Column-level rules need a column-level mechanism.** RLS decides rows, not columns. Where a cell in the matrix says a role sees only *some* fields of a row — a student's released marks, a person's own `students` or `staff_details` row minus its staff-only columns, the two public `platform_settings` columns — it is implemented as a named `v_*` view (or an RPC), never as a SELECT policy that pretends to filter columns.
 
 **Constraints and indexes.** The column tables below give types and meaning, not the full DDL. Every migration follows these rules unless the table says otherwise:
 - **NOT NULL** on every id, foreign key, status, enum-like `text` column and `created_at`. Nullable columns are marked NULL in the tables.
@@ -45,7 +61,7 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 
 ## Part I — Database tables
 
-~117 tables across twelve domains. Columns marked **⚠ special category** hold UK GDPR Article 9 data and carry the strictest policies and full audit.
+~125 tables across twelve domains. Columns marked **⚠ special category** hold UK GDPR Article 9 data and carry the strictest policies and full audit.
 
 ---
 
@@ -62,7 +78,7 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | kind | text | `centre` \| `solo` — a solo private-tutor account owns exactly one implicit centre and is sold `plans.audience = 'solo'` plans. Immutable after creation |
 | owner_profile_id | uuid FK NOT NULL | → profiles.id — **the single source of ownership.** Not a membership role; `transfer_ownership` repoints this one field |
 | storage_policy | text | `pooled` \| `split` — how the account quota is shared across centres (always `pooled` for solo) |
-| status | text | `active` \| `suspended` \| `cancelled` — the **platform** lifecycle only. Plan, trial and dunning state live on `subscriptions` (`trialing` / `past_due` / `paused`) and are never mirrored here, so there is exactly one answer to "what is this account paying for" |
+| status | text | `active` \| `suspended` \| `cancelled` — the **platform** lifecycle only. A `suspended` account is **read-only**: its users sign in and read, every write is refused by `writes_allowed()`. Plan, trial and dunning state live on `subscriptions` (`trialing` / `past_due` / `paused`) and are never mirrored here, so there is exactly one answer to "what is this account paying for" |
 | billing_email | text | Where Klasio billing goes |
 | legal_name | text NULL | Registered company or trading name printed on the Klasio invoice — differs from `name` for a limited company |
 | billing_address | jsonb NULL | Address block for the Klasio invoice (`line1`, `line2`, `city`, `postcode`) |
@@ -79,7 +95,10 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | account_id | uuid FK | → accounts.id |
 | name | text | |
 | slug | text | Unique within account |
-| code | text UNIQUE | Centre login code — students log in with centre-code + username + PIN/password |
+| code | text UNIQUE | Centre login code — students log in with centre-code + username + PIN/password. A **routing key, not a credential**: it selects the centre, the username and PIN/password authenticate. Unique across the whole platform (initials + digits, retried on a unique violation) — the student login takes the first match, so a collision would send a pupil into the wrong tenant. Printed on every claim slip |
+| previous_code | text NULL UNIQUE | The code this one replaced. Still resolves at student login until `previous_code_until`, so every slip and parent letter already printed keeps working while the centre reprints. Only one previous code is honoured — changing again drops it immediately |
+| previous_code_until | date NULL | End of the 30-day grace window. After it, typing the old code returns `code_changed` (the login says the code has changed) rather than "unknown code" |
+| code_changed_at | timestamptz NULL | When `change_centre_code` last ran (audited) |
 | is_primary | boolean | The account's primary centre (partial unique index: one per account) — default selection in the centre switcher |
 | is_implicit | boolean | default false — true only for a solo account's single centre; never rendered as a "centre" in the UI |
 | region | text NULL | Grouping label for multi-centre accounts |
@@ -137,7 +156,7 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | auth_method | text | `pin` \| `password` — **under-13s are always `pin`**. Enforced by a **trigger**, not a CHECK: age depends on `now()`, and Postgres requires CHECK expressions to be immutable, so a date-sensitive rule cannot live in one. The trigger runs on insert and update of `dob` or `auth_method`. **When `dob` is null the row is treated as under-13** — the safe default, and the prototype's habit of inferring age from year group is not a substitute. QR-badge login is not supported (decision #21) |
 | pin_hash | text NULL | Argon2 hash — never the raw PIN. Set when `auth_method = 'pin'`. **A PIN is exactly 6 digits**; the lockout after 5 failed student attempts, not the length, is what makes it safe |
 | address_line1 / address_line2 / city / postcode | text NULL | Home address. Optional — a centre that has no need for it leaves it empty; it is never shown to other students |
-| notes | text NULL | Free-text staff notes on the student (staff-only read) |
+| notes | text NULL | Free-text staff notes on the student. Staff-only: the student's own read goes through `v_my_student_record`, which omits this column |
 
 > Password credentials for `auth_method = 'password'` live in Supabase Auth against the student's synthetic email — never in this table. **At-risk is derived, never stored** (`v_student_risk`); there is no stored `at-risk` status.
 
@@ -150,7 +169,7 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | student_id | uuid FK | → students.profile_id |
 | account_id / centre_id | uuid FK | |
 | full_name | text | |
-| relationship | text | `parent` \| `mother` \| `father` \| `carer` \| `other` — `parent` exists because that is what real imports and forms produce when the relationship is not broken down further; omitting it forced the prototype's CSV import to write a value outside the enum |
+| relationship | text | `parent` \| `mother` \| `father` \| `carer` \| `other` — `parent` exists because that is what real imports and forms produce when the relationship is not broken down further. The prototype records no relationship at all (flat guardian name / email / phone), so its import maps to `parent` |
 | email / phone | text | Contact + comms destination |
 | is_primary | boolean | |
 | is_billing_contact | boolean | Receives invoices |
@@ -304,7 +323,7 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | locked_at / expires_at | timestamptz | `expires_at NULL` = indefinite (manual block) |
 | cleared_by / cleared_at | uuid FK / timestamptz | Set by `clear_lockout` |
 
-> **Lockout policy:** 10 failed attempts for one identifier inside 15 minutes creates a 30-minute `failed_attempts` lock; student PIN logins lock after 5. Checked by the student login endpoint and by a Supabase Auth hook for staff password + TOTP. The suspicious-activity list is the derived view `v_suspicious_activity` (groups `auth_attempts` over a window) — attempt counts are never stored on the lock row beyond the trigger snapshot. Other rate limits (e.g. invoice reminders) keep their own domain log; there is no generic `rate_limits` table.
+> **Lockout policy:** 10 failed attempts for one identifier inside 15 minutes creates a 30-minute `failed_attempts` lock; student PIN logins lock after 5. Enforced by the sign-in endpoints in Part III — `/v1/auth/student/login` for pupils, `/v1/auth/staff/login` and `/v1/auth/staff/mfa/verify` for staff — which write `auth_attempts` and check this table before calling Supabase Auth (its verification hooks need the Team plan). The suspicious-activity list is the derived view `v_suspicious_activity` (groups `auth_attempts` over a window) — attempt counts are never stored on the lock row beyond the trigger snapshot. Other rate limits (e.g. invoice reminders) keep their own domain log; there is no generic `rate_limits` table.
 
 ---
 
@@ -386,6 +405,8 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | teacher_id | uuid FK | → profiles.id — the permanent teacher; temporary cover lives in `class_cover` and the effective teacher is **derived** |
 | kind | text | `group` \| `one_to_one` |
 | description | text NULL | What the class covers, shown on the class card and the create-class form |
+| cover_preset_id | text NULL | The class's background (decision #63) as `<palette>-<pattern>`, e.g. `sky-orbit` — one of the 48 presets in the shared registry (`packages/shared` class-covers). **Class-wide**: every member sees the same banner and class cards, so it works as a wayfinding cue. NULL = derived from the subject at read time, deterministically per class id — never backfilled (derive, don't store). CHECK `cover_preset_id ~ '^[a-z]+-[a-z]+$'`; which ids exist is checked by `PUT /v1/classes/:id/background` |
+| cover_icon_id | text NULL | The background's icon, from the same registry; `'none'` = explicitly no icon; NULL = derived from the subject. CHECK kebab-case, ≤ 40 characters. An id later dropped from the registry falls back to the derived default when read, so a background can never fail to render |
 | room_id | uuid FK NULL | Null when the class has no room — see `location` |
 | location | text NULL | Where a class without a room happens: "Online", "Student's home", "Library". A private tutor has no room list, so `room_id` is meaningless to them; CHECK that at most one of `room_id` and `location` is set |
 | term_id | uuid FK | |
@@ -396,13 +417,12 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 > Classes carry **tags** through `taggables` (e.g. `GCSE`, `Exam Year`, `Intervention`) — the generic targeting mechanism for report rules. Year group and subject are just two possible tag-like facets; a centre that doesn't use them can tag classes however it likes. There is **no class join code** — enrolment is admin-managed (decision #23).
 
 #### `class_settings`
-*Per-class configuration. One row per class, created with the class.*
+*Per-class configuration. One row per class, inserted by a trigger on `classes` INSERT (`classes` itself is created through the Supabase client, so no RPC exists to do it).*
 
 | Column | Type | Notes |
 |---|---|---|
 | class_id | uuid PK FK | |
 | account_id / centre_id | uuid FK | |
-| banner_theme | text | `default` (derives from the subject colour) \| `indigo` \| `teal` \| `ocean` \| `forest` \| `sunset` \| `plum` \| `slate`. **Class-wide, not personal** — the class teacher picks it and every member sees the same banner, so colour works as a wayfinding cue. It is deliberately not a `user_preferences` key |
 | students_can_post | boolean | default false |
 | students_can_comment | boolean | default true |
 | updated_at | timestamptz | |
@@ -434,19 +454,24 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 > Class posts from or to students are subject to the same minor-safety rules as messages: the same flag-scan trigger runs on insert (raising a `message_flags` row against `class_post_id`), and posts are text-only. That shared pipeline is why the class stream ships with messaging in Phase 9 rather than with announcements in Phase 5.
 
 #### `class_change_requests`
-*Teacher → admin. Scheduling and enrolment are admin-managed; this is how a teacher asks for a change.*
+*Teacher → admin. Scheduling and enrolment are admin-managed; this is how a teacher asks for a change — or for a class that doesn't exist yet (decision #46). The admin works them from a Requests view on the Classes page, badged in the sidebar; the teacher sees each request's status and the reply.*
 
 | Column | Type | Notes |
 |---|---|---|
 | id | uuid PK | |
-| class_id | uuid FK | |
+| class_id | uuid FK NULL | Required except for `new_class` (and optional for `other`) — CHECK |
 | account_id / centre_id | uuid FK | |
 | requested_by | uuid FK | |
-| kind | text | `schedule` \| `enrolment` \| `room` \| `other` |
-| body | text | |
+| kind | text | `new_class` \| `schedule` \| `room` \| `enrolment` \| `cancel` \| `other` |
+| body | text | The teacher's reason — required |
+| details | jsonb | Structured asks by kind: `new_class` → `subject_id`, `year_group`, `level`, `expected_students`; `new_class` / `schedule` → `preferred_day`, `preferred_time`; `room` → `preferred_room`. Preferences only — the admin decides the slot |
 | status | text | `open` \| `actioned` \| `declined` |
 | decided_by / decided_at | uuid FK / timestamptz | |
-| decision_note | text NULL | Shown back to the teacher |
+| decision_note | text NULL | Shown back to the teacher. **Required when `declined`** (CHECK) — a teacher told only "no" can do nothing with it |
+| result_class_id | uuid FK NULL | The class created when a `new_class` request was actioned |
+| created_at | timestamptz | |
+
+> **Approving a new class is a prefill, not a creation.** The admin's "Create class" opens the create-class flow with subject, year group, level, teacher and the preferred slot filled in; the admin still chooses the day, time and room, and creating the class actions the request (`result_class_id`). The `audit_log` row is the record, never the delivery mechanism — a request that only wrote an audit line reached nobody.
 
 #### `tags`
 *One tag vocabulary per centre, used on classes, students and reports.*
@@ -641,6 +666,7 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | assessed_on | date | |
 | grade_scale_id | uuid FK | |
 | max_marks | numeric | |
+| tracker_column_id | uuid FK NULL | Set when a tracker score column **counts as an assessment** (`tracker_columns.counts_as_assessment`): a trigger creates this row when the flag is set and upserts `results` as the teacher types cells, so marks are never typed twice. Clearing the flag archives the link, not the results |
 | created_by | uuid FK | |
 
 #### `results`
@@ -675,6 +701,8 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 
 > "On track" is **derived** (`v_student_progress` compares recent results to `target_grade`), never stored. A published report snapshots the predicted grade into `reports.predicted_grade`, so later changes never alter a sent report.
 
+> **What a pupil's "score" is (decision #50).** There is no stored score on a pupil. Two series are derived and **never blended**: **attainment** — `results` against `assessments.max_marks`, in date order (what a tuition centre is judged on); and **homework** — the average of marked submissions (effort and consistency). A diligent pupil who tests badly and a coasting pupil who tests well must not look identical. A pupil with no results has no attainment (null), and every surface says so rather than showing 0%. `v_student_scores` carries both series; Progress, the student profile, at-risk (`v_student_risk`), predicted-grade prompts and reports all read it. A grade shown beside a percentage is only an indicative bucket from `grade_bands` on the pupil's scale — never an official result.
+
 ---
 
 ### 4. Staff & pay
@@ -693,7 +721,7 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | colour | text NULL | Token reference used on the schedule grid |
 | start_date | date | |
 | ni_number_ref | text | Tokenised reference, not the raw NI number |
-| notes | text | Internal notes, admin-only |
+| notes | text | Internal notes, admin-only. A staff member's own read goes through `v_my_staff_record`, which omits this column and `ni_number_ref` |
 
 #### `staff_rates`
 *Pay rate over time. Changes are audited.*
@@ -718,6 +746,32 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | profile_id | uuid FK | The staff member |
 | account_id / centre_id | uuid FK | |
 | kind | text | `holiday` \| `sick` \| `other` |
+| starts_on / ends_on | date | Inclusive |
+| note | text NULL | |
+| created_by | uuid FK | |
+| created_at | timestamptz | |
+
+#### `staff_availability`
+*When a member of staff can teach, week to week (decision #55). Set by the teacher, visible to and overridable by a centre admin. **Advisory**: create-class and class edits warn when the chosen teacher isn't available or is already teaching then, and the cover picker ranks candidates by who is free — nothing is refused. A teacher with no rows gets no warnings (unknown is not unavailable). Replaces the per-user "working hours", which nothing read.*
+
+| Column | Type | Notes |
+|---|---|---|
+| id | uuid PK | |
+| profile_id | uuid FK | |
+| account_id / centre_id | uuid FK | |
+| weekday | smallint | 1 = Monday … 7 = Sunday |
+| starts_at / ends_at | time | One window; several rows for a split day |
+| set_by | text | `self` \| `admin` — an admin override is visible to the teacher |
+| updated_at | timestamptz | |
+
+#### `staff_blackout_dates`
+*Dates a member of staff can't teach — exam-board marking, appointments. Not leave: it needs no approval and never counts as absence, but it ranks the cover picker and warns on dated assignments.*
+
+| Column | Type | Notes |
+|---|---|---|
+| id | uuid PK | |
+| profile_id | uuid FK | |
+| account_id / centre_id | uuid FK | |
 | starts_on / ends_on | date | Inclusive |
 | note | text NULL | |
 | created_by | uuid FK | |
@@ -751,10 +805,15 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | centre_id | uuid PK FK | |
 | account_id | uuid FK | |
 | submission_frequency | text | `week` \| `fortnight` \| `month` — the **only** period control; staff never choose their own window |
+| anchor_date | date | The first day of period 1. **Every period is derived from the anchor, never from today** (decision #52), so a fortnight is the same fortnight for everyone and can line up with the centre's pay run. Monthly periods keep the anchor's day of the month (capped at the 28th) |
+| due_offset_days / due_time | int / time | A period is due `due_offset_days` after it ends, by `due_time` (default 2 days, 12:00). Without a deadline nothing is late, so nothing can be chased |
+| lock_after_days | int | Days after a period ends when it freezes for staff (default 14) — the timesheet twin of the register's backfill window. A centre admin can still act on a locked period |
 | pay_non_session | boolean | Master switch for paying non-teaching time |
 | paid_categories | text[] | Subset of `prep`, `marking`, `meeting`, `training` paid beneath the master switch |
 | updated_at | timestamptz | |
 
+> **Periods and submission state (`v_timesheet_periods`) — derived, never stored.** One row per (teacher, period): the period's range from the anchor, `due_at`, `locks_on`, and a state — `submitted` (nothing left to send), `open` (drafts, before the deadline), `late` (drafts, past it), `locked` (drafts left when it froze) or `nothing` (no hours). The admin's "not yet submitted" list and the teacher's deadline banner both read it. `log_timesheet_entry`, teacher edits and teacher submission are refused inside a locked period.
+>
 > **Pay eligibility (`v_timesheet_pay`) — derived per entry, never stored:**
 > - `teaching` / `cover`: `hourly` → paid · `salaried` → never · `mixed` → only when the entry is cover or extra, where *extra* = `sessions.delivered_by` is not the class's effective teacher for that date (`v_effective_teacher`).
 > - Non-session types: paid only when `pay_non_session` **and** the type is in `paid_categories` **and** the teacher is `hourly` or `mixed`.
@@ -872,7 +931,7 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | marked_at | timestamptz NULL | |
 | marks_released_at | timestamptz NULL | Set by `release_marks` (or on return when marks aren't held back); students read marks only when set |
 
-> **Class standing is derived and gated.** Class average and rank come from `v_submission_standing`. Rank/position is returned to a student **only** when `privacy_flag(centre, 'show_rank_to_students')` is true (default **false**) and the student is at least `centre_privacy_settings.rank_min_age` (default 13); the class average follows the same gate as released marks (decision #29).
+> **Class standing is derived and gated.** Class average and rank come from `v_submission_standing`. Rank/position is returned to a student **only** when `privacy_flag(centre, 'show_rank_to_students')` is true (default **false**) and the student is at least `centre_privacy_settings.rank_min_age` (default 13); the class average is returned to a student only when `privacy_flag(centre, 'show_class_average_to_students')` is true (default **false** — decision #59), and never before their marks are released.
 
 #### `answers`
 *Per-question response; objective types auto-mark on submit.*
@@ -1058,6 +1117,8 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | max_value | numeric NULL | What a `score` column is marked out of; null means uncapped |
 | options | jsonb NULL | For `select` — ordered labels |
 | grade_scale_id | uuid FK NULL | For `grade` |
+| counts_as_assessment | boolean | default false. `score` columns only (they carry `max_value`, so a mark means something). When true the column's marks feed pupils' attainment through a linked `assessments` row (`assessments.tracker_column_id`) — a teacher who lives in their tracker never types marks twice (decision #50). The grid stays internal; pupils see those results only once published |
+| assessed_on | date NULL | Required when `counts_as_assessment` — where the marks sit in the attainment series |
 | sort_order | int | |
 
 #### `tracker_entries`
@@ -1072,20 +1133,38 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | updated_by | uuid FK | |
 | updated_at | timestamptz | |
 
-#### `lesson_plans`
-*Persisted lesson planning. Materials attach through `resource_links (context_type = 'lesson_plan')` (§12).*
+#### `lessons`
+*Reusable teaching content (decision #47) — title, topic, objectives, structure, homework to set — owned by a teacher, with **no class and no date**. A teacher's library. Materials attach to the lesson through `resource_links (context_type = 'lesson')` (§12), so every class it is planned for gets them and reusing it brings its files.*
 
 | Column | Type | Notes |
 |---|---|---|
 | id | uuid PK | |
 | account_id / centre_id | uuid FK | |
-| class_id | uuid FK | |
-| session_id | uuid FK NULL | Optionally pinned to a concrete session |
-| author_id | uuid FK | |
+| owner_id | uuid FK | → profiles.id |
 | title | text | |
-| body | jsonb | |
-| planned_for | date | |
+| topic | text NULL | Captured into `resource_usage_events.topic` at attach time |
+| duration_mins | int NULL | |
+| body | jsonb | Objectives, structure (timed sections), homework to set |
+| forked_from | uuid FK NULL | → lessons.id — set by `fork_lesson` |
 | created_at / updated_at | timestamptz | |
+
+#### `lesson_plans`
+*A **planned lesson**: one lesson delivered to one class on one date. Holds only what belongs to that delivery — notes for the group and the post-lesson reflection — so two groups taught the same lesson never collide, and the lesson keeps a history across groups ("taught 3 times; Group C found part 2 hard"). Editing the lesson changes every delivery; a delivery that must diverge forks its own copy (`fork_lesson`).*
+
+| Column | Type | Notes |
+|---|---|---|
+| id | uuid PK | |
+| account_id / centre_id | uuid FK | |
+| lesson_id | uuid FK | → lessons.id, ON DELETE RESTRICT (a lesson still planned can't be deleted) |
+| class_id | uuid FK | Joined by id — never by the group label, so renaming a class orphans nothing |
+| session_id | uuid FK NULL | Optionally pinned to a concrete session |
+| planned_for | date | |
+| notes | text NULL | For this group only — differentiation, pupils to watch |
+| reflection | text NULL | How it went; writable once `planned_for` has passed |
+| share_with_class | boolean | default **false** — when true, the class's pupils see this lesson's title, topic and objectives in their session view through `v_my_lesson_plans` (decision #60). `notes`, the lesson's structure and `reflection` are never exposed to a pupil, whatever this says |
+| author_id | uuid FK | Who planned it |
+| created_at / updated_at | timestamptz | |
+| UNIQUE | (class_id, planned_for) | One planned lesson per class per day |
 
 ---
 
@@ -1124,7 +1203,7 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | active | boolean | |
 
 #### `invoice_sequences`
-*Per-centre invoice numbering. Import never generates numbers.*
+*Per-centre invoice numbering, seeded with the centre by `provision_account` / `create_centre` (the Phase 7 migration backfills existing centres). Import never generates numbers.*
 
 | Column | Type | Notes |
 |---|---|---|
@@ -1197,6 +1276,8 @@ Every table has Row-Level Security enabled. The primary tenant boundary is **`ce
 | reversed_by | uuid FK NULL | |
 | reversal_reason | text NULL | Required — an unexplained reversal on a money ledger is indistinguishable from a mistake being hidden |
 
+> **The ledger is only as current as its last receipt.** No money moves through the portal, so "outstanding" and "overdue" are right only if someone has recorded what arrived. `v_outstanding_balance` carries the centre's `last_payment_recorded_at` (the latest non-reversed `payments.created_at`), and the invoice list says how long ago that was — warning after 14 days that the figures may include money already in the bank.
+>
 > **Correcting a mistake.** Receipts are entered by hand, so they *will* be entered wrongly — the wrong family, twice, or the wrong amount. `reverse_payment(payment, reason)` marks the row reversed and audited; `v_invoice_status` ignores reversed rows when deriving what is paid. There is no UPDATE and no DELETE on this table, so the ledger only ever grows.
 
 #### `invoice_reminders`
@@ -1277,6 +1358,8 @@ The `locked` preset sets `student_messaging_enabled = false`, so staff↔pupil 1
 | target_type | text | `platform` \| `centre` \| `role` \| `year` \| `class` \| `subject` — year and subject resolve through classes |
 | target_ref | uuid NULL | Points at the matching entity; null for platform/centre-wide. Always a uuid — a column that is sometimes an id and sometimes a label cannot be joined or constrained |
 
+> **A superadmin announcement reaches centre admins only** — which always includes each account owner, since an owner holds a `centre_admin` membership. It takes `platform` or `centre` targets and nothing else, and `publish_announcement` resolves its receipts to `centre_admin` memberships whatever else is set. The centre is the data controller: its teachers and pupils hear from their own centre, never from the platform over its head. This matches the DM rule (a superadmin messages admins only).
+
 #### `announcement_receipts`
 *Per-recipient read/ack row.*
 
@@ -1317,6 +1400,7 @@ The `locked` preset sets `student_messaging_enabled = false`, so staff↔pupil 1
 | role_in_convo | text | `member` \| `observer` |
 | last_read_at | timestamptz | |
 | joined_at | timestamptz | |
+| pinned_at | timestamptz NULL | The participant pinned this thread to the top of their own list — personal, like `report_user_state.pinned`; never visible to other participants |
 
 #### `messages`
 *A single message. Sending = INSERT; triggers flag + broadcast.*
@@ -1406,6 +1490,12 @@ The `locked` preset sets `student_messaging_enabled = false`, so staff↔pupil 1
 > **Raising a concern is not a DSL action.** Any member of staff can raise one, from anywhere in the app, and `raise_concern` is the only way an incident is created by a non-DSL. The raiser then keeps sight of **their own row and its status** — they must be able to evidence that they reported something — but never the `safeguarding_incident_notes` chronology, which stays with the DSL. Raising also notifies the centre's DSLs; that notification cannot be muted (§9).
 >
 > **When the concern is about a DSL**, the row is stamped `restricted` on insert and disappears from every DSL's view, including the subject's. Only the account owner sees it, and the escalation contacts below are the route to the local authority designated officer. A safeguarding system where the subject of an allegation can read it is worse than none, because it looks like a record.
+>
+> **When the concern is about the account owner** (often also the DSL lead in a small centre), no one inside the organisation can safely read it: `restricted` is set and the owner is excluded as its subject, so the row has **no in-app reader** beyond the raiser's own status. On submit the raiser is shown the escalation contacts and told to contact the LADO directly. *Open ruling — confirm before Phase 10 (see the plan).*
+>
+> **A pupil's chronology.** Everything logged about one child is read in one place — the Safeguarding tab of the student profile, over `v_incident_timeline` filtered by `student_id` — for DSLs and centre admins only. A teacher's view of the profile never shows that concerns exist.
+>
+> **Attendance is not a safeguarding signal here.** Persistent absence stays in `v_student_risk` (the at-risk definition). It never raises an item in the DSL queue or creates an incident on its own; a member of staff who is worried raises a concern like any other.
 
 > **Solo accounts:** the tutor is their own DSL (`dsl_role = 'lead'` on their membership is set at provisioning). The concern log is private to the tutor; Klasio stores the record but never reviews it or escalates on the tutor's behalf. The concern log, guardian and emergency contacts, consents and health/SEN notes are available on **every** plan, including free tiers — safeguarding is never capability-gated.
 
@@ -1423,7 +1513,7 @@ The `locked` preset sets `student_messaging_enabled = false`, so staff↔pupil 1
 | bucket_key | text | R2 object key |
 | filename / content_type | text | |
 | size_bytes | bigint | |
-| category | text | `submissions` \| `resources` \| `question_attachments` \| `invoices` \| `reports` \| `avatars` \| `comms_attachments` \| `safeguarding` — set at sign-upload from the destination; drives retention and the storage breakdown |
+| category | text | `submissions` \| `resources` \| `question_attachments` \| `invoices` \| `reports` \| `avatars` \| `comms_attachments` \| `safeguarding` \| `claim_slips` (rendered slip batches) \| `exports` (SAR bundles and import error CSVs written by `jobs`) — set at sign-upload from the destination; drives retention and the storage breakdown |
 | uploaded_by | uuid FK | |
 | status | text | `pending` \| `confirmed` \| `archived` \| `deleted` |
 | confirmed_at | timestamptz | |
@@ -1432,7 +1522,8 @@ The `locked` preset sets `student_messaging_enabled = false`, so staff↔pupil 1
 
 | Category | Retention | Behaviour |
 |---|---|---|
-| `resources`, `question_attachments`, `avatars` | none | Deletable by uploader / centre_admin |
+| `resources`, `question_attachments`, `avatars`, `claim_slips` | none | Deletable by uploader / centre_admin |
+| `exports` | none | Swept 30 days after the owning job finishes; a SAR bundle is regenerated on request, never kept |
 | `invoices`, `reports` | **archive** | Never deletable; may move to `archived` (cold storage), still counted in usage |
 | `submissions`, `comms_attachments` | **locked** | Not deletable from storage management; removed only by the retention sweep of the owning record |
 | `safeguarding` | **locked** | Tombstoned, never hard-deleted — survives erasure |
@@ -1445,7 +1536,7 @@ The `locked` preset sets `student_messaging_enabled = false`, so staff↔pupil 1
 | id | uuid PK | |
 | file_id | uuid FK | |
 | account_id / centre_id | uuid FK | |
-| entity_type | text | `message` \| `assignment` \| `question` \| `answer` \| `report` \| `student` \| `incident` \| `lesson_plan` — a lesson plan attaches files the same way everything else does, rather than embedding them in its own body |
+| entity_type | text | `message` \| `assignment` \| `question` \| `answer` \| `report` \| `student` \| `incident` — **not** `lesson`: a lesson attaches materials only through `resource_links` (§12), so every file on a lesson is a library resource under one retention rule |
 | entity_id | uuid | |
 
 #### `storage_rollups`
@@ -1458,6 +1549,20 @@ The `locked` preset sets `student_messaging_enabled = false`, so staff↔pupil 1
 | total_bytes | bigint | |
 | file_count | int | |
 | updated_at | timestamptz | |
+
+#### `storage_reconciliations`
+*The nightly check of our file records against what the R2 bucket actually holds. Quotas are enforced on the ledger (`files`), but Klasio is billed on the bucket — a half-failed upload or a missed delete leaves objects we pay for and nothing counts.*
+
+| Column | Type | Notes |
+|---|---|---|
+| id | uuid PK | |
+| run_at | timestamptz | |
+| ledger_bytes | bigint | Sum of `files.size_bytes` over `confirmed` and `archived` rows |
+| bucket_bytes | bigint | Total the bucket holds, from listing it |
+| orphan_objects / orphan_bytes | int / bigint | Objects with no live `files` row — reviewed, then swept |
+| missing_objects | int | Confirmed `files` rows whose object is gone — an integrity alarm, never swept |
+| by_account | jsonb | Ledger and bucket bytes per account, for the owner console |
+| status | text | `ok` \| `drift` \| `failed` |
 
 #### `storage_addons`
 *Purchased add-on storage blocks on top of the plan quota. Effective quota = plan limit + active add-on blocks, pooled or split per `accounts.storage_policy`.*
@@ -1487,14 +1592,14 @@ The `locked` preset sets `student_messaging_enabled = false`, so staff↔pupil 1
 | centre_id | uuid PK | |
 | account_id | uuid FK | |
 | branding | jsonb | Logo file, accent, contact block, website |
-| grading_defaults | jsonb | Default grade scale per level |
-| teaching_defaults | jsonb | New-assignment defaults: `attempts_allowed`, `due_days`, `allow_late`, `auto_grade_mcq`, `allow_review`, `hide_marks_until_released` |
+| grading_defaults | jsonb | Default grade scale per level, and `pupil_display`: `percentage` \| `grade` \| `both` (default `both`) — what pupils see beside their own results (decision #54). A per-centre policy, not a teacher preference: some centres deliberately don't show young pupils grades, and results must read the same way across a centre. The grade is always the indicative bucket on the pupil's scale; staff always see both |
+| teaching_defaults | jsonb | New-assignment defaults: `attempts_allowed`, `due_days`, `allow_late`, `auto_grade_mcq`, `allow_review`, `hide_marks_until_released`. **Centre-level only — there is no per-teacher layer** (decision #53): every teacher at a centre starts from the same rules and changes them per assignment |
 | features | jsonb | Presentation-level centre toggles only. **Nothing an RLS policy or view reads lives here** — the two safeguarding-sensitive toggles moved to `centre_privacy_settings` below |
-| setup | jsonb | Setup checklist state `{invite, students, classes}` driving the "needs setup" drawer — completion is derived where possible, this stores dismissals |
+| setup | jsonb | `{ dismissed }` only. The checklist's three steps are **derived** from the centre's data — a teacher membership or invite exists, a pupil has been provisioned, a class exists — never marked done by opening a step. This row stores just the per-centre dismissal of the dashboard prompt, which any centre admin can undo from Settings → Centre (the account-tier Centres page is the owner's alone, so it cannot be the only way back) |
 | updated_at | timestamptz | |
 
 #### `centre_privacy_settings`
-*The two toggles that decide who may see a child's health record and whether a child is shown their rank. Typed, audited, and read directly by RLS and by `v_submission_standing` — never a jsonb key (decision #33). One row per centre, created with the centre.*
+*The toggles that decide who may see a child's health record and what a child is shown about their classmates. Typed, audited, and read directly by RLS and by `v_submission_standing` / `v_results_summary` — never a jsonb key (decision #33). One row per centre, created with the centre.*
 
 | Column | Type | Notes |
 |---|---|---|
@@ -1503,6 +1608,7 @@ The `locked` preset sets `student_messaging_enabled = false`, so staff↔pupil 1
 | teacher_reads_health | boolean | default **false** — when true, a teacher may read `student_health` for their own students only (`is_my_student()`). Art. 9 data: every change is audited |
 | show_rank_to_students | boolean | default **false** (AADC) — class rank is returned to a student only when this is true |
 | rank_min_age | int | default 13 — a student below this age never sees rank, whatever the toggle says |
+| show_class_average_to_students | boolean | default **false** (AADC, decision #59) — a class average (on returned homework and on results) is returned to a student only when this is true. While it is off, a pupil is compared with their own previous result, never with classmates |
 | updated_by | uuid FK | Who last changed it |
 | updated_at | timestamptz | |
 
@@ -1525,7 +1631,7 @@ The `locked` preset sets `student_messaging_enabled = false`, so staff↔pupil 1
 | created_at | timestamptz | |
 
 #### `user_preferences`
-*Per-user appearance, accessibility and role defaults. AADC-relevant: the accessibility and nudge fields are the evidence for the Phase 16 review.*
+*Per-user appearance and convenience settings. Pupils have no row-backed settings here yet (decision #61): accessibility and study-reminder columns are added only when those features are built.*
 
 | Column | Type | Notes |
 |---|---|---|
@@ -1534,14 +1640,11 @@ The `locked` preset sets `student_messaging_enabled = false`, so staff↔pupil 1
 | compact | boolean | |
 | reduce_motion | boolean | |
 | language / timezone / date_format / week_start | text | |
-| text_size | text | `normal` \| `large` \| `xlarge` |
-| high_contrast | boolean | |
-| dyslexia_font | boolean | |
-| streak_nudges | boolean | default **false** — de-gamified; no loss-aversion nudging. Forced false for under-13s |
-| reminder_lead | text | How far ahead homework reminders fire |
-| share_with_guardian | boolean | Student opts in to guardian summaries (guardian receives email only) |
-| working_hours_from / working_hours_to | time NULL | Staff — suppresses non-urgent notifications outside |
 | recents | jsonb | Recently opened trackers / reports etc. — convenience only |
+
+> **Deferred, not rejected (decision #61).** `text_size`, `high_contrast`, `dyslexia_font`, `streak_nudges` and `reminder_lead` were removed rather than shipped as toggles nothing reads. The design is settled for when they return. A dyslexia-friendly font comes first. Text size is handled by relative units and browser zoom, not a setting. Study reminders default off, have no streak or loss-aversion framing, and are never available to under-13s. `share_with_guardian` is gone for good: whether a guardian receives reports is centre policy (`centre_report_settings`), not a pupil's choice.
+
+> There is deliberately **no per-user "working hours"** (dropped by decision #55). When a notification may reach someone is governed by the centre's quiet hours (`comms_settings`) and `notification_prefs`; a second, personal clock would flag messages out of hours by one rule and deliver them by another. When a teacher can *teach* is `staff_availability`.
 | updated_at | timestamptz | |
 
 #### `dashboard_layouts`
@@ -1565,6 +1668,8 @@ The `locked` preset sets `student_messaging_enabled = false`, so staff↔pupil 1
 | entity_type / entity_id | text / uuid | |
 | read_at | timestamptz | |
 
+> **Owner alerts** use the same table: `recipient_id` is a superadmin, `account_id` the account concerned, `centre_id` null. They are written by triggers and scheduled jobs from rows that already exist, never typed by hand: `owner_payment_failed` and `owner_cancelled` (from `billing_events`), `owner_data_request` (a new `data_requests` row — the statutory clock has started), `owner_trial_ending` (trial ends within 3 days on an account with real usage), `owner_capacity` (an account at ≥ 90% of seats or storage). Each is also emailed through the outbox, and new signups and MRR movement go out as a weekly digest. Service-down and error-rate alerts come from the external monitor and Sentry, not from here.
+
 #### `notification_prefs`
 *Per-user, per-kind channel opt-in. AADC-safe defaults for under-13s.*
 
@@ -1581,6 +1686,8 @@ The `locked` preset sets `student_messaging_enabled = false`, so staff↔pupil 1
 
 > One resolver: a class-specific row overrides the account-wide row for the same kind + channel. Safeguarding alerts to DSLs cannot be disabled. Under-13 defaults are inserted **off** for every non-critical kind.
 
+> **Pupils hold `in_app` rows only** (decision #61) — pupil emails are synthetic and undeliverable by construction, so an email channel would be a choice that cannot work. Their kinds are `homework_due`, `marks_released`, `announcement` and `message`, each a switch in the pupil's Settings that the bell obeys.
+
 #### `plans`
 *GLOBAL catalogue — no tenant columns. Superadmin-managed.*
 
@@ -1592,11 +1699,16 @@ The `locked` preset sets `student_messaging_enabled = false`, so staff↔pupil 1
 | name | text | |
 | tagline | text NULL | Plan-card audience line |
 | price_monthly / price_yearly | numeric | Yearly may be discounted (e.g. two months free) |
+| stripe_price_id_monthly / stripe_price_id_yearly | text NULL | Stripe Price ids for each cycle — added and filled in Phase 13; null for `solo_free` |
+| stripe_amount_monthly / stripe_amount_yearly | numeric NULL | What each linked Stripe Price actually charges, written when `POST /v1/admin/plans/:id/stripe-prices` creates it. Differs from `price_monthly` / `price_yearly` exactly when the catalogue has moved and Stripe has not |
 | sort_order | int | Ascending tier order — the **only** thing "upgrade/downgrade" compares |
 | limits | jsonb | Numeric caps (null = unlimited): **`seats` — staff only** (distinct `profile_id`s holding a `centre_admin` or `teacher` membership anywhere on the account, counted **pooled across every centre**, so a person with two roles or two centres is one seat); `max_students` covers pupils, so the two never overlap. Plus `centres`, `storage_bytes`, `max_invoices_per_month`, `storage_addon_block_gb`, `storage_addon_block_price` |
 | capabilities | jsonb | Flat boolean keys that gate surfaces: `group_lessons`, `lesson_planner`, `tracking`, `homework`, `homework_bank`, `reports`, `report_rules`, `at_risk_flags`, `payment_reminders`, `vat`, `analytics_exports`, `waiting_list`. The materials library is core on every plan and is not gated |
+| marketing_bullets | text[] | Pricing-page copy for the plan card, signup and the marketing site. **Display only — gates nothing.** What a plan unlocks is `capabilities`; one field cannot do both jobs |
 | active | boolean | |
 
+> **Catalogue vs Stripe.** The catalogue says what a plan *is*; Stripe says what a customer *pays*. Their agreement is derived per cycle, never stored: `not_in_stripe` (no price id), `price_changed` (`stripe_amount_*` ≠ `price_*`) or `synced`. **Only a synced plan is sold** — `GET /v1/plans` omits the rest and `POST /v1/billing/checkout` refuses them, so nobody is shown one price and charged another. Stripe Prices are immutable, so a price change is a new Price: new checkouts take it, existing subscriptions keep theirs, and moving existing subscribers is a separate deliberate step with at least 30 days' notice.
+>
 > **Capability rule:** application code and RLS ask *"does this account's plan grant capability X / what is limit Y"* (`plan_capability(account, key)`, `plan_limit(account, key)`) — **nothing ever compares a plan code**. Limits are enforced in the write path (e.g. `enrol_student` refuses above `max_students`; invoice issue refuses above `max_invoices_per_month`). Safeguarding, guardian/emergency contacts, consents and health records are never behind a capability.
 
 #### `subscriptions`
@@ -1610,14 +1722,16 @@ The `locked` preset sets `student_messaging_enabled = false`, so staff↔pupil 1
 | billing_cycle | text | `monthly` \| `yearly` |
 | stripe_customer_id / stripe_subscription_id | text | |
 | status | text | `trialing` \| `active` \| `past_due` \| `paused` \| `cancelled` |
-| trial_days / trial_plan_id | int / uuid FK NULL | **Stamped at signup** from `platform_settings` — later changes to the platform offer never retro-apply |
+| trial_days / trial_plan_id | int / uuid FK NULL | **Stamped at signup** from the `trial_offers` row for the account's audience — later changes to the offer never retro-apply |
 | trial_started_at / trial_ends_at | timestamptz NULL | |
 | trial_on_end | text NULL | `bill` \| `downgrade` \| `suspend` |
 | paused_from / paused_until | date NULL | Seasonal pause (e.g. summer) instead of cancelling; Stripe pause-collection mirrored |
 | redeemed_code_id | uuid FK NULL | → plan_codes.id — the override code applied to this subscription, if any |
+| card_brand / card_last4 | text NULL | **Display-only mirror** of the customer's default Stripe payment method, written by the webhook. Card details are never collected or stored — the owner adds or changes a card only in Stripe's Customer Portal (`POST /v1/billing/portal`), which keeps Klasio out of PCI scope |
+| card_exp_month / card_exp_year | int NULL | Drives the expiry warning on Plans & Billing (from the calendar month before expiry) and the "card expiring" email — a card that lapses silently becomes a failed renewal, then dunning, then a suspended centre mid-term |
 | current_period_end | timestamptz | |
 
-> A global free trial (`platform_settings.trial_*`) is a different mechanism from a redeemable `plan_codes.kind = 'free_trial'` code: the first applies to every new signup, the second only to accounts that redeem it.
+> A free trial (`trial_offers`, one per audience) is a different mechanism from a redeemable `plan_codes.kind = 'free_trial'` code: the first applies to every new signup of that audience, the second only to accounts that redeem it.
 
 #### `plan_codes`
 *Superadmin-managed price-override codes (free trial / percent off / fixed price).*
@@ -1644,22 +1758,34 @@ The `locked` preset sets `student_messaging_enabled = false`, so staff↔pupil 1
 | account_id | uuid FK | |
 | redeemed_at | timestamptz | |
 
+#### `trial_offers`
+*The free trial each audience gets at signup. Exactly two rows, seeded — one for `centre`, one for `solo`. One offer per audience, because a single offer pinned to one plan cannot serve both.*
+
+| Column | Type | Notes |
+|---|---|---|
+| audience | text PK | `centre` \| `solo` |
+| enabled | boolean | Off = new accounts of this audience are billed from day one |
+| days | int | 1–365 |
+| plan_id | uuid FK NULL | → plans.id, same audience — pins the trial to one plan; null = the plan they choose. A trial on a free plan is a no-op |
+| require_card | boolean | Payment method up front — changes the signup promise |
+| on_end | text | `bill` \| `downgrade` (to the cheapest live plan of the audience — Solo Free for solo) \| `suspend` |
+| updated_by / updated_at | uuid FK / timestamptz | Changes audited |
+
+> Signup stamps the matching row onto the new subscription (`subscriptions.trial_*`), so a later change to an offer never reaches an account already on its trial. The public reads it only through `GET /v1/plans`.
+
 #### `feature_flags`
-*Product rollout flags — per account, cohort or plan. Platform-wide operational switches are **not** flags; they live in `platform_settings`.*
+*Product rollout flags — dark-ship a feature, then turn it on for one friendly account or everyone. Platform-wide operational switches are **not** flags; they live in `platform_settings`. Plans are **not** flags either: what a plan unlocks is `plans.capabilities` (decision #25).*
 
 | Column | Type | Notes |
 |---|---|---|
 | id | uuid PK | |
 | key | text UNIQUE | e.g. `hw_auto_marking`, `reports_v2` |
 | description | text | |
-| scope | text | `global` \| `opt_in` \| `beta_cohort` \| `plan_gated` |
-| enabled | boolean | Master switch |
-| rollout_pct | int NULL | 0–100, deterministic by account id hash |
-| min_plan_sort_order | int NULL | For `plan_gated` — compares `plans.sort_order`, never a plan code |
-| targeting | jsonb | Explicit account allow/deny lists for `opt_in` / `beta_cohort` |
+| enabled | boolean | Master switch — off means off for every account |
+| account_ids | uuid[] NULL | Null = every account; a list = only those accounts |
 | updated_by / updated_at | uuid FK / timestamptz | |
 
-> The effective flag for an account is derived (`v_account_flags` / `flag_enabled(account, key)`); per-account overrides are the `targeting` lists, not extra rows.
+> The effective flag for an account is `enabled and (account_ids is null or account = any(account_ids))`, exposed as `flag_enabled(account, key)` / `v_account_flags` and loaded once into the app's `featureFlags` global (decision #2). No rollout percentages, cohorts or plan gates: below a few hundred accounts, "34% of accounts" is a handful you can name.
 
 #### `platform_settings`
 *Single-row table (`id = true` CHECK). Global operational switches and superadmin defaults.*
@@ -1667,12 +1793,14 @@ The `locked` preset sets `student_messaging_enabled = false`, so staff↔pupil 1
 | Column | Type | Notes |
 |---|---|---|
 | id | boolean PK | Always true |
-| maintenance_mode | boolean | Global maintenance banner; writes blocked except superadmin |
-| maintenance_notice | text NULL | Banner copy |
-| read_only_mode | boolean | Every centre read-only |
+| maintenance_mode | boolean | **The app is unavailable.** Every tenant session gets the maintenance screen instead of the app, and `writes_allowed()` is false everywhere; the superadmin is exempt. Minutes — for work that cannot run online |
+| maintenance_notice | text NULL | Screen copy |
+| maintenance_until | timestamptz NULL | Expected end, shown on the maintenance screen. **A promise, not a timer** — maintenance ends only when switched off; once this passes, the screen says it is running late. Cleared when maintenance ends |
+| read_only_mode | boolean | **The app works, frozen.** Reads succeed; every tenant write is refused behind a banner. Hours — an incident, a risky deploy |
+| read_only_account_ids | uuid[] NULL | Scope of `read_only_mode`: null = every account, a list = only those accounts |
+| read_only_notice | text NULL | Banner copy |
 | signups_enabled | boolean | Gates `POST /v1/auth/signup` |
-| status_page_public | boolean | |
-| trial_enabled / trial_days / trial_plan_id / trial_require_card / trial_on_end | boolean / int / uuid FK / boolean / text | The one platform-wide free-trial offer, stamped onto each new subscription |
+| status_page_public | boolean | Default **false**. Stays off until an SLA or a customer's procurement asks for a public status page; until then affected admins hear about an incident through a platform announcement |
 | default_seats | int | |
 | currency | text | Klasio's own billing currency |
 | billing_email | text | |
@@ -1729,14 +1857,16 @@ The `locked` preset sets `student_messaging_enabled = false`, so staff↔pupil 1
 | extension_reason | text NULL | |
 | completed_at | timestamptz | |
 
+> **A pupil can file their own** (decision #62). A signed-in pupil aged 13 or over calls `request_my_data()`, which writes `kind = 'sar'` with `subject_profile_id` and `requested_by` both the pupil and `due_at` one month out. It returns the pupil's open request rather than filing a second. The insert raises a notification to the centre's admins and, through the owner-alert trigger, to the superadmin. Under-13s have no self-service route: a parent or the centre files for them.
+
 #### `jobs`
-*Async work the UI polls — CSV imports, SAR and erasure exports, analytics exports. One table, so `GET /v1/jobs/:id` has exactly one place to look.*
+*Async work the UI polls — CSV imports and SAR / erasure exports. One table, so `GET /v1/jobs/:id` has exactly one place to look. Analytics exports are synchronous (`GET /v1/exports/:key`, Phase 12) and never queue a job.*
 
 | Column | Type | Notes |
 |---|---|---|
 | id | uuid PK | |
 | account_id / centre_id | uuid FK | |
-| kind | text | `student_import` \| `invoice_import` \| `sar_export` \| `erasure` \| `analytics_export` |
+| kind | text | `student_import` \| `invoice_import` \| `sar_export` \| `erasure` |
 | status | text | `queued` \| `running` \| `succeeded` \| `failed` \| `cancelled` |
 | created_by | uuid FK | → profiles.id |
 | params | jsonb | The request as submitted (source file id, filters) — never results |
@@ -1793,7 +1923,7 @@ The `locked` preset sets `student_messaging_enabled = false`, so staff↔pupil 1
 |---|---|---|
 | id | uuid PK | |
 | account_id / centre_id | uuid FK | |
-| file_id | uuid FK NULL | → files.id (`category = 'resources'`). Null for `type = 'link'` |
+| file_id | uuid FK NULL | → files.id (`category = 'resources'`) — the **current** version's file; earlier ones live in `resource_versions`. Null for `type = 'link'` |
 | title | text | |
 | description | text | |
 | type | text | `worksheet` \| `mark_scheme` \| `slides` \| `notes` \| `past_paper` \| `revision` \| `video` \| `link` \| `other` |
@@ -1801,10 +1931,44 @@ The `locked` preset sets `student_messaging_enabled = false`, so staff↔pupil 1
 | year_group | text NULL | From `class_dimensions` (kind = year_group) |
 | level | text NULL | **Derived from `year_group` when null** — one resolver so facet, row meta and form agree |
 | exam_board | text NULL | From `class_dimensions` (kind = exam_board); `'None'` is a real value |
-| created_by | uuid FK | → profiles.id. **Ownership never transfers**, including at offboarding |
+| created_by | uuid FK | → profiles.id — who uploaded it. **Ownership never transfers**, including at offboarding |
+| owner_kind | text | `staff` (default) \| `centre`. A **centre document** — safeguarding policy, staff handbook, scheme of work — is published by the centre, not a person: it shows the centre as author, is always `visibility = 'centre'` (CHECK), is managed by any centre admin, and is never part of a leaver's offboarding. Only a centre admin can set `centre` |
 | visibility | text | `centre` \| `on_request` \| `private` |
 | url | text NULL | For `link` |
 | created_at / updated_at | timestamptz | |
+
+#### `resource_versions`
+*Every file a resource has held (decision #48). Replacing a file inserts a row and repoints `resources.file_id`; nothing is overwritten. Because attachments are pointers, every lesson and homework using the resource gets the new version at once — and a link attached before the latest version shows "updated since attached", so whoever relies on it can check the change. Restoring an old version inserts a **new** row carrying the old file; history is never rewritten.*
+
+| Column | Type | Notes |
+|---|---|---|
+| id | uuid PK | |
+| resource_id | uuid FK | ON DELETE CASCADE |
+| account_id / centre_id | uuid FK | |
+| version | int | 1, 2, 3… UNIQUE (resource_id, version); the highest is current |
+| file_id | uuid FK | → files.id. Superseded versions keep the resource's retention rule |
+| note | text | What changed — required from version 2 |
+| created_by | uuid FK | |
+| created_at | timestamptz | |
+
+#### `resource_folders`
+*A person's own filing layer over the library (decision #48) — visible to its owner alone. **Folders are not a sharing mechanism**: filing a file never changes who can see or open it, and a folder can hold any resource its owner can see (a colleague's centre-wide file included). The library's facets still do the finding; folders are for a teacher with hundreds of files who wants their own order.*
+
+| Column | Type | Notes |
+|---|---|---|
+| id | uuid PK | |
+| account_id / centre_id | uuid FK | |
+| owner_id | uuid FK | → profiles.id |
+| name | text | UNIQUE (owner_id, name) |
+| created_at | timestamptz | |
+
+#### `resource_folder_items`
+
+| Column | Type | Notes |
+|---|---|---|
+| folder_id / resource_id | uuid FK | PK (folder_id, resource_id); both ON DELETE CASCADE |
+| account_id / centre_id | uuid FK | |
+| added_at | timestamptz | |
 
 #### `resource_shares`
 *An explicit grant of read access to one staff member. Idempotent.*
@@ -1840,7 +2004,7 @@ The `locked` preset sets `student_messaging_enabled = false`, so staff↔pupil 1
 | id | uuid PK | |
 | resource_id | uuid FK | |
 | account_id / centre_id | uuid FK | |
-| context_type | text | `lesson_plan` \| `assignment` |
+| context_type | text | `lesson` \| `assignment` — a lesson's materials belong to the reusable `lessons` row, not to one dated delivery |
 | context_id | uuid | |
 | student_visible | boolean | Default from the type: `mark_scheme` and `past_paper` default **false**, all others true |
 | visible_from | timestamptz NULL | Release schedule — e.g. hide a mark scheme until after the deadline |
@@ -1881,6 +2045,8 @@ The `locked` preset sets `student_messaging_enabled = false`, so staff↔pupil 1
 | Centre admin | open | blocked until a request exists, then audited override | audited open → `resource_access_log` |
 | Student | never reads the library — only through a `resource_links` row with `student_visible` and `visible_from` elapsed | | |
 
+**Students never browse the library, by design.** A pupil reaches a file only through an attachment on homework or a lesson (`resource_links.student_visible`, default off for mark schemes and past papers). A "let students browse resources" feature would bypass every visibility rule above, so it is not a gap to fill.
+
 "Used in N places" (`v_resource_usage_count`, counted from `resource_links`) and "recently used" (`v_resource_recent`, from `resource_usage_events`) are derived at read time, never stored.
 
 ---
@@ -1905,8 +2071,9 @@ Policies are expressed through a small set of `SECURITY DEFINER` helpers so pred
 | `plan_capability(account uuid, key text)` | boolean | The account's current plan grants the capability — never a plan-code comparison |
 | `plan_limit(account uuid, key text)` | numeric | Numeric cap from `plans.limits`; null = unlimited |
 | `report_perm(centre uuid, key text)` | boolean | Reads a `centre_report_settings.perm_*` column — lets the six report permissions sit inside policies |
-| `privacy_flag(centre uuid, key text)` | boolean | Reads a `centre_privacy_settings` column (`teacher_reads_health`, `show_rank_to_students`) — the two safeguarding-sensitive toggles, typed and audited (§11) |
-| `flag_enabled(account uuid, key text)` | boolean | The effective feature flag for an account (scope, rollout, plan gate, targeting) — the function behind `v_account_flags` |
+| `privacy_flag(centre uuid, key text)` | boolean | Reads a `centre_privacy_settings` column (`teacher_reads_health`, `show_rank_to_students`, `show_class_average_to_students`) — the safeguarding-sensitive toggles, typed and audited (§11) |
+| `flag_enabled(account uuid, key text)` | boolean | The effective feature flag for an account — `enabled` and (no account list, or the account is on it); the function behind `v_account_flags` |
+| `writes_allowed(account uuid)` | boolean | False while `maintenance_mode` is on, while `read_only_mode` covers the account (every account, or it is in `read_only_account_ids`), or while the account is `suspended`. **Every tenant write checks it** — see the canonical write pattern |
 | `resource_can_open(resource uuid)` | boolean | The §12 access predicate (open, not just see) — shared by RLS and `sign-download` |
 | `in_support_session(account uuid)` | boolean | Caller is a superadmin with an active `support_sessions` row for the account |
 
@@ -1919,7 +2086,18 @@ create policy sel on <table> for select using (
 );
 ```
 
-A superadmin holds no membership, so this pattern grants them **nothing** until they open a time-boxed `support_sessions` row that the tenant can see. `is_superadmin()` appears only on the platform-level tables — `plans`, `plan_codes`, `plan_code_redemptions`, `feature_flags`, `platform_settings`, `support_sessions`, `billing_events`, `processed_events`, `email_outbox`, `email_suppressions` — and on `accounts` / `centres` for provisioning and suspension.
+**Canonical write pattern** (every INSERT / UPDATE / DELETE policy on a tenant table, alongside its own role check):
+
+```sql
+create policy ins on <table> for insert with check (
+  <the table's role check>
+  and writes_allowed(account_id)
+);
+```
+
+Every tenant-writing RPC and Railway endpoint calls `writes_allowed()` first, since `SECURITY DEFINER` and the secret key both bypass policies. Platform tables are not covered, so the superadmin can always turn a mode off. **Safeguarding is never frozen:** `raise_concern`, incident notes and message sends skip the read-only check (not maintenance, which takes the whole app down for minutes). A pupil who reaches out during an incident must still get through.
+
+A superadmin holds no membership, so the read pattern grants them **nothing** until they open a time-boxed `support_sessions` row that the tenant can see. `is_superadmin()` appears only where the matrix below says so: the platform tables `plans`, `plan_codes`, `plan_code_redemptions`, `trial_offers`, `feature_flags`, `platform_settings`, `support_sessions`, `billing_events`, `subscriptions`, `storage_addons`, `auth_attempts`, `account_lockouts`, `data_requests`, `jobs` and `storage_reconciliations`; on `audit_log` for platform-level rows only (`centre_id IS NULL`); and on `accounts` / `centres` for provisioning and suspension. `processed_events`, `email_outbox` and `email_suppressions` are service-role only — no interactive role, superadmin included, reads them.
 
 **Teacher scope.** Staff roles are not interchangeable: a teacher reads the pupils they teach, not the centre roll. Every per-student table adds `is_my_student()` rather than a bare membership check, and centre-wide reads stay with `centre_admin` (plus `account_owner` where the matrix says so):
 
@@ -1981,26 +2159,34 @@ Related views in this slice: `v_attendance_summary` (rate folds over `recorded` 
 
 Elsewhere, by slice. Every view is `security_invoker = true`, so it returns only rows the caller's policies already allow.
 
+**Tenancy (Phase 1)**
+- `v_my_student_record` — a student's own `students` row without `notes`; the pupil's self-read in the matrix.
+
 **Academic (Phase 3)**
 - `v_class_summary` — one row per class: enrolled head count against capacity, effective teacher, next session.
 - `v_enrolment_status` — one row per (class, student): current state derived from the `enrolments` date range.
+- `v_effective_teacher` — the permanent teacher overridden by any `class_cover` row covering the date; the schedule, the register and `v_timesheet_pay` read it.
+- `v_student_movement` — per centre and calendar month: pupils who **joined** (first `enrolments.starts_on` in the month) and **left** (last enrolment ended in the month, `students.enrolment_status = 'left'`), and the net. Behind the admin dashboard's "+6 joined · −4 left this month" — headcount alone hides a centre that enrols four a month while losing four.
 
 **Register and pay (Phase 4)**
 - `v_session_delivery` — one row per delivered session: who delivered it, minutes delivered, late and admin-backfill flags.
 - `v_attendance_summary` — attendance rate per class, student and period; `cancelled` sessions excluded from the denominator.
 - `v_timesheet_summary` — hours per teacher per period, by entry type and status.
 - `v_timesheet_pay` — pay eligibility and amount per entry (§4 rules).
+- `v_timesheet_periods` — one row per (teacher, period) derived from `centre_timesheet_policy`'s anchor: range, `due_at`, `locks_on` and the submission state (`submitted` / `open` / `late` / `locked` / `nothing`) — the admin's chase list and the teacher's deadline banner (§4).
+- `v_my_staff_record` — a staff member's own `staff_details` row without `notes` and `ni_number_ref`; the `self` read in the matrix.
 
 **Results (Phase 6)**
-- `v_results_summary` — one row per (assessment, class): mean, spread, published state.
+- `v_results_summary` — one row per (assessment, class): mean, spread, published state. A student reads the mean only when `privacy_flag(centre, 'show_class_average_to_students')` (decision #59).
 - `v_class_performance` — class trend across assessments, behind the progress screens.
 - `v_student_progress` — results trend against `student_targets.target_grade` ("on track").
+- `v_student_scores` — one row per (student, class): the **attainment** series (results in date order, their average, latest and direction of travel) and the **homework** series (average of marked submissions), side by side and never blended (decision #50). Attainment is null for a pupil with no results. Tracker columns that count as assessments arrive through their linked `assessments` rows. Progress, the student profile, `v_student_risk` and reports read it; a pupil reads their own through it with unpublished results excluded.
 - `v_student_risk` — the one at-risk definition (attendance, homework completion and results against centre thresholds). Admin and teacher surfaces read the same view.
 
 **Homework (Phase 8)**
 - `v_homework_completion` — per assignment: assigned, started, submitted, marked, returned.
 - `v_submission_summary` — per submission: score, lateness, time spent, marking state.
-- `v_submission_standing` — class average and rank per submission, rank nulled unless `privacy_flag(centre, 'show_rank_to_students')` and the student meets `rank_min_age`.
+- `v_submission_standing` — class average and rank per submission, rank nulled unless `privacy_flag(centre, 'show_rank_to_students')` and the student meets `rank_min_age`; the average nulled for a student unless `privacy_flag(centre, 'show_class_average_to_students')`.
 - `v_my_submissions`, `v_my_answers` — a student's own rows with `score`, `overall_feedback`, `marks_awarded` and `feedback` withheld until `marks_released_at` is set. This is the column-level gate the matrix refers to.
 
 **Reports (Phase 8b)**
@@ -2008,7 +2194,7 @@ Elsewhere, by slice. Every view is `security_invoker = true`, so it returns only
 
 **Invoicing (Phase 7)**
 - `v_invoice_status` — derived status per invoice (`scheduled` / `partial` / `paid` / `overdue` / `void`).
-- `v_outstanding_balance` — balance per family and per centre.
+- `v_outstanding_balance` — balance per family and per centre; the centre row also carries `last_payment_recorded_at` (ledger freshness, §8).
 - `v_payment_schedule` — instalments with derived paid/outstanding state and days overdue.
 
 **Communications (Phases 5 and 9)**
@@ -2027,13 +2213,16 @@ Elsewhere, by slice. Every view is `security_invoker = true`, so it returns only
 **Analytics exports (Phase 12)**
 - `v_attendance_report`, `v_results_report`, `v_timesheet_report`, `v_invoice_report` — the flattened, filterable rows behind `GET /v1/exports/:key`. Financial figures come from the invoice ledger, never a second source.
 
+**Lesson planning (Phase 12b)**
+- `v_my_lesson_plans` — a pupil's planned lessons for the classes they are enrolled in: `lesson_plan_id`, `class_id`, `planned_for`, `lesson_id`, and the lesson's `title`, `topic` and objectives **only when `share_with_class`** (null otherwise). Never `notes`, the lesson's structure or `reflection`. Behind the pupil's session view (decision #60); the `lesson_id` is what lets the pupil fetch that lesson's student-visible files.
+
 **Resources (Phase 12c)**
 - `v_resource_usage_count`, `v_resource_recent` — §12.
 
 **Platform**
 - `v_suspicious_activity` — `auth_attempts` grouped by identifier over a rolling window.
-- `v_account_flags` — effective feature flags per account, over `flag_enabled()`.
-- `v_platform_status` — the only fields anon may read from `platform_settings`: `maintenance_mode`, `maintenance_notice`, `read_only_mode`, `signups_enabled`, `status_page_public`.
+- `v_account_flags` — effective feature flags per account, over `flag_enabled()` (master switch + optional account list).
+- `v_platform_status` — the only way anyone but the superadmin reads `platform_settings` (anon and authenticated alike): `maintenance_mode`, `maintenance_notice`, `maintenance_until`, `read_only_mode` **only when it covers every account**, `read_only_notice`, `signups_enabled`, `status_page_public`. The account list never leaves the table — an account learns it is frozen through `writes_allowed(its account)`, and never which other accounts are.
 
 ### Per-table policy matrix
 
@@ -2042,10 +2231,10 @@ Each non-empty cell represents one or more policies to write and cover in the RL
 | Table | SELECT | INSERT | UPDATE | DELETE |
 |---|---|---|---|---|
 | accounts | own accounts (`id = any(auth_account_ids())`); account_owner; superadmin | superadmin | superadmin; account_owner (own) | superadmin |
-| centres | members of the account; superadmin | superadmin; account_owner | superadmin; account_owner; centre_admin (own centre) | superadmin; account_owner |
+| centres | members of the account; superadmin | superadmin; account_owner | superadmin; account_owner; centre_admin (own centre) — never `code` / `previous_code*`, which change only through `change_centre_code` (account_owner) | superadmin; account_owner |
 | profiles | self; staff in a shared centre | self (on signup); admin (invite flow) | self; centre_admin for managed users | centre_admin |
 | memberships | self; centre_admin/owner in that centre | account_owner; centre_admin | account_owner; centre_admin (role + dsl_role changes audited) | account_owner; centre_admin |
-| students | centre_admin; teacher via `is_my_student()`; the student (self) | centre_admin | centre_admin; teacher (own students, via RPC — column-limited) | centre_admin |
+| students | centre_admin; teacher via `is_my_student()`; the student (self, through `v_my_student_record`, which omits `notes`) | centre_admin | centre_admin | centre_admin |
 | student_guardians | centre_admin; teacher via `is_my_student()` | centre_admin | centre_admin | centre_admin |
 | families | centre_admin; student (own family) | centre_admin | centre_admin | centre_admin |
 | emergency_contacts | centre_admin; is_dsl; teacher via `is_my_student()` | centre_admin | centre_admin | centre_admin |
@@ -2058,13 +2247,13 @@ Each non-empty cell represents one or more policies to write and cover in the RL
 | auth_attempts | superadmin; centre_admin (identifiers resolved to own centre) | service-role only | — (append-only) | — (retention sweep) |
 | account_lockouts | superadmin; centre_admin (own centre identifiers) | service-role | superadmin via `clear_lockout` / `block_identifier` (audited) | — |
 | subjects / terms / term_breaks / rooms / class_dimensions | centre members | centre_admin | centre_admin | centre_admin |
-| classes | centre members (students: enrolled only) | centre_admin | centre_admin; teacher (own classes) | centre_admin |
+| classes | centre members (students: enrolled only) | centre_admin | centre_admin; teacher (own classes) — `cover_preset_id` / `cover_icon_id` only, written through `PUT /v1/classes/:id/background` (decision #63); every other column is admin-owned (#46) | centre_admin |
 | class_schedules | centre members | centre_admin | centre_admin | centre_admin |
 | class_cover | centre staff | centre_admin | centre_admin | centre_admin |
 | class_settings | class members | system (with class) | class teacher; centre_admin | — |
 | class_posts | enrolled students; class staff; centre_admin | class staff; enrolled student when `students_can_post` | author; centre_admin (soft delete) | — |
 | class_post_comments | as class_posts | class staff; enrolled student when `students_can_comment` | author; centre_admin (soft delete) | — |
-| class_change_requests | requester; centre_admin | teacher (own classes) | centre_admin (decide) | — |
+| class_change_requests | requester; centre_admin | teacher (own classes; `class_id` null only for `new_class` / `other`) via `request_class_change` | centre_admin via `decide_class_change_request` (a decline requires `decision_note`) | — |
 | tags | centre staff | centre_admin; teacher (`kind = 'report'` only) | centre_admin | centre_admin |
 | taggables | centre staff; student never | centre_admin; teacher (report tags on own reports) | — | centre_admin; teacher (own report tags) |
 | waiting_list_entries | centre_admin | centre_admin (capability `waiting_list`) | centre_admin | centre_admin |
@@ -2078,9 +2267,10 @@ Each non-empty cell represents one or more policies to write and cover in the RL
 | assessments | centre_admin; teacher (own classes); enrolled students (if published) | teacher; centre_admin | teacher (own); centre_admin | centre_admin |
 | results | centre_admin; teacher via `is_my_student()`; student (self, if published) | teacher; centre_admin | teacher (own); centre_admin | centre_admin |
 | student_targets | centre_admin; teacher via `is_my_student()`; student (self) | teacher (own students); centre_admin | teacher (own students); centre_admin (audited) | centre_admin |
-| staff_details | self; centre_admin; account_owner | centre_admin | centre_admin; self (own contact fields only, through `update_my_staff_profile`) | centre_admin |
+| staff_details | self (through `v_my_staff_record`, which omits `notes` and `ni_number_ref`); centre_admin; account_owner | centre_admin | centre_admin; self (own contact fields only, through `update_my_staff_profile`) | centre_admin |
 | staff_rates | self; centre_admin | centre_admin (audited) | centre_admin (audited) | centre_admin |
 | staff_leave | self; centre staff | centre_admin | centre_admin | centre_admin |
+| staff_availability / staff_blackout_dates | self; centre_admin | self; centre_admin | self; centre_admin (`set_by = 'admin'` on an override) | self; centre_admin |
 | timesheet_entries | self (teacher); centre_admin | system (`teaching`, via submit_register); teacher (self, non-teaching types via `log_timesheet_entry`) | teacher (self, own `draft`/`rejected` non-teaching — **a rejected entry must be correctable**, which is the point of `decided_reason`; `submitted` is locked while a decision is pending, and `approved`/`exported` are closed); centre_admin (approve/reject/adjust, audited) | teacher (self, own `draft`) |
 | timesheet_adjustments | self; centre_admin | centre_admin (audited) | — | — |
 | centre_timesheet_policy | centre staff | system (with centre) | centre_admin (audited) | — |
@@ -2097,7 +2287,8 @@ Each non-empty cell represents one or more policies to write and cover in the RL
 | report_folders | centre staff | teacher; centre_admin | creator; centre_admin | creator; centre_admin |
 | report_user_state | self | self | self | self |
 | trackers / tracker_columns / tracker_entries | teacher (own classes); centre_admin | teacher (own classes) | teacher (own classes) | teacher (own); centre_admin |
-| lesson_plans | author; teachers of the class; centre_admin | teacher | author | author; centre_admin |
+| lessons | owner; teachers of a class it is planned for (through `lesson_plans`); centre_admin. Pupils never read a lesson directly — a shared summary reaches them through `v_my_lesson_plans` | teacher (self as owner) | owner | owner, only while no `lesson_plans` row points at it; centre_admin |
+| lesson_plans | author; teachers of the class; centre_admin; the class's pupils through `v_my_lesson_plans` (no `notes` or `reflection`; the lesson summary only when `share_with_class`) | teacher (own classes, including cover) | author; teachers of the class (`notes`, `reflection`) | author; centre_admin |
 | fee_plans | centre staff | centre_admin | centre_admin | centre_admin |
 | invoice_sequences | centre_admin (via RPC only) | system | system (via RPC) | — |
 | invoices | centre_admin; account_owner | centre_admin (RPC) | centre_admin (void, audited) | — |
@@ -2121,30 +2312,34 @@ Each non-empty cell represents one or more policies to write and cover in the RL
 | files | linked-entity viewers; resource viewers (`resource_can_open`); uploader; centre_admin | **service-role only** (the `sign-upload` endpoint, after its permission and quota checks) | system (confirm, archive) | uploader; centre_admin — only when the category's retention allows |
 | file_links | entity viewers | uploader; system | — | uploader; centre_admin |
 | storage_rollups | centre staff | system | system (cron) | — |
+| storage_reconciliations | superadmin | system (nightly job) | — (append-only) | — |
 | storage_addons | account_owner; superadmin | system (webhook) | system | — |
 | centre_settings | centre staff | centre_admin | centre_admin | — |
 | centre_privacy_settings | centre staff | system (with centre) | centre_admin via `update_privacy_settings` (audited) | — |
-| audit_log | centre_admin; account_owner; is_dsl (own scope); superadmin | system only | — (append-only) | — |
+| audit_log | centre_admin; account_owner; is_dsl (own scope); superadmin (platform-level rows, `centre_id IS NULL`, or inside a support session) | system only | — (append-only) | — |
 | notifications | recipient (self) | system | recipient (mark read) | recipient |
-| notification_prefs | self | self (non-critical kinds only; DSL safeguarding alerts cannot be disabled) | self | self |
-| user_preferences / dashboard_layouts | self | self | self (under-13: `streak_nudges` cannot be set true) | self |
+| notification_prefs | self | self (non-critical kinds only; DSL safeguarding alerts cannot be disabled; a pupil's rows are `in_app` only) | self | self |
+| user_preferences / dashboard_layouts | self | self | self | self |
 | plans | all authenticated (read); superadmin | superadmin | superadmin | superadmin |
 | subscriptions | account_owner; superadmin | system (webhook) | system (webhook) | — |
 | plan_codes | superadmin | superadmin | superadmin | superadmin |
+| trial_offers | superadmin; everyone else only through `GET /v1/plans` | — (seeded, one row per audience) | superadmin via `update_trial_offer` (audited) | — |
 | plan_code_redemptions | superadmin; account_owner (own) | system (redeem RPC) | — | — |
 | feature_flags | superadmin (accounts read effective values via `v_account_flags`) | superadmin | superadmin (audited) | superadmin |
-| platform_settings | all authenticated (read — maintenance/read-only/signups banners); anon **only** through `v_platform_status` | — (seeded) | superadmin (audited) | — |
+| platform_settings | superadmin; everyone else — anon and authenticated — **only** through `v_platform_status` | — (seeded) | superadmin (audited) | — |
 | support_sessions | superadmin; account_owner + centre_admin (own account) | superadmin via `start_support_session` (audited) | superadmin (end, audited) | — |
 | billing_events | superadmin; account_owner (own account) | system (Stripe webhook) | — (append-only) | — |
-| data_requests | centre_admin; account_owner; superadmin | centre_admin; superadmin | system; superadmin | — |
+| data_requests | centre_admin; account_owner; superadmin; the pupil (own `sar` rows) | centre_admin; superadmin; the pupil through `request_my_data()` (13+) | system; superadmin | — |
 | jobs | centre_admin; account_owner; superadmin | system | system | — |
 | processed_events | — (service-role only) | service-role | — | — |
 | email_outbox | — (service-role only) | system (triggers/cron) | worker (service-role) | — |
 | email_suppressions | — (service-role only) | system (webhook) | — | service-role |
-| resources | creator; centre staff per the §12 predicate (row visible for `centre`/`on_request`, not `private`); centre_admin (all rows; opening `private` is audited) | teacher; centre_admin | creator; centre_admin | creator; centre_admin |
+| resources | creator; centre staff per the §12 predicate (row visible for `centre`/`on_request`, not `private`); centre_admin (all rows; opening `private` is audited) | teacher; centre_admin (`owner_kind = 'centre'` is centre_admin only) | creator; centre_admin | creator; centre_admin |
+| resource_versions | whoever can see the resource (§12 predicate); contents follow `resource_can_open` | via `replace_resource_file` / `restore_resource_version` (creator; centre_admin for a centre document) | — (append-only) | — (cascades with the resource) |
+| resource_folders / resource_folder_items | owner only | owner | owner | owner |
 | resource_shares | creator; grantee; centre_admin | creator; centre_admin; system (on approve) | — | creator; centre_admin |
 | resource_access_requests | requester; derived approver; centre_admin | teacher (self) | approver via `decide_access_request` (audited) | — |
-| resource_links | context viewers; students **only** when `student_visible` and `visible_from` elapsed | teacher (own contexts) | attacher | attacher; centre_admin |
+| resource_links | context viewers (for a `lesson` context, a pupil counts once it is planned for a class they are enrolled in); students **only** when `student_visible` and `visible_from` elapsed | teacher (own contexts) | attacher | attacher; centre_admin |
 | resource_usage_events | centre staff | system (via `attach_resource`) | — (append-only) | — |
 | resource_access_log | centre_admin; account_owner | system | — (append-only) | — |
 
@@ -2169,8 +2364,9 @@ Three surfaces. Plain CRUD goes through the Supabase client (PostgREST), authori
 | POST | `/v1/invites/:id/resend` | Re-send an unexpired invitation |
 | POST | `/v1/auth/staff/login` | Staff email + password + a Turnstile token. Checks `account_lockouts`, writes `auth_attempts`, then signs in against Supabase Auth (passing the Turnstile token through, since it is single-use) and returns the AAL1 session |
 | POST | `/v1/auth/staff/mfa/verify` | TOTP code for the pending factor. Same lockout and `auth_attempts` treatment, then raises the session to AAL2 |
-| POST | `/v1/auth/student/login` | Centre code + username + PIN **or** password (per `students.auth_method`); lockout-checked, writes `auth_attempts`; mints a Supabase session via the admin API |
+| POST | `/v1/auth/student/login` | Centre code + username + PIN **or** password (per `students.auth_method`); lockout-checked, writes `auth_attempts`; mints a Supabase session via the admin API. The code resolves against `centres.code`, or `previous_code` while `previous_code_until` has not passed (the response then carries the new code so the pupil learns it); an expired previous code returns `code_changed`, never "unknown" |
 | POST | `/v1/auth/student/claim` | Public claim page: claim code → set PIN/password (and under-13 guardian consent) → marks the claim `claimed` |
+| POST | `/v1/auth/student/credential` | A signed-in pupil changes their own PIN or password (decision #61). The current one is required, and a wrong one writes `auth_attempts` and counts toward the student lockout. Under-13 accounts stay PIN-only. Updates the Supabase credential through the admin API |
 | POST | `/v1/auth/guardian-approvals` | Issue a guardian magic link for an under-13 action (mechanism, not a role) |
 | POST | `/v1/auth/guardian-approvals/:token/confirm` | Guardian confirms; unlocks the pending action, records consent |
 | POST | `/v1/admin/accounts` | Superadmin: provision account + owner + first centre in one transaction |
@@ -2193,6 +2389,14 @@ Three surfaces. Plain CRUD goes through the Supabase client (PostgREST), authori
 | Method | Endpoint | Description |
 |---|---|---|
 | GET | `/v1/calendar/:token.ics` | The caller's own timetable as an iCalendar feed, subscribable from a phone or desktop calendar. The token is `profiles.calendar_token` — **the URL is the credential**, so it is unguessable, rotatable (`rotate_calendar_token`) and scoped to one person. Because a calendar client sends no session, the feed carries only session times, titles and rooms: never pupil names, never marks, never anything a lost phone should not show |
+
+#### Classes
+
+| Method | Endpoint | Description |
+|---|---|---|
+| PUT | `/v1/classes/:id/background` | Set or reset a class's background (decision #63). Body `{ "cover": { "presetId", "iconId" \| null } \| null }`, validated against the shared registry (`validateCoverSelection` in `packages/shared` class-covers): an unknown preset or icon, an extra field or a body that isn't an object or null is a validation error, and nothing is written. Writes only `classes.cover_preset_id` / `cover_icon_id`, with the caller's session, so RLS decides who: a centre admin for any class in their centre, a teacher for their own classes; a pupil or another centre is refused. `null` clears both (the subject default); `iconId: null` stores `'none'`. Calls `writes_allowed()` first. Not audited — no class edit is |
+
+> **Why an endpoint for two columns.** Which presets and icons exist lives in the shared TypeScript registry the web app renders from, and the database cannot read it — the column CHECKs guard only the format. A route of its own also keeps a teacher's write access to `classes` at these two columns, instead of widening the general class update.
 
 #### Invoicing
 
@@ -2225,16 +2429,18 @@ Three surfaces. Plain CRUD goes through the Supabase client (PostgREST), authori
 | GET | `/v1/exports/:key` | Analytics exports as CSV or PDF (attendance, results, timesheets) — renamed from `/v1/reports/*` to avoid colliding with the student-reports product domain |
 | POST | `/v1/student-claims/batches/:id/slips` | Render a claim-slip batch PDF via the files pipeline |
 
-> **Server-rendered vs browser-print.** Server-rendered (stored to R2, emailable): invoices, published student reports, claim slips. **Browser print** (no endpoint, nothing stored): the timesheet print view and the centre analytics report. The student's upcoming-sessions **ICS export** is generated client-side from the sessions they can already read — no calendar feed endpoint.
+> **Server-rendered vs browser-print.** Server-rendered (stored to R2, emailable): invoices, published student reports, claim slips. **Browser print** (no endpoint, nothing stored): the timesheet print view and the centre analytics report. **Calendar:** every role's timetable is the subscribable feed at `GET /v1/calendar/:token.ics` above; the prototype's one-off client-side `.ics` download is superseded by it (a row in the plan's divergence table).
 
 #### Billing (Klasio's own)
 
 | Method | Endpoint | Description |
 |---|---|---|
-| POST | `/v1/billing/checkout` | Stripe Checkout session for a plan and billing cycle, at account level; only plans whose `audience` matches `accounts.kind` |
+| GET | `/v1/plans` | **Public**, cached (`Cache-Control: public, max-age=300`). Active plans for an `audience`: name, tagline, prices, limits, capability keys and `marketing_bullets` — never Stripe ids — plus that audience's `trial_offers` row, so signup can promise the trial. From Phase 13 only plans in sync with Stripe. The signup page reads it, and it is the one route whose CORS allow-list adds the marketing origin (`MARKETING_ORIGIN`), so the marketing site may read prices too. The marketing site's only other link into the app is `/signup?plan=<code>`, which preselects that plan when it is on offer and is ignored otherwise |
+| POST | `/v1/billing/checkout` | Stripe Checkout session for a plan and billing cycle, at account level; only plans whose `audience` matches `accounts.kind` and whose Stripe price is in sync |
 | POST | `/v1/billing/portal` | Stripe customer portal link for the account owner |
 | POST | `/v1/billing/pause` | Pause collection between two dates (seasonal pause); resumes automatically |
 | POST | `/v1/webhooks/stripe` | Idempotent webhook receiver → syncs the subscriptions mirror and appends `billing_events` |
+| POST | `/v1/admin/plans/:id/stripe-prices` | Superadmin: create new Stripe Prices for the plan's current monthly and yearly amounts and store their ids and `stripe_amount_*`. New checkouts take them; existing subscriptions keep their price. Audited |
 
 #### Privacy
 
@@ -2249,6 +2455,7 @@ Three surfaces. Plain CRUD goes through the Supabase client (PostgREST), authori
 |---|---|---|
 | GET | `/v1/health` | Liveness probe for Railway |
 | GET | `/v1/version` | Build SHA and deploy time |
+| GET | `/v1/admin/system-health` | Superadmin: the counts the console cannot read itself — `jobs` by status, `email_outbox` backlog and failures, Stripe webhook failures, Resend delivery and bounce rates per template, the last run of each scheduled job and the latest `storage_reconciliations` row. Uptime and latency come from the external monitor and Sentry, not from here |
 
 #### Email worker
 
@@ -2268,19 +2475,22 @@ Invoked with the caller's own JWT, so RLS still applies. **Audited** calls write
 |---|---|---|
 | `provision_account(payload)` | Account (centre or solo) + owner + first centre + domain settings rows in one transaction — shared by `/v1/auth/signup` and the superadmin console | yes |
 | `set_account_plan(account, plan)` | Change plan; reconciles with Stripe; refuses a plan whose `audience` doesn't match the account kind | yes |
-| `update_feature_flag(key, patch)` | Enable/disable, rollout %, scope, targeting | yes |
-| `update_platform_settings(patch)` | Maintenance, read-only, signups, status page, trial offer, defaults | yes |
+| `update_feature_flag(key, patch)` | Enable/disable, account list | yes |
+| `update_platform_settings(patch)` | Maintenance (+ notice and expected end), read-only (+ scope and notice), signups, status page, defaults | yes |
+| `update_trial_offer(audience, patch)` | The free trial for one audience — enabled, days, plan, card up front, end rule | yes |
 | `manage_plan_code(payload)` / `redeem_plan_code(subscription, code)` | Create/deactivate override codes; redeem against a subscription (validates max_redemptions, logs redemption) | yes |
 | `start_support_session(account, centre?, support_ref, reason, ttl)` | Time-boxed (≤ 60 min) impersonation tied to a support email reference; visible to the tenant. Safeguarding-sensitive | yes |
 | `end_support_session(session)` | End early | yes |
 | `clear_lockout(identifier)` / `block_identifier(identifier, reason)` | Security console actions | yes |
 | `update_data_request(request, status, note)` | Progress a SAR/erasure; extension requires a reason | yes |
+| `request_my_data()` | A signed-in pupil aged 13+ files a subject access request about themselves (`kind = 'sar'`, `due_at` one month out); returns their open request instead of filing a second; refused for an under-13 (decision #62) | yes |
 
 #### Account owner
 
 | Function | Description | Audited |
 |---|---|---|
 | `create_centre(payload)` | New centre under the account | yes |
+| `change_centre_code(centre)` | Issue a new platform-unique code; move the current one to `previous_code` with `previous_code_until = today + 30 days` (dropping any older previous code). The UI confirms first and names what breaks — the count of unclaimed claim slips, with a reprint link | yes |
 | `invite_member(centre, email, role)` | Staff invitation | yes |
 | `set_member_role(membership, role)` | Role change (add/remove membership rows — multi-role) | yes |
 | `set_dsl_role(membership, lead\|deputy\|null)` | Assign/clear DSL lead or deputy; one lead per centre enforced | yes |
@@ -2293,12 +2503,11 @@ Invoked with the caller's own JWT, so RLS still applies. **Audited** calls write
 | `enrol_student(class, student, starts_on)` | Capacity, duplicate and `plan_limit(max_students)` checks, then enrol | — |
 | `withdraw_enrolment(enrolment, ends_on)` | End-date; history preserved | — |
 | `set_active_term(centre, term)` | Single write for term context | — |
-| `rotate_calendar_token()` | Issue the caller a new `profiles.calendar_token`, revoking every existing `.ics` subscription — the "I lost my phone" action | — |
 | `regenerate_sessions(class)` | Rebuild future sessions, skipping term breaks | — |
 | `set_class_cover(class, teacher, starts_on, ends_on, reason)` | Assign temporary cover; effective teacher derives per session date | yes |
-| `decide_class_change_request(request, actioned\|declined, note)` | Close a teacher's change request | yes |
+| `decide_class_change_request(request, actioned\|declined, note, result_class?)` | Close a teacher's request; `note` is required to decline and is shown to the teacher. A `new_class` request is actioned by creating the class from the prefilled create-class flow, which passes `result_class` | yes |
 | `offer_waiting_list_place(entry)` | Move a waiting-list entry to `offered` / `enrolled` | — |
-| `publish_announcement(announcement)` | Resolve targets into receipts; refuses an unapproved teacher announcement under `approval_workflow` | — |
+| `publish_announcement(announcement)` | Resolve targets into receipts; refuses an unapproved teacher announcement under `approval_workflow`; a superadmin's resolves to `centre_admin` memberships only | — |
 | `approve_announcement(announcement)` | Approve a `pending_approval` announcement (then publishes) | yes |
 | `generate_invoices(centre, period)` | Draft one invoice per family from delivered sessions × `classes.hourly_rate` for families not already invoiced for the period | — |
 | `issue_invoice(invoice)` | Allocate number, snapshot totals, set `issued_at`; enforces `plan_limit(max_invoices_per_month)`; auto-sends when configured | yes |
@@ -2307,7 +2516,7 @@ Invoked with the caller's own JWT, so RLS still applies. **Audited** calls write
 | `reverse_payment(payment, reason)` | Withdraw a receipt entered in error — stamps `reversed_at` / `reversed_by` / `reversal_reason`; never deletes or edits the row. Reason required | yes |
 | `void_invoice(invoice, reason)` | Void; number never reused | yes |
 | `set_staff_rate(profile, rate)` | New pay rate | yes |
-| `update_privacy_settings(centre, patch)` | Change `teacher_reads_health`, `show_rank_to_students` or `rank_min_age` on `centre_privacy_settings` | yes |
+| `update_privacy_settings(centre, patch)` | Change `teacher_reads_health`, `show_rank_to_students`, `rank_min_age` or `show_class_average_to_students` on `centre_privacy_settings` | yes |
 | `update_my_staff_profile(patch)` | A staff member edits their own contact fields on `staff_details`; pay, employment and notes are untouched | — |
 | `approve_timesheet(entry)` / `adjust_timesheet(entry, delta)` | Pay approval + adjustment | yes |
 | `amend_attendance(record, status, reason)` | Correct a register mark within `amendment_hours`; writes `attendance_amendments` | yes |
@@ -2321,7 +2530,8 @@ Invoked with the caller's own JWT, so RLS still applies. **Audited** calls write
 |---|---|---|
 | `submit_register(session, entries, {note, delivered_by, delivered_minutes})` | Keystone: attendance + session confirmation (`register_late`/`note`/`by_admin`/`delivered_by`) + timesheet derivation for the delivering adult; consumes any active unlock grant; refuses a late submission without a note when required | yes |
 | `log_timesheet_entry(type, minutes, date, note)` | Manual non-teaching work (prep/marking/meeting/training/cover/other); `teaching` type rejected | — |
-| `request_class_change(class, kind, body)` | Opens a `class_change_requests` row for the admin queue | yes |
+| `request_class_change(class?, kind, body, details)` | Opens a `class_change_requests` row for the admin queue — a change to one of the teacher's classes, or a `new_class` request with no class | yes |
+| `fork_lesson(lesson_plan)` | Copy the planned lesson's `lessons` row (setting `forked_from`) and repoint only that `lesson_plans` row at the copy — for a delivery that must diverge without changing the shared lesson for everyone else | — |
 | `create_assignment(payload)` / `assign_homework(...)` | Assignment + questions + targets | — |
 | `release_marks(assignment, submissions[]?)` | Set `marks_released_at` (and status `returned`) for held-back marks | — |
 | `record_result(assessment, student, marks)` / `publish_results(assessment)` | Enter and publish grades | — |
@@ -2342,6 +2552,8 @@ Invoked with the caller's own JWT, so RLS still applies. **Audited** calls write
 | `attach_resource(resource, context_type, context_id, {student_visible, visible_from})` | Creates the link **and** the usage event | — |
 | `detach_resource(link)` | Removes the pointer; the usage event stays | — |
 | `update_resource_link(link, patch)` | Flip `student_visible` / set `visible_from` | — |
+| `replace_resource_file(resource, file, note)` | Insert the next `resource_versions` row and repoint `resources.file_id`; every link now resolves to the new version (creator, or any centre admin for a centre document) | — |
+| `restore_resource_version(resource, version)` | Insert a **new** version carrying the old file (`note = 'Restored version N'`); never deletes or rewrites history | — |
 | `admin_open_resource(resource)` | The audited override path; writes `resource_access_log` | yes |
 
 #### DSL (capability flag)
@@ -2352,6 +2564,12 @@ Invoked with the caller's own JWT, so RLS still applies. **Audited** calls write
 | `log_safeguarding_incident(student, payload)` | Open an incident directly | yes |
 | `add_incident_note(incident, note)` | Append to the chronology | yes |
 | `resolve_incident(incident, outcome)` | Close/monitor an incident | yes |
+
+#### Any authenticated user
+
+| Function | Description | Audited |
+|---|---|---|
+| `rotate_calendar_token()` | Issue the caller a new `profiles.calendar_token`, revoking every existing `.ics` subscription — the "I lost my phone" action. Staff and students alike, own token only | — |
 
 #### Student
 

@@ -1,15 +1,9 @@
 // ══════════════════════════════════════════════════════════════
 //  Mock data — Teacher Dashboard
 //  Loaded as a global script before TeacherDashboard.jsx (see index.html).
+//  Today's sessions are NOT mocked here: the dashboard hero materialises them
+//  from the class store on the shared clock (see TeacherDashboard.jsx).
 // ══════════════════════════════════════════════════════════════
-
-const todaySchedule = [
-  { time: '09:00', subject: 'GCSE Mathematics', group: 'Year 10 – Group A', room: 'Room 3', students: 8, status: 'completed' },
-  { time: '10:30', subject: 'GCSE Mathematics', group: 'Year 11 – Group B', room: 'Room 3', students: 7, status: 'current'   },
-  { time: '13:00', subject: 'A-Level Maths',    group: 'Year 12 – Group A', room: 'Room 5', students: 5, status: 'upcoming'  },
-  { time: '15:00', subject: 'GCSE Mathematics', group: 'Year 9 – Group C',  room: 'Room 3', students: 9, status: 'upcoming'  },
-  { time: '16:30', subject: 'A-Level Maths',    group: 'Year 13 – Group A', room: 'Room 5', students: 4, status: 'upcoming'  },
-];
 
 const homeworkItems = [
   { title: 'Algebra: Simultaneous Equations',   class: 'Yr 10 Group A', due: '22 Apr', submitted: 8,  total: 8,  toMark: 3,  status: 'marking'   },
@@ -40,20 +34,6 @@ const studentProgress = [
   { name: 'Oscar Whitfield',  scores: [64, 61, 60, 58, 59], predicted: 'D',  trend: 'down' },
 ];
 
-const attendanceClass = {
-  group: 'Year 11 – Group B',
-  subject: 'GCSE Mathematics',
-  students: [
-    { name: 'Emma Thompson',  status: 'present' },
-    { name: 'Oliver Chen',    status: 'present' },
-    { name: 'Sophia Patel',   status: null },
-    { name: 'James Wilson',   status: null },
-    { name: 'Amelia Roberts', status: 'absent' },
-    { name: 'Noah Fitzgerald',status: null },
-    { name: 'Ethan Huang',    status: null },
-  ],
-};
-
 // Expose on window for the teacher-metrics selector layer (teacherMetrics.jsx) —
 // Babel-standalone top-level consts are lexical globals, not window properties.
-Object.assign(window, { todaySchedule, homeworkItems, studentProgress, attendanceClass });
+Object.assign(window, { homeworkItems, studentProgress });

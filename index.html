@@ -75,6 +75,9 @@
 <script type="text/babel" src="mocks/invoices.mock.jsx"></script>
 <script type="text/babel" src="mocks/teacherDashboard.mock.jsx"></script>
 <script type="text/babel" src="mocks/teacherPages.mock.jsx"></script>
+<!-- Assessment results seed inputs (attainment baselines + templates) — pupils no
+     longer carry a stored score; assessments.jsx derives every score from results. -->
+<script type="text/babel" src="mocks/assessments.mock.jsx"></script>
 <script type="text/babel" src="mocks/attendance.mock.jsx"></script>
 <script type="text/babel" src="mocks/lessonPlanner.mock.jsx"></script>
 <script type="text/babel" src="mocks/studentDashboard.mock.jsx"></script>
@@ -114,6 +117,30 @@
      stores lazily) and before every teacher screen. -->
 <script type="text/babel" src="teacherGrades.jsx"></script>
 <script type="text/babel" src="teacherMetrics.jsx"></script>
+<!-- Assessments + results and THE score selector (window.klasioScores,
+     decision #50): attainment from results, homework as a separate series, no
+     stored score. Read by both metrics layers, studentData and every progress view. -->
+<script type="text/babel" src="assessments.jsx"></script>
+
+<!-- Class covers (window.klasioCovers): the background of class cards and banners —
+     the registry, the one class read path (classCover), who may change it
+     (canChangeBackground), CoverArt and the "Change background" dialog.
+     classCoverIcons.js is generated icon data — a plain script, so it skips Babel.
+     Loads before studentData (which resolves each enrolment's cover) and every page
+     that renders a class card or banner. -->
+<script src="classCoverIcons.js"></script>
+<script type="text/babel" src="classCovers.jsx"></script>
+<!-- Dev only: the class cover gallery (every background in both formats, for
+     curation). Loaded only on a local host, so the deployed prototype never fetches
+     it; open it at ?view=cover-gallery. -->
+<script>
+  if (/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) {
+    var coverGalleryScript = document.createElement('script');
+    coverGalleryScript.type = 'text/babel';
+    coverGalleryScript.src = 'classCoverGallery.jsx';
+    document.currentScript.after(coverGalleryScript);
+  }
+</script>
 
 <!-- Student-tier single sources of truth (§1–§7): canonical principal, enrolments,
      grade model, rollup metrics, teacher resolution + active term. Loads after the
@@ -132,12 +159,20 @@
      Centres.jsx (subscription resolution) which consume window.usePlansStore etc. -->
 <script type="text/babel" src="Plans.jsx"></script>
 
-<!-- Communications module (announcements + messages; consumes communications.mock + SuperAdmin's SACommsPage) -->
+<!-- Communications module (announcements + messages; consumes communications.mock) -->
 <script type="text/babel" src="Communications.jsx"></script>
 
 <script type="text/babel" src="SuperAdmin.jsx"></script>
+<!-- Public pages: status page preview, maintenance screen, "Public pages" preview list
+     (reads SuperAdmin.jsx's platform settings + health roll-up). The 404 page is the
+     standalone 404.html at the repo root. -->
+<script type="text/babel" src="PublicPages.jsx"></script>
 <script type="text/babel" src="AdminDashboard.jsx"></script>
 <script type="text/babel" src="AdminPages.jsx"></script>
+<!-- Class change requests (teacher → admin queue, decision #46). Reuses
+     useAdminStore; the admin queue renders inside AdminClassesPage and the
+     teacher modal on My Classes / class Settings. -->
+<script type="text/babel" src="ClassRequests.jsx"></script>
 
 <!-- Invoices module (admin ledger + workflow: derived status, schedules,
      detail drawer, reminders, CSV reconciliation, analytics).
@@ -173,14 +208,18 @@
      useTimesheetStore at call-time, so load order vs those files is not load-bearing;
      must precede TeacherPages.jsx which renders the screen. -->
 <script type="text/babel" src="attendance.jsx"></script>
+<!-- Lessons (reusable content) + planned lessons (deliveries by class id + date),
+     decision #47. window.klasioLessons — read by the planner, the dashboard hero,
+     class detail (teacher + admin), the session drawer and Resources. -->
+<script type="text/babel" src="lessons.jsx"></script>
 <script type="text/babel" src="TeacherPages.jsx"></script>
 <!-- Centre-wide admin Attendance page. Loads after TeacherPages.jsx so it can reuse
      the shared register drawer / session row / unlock chooser it exposes on window;
      dispatched by the AdminPages router as window.AdminAttendancePage. -->
 <script type="text/babel" src="AttendanceAdmin.jsx"></script>
-<!-- Resources (Materials) library + attach mechanism + admin session detail +
+<!-- Resources (Materials) library + attach mechanism + the session drawer +
      offboarding step. Loads after the data layers (reads them through window at
-     render time); exposes ResourcesPage / AttachResourcesPanel / ResourceSessionDetail
+     render time); exposes ResourcesPage / AttachResourcesPanel / SessionDrawer
      / OffboardResourcesStep + window.klasioResources for the pages that attach. -->
 <script type="text/babel" src="Resources.jsx"></script>
 <script type="text/babel" src="StudentDashboard.jsx"></script>
@@ -207,7 +246,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "density": "compact"
 }/*EDITMODE-END*/;
 
-// Build a breadcrumb trail (e.g. "Reports › All Reports") from the active page id
+// Build a breadcrumb trail (e.g. "Homework › Analytics") from the active page id
 // using NAV_CONFIG, mirroring the sidebar's parent/sub structure.
 const buildCrumbs = (role, page) => {
   const cfg = window.NAV_CONFIG[role];
@@ -481,6 +520,10 @@ const TopBar = ({ view, page, comms, onNavigate, collapsed, onToggleSidebar, ide
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 4 }}>
         {/* "Viewing as" student switcher — student surface only. */}
         {view === 'student' && <StudentSwitcher activeStudent={activeStudent} onPick={(id) => window.__setActiveStudent && window.__setActiveStudent(id)} />}
+        {/* Raise a safeguarding concern — every staff member, every screen. The
+            person who notices is rarely the DSL, and a teacher never opens the
+            Safeguarding page, so the action lives in the chrome. */}
+        {(view === 'admin' || view === 'teacher') && comms && window.RaiseConcernButton && <RaiseConcernButton comms={comms} />}
         {/* Settings — relocated from the sidebar; sits beside notifications. */}
         <button onClick={() => onNavigate(view, 'settings')} title="Settings"
           style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6B7280', padding: 5, borderRadius: 7, display: 'flex' }}
@@ -556,8 +599,33 @@ const App = () => {
   const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
   // There is no marketing/landing page — the app boots straight into the admin
   // dashboard. Login/Signup are still reachable as public views (log out, deep link).
-  const [view, setView]     = React.useState('admin');
+  // The marketing site (a separate project) links in only to signup, carrying the
+  // chosen plan: `?plan=<code>` (or `?view=signup`) boots straight onto Sign up,
+  // where the plan is preselected. `?view=` also opens the other public pages
+  // directly — login, status (the status page preview) and maintenance (the
+  // maintenance screen preview) — which is how the owner console's "Public pages"
+  // list previews them in a new tab.
+  const [view, setView]     = React.useState(() => {
+    try {
+      const q = new URLSearchParams(window.location.search);
+      if (q.get('plan')) return 'signup';
+      const v = q.get('view');
+      if (['login', 'signup', 'status', 'maintenance'].includes(v)) return v;
+      // Dev only: the class cover gallery exists only where its script was loaded (a local host).
+      if (v === 'cover-gallery' && window.CoverGallery) return v;
+    } catch (e) {}
+    return 'admin';
+  });
   const [page, setPage]     = React.useState('dashboard');
+  // Navigating to the page you're already on changes no state, so nothing would
+  // happen. Announce it instead: a page showing a full-page takeover (a report,
+  // "Reports due") listens for `klasio:renav` and returns to its own top level.
+  const pageRef = React.useRef(page);
+  pageRef.current = page;
+  const goPage = (np) => {
+    if (np === pageRef.current) window.dispatchEvent(new CustomEvent('klasio:renav', { detail: np }));
+    setPage(np);
+  };
   const [plannerArgs, setPlannerArgs] = React.useState(null);
   const [renderKey, setRenderKey] = React.useState(0);
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
@@ -671,9 +739,21 @@ const App = () => {
   // Public, full-screen, unauthenticated views — gated ahead of the app shell
   // (no sidebar/topbar), like the claim page.
   const isAuth = view === 'login' || view === 'signup';
-  const commsRole = isAuth ? 'admin' : view;
+  // Public, full-screen views with no app shell: the auth pages plus the two
+  // previews (status page, maintenance screen) and, locally, the cover gallery.
+  const isPublic = isAuth || view === 'status' || view === 'maintenance' || view === 'cover-gallery';
+  // Platform switches (Platform Controls). Subscribed so flipping one in the owner
+  // console re-renders the tenant shell live.
+  const [platform] = window.usePlatformSettings ? window.usePlatformSettings() : [{}];
+  const ownerInside = !!(window.readImpersonation && window.readImpersonation());
+  const maintenanceBlocks = !!platform.maintenanceMode && view !== 'superadmin' && !ownerInside;
+  const commsRole = isPublic ? 'admin' : view;
   const commsCtx  = React.useMemo(() => window.commsContext ? window.commsContext(commsRole) : null, [commsRole]);
   const comms     = window.useComms ? window.useComms(commsCtx) : null;
+  // Pages that need the ONE lifted comms instance without prop-drilling (the
+  // student profile's safeguarding chronology) read it here. A second useComms()
+  // instance would persist its own stale copy of the store and clobber this one.
+  window.__comms = comms;
 
   // Resources — pending access-request count for the acting user, surfaced as a
   // sidebar badge on the Resources item (D3). Re-derived live when a request is
@@ -685,6 +765,15 @@ const App = () => {
     return () => window.removeEventListener('klasio-resources-changed', fn);
   }, []);
   const resReqCount = (window.resourceRequestCount && (view === 'admin' || view === 'teacher')) ? window.resourceRequestCount(view) : 0;
+  // Class change requests waiting for an admin (decision #46) — badged on the admin
+  // Classes item by the same mechanism, re-derived when a request is made/decided.
+  const [crTick, setCrTick] = React.useState(0);
+  React.useEffect(() => {
+    const fn = () => setCrTick(t => t + 1);
+    window.addEventListener('klasio-classrequests-changed', fn);
+    return () => window.removeEventListener('klasio-classrequests-changed', fn);
+  }, []);
+  const classReqCount = (view === 'admin' && window.klasioClassRequests) ? window.klasioClassRequests.openCount() : 0;
   const sidebarBadges = React.useMemo(() => {
     const b = {};
     if (comms) {
@@ -697,8 +786,9 @@ const App = () => {
       b['comms:messages']      = comms.unread.messages;
     }
     if (resReqCount) b.resources = resReqCount;
+    if (classReqCount) b.classes = classReqCount;
     return Object.keys(b).length ? b : null;
-  }, [comms && comms.unread.announcements, comms && comms.unread.messages, resReqCount, resTick]);
+  }, [comms && comms.unread.announcements, comms && comms.unread.messages, resReqCount, resTick, classReqCount, crTick]);
 
   React.useLayoutEffect(() => {
     if (window.DS) {
@@ -719,12 +809,16 @@ const PAGE_ALIASES = {
   'timesheets:review': 'timesheets',      // Staff dropdown gone; Timesheets is top-level
   'comms:settings':    'settings:comms',  // Comms settings became a Settings tab
   'comms:inbox':       'comms:messages',
+  'comms:support':     'support',         // owner Support left Communications (support-sessions page)
+  'reports:generate':  'analytics',       // centre exports left Reports for their own Analytics page
+  'reports:overview':  'reports',         // Reports is one page now (figures + list);
+  'reports:browse':    'reports',         // only reports:settings is still a route
   // No role has a bare `comms` parent item any more (every role's Announcements /
   // Messages are top-level nav items), so pin the landing section explicitly.
   'comms':             'comms:announcements',
 };
 
-// Expand a bare nav id (e.g. "reports") to its first sub-section ("reports:overview")
+// Expand a bare nav id (e.g. "homework") to its first sub-section ("homework:assignments")
   // when that item has a dropdown, so the active section is always canonical — this
   // keeps the sidebar dropdown + sub-item highlighting consistent no matter the entry
   // point (sidebar click, PPTX export, Tweaks panel).
@@ -744,7 +838,7 @@ const PAGE_ALIASES = {
       setAccount('centre'); // every route here is a centre-demo route
       // Public auth views aren't role nav — don't normalize against NAV_CONFIG.
       // ('landing' is gone; anything asking for it lands on Log in instead.)
-      if (role === 'login' || role === 'signup' || role === 'landing') { setView(role === 'landing' ? 'login' : role); setPage('dashboard'); }
+      if (['login', 'signup', 'landing', 'status', 'maintenance'].includes(role)) { setView(role === 'landing' ? 'login' : role); setPage('dashboard'); }
       // The standalone "Set up centre" page is gone — setup is now a right-hand drawer
       // on the Centres page. Rewrite any admin/setup navigation to open it for the
       // active centre (covers the dashboard banner, signup CTA and sub-flow back links).
@@ -756,21 +850,24 @@ const PAGE_ALIASES = {
       // routes (§3); rewrite the old settings deep links so existing CTAs still land.
       else if (role === 'admin' && pg === 'settings:billing') { setView('admin'); setPage('plans'); }
       else if (role === 'admin' && pg === 'settings:storage') { setView('admin'); setPage('storage'); }
-      else { setView(role); setPage(normalizePage(role, pg)); }
+      else if (role === 'superadmin' && pg === 'settings:storage') { setView('superadmin'); setPage('storage'); }
+      else { setView(role); goPage(normalizePage(role, pg)); }
     };
     // Open the public account-claim page for a mock invite token / claim code.
     window.__openClaim = (id) => setClaimId(id || '');
-    window.__openLessonPlanner = (group, date, mode) => {
-      setPlannerArgs({ group, date, mode });
+    // Open the planner on one class's delivery for a date (class ID, never the
+    // group label — decision #47). mode: 'view' | 'edit'.
+    window.__openLessonPlanner = (classId, date, mode) => {
+      setPlannerArgs({ classId, date, mode, at: Date.now() });
       setView('teacher');
       setPage('lesson_planner');
     };
   }, []);
-  const handleNav = (p)   => { setPlannerArgs(null); setPage(normalizePage(view, p)); };
+  const handleNav = (p)   => { setPlannerArgs(null); goPage(normalizePage(view, p)); };
 
   const renderContent = () => {
     // Nav items with sub-sections route on a `<parent>:<section>` id (e.g.
-    // reports:browse). Split the active page into its parent and section so the
+    // homework:analytics, reports:settings). Split the active page into its parent and section so the
     // owning page can open straight to that section.
     const parent  = page.split(':')[0];
     const section = page.includes(':') ? page.split(':')[1] : null;
@@ -794,6 +891,7 @@ const PAGE_ALIASES = {
       if (parent === 'plans')     return accountOwner ? <AccountBillingPage /> : <AccountLocked />;
       if (parent === 'storage')   return accountOwner ? <AccountStoragePage /> : <AccountLocked />;
       if (parent === 'reports')   return <AdminReportsConfig section={section} />;
+      if (parent === 'analytics') return <AdminAnalyticsPage />;
       // Resources (Materials) — admin lens of the same page (no Mine/Shared/Requests).
       if (parent === 'resources') return <ResourcesPage role="admin" />;
       // Onboarding flows (Onboarding.jsx) — full-page admin routes reached via adminNav.
@@ -836,9 +934,17 @@ const PAGE_ALIASES = {
         <div style={{ flex: 1, overflow: 'auto' }}>
           <ClaimPage identifier={claimId} onExit={() => { setClaimId(null); setView('login'); setPage('dashboard'); }} />
         </div>
-      ) : isAuth ? (
-        <div style={{ flex: 1, overflow: 'auto' }}>
-          {view === 'signup' ? <SignupPage /> : <LoginPage />}
+      ) : isPublic ? (
+        <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
+          {view === 'cover-gallery' ? (window.CoverGallery ? <window.CoverGallery /> : null)
+            : view === 'status' ? (window.StatusPage ? <window.StatusPage /> : null)
+            : view === 'maintenance' ? (window.MaintenanceScreen ? <window.MaintenanceScreen preview /> : null)
+            : view === 'signup' ? <SignupPage /> : <LoginPage />}
+        </div>
+      ) : maintenanceBlocks && window.MaintenanceScreen ? (
+        // Maintenance mode: the app is unavailable to every tenant — centre and solo.
+        <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
+          <window.MaintenanceScreen audience={view === 'student' ? 'student' : 'staff'} />
         </div>
       ) : account === 'solo' && window.SoloShell ? (
         // Solo tutor demo account — its own shell (no role strip, no centre data).
@@ -897,6 +1003,8 @@ const PAGE_ALIASES = {
                 (Superadmin impersonation). Visible across every view, with an
                 Exit that writes the exit audit entry. */}
             {window.SAImpersonationBanner && <window.SAImpersonationBanner />}
+            {/* Read-only mode (platform-wide or this account) or a suspended account. */}
+            {view !== 'superadmin' && window.SAReadOnlyBanner && <window.SAReadOnlyBanner accountId={window.STG_SELF_ACCT || 'acc_brightminds'} />}
             {/* The header is sticky *inside* the scroll area so page content
                 scrolls beneath it — that's what makes the glass blur visible. */}
             <div style={{ flex: 1, overflow: 'auto', position: 'relative' }}>
@@ -922,14 +1030,18 @@ const PAGE_ALIASES = {
           {[
             ['login',       'login',        'Public — Log in'],
             ['signup',      'signup',       'Public — Sign up'],
+            ['status',      'status',       'Public — Status page (preview)'],
+            ['maintenance', 'maintenance',  'Public — Maintenance screen (preview)'],
             ['superadmin',  'dashboard',    'SuperAdmin — Overview'],
             ['superadmin',  'centres',      'SuperAdmin — Centres'],
             ['superadmin',  'users',        'SuperAdmin — Users'],
             ['superadmin',  'revenue',      'SuperAdmin — Revenue'],
+            ['superadmin',  'pricing',      'SuperAdmin — Pricing'],
             ['superadmin',  'engagement',   'SuperAdmin — Engagement'],
             ['superadmin',  'system',       'SuperAdmin — System Health'],
+            ['superadmin',  'storage',      'SuperAdmin — Storage'],
             ['superadmin',  'comms:announcements', 'SuperAdmin — Announcements'],
-            ['superadmin',  'comms:support',       'SuperAdmin — Support'],
+            ['superadmin',  'support',      'SuperAdmin — Support sessions'],
             ['superadmin',  'security',     'SuperAdmin — Security & Audit'],
             ['superadmin',  'controls',     'SuperAdmin — Platform Controls'],
             ['superadmin',  'settings',     'SuperAdmin — Settings'],
@@ -954,6 +1066,7 @@ const PAGE_ALIASES = {
             ['admin',    'invoices',   'Admin — Invoices'],
             ['admin',    'timesheets', 'Admin — Timesheets'],
             ['admin',    'reports',    'Admin — Reports'],
+            ['admin',    'analytics',  'Admin — Analytics'],
             ['admin',    'comms:safeguarding', 'Admin — Safeguarding'],
             ['admin',    'comms:announcements', 'Admin — Announcements'],
             ['admin',    'comms:messages',      'Admin — Messages'],
@@ -984,7 +1097,7 @@ const PAGE_ALIASES = {
             ['student',  'settings',   'Student — Settings'],
           ].map(([role, pg, label]) => {
             // Compound targets (comms:messages) match exactly; bare ones match any
-            // section of that page (reports → reports:browse).
+            // section of that page (homework → homework:analytics).
             const isActive = account === 'centre' && view === role && (pg.includes(':') ? page === pg : page.split(':')[0] === pg);
             return (
               <button key={label}

@@ -6,71 +6,13 @@
 // grade model and the active term all come from the student SoT
 // (studentData.jsx → window.klasioStudent), loaded before this file. Homework lives
 // in Homework.jsx (StudentHomework); reports come from the shared reports store
-// (Reports.jsx, window.StudentReports). The Overview "due soon" list comes from
-// klasioStudent.metrics.homeworkSummary(), which reads the live homework store.
+// (Reports.jsx, window.StudentReports). The Overview's ranked "Up next" pools the
+// live homework store, the pupil's real sessions and unread reports (decision #56);
+// every session opens the read-only session view (decision #60).
 
 // ─── Overview page ─────────────────────────────────────────────────────────────
-// Subject themes — pastel cards with abstract shapes
-const subjectThemes = {
-  'Mathematics':   { tint:'#FEEEE0', tint2:'#F8C9A4', deep:'#A6531B', text:'#79300E', shape:'#FA9B62', shapeShadow:'#F4B58F', symbol:'square', glyph:'∫' },
-  'Further Maths': { tint:'#EFE9FC', tint2:'#C9BAF5', deep:'#6B5BA8', text:'#332083', shape:'#8D75E9', shapeShadow:'#B6A6F5', symbol:'diamond', glyph:'Σ' },
-  'Physics':       { tint:'#E7F4FD', tint2:'#B4DBF6', deep:'#4B7EA8', text:'#124979', shape:'#5BA6EA', shapeShadow:'#86BFEC', symbol:'circle', glyph:'⚛' },
-  'Chemistry':     { tint:'#FDEFE0', tint2:'#F8CFA2', deep:'#9A5B22', text:'#7A3E12', shape:'#F0A45C', shapeShadow:'#F6C394', symbol:'diamond', glyph:'⚗' },
-  'Biology':       { tint:'#E7F6EC', tint2:'#BEE7CC', deep:'#2E7D48', text:'#14532D', shape:'#4FB477', shapeShadow:'#93D3AC', symbol:'circle', glyph:'✿' },
-  'English':       { tint:'#FDE9F1', tint2:'#F6C2D8', deep:'#A83B6B', text:'#7A1E45', shape:'#E96FA0', shapeShadow:'#F2A8C6', symbol:'square', glyph:'A' },
-  'English Literature': { tint:'#FDE9F1', tint2:'#F6C2D8', deep:'#A83B6B', text:'#7A1E45', shape:'#E96FA0', shapeShadow:'#F2A8C6', symbol:'square', glyph:'A' },
-  'English Lit.':  { tint:'#FDE9F1', tint2:'#F6C2D8', deep:'#A83B6B', text:'#7A1E45', shape:'#E96FA0', shapeShadow:'#F2A8C6', symbol:'square', glyph:'A' },
-};
-
-// Any subject NOT curated above still gets a clean, subject-coloured card (built
-// from the enrolment's subjectColor) with a monogram glyph — so a student's real
-// subjects never fall back to the Maths ∫ card.
-const hexToTheme = (hex, subject) => {
-  const c = /^#[0-9a-f]{6}$/i.test(hex || '') ? hex : '#0F9D7F';
-  return {
-    tint: c + '14', tint2: c + '30', deep: c, text: c,
-    shape: c, shapeShadow: c + '80', symbol: 'circle',
-    glyph: (String(subject || '?').trim()[0] || '?').toUpperCase(),
-  };
-};
-
-const SubjectShape = ({ theme }) => {
-  if (theme.symbol === 'square') {
-    // Two rounded squares stacked, slight rotation, plus a small white circle
-    return (
-      <svg width="150" height="150" viewBox="0 0 150 150" style={{ position:'absolute', top:6, right:0 }}>
-        {/* shadow square behind */}
-        <rect x="48" y="34" width="78" height="78" rx="14" transform="rotate(18 87 73)" fill={theme.shapeShadow} />
-        {/* main square */}
-        <rect x="42" y="28" width="78" height="78" rx="14" transform="rotate(10 81 67)" fill={theme.shape} />
-        {/* glyph inside main square */}
-        <text x="81" y="78" textAnchor="middle" fontSize="38" fontWeight="700" fill="#fff" fontFamily="Georgia, serif" transform="rotate(10 81 67)">{theme.glyph}</text>
-        {/* small white circle bottom-left */}
-        <circle cx="40" cy="112" r="10" fill="#FFFFFF" />
-      </svg>
-    );
-  }
-  if (theme.symbol === 'diamond') {
-    // Single big rotated rounded square (appears as a diamond)
-    return (
-      <svg width="150" height="150" viewBox="0 0 150 150" style={{ position:'absolute', top:6, right:0 }}>
-        <rect x="48" y="30" width="72" height="72" rx="12" transform="rotate(45 84 66)" fill={theme.shape} />
-        <text x="84" y="78" textAnchor="middle" fontSize="36" fontWeight="700" fill="#fff" fontFamily="Georgia, serif">{theme.glyph}</text>
-      </svg>
-    );
-  }
-  // circle
-  return (
-    <svg width="150" height="150" viewBox="0 0 150 150" style={{ position:'absolute', top:6, right:0 }}>
-      {/* outer ring */}
-      <circle cx="86" cy="66" r="46" fill="none" stroke={theme.shape} strokeWidth="2" opacity="0.45" />
-      {/* main circle */}
-      <circle cx="86" cy="66" r="38" fill={theme.shape} />
-      {/* glyph inside circle */}
-      <text x="86" y="79" textAnchor="middle" fontSize="38" fontWeight="700" fill="#fff" fontFamily="'Segoe UI Symbol', 'Apple Color Emoji', system-ui, sans-serif">{theme.glyph}</text>
-    </svg>
-  );
-};
+// Class cards paint their background with the class's cover (classCovers.jsx),
+// resolved once per enrolment by the student data layer (enr.coverArt).
 
 // Reflow helper — the dashboard right rail sits beside the main column, but drops
 // below it (same order) under ~1100px (D5). Inline styles can't do a media query, so
@@ -85,125 +27,226 @@ const useViewportNarrow = (bp = 1100) => {
   return narrow;
 };
 
-// ─── Reusable month calendar ─────────────────────────────────────────────────────
-// ONE month-grid implementation, used by both the full Sessions page (variant="full",
-// event chips in each cell) and the dashboard right-rail mini calendar
-// (variant="mini", dotted session days + day selection). Session dates, today and the
-// per-subject colour all come from the caller — the grid never invents a date.
-const MonthCalendar = ({
-  month, today, sessionsByDay = {}, subjColor = () => DS.accent,
-  variant = 'full', selectedDay = null, onSelectDay,
-  onPrev, onNext, onToday, legend, title,
-}) => {
-  const cells = [];
-  for (let i = 0; i < month.firstDow; i++) cells.push(null);
-  for (let d = 1; d <= month.days; d++) cells.push(d);
-  while (cells.length % 7 !== 0) cells.push(null);
-  const mini = variant === 'mini';
-  const navBtn = (label, onClick, rotate) => (
-    <button aria-label={label} onClick={onClick} style={{
-      width: mini ? 26 : 30, height: mini ? 26 : 30, borderRadius:7, border:`1px solid ${DS.border}`,
-      background:DS.bg, cursor:'pointer', display:'inline-flex', alignItems:'center', justifyContent:'center',
-    }}>
-      <span style={{ display:'inline-flex', transform: rotate ? 'rotate(180deg)' : 'none' }}>
-        <Icon name="chevron_r" size={13} color={DS.muted} strokeWidth={2} />
-      </span>
-    </button>
+// The month grid (MonthCalendar) lives in shared.jsx — the teacher Timetable uses it too.
+
+// ─── Sessions, as a pupil sees them (decision #60) ─────────────────────────────
+// A session's status is the pupil's OWN mark read back from the class register —
+// never the class's figures. Upcoming / live / cancelled come from the timetable.
+const STU_SESSION_STATUS = {
+  upcoming:          { label: 'Upcoming',            tone: 'neutral'  },
+  live:              { label: 'Happening now',       tone: 'accent'   },
+  present:           { label: 'Present',             tone: 'positive' },
+  late:              { label: 'Late',                tone: 'warning'  },
+  absent:            { label: 'Absent',              tone: 'negative' },
+  excused:           { label: 'Excused',             tone: 'neutral'  },
+  cancelled:         { label: 'Cancelled',           tone: 'neutral'  },
+  not_marked:        { label: 'Not marked',          tone: 'neutral'  },
+  awaiting_register: { label: 'Register not in yet', tone: 'neutral'  },
+};
+const StuSessionPill = ({ status }) => {
+  const m = STU_SESSION_STATUS[status] || STU_SESSION_STATUS.upcoming;
+  return <StatusPill tone={m.tone}>{m.label}</StatusPill>;
+};
+const STU_ATTENDANCE_LINE = {
+  present: 'Your teacher marked you present.',
+  late: 'You were marked late.',
+  absent: 'You were marked absent. If that’s wrong, speak to your teacher.',
+  excused: 'Your absence was excused.',
+  not_marked: 'You weren’t marked on this register.',
+  awaiting_register: 'Your teacher hasn’t submitted the register for this lesson yet.',
+  cancelled: 'This lesson was cancelled.',
+};
+
+// "Today" / "Tomorrow" / "In 3 days" / "Yesterday" / "5 days ago" on the register clock.
+const stuDayDiff = (ms, nowMs) => {
+  const a = new Date(ms); a.setHours(0, 0, 0, 0);
+  const b = new Date(nowMs); b.setHours(0, 0, 0, 0);
+  return Math.round((a - b) / 86400000);
+};
+const stuRelDay = (ms, nowMs) => {
+  const d = stuDayDiff(ms, nowMs);
+  if (d === 0) return 'Today';
+  if (d === 1) return 'Tomorrow';
+  if (d === -1) return 'Yesterday';
+  return d > 0 ? `In ${d} days` : `${-d} days ago`;
+};
+
+// A month the pupil can page through, opening on today's month (register clock).
+const useStudentMonth = () => {
+  const K = window.klasioStudent;
+  const cal = K.activeTerm.calendar;
+  const [ym, setYm] = React.useState({ y: cal.y, m: cal.m });
+  const month = K.monthModel(ym.y, ym.m);
+  const step = (n) => setYm(p => { const d = new Date(p.y, p.m + n, 1); return { y: d.getFullYear(), m: d.getMonth() }; });
+  const byDay = {};
+  K.sessions.all.filter(s => s.monthKey === month.key).forEach(s => { (byDay[s.day] = byDay[s.day] || []).push(s); });
+  return {
+    month, byDay, today: month.key === cal.key ? cal.today : null,
+    prev: () => step(-1), next: () => step(1), toToday: () => setYm({ y: cal.y, m: cal.m }),
+  };
+};
+
+// ─── The read-only session view (decision #60) ─────────────────────────────────
+// When, where and who; the pupil's own attendance; homework set in that lesson;
+// files the teacher made visible to pupils; and — only when the teacher ticked
+// "Share with the class" on that planned lesson — its title, topic and objectives.
+// A plan's notes for the group, its structure and the reflection are the teacher's
+// working document and never reach this view.
+const StudentSessionDrawer = ({ sessionId, onClose, onNav }) => {
+  const K = window.klasioStudent;
+  const s = sessionId ? K.sessionById(sessionId) : null;
+  if (!s) return null;
+  const now = K.now();
+  const past = s.ends_at < now;
+  const summary = K.lessonSummaryFor(s.id);
+  const hw = (past || s.status === 'live') ? K.homeworkForSession(s.id) : [];
+  const files = K.filesForSession(s.id);
+  const objectives = summary && summary.objectives
+    ? summary.objectives.split('\n').map(l => l.replace(/^\s*[•\-*]\s*/, '').trim()).filter(Boolean) : [];
+  const section = (title, children) => (
+    <div style={{ padding: '16px 0', borderTop: `1px solid ${DS.border}` }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: DS.faint, letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 10 }}>{title}</div>
+      {children}
+    </div>
   );
+  const quiet = (t) => <div style={{ fontSize: 13, color: DS.muted, lineHeight: 1.5 }}>{t}</div>;
+  const openClass = () => { window.__studentClassId = s.classId; onClose(); onNav && onNav('classes:detail'); };
+  const attLine = s.status === 'cancelled'
+    ? (past ? STU_ATTENDANCE_LINE.cancelled : 'This lesson has been cancelled.')
+    : past ? STU_ATTENDANCE_LINE[s.status] : null;
+
   return (
-    <div>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom: mini ? 10 : 16 }}>
-        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-          {!mini && <Icon name="calendar" size={16} color={DS.muted} />}
-          <div style={{ fontSize: mini ? 14 : 17, fontWeight:700, color:DS.text, letterSpacing:'-0.3px' }}>{title || month.name}</div>
+    <SlideOver open onClose={onClose} icon="calendar" iconColor={s.color} width={460}
+      title={`${s.subject} · ${s.date}`} subtitle={`${s.time} · ${stuRelDay(s.starts_at, now)}`}
+      footer={<><Btn variant="secondary" small onClick={onClose}>Close</Btn><Btn variant="primary" small icon="book" onClick={openClass}>Open class</Btn></>}>
+      <div style={{ paddingBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 10 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 600, color: DS.text }}>{s.className} · {s.group}</div>
+          <StuSessionPill status={s.status} />
         </div>
-        <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-          {legend}
-          {onPrev && navBtn('Previous month', onPrev, true)}
-          {onToday && <button onClick={onToday} style={{ padding: mini ? '4px 9px' : '6px 12px', borderRadius:7, border:`1px solid ${DS.border}`, background:DS.bg, fontSize:12, fontWeight:500, color:DS.sub, cursor:'pointer' }}>Today</button>}
-          {onNext && navBtn('Next month', onNext, false)}
-        </div>
-      </div>
-
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(7, 1fr)', gap: mini ? 3 : 6, marginBottom: mini ? 3 : 6 }}>
-        {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(d => (
-          <div key={d} style={{ fontSize: mini ? 9 : 11, fontWeight:700, color:DS.muted, letterSpacing:'1px', textAlign:'center', padding: mini ? '2px 0' : '4px 0' }}>{d.toUpperCase()}</div>
+        {[['clock', s.time], ['home', s.room], ['user', s.coverFor ? `${s.teacher} (covering for ${s.coverFor})` : s.teacher]].map(([ic, t]) => (
+          <div key={ic} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: DS.sub, padding: '3px 0' }}>
+            <Icon name={ic} size={14} color={DS.faint} />{t}
+          </div>
         ))}
+        {attLine && <div style={{ marginTop: 10, fontSize: 12.5, color: DS.muted, lineHeight: 1.5 }}>{attLine}</div>}
       </div>
 
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(7, 1fr)', gap: mini ? 3 : 6 }}>
-        {cells.map((d, i) => {
-          const isToday = d === today;
-          const items = (d && sessionsByDay[d]) || [];
-          const selected = d != null && d === selectedDay;
-          if (mini) {
-            const clickable = d != null;
-            return (
-              <button key={i} disabled={!clickable} onClick={() => clickable && onSelectDay && onSelectDay(d)} style={{
-                aspectRatio:'1 / 1', border: selected ? `1.5px solid ${DS.accent}` : isToday ? `1.5px solid ${DS.accentBorder}` : '1px solid transparent',
-                background: d == null ? 'transparent' : selected ? DS.accentLight : 'transparent',
-                borderRadius:8, cursor: clickable ? 'pointer' : 'default', padding:0, position:'relative',
-                display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:2,
-                opacity: d == null ? 0 : 1,
-              }}>
-                <span style={{ fontSize:11.5, fontWeight: isToday || selected ? 700 : 500, color: isToday ? DS.accent : DS.sub, lineHeight:1 }}>{d}</span>
-                <span style={{ display:'flex', gap:2, height:4 }}>
-                  {items.slice(0, 3).map((s, j) => (
-                    <span key={j} style={{ width:4, height:4, borderRadius:'50%', background: s.status === 'missed' ? DS.danger : subjColor(s.subject) }} />
-                  ))}
-                </span>
-              </button>
-            );
-          }
-          return (
-            <div key={i} style={{
-              minHeight:90, padding:'8px 8px 6px', borderRadius:9,
-              background: d == null ? 'transparent' : isToday ? DS.accentLight : DS.surface,
-              border: d == null ? 'none' : `1px solid ${isToday ? DS.accentBorder : DS.border}`,
-              opacity: d == null ? 0 : 1, display:'flex', flexDirection:'column', gap:4,
-            }}>
-              {d != null && (<>
-                <div style={{ fontSize:12, fontWeight: isToday ? 700 : 600, color: isToday ? DS.accent : DS.sub, marginBottom:2 }}>{d}</div>
-                {items.slice(0, 3).map((s, j) => {
-                  const color = subjColor(s.subject);
-                  const missed = s.status === 'missed';
-                  return (
-                    <div key={j} title={`${s.subject} · ${s.time}`} style={{
-                      fontSize:10.5, fontWeight:600, color: missed ? DS.danger : color,
-                      background: missed ? DS.dangerBg : color + '18', borderLeft:`2px solid ${missed ? DS.danger : color}`,
-                      padding:'3px 6px', borderRadius:4, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
-                      textDecoration: missed ? 'line-through' : 'none',
-                    }}>{s.time.split('–')[0]} {s.subject.split(' ')[0]}</div>
-                  );
-                })}
-                {items.length > 3 && <div style={{ fontSize:10, color:DS.muted }}>+{items.length - 3} more</div>}
-              </>)}
-            </div>
-          );
-        })}
+      {section(past ? 'What we covered' : 'What’s planned', summary ? (
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: DS.text }}>{summary.title || 'Untitled lesson'}</div>
+          {summary.topic && <div style={{ fontSize: 12.5, color: DS.muted, marginTop: 2 }}>{summary.topic}</div>}
+          {objectives.length > 0 && (
+            <ul style={{ margin: '10px 0 0', paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 5 }}>
+              {objectives.map((o, i) => <li key={i} style={{ fontSize: 13, color: DS.sub, lineHeight: 1.45 }}>{o}</li>)}
+            </ul>
+          )}
+        </div>
+      ) : quiet(past ? 'Your teacher hasn’t shared a summary of this lesson.' : 'Nothing shared for this lesson yet.'))}
+
+      {(past || s.status === 'live') && section('Homework set in this lesson', hw.length ? hw.map((h, i) => (
+        <button key={h.id} onClick={() => { onClose(); onNav && onNav('homework'); }} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left', padding: '9px 0', border: 'none', borderTop: i ? `1px solid ${DS.border}` : 'none', background: 'none', cursor: 'pointer' }}>
+          <Icon name="clip" size={15} color={s.color} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>{h.title}</div>
+            <div style={{ fontSize: 12, color: h.overdue && h.state === 'pending' ? DS.danger : DS.muted }}>{h.state === 'marked' ? 'Marked' : h.state === 'submitted' ? 'Handed in' : h.due}</div>
+          </div>
+          <Icon name="chevron_r" size={14} color={DS.faint} />
+        </button>
+      )) : quiet('No homework was set in this lesson.'))}
+
+      {section('Files from this lesson', files.length ? files.map((f, i) => (
+        <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderTop: i ? `1px solid ${DS.border}` : 'none' }}>
+          <div style={{ width: 30, height: 30, borderRadius: 8, background: s.color + '14', color: s.color, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={f.icon} size={14} /></div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.title}</div>
+            <div style={{ fontSize: 11.5, color: DS.muted }}>{f.typeLabel}{f.size ? ` · ${fmtBytes(f.size)}` : ''}</div>
+          </div>
+          {f.url && <Btn variant="ghost" small icon="link" onClick={() => window.open(f.url, '_blank', 'noopener')}>Open</Btn>}
+        </div>
+      )) : quiet('Your teacher hasn’t shared any files from this lesson.'))}
+    </SlideOver>
+  );
+};
+
+// ─── Up next (decision #56) ─────────────────────────────────────────────────────
+// ONE ranked list of what to deal with, in order: overdue work, a lesson happening
+// now, work due today, today's lessons, work due tomorrow, tomorrow's lessons,
+// later work, the rest of the week's lessons, then a report not yet read. It
+// replaced the Due soon / Upcoming sessions cards and the Sessions-a-week tile, so
+// each thing appears on the dashboard once.
+const stuUpNextItems = (K, pendingHw, latestReports) => {
+  const now = K.now();
+  const out = [];
+  pendingHw.forEach(h => {
+    const st = K.dueState(h);
+    const enr = K.getEnrolment(h.subject);
+    out.push({
+      key: 'hw:' + h.id, kind: 'homework', rank: { overdue: 0, 'due-today': 2, 'due-tomorrow': 4, upcoming: 6 }[st], t: h.dueAt || Infinity,
+      icon: 'clip', color: enr ? enr.subjectColor : DS.accent, title: h.title, meta: `${h.subject} · Homework`,
+      pill: { label: st === 'upcoming' ? h.due : K.dueLabel(h), tone: st === 'overdue' ? 'negative' : st === 'due-today' ? 'warning' : 'neutral' },
+    });
+  });
+  K.sessions.upcoming.filter(s => stuDayDiff(s.starts_at, now) <= 7).forEach(s => {
+    const dd = stuDayDiff(s.starts_at, now);
+    const cancelled = s.status === 'cancelled';
+    out.push({
+      key: 's:' + s.id, kind: 'session', sessionId: s.id, rank: s.status === 'live' ? 1 : dd === 0 ? 3 : dd === 1 ? 5 : 7, t: s.starts_at,
+      icon: 'calendar', color: cancelled ? DS.faint : s.color, title: s.subject, meta: `${s.date} · ${s.time.split('–')[0]} · ${s.room}`,
+      pill: cancelled ? { label: 'Cancelled', tone: 'neutral' }
+        : s.status === 'live' ? { label: 'Now', tone: 'accent' }
+        : { label: dd === 0 ? 'Today' : dd === 1 ? 'Tomorrow' : s.date.split(' ')[0], tone: 'neutral' },
+    });
+  });
+  latestReports.filter(r => !(r.acknowledgement && r.acknowledgement.ack)).forEach(r => out.push({
+    key: 'r:' + r.id, kind: 'report', rank: 8, t: 0, icon: 'file', color: r.subjectColor || DS.info,
+    title: r.title, meta: `${r.subject} · Report from ${r.teacher}`, pill: { label: 'New', tone: 'accent' },
+  }));
+  return out.sort((a, b) => a.rank - b.rank || a.t - b.t);
+};
+
+const StudentUpNext = ({ items, onNav, onOpenSession }) => {
+  const [all, setAll] = React.useState(false);
+  const shown = all ? items : items.slice(0, 6);
+  const go = (it) => it.kind === 'session' ? onOpenSession(it.sessionId) : onNav(it.kind === 'report' ? 'reports' : 'homework');
+  return (
+    <div style={{ background: DS.bg, border: `1px solid ${DS.cardBorder}`, borderRadius: 14, overflow: 'hidden', marginBottom: 28 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 12, padding: '18px 20px 12px' }}>
+        <div>
+          <h2 style={{ fontSize: 20, fontWeight: 800, color: DS.text, margin: '0 0 4px', letterSpacing: '-0.4px' }}>Up next</h2>
+          <div style={{ fontSize: 13, color: DS.muted }}>Homework and lessons in one list, most pressing first</div>
+        </div>
+        {items.length > 6 && (
+          <button onClick={() => setAll(v => !v)} style={{ background: 'none', border: 'none', color: DS.accent, fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}>
+            {all ? 'Show less' : `Show all ${items.length}`}
+          </button>
+        )}
       </div>
+      {shown.length ? shown.map(it => (
+        <button key={it.key} onClick={() => go(it)} style={{ display: 'flex', alignItems: 'center', gap: 14, width: '100%', textAlign: 'left', padding: '13px 20px', border: 'none', borderTop: `1px solid ${DS.border}`, background: 'none', cursor: 'pointer' }}>
+          <div style={{ width: 38, height: 38, borderRadius: 10, background: it.color + '18', color: it.color, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={it.icon} size={17} /></div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 14.5, fontWeight: 600, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.title}</div>
+            <div style={{ fontSize: 12.5, color: DS.muted, marginTop: 1 }}>{it.meta}</div>
+          </div>
+          <StatusPill tone={it.pill.tone}>{it.pill.label}</StatusPill>
+          <Icon name="chevron_r" size={15} color={DS.faint} />
+        </button>
+      )) : (
+        <div style={{ padding: '14px 20px 20px', fontSize: 13, color: DS.muted, borderTop: `1px solid ${DS.border}` }}>
+          You’re all caught up — no homework to do and no lessons in the next week.
+        </div>
+      )}
     </div>
   );
 };
 
-// ─── Dashboard right rail (D5/D6) — identity · mini calendar · up next · announce ─
-const StudentOverviewRail = ({ K, cs, enrolments, pendingHw, latestReports, comms, onNav }) => {
-  const cal = K.activeTerm.calendar;
-  const [month] = React.useState({ name: cal.name, firstDow: cal.firstDow, days: cal.days });
-  const [selectedDay, setSelectedDay] = React.useState(cal.today);
+// ─── Dashboard right rail — identity · calendar · announcements ─────────────────
+const StudentOverviewRail = ({ K, cs, enrolments, comms, onNav, onOpenSession }) => {
+  const m = useStudentMonth();
+  const [selectedDay, setSelectedDay] = React.useState(K.activeTerm.calendar.today);
   const subjColor = (name) => { const e = K.getEnrolment(name); return e ? e.subjectColor : DS.accent; };
-
-  const sessionsByDay = {};
-  [...K.sessions.upcoming, ...K.sessions.history].forEach(s => { (sessionsByDay[s.day] = sessionsByDay[s.day] || []).push(s); });
-  const dayItems = sessionsByDay[selectedDay] || [];
-
-  // Up next — the next 3 items merged across upcoming sessions, homework due dates and
-  // newly published reports, ordered so the most pressing surfaces first.
-  const upNext = [];
-  K.sessions.upcoming.forEach(s => upNext.push({ type:'session', icon:'calendar', color:subjColor(s.subject), title:s.subject, meta:`${s.date} · ${s.time.split('–')[0]}`, sort: 20 + (s.day || 0), go:() => onNav('sessions') }));
-  pendingHw.forEach(h => { const rank = { overdue:0, 'due-today':1, 'due-tomorrow':2, upcoming:3 }[K.dueState(h)]; upNext.push({ type:'homework', icon:'clip', color: rank <= 1 ? DS.danger : DS.warning, title:h.title, meta:`${h.subject} · ${K.dueLabel(h)}`, sort: rank, go:() => onNav('homework') }); });
-  latestReports.forEach(r => upNext.push({ type:'report', icon:'file', color:DS.info, title:r.title, meta:`${r.subject} · report`, sort: 50, go:() => onNav('reports') }));
-  const upNextTop = upNext.sort((a, b) => a.sort - b.sort).slice(0, 3);
+  const dayItems = m.byDay[selectedDay] || [];
 
   // Recent unread announcements — the class they belong to links into class detail.
   const uid = comms && comms.ctx && comms.ctx.userId;
@@ -237,39 +280,25 @@ const StudentOverviewRail = ({ K, cs, enrolments, pendingHw, latestReports, comm
         </div>
       </div>
 
-      {/* Mini calendar */}
+      {/* Mini calendar — the pupil's real sessions; a day's lessons open the session view */}
       <div style={cardWrap}>
         <div style={{ padding:'14px 16px' }}>
           <MonthCalendar
-            month={month} today={cal.today} sessionsByDay={sessionsByDay} subjColor={subjColor}
+            month={m.month} today={m.today} sessionsByDay={m.byDay} subjColor={subjColor}
             variant="mini" selectedDay={selectedDay} onSelectDay={setSelectedDay}
-            onPrev={() => {}} onNext={() => {}} title={month.name}
+            onPrev={m.prev} onNext={m.next} title={m.month.name}
           />
-          <div style={{ marginTop:10, borderTop:`1px solid ${DS.border}`, paddingTop:10 }}>
-            {dayItems.length ? dayItems.map((s, i) => (
-              <div key={i} style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 0' }}>
-                <span style={{ width:8, height:8, borderRadius:'50%', background: s.status === 'missed' ? DS.danger : subjColor(s.subject), flexShrink:0 }} />
-                <div style={{ flex:1, minWidth:0, fontSize:12, color:DS.text }}>{s.subject}</div>
+          <div style={{ marginTop:10, borderTop:`1px solid ${DS.border}`, paddingTop:6 }}>
+            {dayItems.length ? dayItems.map(s => (
+              <button key={s.id} onClick={() => onOpenSession(s.id)} style={{ display:'flex', alignItems:'center', gap:8, width:'100%', padding:'7px 0', border:'none', background:'none', cursor:'pointer', textAlign:'left' }}>
+                <span style={{ width:8, height:8, borderRadius:'50%', background: s.status === 'absent' ? DS.danger : s.status === 'cancelled' ? DS.faint : s.color, flexShrink:0 }} />
+                <div style={{ flex:1, minWidth:0, fontSize:12, color:DS.text, textDecoration: s.status === 'cancelled' ? 'line-through' : 'none' }}>{s.subject}</div>
                 <div style={{ fontSize:11, color:DS.muted }}>{s.time.split('–')[0]}</div>
-              </div>
-            )) : <div style={{ fontSize:12, color:DS.faint, padding:'4px 0' }}>Nothing on {cal.name.split(' ')[0]} {selectedDay}.</div>}
+                <Icon name="chevron_r" size={12} color={DS.faint} />
+              </button>
+            )) : <div style={{ fontSize:12, color:DS.faint, padding:'4px 0' }}>No lessons on {m.month.name.split(' ')[0]} {selectedDay}.</div>}
           </div>
         </div>
-      </div>
-
-      {/* Up next */}
-      <div style={cardWrap}>
-        {cardHead('Up next')}
-        {upNextTop.length ? upNextTop.map((it, i) => (
-          <button key={i} onClick={it.go} style={{ display:'flex', alignItems:'center', gap:11, width:'100%', textAlign:'left', padding:'11px 16px', border:'none', borderTop:`1px solid ${DS.border}`, background:'none', cursor:'pointer' }}>
-            <div style={{ width:30, height:30, borderRadius:8, background: it.color + '18', color: it.color, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}><Icon name={it.icon} size={15} /></div>
-            <div style={{ flex:1, minWidth:0 }}>
-              <div style={{ fontSize:12.5, fontWeight:600, color:DS.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{it.title}</div>
-              <div style={{ fontSize:11, color:DS.muted }}>{it.meta}</div>
-            </div>
-            <Icon name="chevron_r" size={14} color={DS.faint} />
-          </button>
-        )) : <div style={{ padding:'12px 16px 16px', fontSize:12.5, color:DS.faint }}>You're all caught up.</div>}
       </div>
 
       {/* Announcements */}
@@ -299,28 +328,45 @@ const StudentOverview = ({ onNav, comms }) => {
   const hwSummary   = K.metrics.homeworkSummary();
   const pendingHw   = hwSummary.pending;
   const urgentCount = hwSummary.urgentCount;
-  const avgScore    = K.metrics.termAverage();            // term avg, all subjects
+  const avgScore    = K.metrics.termAverage();            // latest results, all classes
   const termTrend   = K.metrics.termTrendDelta();          // computed, not decorative
-  const attendance  = K.metrics.attendanceOverall();       // one figure, all subjects
-  const perWeek     = K.metrics.sessionsPerWeek();
-  const nextSession = K.sessions.upcoming[0];
+  const attendance  = K.metrics.attendanceOverall();       // from the registers
+  const now         = K.now();
   const reportsStore = useReportsStore();
   const latestReports = reportsStore.reportsArr
     .filter(r => r.studentId === cs.id && r.status === 'published')
     .sort((a,b) => (b.datePublished||'').localeCompare(a.datePublished||''))
     .slice(0,3);
+  const [openSession, setOpenSession] = React.useState(null);
 
   const narrow = useViewportNarrow(1100);
   const rail = (
-    <StudentOverviewRail K={K} cs={cs} enrolments={enrolments} pendingHw={pendingHw} latestReports={latestReports} comms={comms} onNav={onNav} />
+    <StudentOverviewRail K={K} cs={cs} enrolments={enrolments} comms={comms} onNav={onNav} onOpenSession={setOpenSession} />
   );
 
-  // Single-row subjects carousel — scroll horizontally when subjects overflow
+  // Single-row classes carousel — scroll horizontally when classes overflow
   const subjectsRef = React.useRef(null);
   const scrollSubjects = (dir) => {
     const el = subjectsRef.current;
     if (el) el.scrollBy({ left: dir * 336, behavior: 'smooth' });
   };
+
+  // The hero states facts, never a verdict (decision #56). "On track" is defined
+  // against the teacher's target grade (v_student_progress); until that drives a
+  // sentence here, the hero says what is due and when the next lesson is.
+  const hour = new Date(now).getHours();
+  const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+  const overdueN = pendingHw.filter(h => K.dueState(h) === 'overdue').length;
+  const liveLesson = K.sessions.upcoming.find(s => s.status === 'live');
+  const nextLesson = K.sessions.upcoming.find(s => s.status === 'upcoming');
+  const hwLine = pendingHw.length
+    ? `${pendingHw.length} piece${pendingHw.length === 1 ? '' : 's'} of homework to do${overdueN ? `, ${overdueN} overdue` : ''}.`
+    : 'No homework to do right now.';
+  const lessonLine = liveLesson
+    ? ` ${liveLesson.subject} is on now in ${liveLesson.room}.`
+    : nextLesson
+      ? ` Next lesson: ${nextLesson.subject}, ${stuRelDay(nextLesson.starts_at, now).toLowerCase()} at ${nextLesson.time.split('–')[0]}.`
+      : '';
 
   const heroStat = (label, value, sub) => (
     <div style={{
@@ -332,6 +378,8 @@ const StudentOverview = ({ onNav, comms }) => {
       {sub && <div style={{ fontSize:11, color:'rgba(255,255,255,0.78)', marginTop:3 }}>{sub}</div>}
     </div>
   );
+
+  const upNext = stuUpNextItems(K, pendingHw, latestReports);
 
   return (
     <div style={pageFrame()}>
@@ -355,18 +403,17 @@ const StudentOverview = ({ onNav, comms }) => {
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:32 }}>
           <div style={{ maxWidth:560 }}>
             <div style={{ fontSize:11, fontWeight:700, color:'rgba(255,255,255,0.78)', letterSpacing:'1.5px', marginBottom:14 }}>
-              {cs.yearGroup.toUpperCase()} · {K.activeTerm.banner.toUpperCase()}
+              {[cs.yearGroup, K.activeTerm.banner].filter(Boolean).join(' · ').toUpperCase()}
             </div>
             <h1 style={{ fontSize:38, fontWeight:800, color:'#fff', margin:'0 0 10px', letterSpacing:'-1px', lineHeight:1.05 }}>
-              Good morning, {cs.displayName}
+              {greeting}, {cs.displayName}
             </h1>
             <div style={{ fontSize:15, color:'rgba(255,255,255,0.88)', lineHeight:1.5, marginBottom:22 }}>
-              You're <strong style={{ color:'#fff' }}>on track</strong> across your {enrolments.length} class{enrolments.length === 1 ? '' : 'es'} this term. {pendingHw.length} piece{pendingHw.length === 1 ? '' : 's'} of homework due, {urgentCount} urgent.
+              {hwLine}{lessonLine}
             </div>
             <div style={{ display:'flex', gap:10 }}>
               {/* §9: targets the most-urgent in-progress assignment (overdue → due
-                  today → soonest). Overview no longer owns "Download report" —
-                  the Reports section is the single owner of report download. */}
+                  today → soonest). The Reports section owns report download. */}
               <button onClick={() => onNav('homework')}
                 title={K.getContinueHomework() ? `Continue: ${K.getContinueHomework().title}` : 'Go to homework'}
                 style={{
@@ -380,22 +427,26 @@ const StudentOverview = ({ onNav, comms }) => {
             </div>
           </div>
 
-          {/* Stat tiles 2x2 */}
+          {/* Stat tiles — the original right-hand 2-column block; three signals, each
+              changes with what the pupil does (the third spans the bottom row) */}
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
-            {heroStat('Average score', `${avgScore}%`, `${termTrend >= 0 ? '+' : ''}${termTrend}% vs last · all subjects`)}
-            {heroStat('Attendance', `${attendance}%`, 'All subjects, this term')}
-            {heroStat('Homework due', pendingHw.length, urgentCount ? `${urgentCount} urgent` : 'None urgent')}
-            {heroStat('Sessions / wk', perWeek, nextSession ? `Next ${nextSession.date} ${nextSession.time.split('–')[0]}` : '—')}
+            {heroStat('Average result', avgScore == null ? '—' : K.formatAttainment(avgScore),
+              avgScore == null ? 'No results published yet' : termTrend == null ? 'Latest results · all classes' : `${termTrend >= 0 ? '+' : ''}${termTrend}% vs last · all classes`)}
+            {heroStat('Attendance', attendance == null ? '—' : `${attendance}%`, attendance == null ? 'No registers yet' : 'Last 6 weeks · all classes')}
+            <div style={{ gridColumn:'1 / -1' }}>{heroStat('Homework due', pendingHw.length, overdueN ? `${overdueN} overdue` : urgentCount ? `${urgentCount} due today` : 'None urgent')}</div>
           </div>
         </div>
       </div>
+
+      {/* Up next — promoted out of the rail: the most useful block on the page */}
+      <StudentUpNext items={upNext} onNav={onNav} onOpenSession={setOpenSession} />
 
       {/* My classes — cards keyed by CLASS (a student with two classes in one subject
           sees two cards). Card click opens the class detail. */}
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-end', marginBottom:14 }}>
         <div>
           <h2 style={{ fontSize:20, fontWeight:800, color:DS.text, margin:'0 0 4px', letterSpacing:'-0.4px' }}>My classes</h2>
-          <div style={{ fontSize:13, color:DS.muted }}>Latest scores and predicted grades</div>
+          <div style={{ fontSize:13, color:DS.muted }}>Latest results and the grade your teacher predicts</div>
         </div>
         <div style={{ display:'flex', alignItems:'center', gap:8 }}>
           <button onClick={() => scrollSubjects(-1)} aria-label="Previous classes" style={{
@@ -416,36 +467,37 @@ const StudentOverview = ({ onNav, comms }) => {
         scrollSnapType:'x mandatory', scrollbarWidth:'none', msOverflowStyle:'none',
       }}>
         {enrolments.map(s => {
-          const theme = subjectThemes[s.subject] || hexToTheme(s.subjectColor, s.subject);
-          const latest = s.scores[s.scores.length-1];
+          const latest = s.scores.length ? s.scores[s.scores.length-1] : null;
           const openClass = () => { window.__studentClassId = s.classId; onNav('classes:detail'); };
-          const nextForClass = K.sessions.upcoming.find(x => x.subject === s.subject);
+          const nextForClass = K.sessions.upcoming.find(x => x.classId === s.classId && x.status !== 'cancelled');
           return (
             <button key={s.classId} onClick={openClass} style={{
-              position:'relative', overflow:'hidden', flex:'1 0 280px', scrollSnapAlign:'start', textAlign:'left',
-              background: `linear-gradient(150deg, ${theme.tint} 0%, ${theme.tint2} 100%)`, borderRadius:18, border:'none', cursor:'pointer',
+              position:'relative', overflow:'hidden', isolation:'isolate', flex:'1 0 280px', scrollSnapAlign:'start', textAlign:'left',
+              borderRadius:18, border:'none', cursor:'pointer',
               padding:'22px 24px 24px', minHeight:220,
               display:'flex', flexDirection:'column', justifyContent:'space-between',
+              ...coverStyleVars(s.coverArt, 'card'),
             }}>
-              <SubjectShape theme={theme} />
-              <div style={{ position:'relative', zIndex:1 }}>
-                <div style={{ display:'inline-flex', alignItems:'center', gap:6, fontSize:10.5, fontWeight:700, color:theme.deep, letterSpacing:'0.5px', opacity:0.85, background:'rgba(255,255,255,0.45)', padding:'2px 8px', borderRadius:999 }}>{s.subject}</div>
-                <div style={{ fontSize:22, fontWeight:800, color:theme.text, marginTop:8, letterSpacing:'-0.5px' }}>{s.name}</div>
-                <div style={{ fontSize:12, color:theme.deep, opacity:0.8, marginTop:4 }}>{s.teacher}{nextForClass ? ` · Next ${nextForClass.date}` : ''}</div>
+              <CoverArt cover={s.coverArt} variant="card" />
+              {/* The title block stays on the left 56%, clear of the artwork. */}
+              <div style={{ position:'relative', zIndex:1, maxWidth:'56%' }}>
+                <div style={{ display:'inline-flex', alignItems:'center', gap:6, fontSize:10.5, fontWeight:700, color:'var(--cover-chip-ink)', letterSpacing:'0.5px', background:'var(--cover-chip-bg)', padding:'2px 8px', borderRadius:999 }}>{s.subject}</div>
+                <div style={{ fontSize:22, fontWeight:800, color:'var(--cover-ink)', marginTop:8, letterSpacing:'-0.5px' }}>{s.name}</div>
+                <div style={{ fontSize:12, color:'var(--cover-ink-muted)', marginTop:4 }}>{s.teacher}{nextForClass ? ` · Next ${nextForClass.date}` : ''}</div>
               </div>
               <div style={{ position:'relative', zIndex:1, display:'flex', justifyContent:'space-between', alignItems:'flex-end' }}>
                 <div>
-                  <div style={{ fontSize:42, fontWeight:800, color:theme.text, letterSpacing:'-1.5px', lineHeight:1 }}>{latest}%</div>
-                  <div style={{ fontSize:12, color:theme.deep, marginTop:4, opacity:0.75 }}>Latest score · {s.scores.length} assessments</div>
+                  <div style={{ fontSize: K.pupilGradeDisplay() === 'both' ? 32 : 42, fontWeight:800, color:'var(--cover-ink)', letterSpacing:'-1.5px', lineHeight:1 }}>{K.formatAttainment(latest, s.qualification)}</div>
+                  <div style={{ fontSize:12, color:'var(--cover-ink-muted)', marginTop:4 }}>{latest == null ? 'No results yet' : `Latest result · ${s.scores.length} assessment${s.scores.length === 1 ? '' : 's'}`}</div>
                 </div>
-                {/* Predicted grade is teacher-set + read-only, rendered through the
-                    canonical grade model (§3) for this enrolment's qualification. */}
-                <div title="Predicted grade — set by your teacher" style={{
-                  background:'rgba(255,255,255,0.55)', borderRadius:10,
+                {/* Predicted grade is the teacher's stored judgement (decision #28),
+                    rendered through the canonical grade model — or "Not set yet". */}
+                <div title={s.predictedGrade ? 'Predicted grade — set by your teacher' : 'Your teacher hasn’t set a predicted grade yet'} style={{
+                  background:'var(--cover-chip-bg)', borderRadius:10,
                   padding:'8px 10px', textAlign:'center', minWidth:54,
                 }}>
-                  <div style={{ fontSize:18, fontWeight:800, color:theme.text, lineHeight:1 }}><K.GradeChip value={s.predictedGrade} qualification={s.qualification} color={theme.text} variant="bare" title="Predicted grade — set by your teacher" /></div>
-                  <div style={{ fontSize:9, fontWeight:700, color:theme.deep, letterSpacing:'1px', marginTop:3, opacity:0.8 }}>PREDICTED</div>
+                  <div style={{ fontSize:18, fontWeight:800, color:'var(--cover-ink)', lineHeight:1 }}>{s.predictedGrade ? <K.GradeChip value={s.predictedGrade} qualification={s.qualification} color="var(--cover-ink)" variant="bare" title="Predicted grade — set by your teacher" /> : '—'}</div>
+                  <div style={{ fontSize:9, fontWeight:700, color:'var(--cover-ink-muted)', letterSpacing:'1px', marginTop:3 }}>{s.predictedGrade ? 'PREDICTED' : 'NOT SET YET'}</div>
                 </div>
               </div>
             </button>
@@ -453,115 +505,36 @@ const StudentOverview = ({ onNav, comms }) => {
         })}
       </div>
 
-      {/* 3-column footer: Due soon · Upcoming sessions · Latest feedback */}
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:16 }}>
-        {/* Due soon */}
-        <div style={{ background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:12, overflow:'hidden' }}>
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'16px 18px 12px' }}>
-            <div style={{ fontSize:15, fontWeight:700, color:DS.text }}>Due soon</div>
-            <button onClick={() => onNav('homework')} style={{ background:'none', border:'none', color:DS.muted, fontSize:12, cursor:'pointer' }}>See all</button>
+      {/* Latest reports — the one place published reports live on the dashboard */}
+      <div style={{ background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:14, overflow:'hidden' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-end', padding:'18px 20px 12px' }}>
+          <div>
+            <h2 style={{ fontSize:20, fontWeight:800, color:DS.text, margin:'0 0 4px', letterSpacing:'-0.4px' }}>Latest reports</h2>
+            <div style={{ fontSize:13, color:DS.muted }}>Written by your teachers and shared with your family</div>
           </div>
-          {pendingHw.slice(0,3).map((hw, i, arr) => {
-            const enr   = K.getEnrolment(hw.subject);
-            const color = enr ? enr.subjectColor : DS.accent;
-            // §9: ONE correct due-state per item (no more "Today" + "Overdue"
-            // together). §6: teacher resolves from the enrolment, not the row.
-            const state = K.dueState(hw);
-            const badgeVariant = state === 'overdue' ? 'danger' : state === 'due-today' ? 'warning' : 'default';
-            const alarm = state === 'overdue' || state === 'due-today';
-            return (
-              <div key={hw.id} style={{
-                padding:'14px 18px',
-                borderTop:`1px solid ${DS.border}`,
-                borderLeft:`3px solid ${color}`,
-                display:'flex', alignItems:'center', gap:10,
-              }}>
-                <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:2 }}>
-                    <span style={{ fontSize:13, fontWeight:600, color:DS.text }}>{hw.title}</span>
-                  </div>
-                  <div style={{ fontSize:11, color:DS.muted, marginBottom:4 }}>{hw.subject} · {K.resolveTeacher(hw.subject)}</div>
-                  <div style={{ fontSize:11, fontWeight: alarm ? 600 : 400, color: alarm ? DS.danger : DS.muted }}>
-                    Due {hw.due.replace(', 11:59 PM','').replace('Today','today').replace(/PM/, 'pm')}
-                  </div>
-                </div>
-                <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:6 }}>
-                  <Badge variant={badgeVariant}>{K.dueLabel(hw)}</Badge>
-                  <Btn variant="primary" small onClick={() => onNav('homework')}>Start</Btn>
-                </div>
-              </div>
-            );
-          })}
+          <button onClick={() => onNav('reports')} style={{ background:'none', border:'none', color:DS.accent, fontSize:12.5, fontWeight:600, cursor:'pointer' }}>See all</button>
         </div>
-
-        {/* Upcoming sessions */}
-        <div style={{ background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:12, overflow:'hidden' }}>
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'16px 18px 12px' }}>
-            <div style={{ fontSize:15, fontWeight:700, color:DS.text }}>Upcoming sessions</div>
-            <button onClick={() => onNav('sessions')} style={{ background:'none', border:'none', color:DS.muted, fontSize:12, cursor:'pointer' }}>See all</button>
-          </div>
-          {K.sessions.upcoming.slice(0,3).map((s, i) => {
-            const enr = K.getEnrolment(s.subject);
-            const color = enr ? enr.subjectColor : DS.accent;
-            const m = s.date.match(/(\d+)\s+(\w+)/);
-            const day = m ? m[1] : '';
-            const mon = m ? m[2].toUpperCase() : '';
-            return (
-              <div key={i} style={{
-                padding:'14px 18px',
-                borderTop:`1px solid ${DS.border}`,
-                display:'flex', alignItems:'center', gap:14,
-              }}>
-                <div style={{
-                  width:44, flexShrink:0, textAlign:'center',
-                  background: color + '14', borderRadius:8, padding:'6px 0',
-                }}>
-                  <div style={{ fontSize:18, fontWeight:800, color, lineHeight:1 }}>{day}</div>
-                  <div style={{ fontSize:9, fontWeight:700, color, letterSpacing:'1px', marginTop:2 }}>{mon}</div>
-                </div>
-                <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ fontSize:13, fontWeight:600, color:DS.text }}>{s.subject}</div>
-                  <div style={{ fontSize:11, color:DS.muted }}>{s.time} · {s.room}</div>
-                </div>
+        {latestReports.length === 0 && (
+          <div style={{ padding:'14px 20px 18px', borderTop:`1px solid ${DS.border}`, fontSize:13, color:DS.muted }}>No reports published yet.</div>
+        )}
+        {latestReports.map(r => {
+          const color = r.subjectColor || DS.accent;
+          const acked = r.acknowledgement && r.acknowledgement.ack;
+          return (
+            <button key={r.id} onClick={() => onNav('reports')} style={{
+              display:'flex', alignItems:'center', gap:14, width:'100%', textAlign:'left',
+              padding:'14px 20px', border:'none', borderTop:`1px solid ${DS.border}`, background:'none', cursor:'pointer',
+            }}>
+              <div style={{ width:38, height:38, borderRadius:10, background: color + '18', color, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}><Icon name="file" size={17} /></div>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:14.5, fontWeight:600, color:DS.text, lineHeight:1.3 }}>{r.title}</div>
+                <div style={{ fontSize:12.5, color:DS.muted, marginTop:1 }}>{r.subject} · {r.teacher} · {r.period}</div>
               </div>
-            );
-          })}
-        </div>
-
-        {/* Latest reports */}
-        <div style={{ background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:12, overflow:'hidden' }}>
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'16px 18px 12px' }}>
-            <div style={{ fontSize:15, fontWeight:700, color:DS.text }}>Latest reports</div>
-            <button onClick={() => onNav('reports')} style={{ background:'none', border:'none', color:DS.muted, fontSize:12, cursor:'pointer' }}>See all</button>
-          </div>
-          {latestReports.length === 0 && (
-            <div style={{ padding:'14px 18px', borderTop:`1px solid ${DS.border}`, fontSize:12.5, color:DS.faint }}>No reports published yet.</div>
-          )}
-          {latestReports.map((r, i) => {
-            const color = r.subjectColor || DS.accent;
-            const acked = r.acknowledgement && r.acknowledgement.ack;
-            return (
-              <div key={r.id} onClick={() => onNav('reports')} style={{
-                padding:'14px 18px', borderTop:`1px solid ${DS.border}`, cursor:'pointer',
-              }}>
-                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:8, marginBottom:6 }}>
-                  <div style={{ fontSize:13, fontWeight:600, color:DS.text, lineHeight:1.3 }}>{r.title}</div>
-                  <span style={{
-                    fontSize:10.5, fontWeight:700, whiteSpace:'nowrap',
-                    color: acked ? DS.success : DS.accent,
-                    background: acked ? DS.successBg : DS.accentLight,
-                    border: `1px solid ${acked ? DS.successBorder : DS.accentBorder}`,
-                    padding:'2px 8px', borderRadius:999,
-                  }}>{acked ? '✓ Read' : 'New'}</span>
-                </div>
-                <div style={{ display:'flex', alignItems:'center', gap:6, fontSize:11, color:DS.muted }}>
-                  <span style={{ width:6, height:6, borderRadius:'50%', background:color }} />
-                  {r.subject} · {r.teacher} · {r.period}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+              <StatusPill tone={acked ? 'positive' : 'accent'}>{acked ? 'Read' : 'New'}</StatusPill>
+              <Icon name="chevron_r" size={15} color={DS.faint} />
+            </button>
+          );
+        })}
       </div>
       </div>{/* /main column */}
 
@@ -573,6 +546,7 @@ const StudentOverview = ({ onNav, comms }) => {
         {rail}
       </aside>
      </div>{/* /flex wrapper */}
+     <StudentSessionDrawer sessionId={openSession} onClose={() => setOpenSession(null)} onNav={onNav} />
     </div>
   );
 };
@@ -583,26 +557,37 @@ const StudentOverview = ({ onNav, comms }) => {
 // dead, never-routed duplicate (plain textarea submit) and has been removed.
 
 // ─── Progress page ──────────────────────────────────────────────────────────────
+// Published results per class, the pupil's own direction of travel, and the
+// grades their teacher set (decision #28). Class averages appear only when the
+// centre turns them on (decision #59, default off) — otherwise a pupil is compared
+// with their own previous result, never with classmates.
 const StudentProgressPage = () => {
-  // §2/§4: subjects, scores, per-subject class averages, predicted grades and
-  // attendance all come from the enrolment SoT + studentMetrics. Attendance here
-  // is the SAME record the Overview all-subjects figure derives from (§4), just
-  // scoped to this subject and labelled as such.
   const K = window.klasioStudent;
   const enrolments = K.getEnrolments();
   const [activeSub, setActiveSub] = React.useState(0);
-  const sub = enrolments[activeSub];
+  if (!enrolments.length) return (
+    <div style={pageFrame()}>
+      <PageHeader title="My Progress" subtitle="Your published results and predicted grades" />
+      <Card><div style={{ padding:'40px 20px' }}><EmptyState icon="chart" title="No classes yet" message="Your results appear here once your centre adds you to a class." /></div></Card>
+    </div>
+  );
+  const sub = enrolments[Math.min(activeSub, enrolments.length - 1)];
+  const showAvg = K.showClassAverage();
   const classAvg = sub.classAvg;
-  const scoreLabels = K.activeTerm.assessmentLabels;
+  // Each class has its own published assessments on its own dates (decision #50).
+  const scoreLabels = sub.scoreLabels || [];
+  const fmt = (pct) => K.formatAttainment(pct, sub.qualification);
+  const signed = (n) => `${n >= 0 ? '+' : ''}${n}%`;
+  const notSet = <span style={{ fontSize:12.5, fontWeight:600, color:DS.faint }}>Not set yet</span>;
 
   return (
     <div style={pageFrame()}>
-      <PageHeader title="My Progress" subtitle="Track your score trends and predicted grades across subjects" />
+      <PageHeader title="My Progress" subtitle="Your published results and the grades your teachers set. Other grades are indicative — worked out from your results, not official." />
 
-      {/* Subject tabs */}
-      <div style={{ display:'flex', gap:12, marginBottom:24 }}>
+      {/* Class tabs */}
+      <div style={{ display:'flex', gap:12, marginBottom:24, flexWrap:'wrap' }}>
         {enrolments.map((s, i) => (
-          <button key={s.subject} onClick={() => setActiveSub(i)} style={{
+          <button key={s.classId} onClick={() => setActiveSub(i)} style={{
             padding:'8px 20px', borderRadius:20, border:`1px solid ${activeSub===i ? s.subjectColor : DS.border}`,
             background: activeSub===i ? s.subjectColor + '18' : DS.bg,
             color: activeSub===i ? s.subjectColor : DS.muted,
@@ -613,60 +598,83 @@ const StudentProgressPage = () => {
 
       <div style={{ display:'grid', gridTemplateColumns:'1fr 280px', gap:20 }}>
         <div>
-          {/* Score trend chart */}
-          <Card title={`Score Trend — ${sub.subject}`} style={{ marginBottom:20 }} actions={[
+          {/* Result trend chart */}
+          <Card title={`Results — ${sub.subject}`} style={{ marginBottom:20 }} actions={[
             <div key="leg" style={{ display:'flex', gap:12 }}>
               <div style={{ display:'flex', alignItems:'center', gap:5 }}>
                 <div style={{ width:16, height:2, background:sub.subjectColor, borderRadius:2 }} />
-                <span style={{ fontSize:11, color:DS.muted }}>Your score</span>
+                <span style={{ fontSize:11, color:DS.muted }}>Your result</span>
               </div>
+              {showAvg && (
               <div style={{ display:'flex', alignItems:'center', gap:5 }}>
                 <div style={{ width:16, height:2, background:DS.border, borderRadius:2 }} />
                 <span style={{ fontSize:11, color:DS.muted }}>Class avg</span>
               </div>
+              )}
             </div>
           ]}>
             <div style={{ padding:'16px 20px 8px' }}>
-              <LineChart
-                labels={scoreLabels}
-                series={[
-                  { label:'Your score', data:sub.scores,  color:sub.subjectColor },
-                  { label:'Class avg',  data:classAvg,     color:DS.borderDark },
-                ]}
-                height={220}
-              />
+              {sub.scores.length >= 2 ? (
+                <LineChart
+                  labels={scoreLabels}
+                  series={[
+                    { label:'Your result', data:sub.scores, color:sub.subjectColor },
+                    ...(showAvg ? [{ label:'Class avg', data:classAvg, color:DS.borderDark }] : []),
+                  ]}
+                  height={220}
+                />
+              ) : (
+                <div style={{ padding:'40px 0', textAlign:'center', fontSize:13, color:DS.muted }}>
+                  {sub.scores.length ? 'Your first result is in — the trend appears after your next assessment.' : 'No results published for this class yet.'}
+                </div>
+              )}
             </div>
           </Card>
 
           {/* Assessment history table */}
-          <Card title="Assessment History">
+          <Card title="Assessment history">
+            {scoreLabels.length === 0 ? (
+              <div style={{ padding:'18px 20px', fontSize:13, color:DS.muted }}>Your teacher hasn’t published any results for this class yet.</div>
+            ) : (
             <Table
-              cols={['Assessment','Date','Your Score','Class Avg','vs Average']}
+              cols={showAvg ? ['Assessment','Date','Your result','Class avg','vs Average'] : ['Assessment','Date','Your result','Since last']}
               rows={scoreLabels.map((date, i) => {
                 const mine = sub.scores[i];
-                const avg  = classAvg[i];
-                const diff = mine - avg;
-                return [
-                  <span style={{ fontSize:13, color:DS.text }}>Assessment {i+1}</span>,
+                const base = [
+                  <span style={{ fontSize:13, color:DS.text }}>{(sub.scoreTitles && sub.scoreTitles[i]) || `Assessment ${i+1}`}</span>,
                   <span style={{ fontSize:13, color:DS.muted }}>{date}</span>,
-                  <ScorePill score={mine} />,
-                  <span style={{ fontSize:13, color:DS.muted }}>{avg}%</span>,
-                  <span style={{ fontSize:12, fontWeight:600, color: diff >= 0 ? DS.success : DS.danger }}>
-                    {diff >= 0 ? '+' : ''}{diff}%
-                  </span>,
+                  <span style={{ fontSize:13, fontWeight:600, color:DS.text }}>{fmt(mine)}</span>,
                 ];
+                if (showAvg) {
+                  const diff = mine - classAvg[i];
+                  return [...base,
+                    <span style={{ fontSize:13, color:DS.muted }}>{classAvg[i]}%</span>,
+                    <span style={{ fontSize:12, fontWeight:600, color: diff >= 0 ? DS.success : DS.danger }}>{signed(diff)}</span>];
+                }
+                const delta = i ? mine - sub.scores[i - 1] : null;
+                return [...base, delta == null
+                  ? <span style={{ fontSize:12, color:DS.faint }}>First result</span>
+                  : delta === 0
+                    ? <span style={{ fontSize:12, color:DS.muted }}>No change</span>
+                    : <span style={{ fontSize:12, fontWeight:600, color: delta > 0 ? DS.success : DS.danger }}>{signed(delta)}</span>];
               })}
             />
+            )}
           </Card>
         </div>
 
         {/* Right sidebar */}
         <div style={{ display:'flex', flexDirection:'column', gap:20 }}>
-          {/* Summary card */}
           {(() => {
-            const attendance = K.metrics.attendanceForSubject(sub.subject);
+            const attendance = K.metrics.attendanceForClass(sub.classId);
             const vsClass    = K.metrics.subjectVsClass(sub.subject);
+            const sinceLast  = K.metrics.subjectSinceLast(sub.subject);
             const subjectAvg = K.metrics.subjectAverage(sub.subject);
+            const row = (label, value) => (
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:9 }}>
+                <span style={{ fontSize:13, color:DS.muted }}>{label}</span>{value}
+              </div>
+            );
             return (
           <div style={{
             background:DS.bg, border:`1px solid ${DS.border}`,
@@ -675,33 +683,27 @@ const StudentProgressPage = () => {
           }}>
             <div style={{ fontSize:13, color:DS.muted, marginBottom:12 }}>{sub.subject} summary</div>
             <div style={{ fontSize:40, fontWeight:800, color:DS.text, letterSpacing:'-1px', lineHeight:1 }}>
-              {sub.scores[sub.scores.length-1]}%
+              {fmt(sub.scores.length ? sub.scores[sub.scores.length-1] : null)}
             </div>
-            <div style={{ fontSize:12, color:DS.muted, marginTop:4 }}>Latest score · {subjectAvg}% avg this term</div>
+            <div style={{ fontSize:12, color:DS.muted, marginTop:4 }}>{subjectAvg == null ? 'No results yet' : `Latest result · ${subjectAvg}% average`}</div>
             <Divider />
-            <div style={{ display:'flex', justifyContent:'space-between', marginBottom:8 }}>
-              <span style={{ fontSize:13, color:DS.muted }}>Predicted grade</span>
-              <span style={{ fontSize:16 }}><K.GradeChip value={sub.predictedGrade} qualification={sub.qualification} color={sub.subjectColor} variant="bare" /></span>
-            </div>
-            <div style={{ display:'flex', justifyContent:'space-between', marginBottom:8 }}>
-              <span style={{ fontSize:13, color:DS.muted }}>Attendance <span style={{ color:DS.faint }}>· this subject</span></span>
-              <span style={{ fontSize:13, fontWeight:600, color: attendance > 95 ? DS.success : DS.warning }}>{attendance}%</span>
-            </div>
-            <div style={{ display:'flex', justifyContent:'space-between' }}>
-              <span style={{ fontSize:13, color:DS.muted }}>{vsClass >= 0 ? 'Above' : 'Below'} class avg</span>
-              <span style={{ fontSize:13, fontWeight:600, color: vsClass >= 0 ? DS.success : DS.danger }}>
-                {vsClass >= 0 ? '+' : ''}{vsClass}%
-              </span>
-            </div>
+            {row('Predicted grade', sub.predictedGrade ? <span style={{ fontSize:16 }}><K.GradeChip value={sub.predictedGrade} qualification={sub.qualification} color={sub.subjectColor} variant="bare" title="Predicted grade — set by your teacher" /></span> : notSet)}
+            {row('Target grade', sub.targetGrade ? <span style={{ fontSize:16 }}><K.GradeChip value={sub.targetGrade} qualification={sub.qualification} color={DS.text} variant="bare" title="Target grade — set by your teacher" /></span> : notSet)}
+            {row(<span>Indicative <span style={{ color:DS.faint }}>· from results</span></span>, <span style={{ fontSize:13, fontWeight:600, color:DS.sub }}>{sub.indicativeGrade || '—'}</span>)}
+            {row(<span>Attendance <span style={{ color:DS.faint }}>· this class</span></span>, <span style={{ fontSize:13, fontWeight:600, color: attendance == null ? DS.faint : attendance >= 95 ? DS.success : DS.warning }}>{attendance == null ? '—' : `${attendance}%`}</span>)}
+            {showAvg && vsClass != null
+              ? row(`${vsClass >= 0 ? 'Above' : 'Below'} class avg`, <span style={{ fontSize:13, fontWeight:600, color: vsClass >= 0 ? DS.success : DS.danger }}>{signed(vsClass)}</span>)
+              : sinceLast != null && row('Since your last result', <span style={{ fontSize:13, fontWeight:600, color: sinceLast > 0 ? DS.success : sinceLast < 0 ? DS.danger : DS.muted }}>{sinceLast === 0 ? 'No change' : signed(sinceLast)}</span>)}
+            <div style={{ fontSize:11.5, color:DS.faint, marginTop:6, lineHeight:1.45 }}>Predicted and target grades are set by {sub.teacher}.</div>
           </div>
             );
           })()}
 
-          {/* All subjects summary */}
-          <Card title="All Subjects">
+          {/* All classes summary */}
+          <Card title="All classes">
             <div style={{ padding:'8px 0' }}>
               {enrolments.map((s, i) => (
-                <div key={s.subject} style={{
+                <div key={s.classId} style={{
                   display:'flex', alignItems:'center', gap:12, padding:'10px 16px',
                   borderBottom: i < enrolments.length-1 ? `1px solid ${DS.border}` : 'none',
                   cursor:'pointer', background: activeSub===i ? s.subjectColor+'0A' : 'transparent',
@@ -709,9 +711,9 @@ const StudentProgressPage = () => {
                   <div style={{ width:3, height:36, borderRadius:2, background:s.subjectColor, flexShrink:0 }} />
                   <div style={{ flex:1 }}>
                     <div style={{ fontSize:13, fontWeight:500, color:DS.text }}>{s.subject}</div>
-                    <div style={{ fontSize:11, color:DS.muted }}>Predicted <K.GradeChip value={s.predictedGrade} qualification={s.qualification} color={s.subjectColor} variant="bare" /></div>
+                    <div style={{ fontSize:11, color:DS.muted }}>Predicted {s.predictedGrade ? <K.GradeChip value={s.predictedGrade} qualification={s.qualification} color={s.subjectColor} variant="bare" /> : <span style={{ color:DS.faint }}>not set yet</span>}</div>
                   </div>
-                  <ScorePill score={s.scores[s.scores.length-1]} />
+                  <span style={{ fontSize:12.5, fontWeight:600, color:DS.sub, whiteSpace:'nowrap' }}>{K.formatAttainment(s.scores.length ? s.scores[s.scores.length-1] : null, s.qualification)}</span>
                 </div>
               ))}
             </div>
@@ -723,40 +725,29 @@ const StudentProgressPage = () => {
 };
 
 // ─── Sessions page ──────────────────────────────────────────────────────────────
-const StudentSessionsPage = () => {
+// The pupil's real timetable on the register clock: a calendar they can page
+// through, what's coming up, and past lessons with their own attendance. Every
+// session opens the read-only session view (decision #60). No self-booking.
+const StudentSessionsPage = ({ onNav }) => {
   const K = window.klasioStudent;
-  // §2/§6: sessions, teachers and rooms all come from the enrolment SoT — no
-  // invented "Mr Davies" / "Dr Patel". §7: the calendar month is the single
-  // active-term value. Read-only — students can't self-book (correct).
-  const { upcoming, history } = K.sessions;
-  const cal = K.activeTerm.calendar;
-  const [month] = React.useState({ name: cal.name, firstDow: cal.firstDow, days: cal.days });
+  const m = useStudentMonth();
+  const [openId, setOpenId] = React.useState(null);
+  const now = K.now();
+  const upcoming = K.sessions.upcoming.slice(0, 8);
+  const history = K.sessions.history;
+  const subjColor = (name) => { const enr = K.getEnrolment(name); return enr ? enr.subjectColor : DS.accent; };
 
-  const sessionsByDay = {};
-  [...upcoming, ...history].forEach(s => {
-    if (!sessionsByDay[s.day]) sessionsByDay[s.day] = [];
-    sessionsByDay[s.day].push(s);
-  });
-
-  const today = cal.today; // demo "today" (single source: active term)
-
-  const subjColor = (name) => {
-    const enr = K.getEnrolment(name);
-    return enr ? enr.subjectColor : DS.accent;
-  };
-
-  // Export-to-Calendar (ICS): build a minimal VCALENDAR from the upcoming sessions
-  // and trigger a client-side download. No backend — an in-memory blob only.
+  // Export-to-Calendar (ICS) of the upcoming sessions — client-side, no backend.
+  // Times are written in UTC so any calendar app places them correctly.
   const exportICS = () => {
     const pad = (n) => String(n).padStart(2, '0');
-    const dt = (day, hhmm) => `202604${pad(day)}T${hhmm.replace(':', '')}00`;
+    const utc = (ms) => { const d = new Date(ms); return `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00Z`; };
     const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Klasio//Student Sessions//EN'];
-    upcoming.forEach((s, i) => {
-      const [start, end] = s.time.split('–');
+    K.sessions.upcoming.filter(s => s.status !== 'cancelled').forEach(s => {
       lines.push('BEGIN:VEVENT',
-        `UID:klasio-session-${s.day}-${i}@klasio`,
-        `DTSTART:${dt(s.day, start)}`,
-        `DTEND:${dt(s.day, end)}`,
+        `UID:klasio-${s.id.replace('|', '-')}@klasio`,
+        `DTSTART:${utc(s.starts_at)}`,
+        `DTEND:${utc(s.ends_at)}`,
         `SUMMARY:${s.subject} — ${s.teacher}`,
         `LOCATION:${s.room || ''}`,
         'END:VEVENT');
@@ -772,22 +763,22 @@ const StudentSessionsPage = () => {
 
   return (
     <div style={pageFrame()}>
-      <PageHeader title="My Sessions" subtitle="Your upcoming and past tutoring sessions" actions={[
+      <PageHeader title="My Sessions" subtitle="Your lessons — open one to see what was covered, your attendance and any homework" actions={[
         <Btn key="cal" variant="secondary" icon="download" small onClick={exportICS}>Export to Calendar</Btn>
       ]} />
 
-      {/* Calendar — shared MonthCalendar (full variant) */}
+      {/* Calendar — shared MonthCalendar (full variant); a lesson chip opens it */}
       <div style={{
         background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:12,
         padding:'20px 22px', marginBottom:28,
       }}>
         <MonthCalendar
-          month={month} today={today} sessionsByDay={sessionsByDay} subjColor={subjColor} variant="full"
-          onPrev={() => {}} onToday={() => {}} onNext={() => {}}
+          month={m.month} today={m.today} sessionsByDay={m.byDay} subjColor={subjColor} variant="full"
+          onPrev={m.prev} onToday={m.toToday} onNext={m.next} onOpenSession={setOpenId}
           legend={
             <div style={{ display:'flex', alignItems:'center', gap:14, marginRight:14 }}>
               {K.getEnrolments().map(s => (
-                <div key={s.subject} style={{ display:'flex', alignItems:'center', gap:5 }}>
+                <div key={s.classId} style={{ display:'flex', alignItems:'center', gap:5 }}>
                   <span style={{ width:8, height:8, borderRadius:'50%', background:s.subjectColor }} />
                   <span style={{ fontSize:11, color:DS.muted }}>{s.subject}</span>
                 </div>
@@ -797,49 +788,58 @@ const StudentSessionsPage = () => {
         />
       </div>
 
-      {/* Upcoming row */}
-      <div style={{ fontSize:14, fontWeight:600, color:DS.text, marginBottom:12 }}>Upcoming</div>
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:12, marginBottom:32 }}>
-        {upcoming.map((s, i) => {
-          const color = subjColor(s.subject);
+      {/* Upcoming */}
+      <div style={{ fontSize:14, fontWeight:600, color:DS.text, marginBottom:12 }}>Coming up</div>
+      {upcoming.length === 0 ? (
+        <Card style={{ marginBottom:32 }}><div style={{ padding:'20px', fontSize:13, color:DS.muted }}>No lessons coming up.</div></Card>
+      ) : (
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(220px, 1fr))', gap:12, marginBottom:32 }}>
+        {upcoming.map(s => {
+          const cancelled = s.status === 'cancelled';
           return (
-            <div key={i} style={{
+            <button key={s.id} onClick={() => setOpenId(s.id)} style={{
+              textAlign:'left', cursor:'pointer',
               background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:10,
-              padding:'18px', borderTop:`3px solid ${color}`,
+              padding:'18px', borderTop:`3px solid ${cancelled ? DS.faint : s.color}`, opacity: cancelled ? 0.75 : 1,
             }}>
-              <div style={{ fontSize:14, fontWeight:600, color:DS.text }}>{s.subject}</div>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8 }}>
+                <div style={{ fontSize:14, fontWeight:600, color:DS.text }}>{s.subject}</div>
+                {(cancelled || s.status === 'live') && <StuSessionPill status={s.status} />}
+              </div>
               <div style={{ fontSize:12, color:DS.muted, marginBottom:14 }}>{s.teacher}</div>
               <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
-                {[['calendar', s.date], ['clock', s.time], ['home', s.room]].map(([icon, txt]) => (
-                  <div key={txt} style={{ display:'flex', alignItems:'center', gap:7, fontSize:12, color:DS.muted }}>
+                {[['calendar', `${s.date} · ${stuRelDay(s.starts_at, now)}`], ['clock', s.time], ['home', s.room]].map(([icon, txt]) => (
+                  <div key={icon} style={{ display:'flex', alignItems:'center', gap:7, fontSize:12, color:DS.muted }}>
                     <Icon name={icon} size={12} color={DS.faint} />
                     {txt}
                   </div>
                 ))}
               </div>
-            </div>
+            </button>
           );
         })}
       </div>
+      )}
 
-      {/* History */}
-      <div style={{ fontSize:14, fontWeight:600, color:DS.text, marginBottom:12 }}>History</div>
+      {/* History — the pupil's own mark on each register */}
+      <div style={{ fontSize:14, fontWeight:600, color:DS.text, marginBottom:12 }}>Past lessons</div>
       <Card>
-        {history.map((s, i) => (
-          <div key={i} style={{
-            display:'flex', alignItems:'center', gap:14, padding:'14px 18px',
-            borderBottom: i < history.length-1 ? `1px solid ${DS.border}` : 'none',
+        {history.length === 0 ? <div style={{ padding:'20px', fontSize:13, color:DS.muted }}>No past lessons yet.</div> : history.map((s, i) => (
+          <button key={s.id} onClick={() => setOpenId(s.id)} style={{
+            display:'flex', alignItems:'center', gap:14, width:'100%', textAlign:'left', padding:'13px 18px',
+            border:'none', borderBottom: i < history.length-1 ? `1px solid ${DS.border}` : 'none', background:'none', cursor:'pointer',
           }}>
+            <div style={{ width:3, alignSelf:'stretch', minHeight:30, borderRadius:2, background:s.color, flexShrink:0 }} />
             <div style={{ flex:1, minWidth:0 }}>
               <div style={{ fontSize:13, fontWeight:600, color:DS.text }}>{s.subject}</div>
               <div style={{ fontSize:12, color:DS.muted }}>{s.teacher} · {s.date} · {s.time}</div>
             </div>
-            <Badge variant={s.status === 'attended' ? 'success' : 'danger'}>
-              {s.status === 'attended' ? 'Attended' : 'Missed'}
-            </Badge>
-          </div>
+            <StuSessionPill status={s.status} />
+            <Icon name="chevron_r" size={14} color={DS.faint} />
+          </button>
         ))}
       </Card>
+      <StudentSessionDrawer sessionId={openId} onClose={() => setOpenId(null)} onNav={onNav} />
     </div>
   );
 };
@@ -879,7 +879,7 @@ const fmtBytes = (b) => b == null ? '' : b < 1024 ? b + ' B' : b < 1048576 ? Mat
 const fmtAnnDate = (iso) => { const d = new Date(iso); const mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return `${d.getDate()} ${mo[d.getMonth()]}`; };
 
 // ── Class card visual language ────────────────────────────────────────────────
-// A course card reads as three bands: a coloured cover (identity), a white body
+// A course card reads as three bands: the class's cover (identity), a white body
 // (what's happening next) and a hairline stat band (how I'm doing). Nothing here
 // is decorative-only — every band answers a question the student actually has.
 
@@ -888,55 +888,6 @@ const subjectMonogram = (subject) => {
   const words = String(subject || '').trim().split(/\s+/).filter(Boolean);
   if (words.length >= 2) return ((words[0][0] || '') + (words[1][0] || '')).toUpperCase();
   return (words[0] || '?').slice(0, 2).toUpperCase();
-};
-
-// Stable 0..n picker so a subject always draws the SAME cover motif.
-const motifIndex = (subject, n) => {
-  let h = 0;
-  for (let i = 0; i < String(subject).length; i++) h = (h * 31 + String(subject).charCodeAt(i)) >>> 0;
-  return h % n;
-};
-
-// Cover artwork. The prototype ships no image assets, so the "illustration" is
-// inline SVG in white alpha over the subject gradient — three compositions, picked
-// deterministically per subject so a student's cards are visually distinguishable
-// at a glance without depending on colour alone.
-const ClassCoverArt = ({ subject, hov }) => {
-  const v = motifIndex(subject, 3);
-  const W = 'rgba(255,255,255,';
-  const wrap = {
-    position:'absolute', inset:0, opacity: hov ? 1 : 0.85,
-    transform: hov ? 'scale(1.04)' : 'none',
-    transition:'opacity .22s ease, transform .35s cubic-bezier(.2,.7,.3,1)',
-  };
-  return (
-    <svg width="100%" height="100%" viewBox="0 0 320 108" preserveAspectRatio="xMaxYMid slice" style={wrap} aria-hidden="true" focusable="false">
-      {v === 0 && (
-        <g>
-          <circle cx="268" cy="18" r="62" fill={W + '0.07)'} />
-          <circle cx="268" cy="18" r="42" fill={W + '0.08)'} />
-          <circle cx="268" cy="18" r="22" fill={W + '0.10)'} />
-          <circle cx="196" cy="96" r="30" fill={W + '0.05)'} />
-        </g>
-      )}
-      {v === 1 && (
-        <g fill="none" stroke={W + '0.16)'} strokeWidth="1.25" strokeLinecap="round">
-          <path d="M132 118 C 176 78, 208 92, 244 48 S 300 6, 342 18" />
-          <path d="M150 122 C 196 84, 226 98, 262 54 S 316 12, 356 24" stroke={W + '0.11)'} />
-          <path d="M168 126 C 216 90, 244 104, 280 60 S 332 18, 370 30" stroke={W + '0.08)'} />
-          <circle cx="286" cy="30" r="44" fill={W + '0.06)'} stroke="none" />
-        </g>
-      )}
-      {v === 2 && (
-        <g>
-          <circle cx="290" cy="82" r="58" fill={W + '0.06)'} />
-          {[0,1,2,3,4].map(r => [0,1,2,3,4,5].map(cx => (
-            <circle key={r + '-' + cx} cx={200 + cx * 22} cy={14 + r * 20} r="1.8" fill={W + '0.28)'} />
-          )))}
-        </g>
-      )}
-    </svg>
-  );
 };
 
 // One micro-stat in the card's footer band.
@@ -954,7 +905,7 @@ const StudentClassCard = ({ enr, nextSession, unread, hwDue, attendance, onOpen 
   const [hov, setHov] = React.useState(false);
   const K = window.klasioStudent;
   const c = enr.subjectColor;
-  const attColor = attendance >= 90 ? DS.success : attendance >= 80 ? DS.warning : DS.danger;
+  const attColor = attendance == null ? DS.faint : attendance >= 90 ? DS.success : attendance >= 80 ? DS.warning : DS.danger;
   const dayNum = nextSession ? (nextSession.date.match(/(\d+)/) || [])[1] : null;
   const monTxt = nextSession ? ((nextSession.date.match(/\d+\s+(\w+)/) || [])[1] || '').toUpperCase() : '';
   const dowTxt = nextSession ? (nextSession.date.split(' ')[0] || '') : '';
@@ -972,18 +923,18 @@ const StudentClassCard = ({ enr, nextSession, unread, hwDue, attendance, onOpen 
         cursor:'pointer', overflow:'hidden', display:'flex', flexDirection:'column',
       }}
     >
-      {/* ── Cover: subject identity ─────────────────────────────────────────── */}
+      {/* ── Cover: the class's background (a banner strip) ───────────────────── */}
       <div style={{
-        position:'relative', height:100, overflow:'hidden',
+        position:'relative', height:100, overflow:'hidden', isolation:'isolate',
         padding:'13px 15px', display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:10,
-        background:`linear-gradient(135deg, ${shadeColor(c, 10)} 0%, ${c} 42%, ${shadeColor(c, -30)} 100%)`,
+        ...coverStyleVars(enr.coverArt, 'banner'),
       }}>
-        <ClassCoverArt subject={enr.subject} hov={hov} />
+        <CoverArt cover={enr.coverArt} variant="banner" />
         <span style={{
-          position:'relative', display:'inline-flex', alignItems:'center', gap:6, maxWidth:'70%',
-          padding:'4px 10px', borderRadius:999, background:'rgba(255,255,255,0.18)',
+          position:'relative', display:'inline-flex', alignItems:'center', gap:6, maxWidth:'60%',
+          padding:'4px 10px', borderRadius:999, background:'var(--cover-chip-bg)',
           border:'1px solid rgba(255,255,255,0.28)', backdropFilter:'blur(6px)',
-          color:'#fff', fontSize:10.5, fontWeight:700, letterSpacing:'0.06em', textTransform:'uppercase',
+          color:'var(--cover-chip-ink)', fontSize:10.5, fontWeight:700, letterSpacing:'0.06em', textTransform:'uppercase',
           whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
         }}>{enr.qualification || enr.subject}</span>
 
@@ -1075,12 +1026,12 @@ const StudentClassCard = ({ enr, nextSession, unread, hwDue, attendance, onOpen 
           <span style={{ color: hwDue > 0 ? DS.warning : DS.text }}>{hwDue}</span>
         </ClassStatCell>
         <ClassStatCell label="Attendance">
-          <span style={{ color:attColor }}>{attendance}%</span>
+          <span style={{ color:attColor }}>{attendance == null ? '—' : `${attendance}%`}</span>
         </ClassStatCell>
         <ClassStatCell label="Predicted">
-          {K && K.GradeChip
-            ? <K.GradeChip value={enr.predictedGrade} qualification={enr.qualification} color={c} variant="bare" />
-            : <span style={{ color:c }}>{enr.predictedGrade}</span>}
+          {enr.predictedGrade && K && K.GradeChip
+            ? <K.GradeChip value={enr.predictedGrade} qualification={enr.qualification} color={c} variant="bare" title="Predicted grade — set by your teacher" />
+            : <span title="Your teacher hasn’t set a predicted grade yet" style={{ color:DS.faint }}>—</span>}
         </ClassStatCell>
       </div>
     </button>
@@ -1090,9 +1041,9 @@ const StudentClassCard = ({ enr, nextSession, unread, hwDue, attendance, onOpen 
 const StudentClassesList = ({ onNav, comms }) => {
   const K = window.klasioStudent;
   const enrolments = K.getEnrolments();
-  const nextFor = (subject) => K.sessions.upcoming.find(s => s.subject === subject);
+  const nextFor = (classId) => K.sessions.upcoming.find(s => s.classId === classId && s.status !== 'cancelled');
   const sorted = enrolments.slice().sort((a, b) => {
-    const da = (nextFor(a.subject) || {}).day || 99, db = (nextFor(b.subject) || {}).day || 99;
+    const da = (nextFor(a.classId) || {}).starts_at || Infinity, db = (nextFor(b.classId) || {}).starts_at || Infinity;
     return da - db;
   });
   const open = (enr) => { window.__studentClassId = enr.classId; onNav('classes:detail'); };
@@ -1107,10 +1058,10 @@ const StudentClassesList = ({ onNav, comms }) => {
           {sorted.map(enr => {
             const anns = classAnnouncementsForStudent(comms, enr.classId);
             return (
-              <StudentClassCard key={enr.classId} enr={enr} nextSession={nextFor(enr.subject)}
+              <StudentClassCard key={enr.classId} enr={enr} nextSession={nextFor(enr.classId)}
                 unread={anns.filter(a => a.unread).length}
                 hwDue={K.homeworkForSubject(enr.subject).due.length}
-                attendance={K.metrics.attendanceForSubject(enr.subject)}
+                attendance={K.metrics.attendanceForClass(enr.classId)}
                 onOpen={() => open(enr)} />
             );
           })}
@@ -1149,13 +1100,16 @@ const StudentClassDetail = ({ enr, onNav, onBack, comms }) => {
   const K = window.klasioStudent;
   const Shell = window.ClassDetailShell;
   const [tab, setTab] = React.useState('overview');
+  const [openSession, setOpenSession] = React.useState(null);
   const color = enr.subjectColor;
   const anns = classAnnouncementsForStudent(comms, enr.classId);
   const hw = K.homeworkForSubject(enr.subject);
-  const attendance = K.metrics.attendanceForSubject(enr.subject);
-  const upcoming = K.sessions.upcoming.filter(s => s.subject === enr.subject);
-  const history  = K.sessions.history.filter(s => s.subject === enr.subject);
-  const nextSession = upcoming[0];
+  const attendance = K.metrics.attendanceForClass(enr.classId);
+  const now = K.now();
+  const upcoming = K.sessions.upcoming.filter(s => s.classId === enr.classId);
+  const history  = K.sessions.history.filter(s => s.classId === enr.classId);
+  const nextSession = upcoming.find(s => s.status !== 'cancelled');
+  const attColor = attendance == null ? DS.faint : attendance >= 90 ? DS.success : DS.warning;
   const resources = classResourcesForStudent(enr.subject);
   const totalHw = hw.due.length + hw.submitted.length + hw.marked.length;
   const completion = totalHw ? Math.round(((hw.submitted.length + hw.marked.length) / totalHw) * 100) : 0;
@@ -1191,16 +1145,17 @@ const StudentClassDetail = ({ enr, onNav, onBack, comms }) => {
         <Card title="Next session" icon="calendar" accent={color}>
           <div style={{ padding:'16px 20px' }}>
             {nextSession ? (
-              <div style={{ display:'flex', alignItems:'center', gap:14 }}>
+              <button onClick={() => setOpenSession(nextSession.id)} style={{ display:'flex', alignItems:'center', gap:14, width:'100%', textAlign:'left', border:'none', background:'none', padding:0, cursor:'pointer' }}>
                 <div style={{ width:52, textAlign:'center', flexShrink:0, background:color+'14', borderRadius:10, padding:'8px 0' }}>
                   <div style={{ fontSize:20, fontWeight:800, color, lineHeight:1 }}>{(nextSession.date.match(/(\d+)/) || [])[1]}</div>
                   <div style={{ fontSize:10, fontWeight:700, color, letterSpacing:'1px', marginTop:2 }}>{(nextSession.date.match(/\d+\s+(\w+)/) || [])[1] ? (nextSession.date.match(/\d+\s+(\w+)/)[1]).toUpperCase() : ''}</div>
                 </div>
                 <div style={{ flex:1, minWidth:0 }}>
                   <div style={{ fontSize:14, fontWeight:700, color:DS.text }}>{nextSession.date} · {nextSession.time}</div>
-                  <div style={{ fontSize:12.5, color:DS.muted, marginTop:2 }}>{enr.room} · {enr.teacher}</div>
+                  <div style={{ fontSize:12.5, color:DS.muted, marginTop:2 }}>{nextSession.room} · {nextSession.teacher} · {stuRelDay(nextSession.starts_at, now)}</div>
                 </div>
-              </div>
+                <Icon name="chevron_r" size={15} color={DS.faint} />
+              </button>
             ) : <div style={{ fontSize:13, color:DS.faint }}>No upcoming sessions.</div>}
           </div>
         </Card>
@@ -1218,13 +1173,19 @@ const StudentClassDetail = ({ enr, onNav, onBack, comms }) => {
         </Card>
       </div>
       <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
-        <Card>{stat('My attendance', attendance + '%', 'This class, this term', attendance >= 90 ? DS.success : DS.warning)}</Card>
+        <Card>{stat('My attendance', attendance == null ? '—' : attendance + '%', attendance == null ? 'No registers yet' : 'This class · last 6 weeks', attColor)}</Card>
         <Card>{stat('Homework completion', completion + '%', `${hw.due.length} due now`, hw.due.length ? DS.warning : DS.success)}</Card>
         <Card>
           <div style={{ padding:'16px 18px' }}>
             <div style={{ fontSize:11, fontWeight:600, color:DS.faint, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom:8 }}>Predicted grade</div>
-            <K.GradeChip value={enr.predictedGrade} qualification={enr.qualification} color={color} />
-            <div style={{ fontSize:12, color:DS.muted, marginTop:8 }}>Set by {enr.teacher}</div>
+            {enr.predictedGrade
+              ? <K.GradeChip value={enr.predictedGrade} qualification={enr.qualification} color={color} title="Predicted grade — set by your teacher" />
+              : <span style={{ fontSize:13, fontWeight:600, color:DS.faint }}>Not set yet</span>}
+            <div style={{ fontSize:12, color:DS.muted, marginTop:8 }}>
+              {enr.predictedGrade ? `Set by ${enr.teacher}` : `${enr.teacher} hasn’t set one yet`}
+              {enr.targetGrade ? ` · target ${enr.targetGrade}` : ''}
+            </div>
+            {enr.indicativeGrade && <div style={{ fontSize:11.5, color:DS.faint, marginTop:4 }}>Indicative from your results: {enr.indicativeGrade}</div>}
           </div>
         </Card>
       </div>
@@ -1279,19 +1240,20 @@ const StudentClassDetail = ({ enr, onNav, onBack, comms }) => {
   const sessions = (
     <div>
       <div style={{ display:'flex', gap:14, marginBottom:18, flexWrap:'wrap' }}>
-        <Card style={{ flex:1, minWidth:150 }}>{stat('My attendance', attendance + '%', null, attendance >= 90 ? DS.success : DS.warning)}</Card>
-        <Card style={{ flex:1, minWidth:150 }}>{stat('Upcoming', upcoming.length)}</Card>
-        <Card style={{ flex:1, minWidth:150 }}>{stat('Attended', history.filter(s => s.status === 'attended').length, `of ${history.length} recent`)}</Card>
+        <Card style={{ flex:1, minWidth:150 }}>{stat('My attendance', attendance == null ? '—' : attendance + '%', null, attColor)}</Card>
+        <Card style={{ flex:1, minWidth:150 }}>{stat('Upcoming', upcoming.filter(s => s.status !== 'cancelled').length, 'next 5 weeks')}</Card>
+        <Card style={{ flex:1, minWidth:150 }}>{stat('Attended', enr.sessionsAttended, `of ${enr.sessionsTotal} marked`)}</Card>
       </div>
       {upcoming.length > 0 && (
         <Card title="Upcoming" style={{ marginBottom:16 }}>
           <div>
             {upcoming.map((s, i) => (
-              <div key={i} style={{ display:'flex', alignItems:'center', gap:12, padding:'12px 18px', borderTop: i ? `1px solid ${DS.border}` : 'none' }}>
-                <Icon name="calendar" size={14} color={color} />
-                <div style={{ flex:1, minWidth:0, fontSize:13, color:DS.text }}>{s.date} · {s.time}</div>
-                <div style={{ fontSize:12, color:DS.muted }}>{s.room}</div>
-              </div>
+              <button key={s.id} onClick={() => setOpenSession(s.id)} style={{ display:'flex', alignItems:'center', gap:12, width:'100%', textAlign:'left', padding:'12px 18px', border:'none', borderTop: i ? `1px solid ${DS.border}` : 'none', background:'none', cursor:'pointer' }}>
+                <Icon name="calendar" size={14} color={s.status === 'cancelled' ? DS.faint : color} />
+                <div style={{ flex:1, minWidth:0, fontSize:13, color:DS.text, textDecoration: s.status === 'cancelled' ? 'line-through' : 'none' }}>{s.date} · {s.time}</div>
+                {s.status === 'cancelled' || s.status === 'live' ? <StuSessionPill status={s.status} /> : <div style={{ fontSize:12, color:DS.muted }}>{s.room}</div>}
+                <Icon name="chevron_r" size={14} color={DS.faint} />
+              </button>
             ))}
           </div>
         </Card>
@@ -1299,10 +1261,11 @@ const StudentClassDetail = ({ enr, onNav, onBack, comms }) => {
       <Card title="History">
         {history.length === 0 ? <div style={{ padding:'24px', fontSize:13, color:DS.muted, textAlign:'center' }}>No past sessions yet.</div> :
           history.map((s, i) => (
-            <div key={i} style={{ display:'flex', alignItems:'center', gap:12, padding:'12px 18px', borderTop: i ? `1px solid ${DS.border}` : 'none' }}>
+            <button key={s.id} onClick={() => setOpenSession(s.id)} style={{ display:'flex', alignItems:'center', gap:12, width:'100%', textAlign:'left', padding:'12px 18px', border:'none', borderTop: i ? `1px solid ${DS.border}` : 'none', background:'none', cursor:'pointer' }}>
               <div style={{ flex:1, minWidth:0, fontSize:13, color:DS.text }}>{s.date} · {s.time}</div>
-              <Badge variant={s.status === 'attended' ? 'success' : 'danger'}>{s.status === 'attended' ? 'Attended' : 'Missed'}</Badge>
-            </div>
+              <StuSessionPill status={s.status} />
+              <Icon name="chevron_r" size={14} color={DS.faint} />
+            </button>
           ))}
       </Card>
     </div>
@@ -1335,12 +1298,13 @@ const StudentClassDetail = ({ enr, onNav, onBack, comms }) => {
   return (
     <Shell
       onBack={onBack} backLabel="My Classes"
-      color={color} bannerTheme="default"
+      color={color} cover={enr.coverArt}
       chips={[enr.subject, enr.qualification, enr.teacher].filter(Boolean)}
       title={enr.name} subtitle={`${enr.group} · ${enr.day} ${enr.time} · ${enr.room}`}
       tabs={TABS} activeTab={tab} onTab={setTab}
     >
       {body[tab]}
+      <StudentSessionDrawer sessionId={openSession} onClose={() => setOpenSession(null)} onNav={onNav} />
     </Shell>
   );
 };
@@ -1364,7 +1328,7 @@ const StudentClassesPage = ({ section, onNav, comms }) => {
 const StudentDashboard = ({ page = 'dashboard', section, onNav, comms }) => {
   if (page === 'homework') return <StudentHomework section={section} onNav={onNav} />;
   if (page === 'progress') return <StudentProgressPage />;
-  if (page === 'sessions') return <StudentSessionsPage />;
+  if (page === 'sessions') return <StudentSessionsPage onNav={onNav} />;
   if (page === 'classes')  return <StudentClassesPage section={section} onNav={onNav} comms={comms} />;
   if (page === 'reports') return <StudentReports />;
   return <StudentOverview onNav={onNav} comms={comms} />;

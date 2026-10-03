@@ -1,12 +1,14 @@
 // ══════════════════════════════════════════════════════════════
 //  Klasio — Settings
-//  One tabbed Settings page per role. The first few tabs ("Account",
-//  "Notifications", "Appearance") are common to *every* role; the final
+//  One tabbed Settings page per STAFF role. The first few tabs ("Account",
+//  "Notifications", "Appearance") are common to every staff role; the final
 //  tab is role-specific:
 //    superadmin → Platform Defaults   (new-centre defaults, billing, retention)
-//    admin      → Centre              (centre profile, branding, term, invoicing)
-//    teacher    → Teaching            (homework/grading defaults, availability)
-//    student    → Learning            (guardian, accessibility, reminders)
+//    admin      → Centre              (centre profile, branding, term, invoicing,
+//                                      pupil privacy)
+//    teacher    → Teaching            (alerts, teaching availability)
+//  A pupil gets ONE page with no tabs (StudentSettingsPage, decision #61):
+//  read-only account + sign-in action, in-app notifications, their data.
 //
 //  Backed by a shared localStorage store (settings_store_v1) seeded from
 //  mocks/settings.mock.jsx, keyed by role so switching roles in the demo
@@ -41,6 +43,19 @@ function setLoad() {
 function setSave(store) {
   try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(store)); } catch (e) {}
 }
+
+// Centre-level teaching policy, read by other modules (Homework's new-assignment
+// defaults, the pupil-facing grade display). Centre decisions, not teacher
+// preferences: two teachers at one centre start from the same rules and pupils see
+// results the same way (decisions #53/#54; production: centre_settings).
+window.klasioCentreSettings = () => (setLoad().admin || {}).centre || {};
+
+// Pupil privacy (decisions #29 / #59) — what a pupil may see about their standing
+// against classmates. Both default OFF (AADC): a pupil sees their own results and
+// trend, never where they sit. Production: centre_privacy_settings, typed and
+// audited, read through privacy_flag().
+const PRIVACY_DEFAULTS = { showRankToStudents: false, rankMinAge: 13, showClassAverageToStudents: false };
+window.klasioPrivacy = () => ({ ...PRIVACY_DEFAULTS, ...((setLoad().admin || {}).privacy || {}) });
 
 function useSettingsStore(role) {
   const [store, setStore] = React.useState(setLoad);
@@ -440,32 +455,33 @@ const AppearanceTab = ({ data, set, role, wide }) => {
 
 // ─── Role-specific tabs ────────────────────────────────────────────────────────────
 
-// SuperAdmin → Platform Defaults (distinct from live "Platform Controls" page,
-// which handles feature flags / plans / roles). This is org-level configuration.
+// SuperAdmin → Platform Defaults (distinct from the live "Platform Controls" page,
+// which handles switches / feature flags / roles, and the "Pricing" page, which
+// handles plans / trials / codes). This is org-level configuration.
 const PlatformTab = ({ data, set, wide }) => {
   const p = data.platform || {};
-  // Trial length is NOT editable here — there is one global free trial, owned by
-  // Platform Controls (Plans.jsx trial store). Show it live and link across, so the
+  // Trial length is NOT editable here — the centre free trial is owned by the
+  // Pricing page (Plans.jsx trial store). Show it live and link across, so the
   // signup promise can never drift from what this screen claims.
-  const trial = (typeof window.getPlatformTrial === 'function') ? window.getPlatformTrial() : { enabled: true, days: 14 };
+  const trial = (typeof window.getPlatformTrial === 'function') ? window.getPlatformTrial('centre') : { enabled: true, days: 14 };
+  // The plan list is the live catalogue's centre plans, never a local list.
+  const centrePlans = (typeof window.getPlans === 'function') ? window.getPlans('centre').filter(pl => !pl.archived) : [];
   const defaults = (
     <SettingsSection title="New-centre defaults" subtitle="Applied automatically when a centre is created" icon="book">
       <SetGrid>
         <Field label="Default plan">
           <Select value={p.defaultPlan || 'growth'} onChange={e => set('platform', 'defaultPlan', e.target.value)}>
-            <option value="starter">Starter</option>
-            <option value="growth">Growth</option>
-            <option value="scale">Scale</option>
+            {centrePlans.map(pl => <option key={pl.id} value={pl.id}>{pl.name}</option>)}
           </Select>
         </Field>
-        <Field label="Free trial" hint="Set once, platform-wide, in Platform Controls.">
+        <Field label="Free trial" hint="Set per audience on the Pricing page.">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 38 }}>
             <Badge variant={trial.enabled ? 'success' : 'default'}>
               {trial.enabled ? `${trial.days} day${trial.days === 1 ? '' : 's'}` : 'Off'}
             </Badge>
-            <button onClick={() => window.__navigate && window.__navigate('superadmin', 'controls')}
+            <button onClick={() => window.__navigate && window.__navigate('superadmin', 'pricing')}
               style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 12.5, color: DS.accent, textDecoration: 'underline' }}>
-              Change in Platform Controls
+              Change on the Pricing page
             </button>
           </div>
         </Field>
@@ -730,6 +746,31 @@ const CentreTab = ({ data, set, wide }) => {
       </Field>
     </SettingsSection>
   );
+  // Setup checklist — the SAME status the dashboard banner and the Centres drawer
+  // read (centreSetupStatus). This is where any centre admin (not only the account
+  // owner, who alone can open Centres) brings a dismissed banner back.
+  const setup = window.centreSetupStatus ? window.centreSetupStatus(activeCentreId) : null;
+  const setupCard = setup && setup.centre && (
+    <SettingsSection title="Setup checklist" subtitle={setup.complete ? 'All set — this centre is ready' : `${setup.done} of ${setup.total} steps done — shown on the dashboard until finished`} icon="zap">
+      <div style={{ padding: '6px 0 10px' }}>
+        {setup.steps.map(st => (
+          <div key={st.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: `1px solid ${DS.border}` }}>
+            <span style={{ display: 'flex', color: st.done ? DS.success : DS.faint }}><Icon name={st.done ? 'check' : 'clock'} size={15} /></span>
+            <span style={{ flex: 1, fontSize: 13, color: st.done ? DS.muted : DS.text }}>{st.title}</span>
+            {!st.done && <Btn small variant="ghost" onClick={() => window.__navigate && window.__navigate('admin', st.route)}>{st.cta}</Btn>}
+          </div>
+        ))}
+        {!setup.complete && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12 }}>
+            <span style={{ flex: 1, fontSize: 12.5, color: DS.muted }}>{setup.dismissed ? 'Hidden from the dashboard.' : 'Showing on the dashboard.'}</span>
+            <Btn small variant="secondary" icon={setup.dismissed ? 'eye' : 'x'} onClick={() => window.setSetupDismissed && window.setSetupDismissed(activeCentreId, !setup.dismissed)}>
+              {setup.dismissed ? 'Show on dashboard' : 'Hide from dashboard'}
+            </Btn>
+          </div>
+        )}
+      </div>
+    </SettingsSection>
+  );
   const termsCard = (
     <SettingsSection
       title="Academic terms"
@@ -764,12 +805,60 @@ const CentreTab = ({ data, set, wide }) => {
     </SettingsSection>
   );
 
+  // Teaching defaults — what a NEW assignment starts from, for every teacher here.
+  // (Moved from the teacher's own Settings: a per-teacher layer made two teachers
+  // in one centre run different lateness / attempts / release rules.)
+  const td = c.teachingDefaults || {};
+  const setTd = (k, v) => set('centre', 'teachingDefaults', { ...td, [k]: v });
+  const teachingCard = (
+    <SettingsSection title="Teaching defaults" subtitle="Every new homework assignment starts from these — teachers change them per assignment" icon="notebook_pen">
+      <SetGrid>
+        <Field label="Attempts allowed">
+          <Input type="number" min="1" value={td.attemptsAllowed ?? 1} onChange={e => setTd('attemptsAllowed', Math.max(1, +e.target.value || 1))} />
+        </Field>
+        <Field label="Due after (days)">
+          <Input type="number" min="0" value={td.dueDays ?? 7} onChange={e => setTd('dueDays', Math.max(0, +e.target.value || 0))} />
+        </Field>
+      </SetGrid>
+      <SettingRow title="Accept late work" desc="Pupils can still submit after the due date; it is marked late."
+        checked={!!td.allowLate} onToggle={v => setTd('allowLate', v)} />
+      <SettingRow title="Auto-mark objective questions" desc="Multiple choice, true/false and numeric answers are checked against the teacher's answer on submission."
+        checked={td.autoGradeMcq !== false} onToggle={v => setTd('autoGradeMcq', v)} />
+      <SettingRow title="Let pupils review marked work" desc="Pupils can reopen a returned assignment and see their answers."
+        checked={!!td.allowReview} onToggle={v => setTd('allowReview', v)} />
+      <SettingRow title="Hold marks until released" desc="Marks stay hidden from pupils until the teacher releases them." last
+        checked={!!td.hideMarksUntilReleased} onToggle={v => setTd('hideMarksUntilReleased', v)} />
+    </SettingsSection>
+  );
+  // What pupils see — a centre policy with real consequences (some centres don't
+  // show young pupils grades). The grade is always an indicative bucket on the
+  // pupil's own scale (GCSE 9–1 / A-Level A*–E / KS3), never an official result.
+  const pgd = c.pupilGradeDisplay || 'both';
+  const pupilCard = (
+    <SettingsSection title="What pupils see" subtitle="How assessment results appear on the pupil's own screens" icon="eye">
+      <div style={{ padding: '12px 0 6px' }}>
+        <Segmented value={pgd} onChange={v => set('centre', 'pupilGradeDisplay', v)} options={[
+          { id: 'percentage', label: 'Percentage' },
+          { id: 'grade', label: 'Indicative grade' },
+          { id: 'both', label: 'Both' },
+        ]} />
+        <div style={{ display: 'flex', gap: 14, alignItems: 'center', marginTop: 14, padding: '12px 14px', background: DS.surface, borderRadius: 9 }}>
+          <span style={{ fontSize: 12, color: DS.muted }}>A pupil scoring 72% on a GCSE paper sees</span>
+          <strong style={{ fontSize: 15, color: DS.text }}>{pgd === 'percentage' ? '72%' : pgd === 'grade' ? (window.klasioGrades ? window.klasioGrades.pctToGrade(72, { level: 'GCSE' }) : '6') : `72% · ${window.klasioGrades ? window.klasioGrades.pctToGrade(72, { level: 'GCSE' }) : '6'}`}</strong>
+        </div>
+        <div style={{ fontSize: 12, color: DS.muted, marginTop: 10, lineHeight: 1.5 }}>
+          Grades are indicative — worked out from the percentage on the pupil's own scale, not an exam board result. Staff always see both.
+        </div>
+      </div>
+    </SettingsSection>
+  );
+
   return (
     <div>
       <SplitLayout
         wide={wide}
         left={<>{logoCard}{colourCard}</>}
-        right={<>{profileCard}{termsCard}{invoicingCard}</>}
+        right={<>{setupCard}{profileCard}{termsCard}{teachingCard}{pupilCard}<PupilPrivacyCard data={data} set={set} />{invoicingCard}</>}
       />
       {/* Working hours & pay — drives the derived staff timesheet (Staff › Timesheets).
           Kept full-width below the split: the teacher rows need the horizontal room. */}
@@ -778,125 +867,328 @@ const CentreTab = ({ data, set, wide }) => {
   );
 };
 
-// Teacher → Teaching (homework / grading defaults, availability)
-const TeachingTab = ({ data, set, wide }) => {
-  const t = data.teaching || {};
-  const homework = (
-    <SettingsSection title="Homework defaults" subtitle="Pre-filled when you create a new assignment" icon="notebook_pen">
-      <SetGrid>
-        <Field label="Default attempts allowed">
-          <Input type="number" value={t.attempts ?? 1} onChange={e => set('teaching', 'attempts', Math.max(1, +e.target.value || 1))} />
-        </Field>
-        <Field label="Default due window (days)">
-          <Input type="number" value={t.dueDays ?? 7} onChange={e => set('teaching', 'dueDays', +e.target.value)} />
-        </Field>
-      </SetGrid>
-      <SettingRow title="Allow late submissions" desc="By default, accept work submitted after the due date."
-        checked={!!t.allowLate} onToggle={v => set('teaching', 'allowLate', v)} />
-      <SettingRow title="Auto-grade multiple choice" desc="Mark MCQ questions automatically on submission."
-        checked={!!t.autoGradeMcq} onToggle={v => set('teaching', 'autoGradeMcq', v)} />
-      <SettingRow title="Let students review answers" desc="Allow review of marked work by default."
-        checked={!!t.allowReview} onToggle={v => set('teaching', 'allowReview', v)} last />
-    </SettingsSection>
-  );
-  const grading = (
-    <SettingsSection title="Grading" subtitle="How marks are scored and released" icon="check">
-      <SettingRow
-        title="Default grading scale"
+// Admin → Centre → Pupil privacy (decisions #29 / #59). Typed, audited centre
+// policy in production (centre_privacy_settings); both comparisons default off.
+const PupilPrivacyCard = ({ data, set }) => {
+  const pv = { ...PRIVACY_DEFAULTS, ...(data.privacy || {}) };
+  const put = (k, v) => { set('privacy', k, v); if (window.klasioAudit) window.klasioAudit('update_privacy_settings', 'centre_privacy_settings', { [k]: v }); };
+  return (
+    <SettingsSection title="Pupil privacy" subtitle="What pupils can see about their standing against classmates" icon="shield">
+      <SettingRow title="Show class averages to pupils"
+        desc="Off: pupils see their own results and how they've moved since last time. On: their Progress page and returned homework also show the class average."
+        checked={!!pv.showClassAverageToStudents} onToggle={v => put('showClassAverageToStudents', v)} />
+      <SettingRow title="Show class rank to pupils"
+        desc="A banded position (e.g. Top 15%) on returned homework. Never shown to pupils under the minimum age below."
+        checked={!!pv.showRankToStudents} onToggle={v => put('showRankToStudents', v)} />
+      <SettingRow title="Minimum age for rank" desc="Pupils younger than this never see a rank, whatever the setting above."
+        disabled={!pv.showRankToStudents}
         control={
-          <Select value={t.gradingScale || 'percent'} onChange={e => set('teaching', 'gradingScale', e.target.value)} style={{ width: 150 }}>
-            <option value="percent">Percentage</option>
-            <option value="letter">Letter (A–F)</option>
-            <option value="points">Points</option>
+          <Select value={String(pv.rankMinAge)} onChange={e => put('rankMinAge', Number(e.target.value))} style={{ width: 110 }} disabled={!pv.showRankToStudents}>
+            {[13, 14, 15, 16].map(a => <option key={a} value={a}>{a}+</option>)}
           </Select>
-        }
-      />
-      <SettingRow title="Release marks after approval" desc="Hold marks until you've reviewed and approved them."
-        checked={!!t.releaseAfterApproval} onToggle={v => set('teaching', 'releaseAfterApproval', v)} last />
-    </SettingsSection>
-  );
-  const availability = (
-    <SettingsSection title="Availability & alerts" subtitle="Your working hours" icon="calendar">
-      <SetGrid>
-        <Field label="Working hours from">
-          <Input type="time" value={t.hoursFrom || '09:00'} onChange={e => set('teaching', 'hoursFrom', e.target.value)} />
-        </Field>
-        <Field label="Working hours to">
-          <Input type="time" value={t.hoursTo || '17:00'} onChange={e => set('teaching', 'hoursTo', e.target.value)} />
-        </Field>
-      </SetGrid>
-      <SettingRow title="Notify on each submission" desc="Get an alert the moment a student submits homework."
-        checked={!!t.notifyOnSubmission} onToggle={v => set('teaching', 'notifyOnSubmission', v)} last />
-    </SettingsSection>
-  );
-  return <SplitLayout wide={wide} left={<>{grading}{availability}</>} right={homework} />;
-};
-
-// Student → Learning (guardian, accessibility, reminders) — lighter weight
-const LearningTab = ({ data, set, wide }) => {
-  const l = data.learning || {};
-  // §8: the guardian is the student's LINKED PARENT ACCOUNT — not free-text
-  // contact metadata. It is read-only to the student (display only; centre/parent-
-  // managed). "Share reports with guardian" is governed by centre policy, not a
-  // free student toggle, so it renders read-only with a "managed by your centre"
-  // note.
-  const readonlyBox = (v) => (
-    <div style={{ padding: '9px 12px', border: `1px solid ${DS.border}`, borderRadius: 8, background: DS.surface, fontSize: 13, color: DS.text }}>{v || '—'}</div>
-  );
-  const managedPill = (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: DS.muted, background: DS.surface, border: `1px solid ${DS.border}`, borderRadius: 999, padding: '4px 10px' }}>
-      <Icon name="lock" size={12} color={DS.muted} /> Managed by your centre
-    </span>
-  );
-  const guardian = (
-    <SettingsSection title="Guardian & contact" subtitle="Your linked parent/guardian account" icon="users">
-      <SetGrid>
-        <Field label="Guardian name">{readonlyBox(l.guardianName)}</Field>
-        <Field label="Guardian email">{readonlyBox(l.guardianEmail)}</Field>
-      </SetGrid>
-      <SettingRow title="Share reports with guardian"
-        desc="Whether new reports and feedback are shared with your guardian is set by your centre's policy."
-        control={managedPill} last />
-      <div style={{ fontSize: 11.5, color: DS.faint, marginTop: 8 }}>
-        Guardian details come from your linked parent account and can only be changed by your centre.
+        } last />
+      <div style={{ fontSize: 12, color: DS.muted, padding: '2px 0 8px', lineHeight: 1.5 }}>
+        Staff always see class averages. Every change here is recorded in the audit log.
       </div>
     </SettingsSection>
   );
-  const reminders = (
-    <SettingsSection title="Homework reminders" subtitle="When we nudge you" icon="notebook_pen">
-      <SettingRow
-        title="Remind me before a deadline"
-        control={
-          <Select value={l.reminderLead || '1d'} onChange={e => set('learning', 'reminderLead', e.target.value)} style={{ width: 150 }}>
-            <option value="none">Don't remind</option>
-            <option value="1h">1 hour before</option>
-            <option value="1d">1 day before</option>
-            <option value="2d">2 days before</option>
-          </Select>
-        }
-      />
-      {/* §8/AADC: de-gamified and default OFF — a neutral study reminder, no
-          streaks and no loss-aversion "don't break your streak" framing. */}
-      <SettingRow title="Study reminders" desc="Occasional gentle reminders to keep up with your studies. No streaks, no pressure."
-        checked={!!l.streakNudges} onToggle={v => set('learning', 'streakNudges', v)} last />
+};
+
+// Teacher → Teaching: WHEN you can teach (decision #55), plus your alerts.
+// The old homework defaults moved to the centre (admin Settings → Centre →
+// Teaching defaults); the "default grading scale" was read by nothing and offered
+// a Letter A–F scale the grade model rules out, so it is gone (the centre decides
+// what pupils see); "working hours" was read by nothing and became availability.
+const TeachingTab = ({ data, set, wide }) => {
+  const t = data.teaching || {};
+  const admin = useAdminStore();
+  const me = window.teacherMetrics ? window.teacherMetrics.getPrincipal() : { id: 't1', name: 'Heebz A' };
+  const av = window.teacherAvailability ? window.teacherAvailability(admin, me.id) : null;
+  const centre = window.klasioCentreSettings ? window.klasioCentreSettings() : {};
+  const td = centre.teachingDefaults || {};
+  const availability = (
+    <SettingsSection title="When I can teach" subtitle="Your admin sees this when timetabling and arranging cover — it warns them, it never blocks" icon="calendar">
+      {av && av.setBy === 'admin' && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '10px 0 4px', padding: '8px 12px', background: DS.infoBg, borderRadius: 8, fontSize: 12.5, color: DS.sub }}>
+          <Icon name="shield" size={14} color={DS.info} /> Your admin last updated this. Change it here if it's wrong.
+        </div>
+      )}
+      <div style={{ padding: '10px 0 6px' }}>
+        {window.AvailabilityEditor
+          ? <window.AvailabilityEditor value={av} onChange={v => admin.setAvailability(me.id, v, 'teacher')} />
+          : null}
+      </div>
     </SettingsSection>
   );
-  const accessibility = (
-    <SettingsSection title="Accessibility" subtitle="Make Klasio easier to use" icon="star">
-      <Field label="Text size" style={{ padding: '10px 0 0' }}>
-        <Select value={l.textSize || 'normal'} onChange={e => set('learning', 'textSize', e.target.value)}>
-          <option value="normal">Normal</option>
-          <option value="large">Large</option>
-          <option value="xlarge">Extra large</option>
-        </Select>
-      </Field>
-      <SettingRow title="High contrast" desc="Increase colour contrast for readability."
-        checked={!!l.highContrast} onToggle={v => set('learning', 'highContrast', v)} />
-      <SettingRow title="Dyslexia-friendly font" desc="Use a typeface designed for easier reading."
-        checked={!!l.dyslexiaFont} onToggle={v => set('learning', 'dyslexiaFont', v)} last />
+  const alerts = (
+    <SettingsSection title="Alerts" subtitle="What reaches you as it happens" icon="bell">
+      <SettingRow title="Notify on each submission" desc="Get an alert the moment a pupil submits homework."
+        checked={!!t.notifyOnSubmission} onToggle={v => set('teaching', 'notifyOnSubmission', v)} last />
     </SettingsSection>
   );
-  return <SplitLayout wide={wide} left={<>{reminders}{accessibility}</>} right={guardian} />;
+  const defaults = (
+    <SettingsSection title="Homework defaults" subtitle="Set by your centre — every teacher starts from the same rules" icon="notebook_pen">
+      {[
+        ['Attempts allowed', td.attemptsAllowed ?? 1],
+        ['Due after', `${td.dueDays ?? 7} days`],
+        ['Late work', td.allowLate ? 'Accepted, marked late' : 'Not accepted'],
+        ['Auto-mark objective questions', td.autoGradeMcq === false ? 'Off' : 'On'],
+        ['Pupils review marked work', td.allowReview ? 'Yes' : 'No'],
+        ['Marks held until released', td.hideMarksUntilReleased ? 'Yes' : 'No'],
+      ].map(([k, v], i, arr) => (
+        <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '10px 0', borderBottom: i < arr.length - 1 ? `1px solid ${DS.border}` : 'none', fontSize: 13 }}>
+          <span style={{ color: DS.muted }}>{k}</span><span style={{ color: DS.text, fontWeight: 500 }}>{v}</span>
+        </div>
+      ))}
+      <div style={{ fontSize: 12, color: DS.faint, padding: '4px 0 6px' }}>You can change any of these on an individual assignment.</div>
+    </SettingsSection>
+  );
+  return <SplitLayout wide={wide} left={<>{alerts}{defaults}</>} right={availability} />;
+};
+
+// ─── Student → Settings: ONE page, no tab bar (decision #61) ──────────────────────
+// A pupil gets fewer settings than staff, and only ones that do something:
+//  • My account — identity is read-only (the centre provisions it: editing a name
+//    breaks roster matching, editing an email breaks synthetic-email sign-in), the
+//    sign-in method, and ONE action for the pupil's case — change PIN / change
+//    password (needs the current one), or for a QR badge "ask your centre". The
+//    "forgot it?" line follows the same recovery lanes as the sign-in screen.
+//  • Notifications — in-app only (pupil emails are synthetic, so undeliverable);
+//    every toggle is obeyed by the bell.
+//  • Your data — a UK-GDPR request for a copy of their data (13+; under-13s go
+//    through a parent), which files a data request the centre and owner act on.
+// Appearance, accessibility and study reminders are deliberately absent until
+// those features exist — a toggle for something that doesn't happen is worse than
+// none. The deferral (with the AADC design already decided) is in the plan.
+
+// Per-pupil in-app notification preferences (production: notification_prefs rows,
+// channel 'in_app'). Under-13s start with every non-critical kind OFF.
+const STU_PREFS_KEY = 'klasio.studentNotifPrefs.v1';
+const STU_PREFS_EVENT = 'klasio-student-prefs-changed';
+const STU_NOTIF_TOPICS = [
+  { key: 'homeworkDue',   title: 'Homework due',   desc: 'Work due today or tomorrow, and anything overdue.' },
+  { key: 'marksReleased', title: 'Marks released', desc: 'When your teacher releases marks on work you handed in.' },
+  { key: 'announcements', title: 'Announcements',  desc: 'Posts from your centre and your classes.' },
+  { key: 'messages',      title: 'Messages',       desc: 'New messages and replies.' },
+];
+const stuPrefsAll = () => { try { return JSON.parse(localStorage.getItem(STU_PREFS_KEY) || '{}') || {}; } catch (e) { return {}; } };
+const stuPrefDefaults = (student) => {
+  const on = !(student && student.account && student.account.underThirteen);
+  const d = {}; STU_NOTIF_TOPICS.forEach(t => { d[t.key] = on; }); return d;
+};
+window.klasioStudentPrefs = {
+  get: (student) => ({ ...stuPrefDefaults(student), ...(stuPrefsAll()[student && student.id] || {}) }),
+  set: (student, key, value) => {
+    const all = stuPrefsAll();
+    all[student.id] = { ...(all[student.id] || {}), [key]: !!value };
+    try { localStorage.setItem(STU_PREFS_KEY, JSON.stringify(all)); } catch (e) {}
+    try { window.dispatchEvent(new CustomEvent(STU_PREFS_EVENT)); } catch (e) {}
+  },
+  EVENT: STU_PREFS_EVENT,
+};
+
+// Subject access requests a pupil files themselves (production: data_requests,
+// kind 'sar', through request_my_data()). The statutory clock is one month from
+// receipt; the centre admin sees it in their bell and the owner console's DSAR
+// queue carries the deadline.
+const DSR_KEY = 'klasio.dataRequests.v1';
+const DSR_EVENT = 'klasio-data-requests-changed';
+const dsrAll = () => { try { return JSON.parse(localStorage.getItem(DSR_KEY) || '[]') || []; } catch (e) { return []; } };
+window.klasioDataRequests = {
+  list: () => dsrAll(),
+  openForStudent: (studentId) => dsrAll().find(r => r.subjectStudentId === studentId && r.status !== 'completed' && r.status !== 'refused') || null,
+  requestMyData: (student, centreName) => {
+    const existing = window.klasioDataRequests.openForStudent(student.id);
+    if (existing) return existing;
+    const received = new Date();
+    const due = new Date(received); due.setMonth(due.getMonth() + 1);
+    const row = {
+      id: 'dsr_' + Date.now().toString(36), kind: 'sar', status: 'open',
+      subjectStudentId: student.id, subjectName: `${student.firstName || ''} ${student.lastName || ''}`.trim(),
+      centreId: student.centreId || 'bm', centreName: centreName || '', requestedBy: student.id,
+      requesterNote: 'Pupil · in-app request', receivedAt: received.toISOString(), dueAt: due.toISOString(),
+    };
+    try { localStorage.setItem(DSR_KEY, JSON.stringify([row, ...dsrAll()])); } catch (e) {}
+    if (window.klasioAudit) window.klasioAudit('request_my_data', 'data_requests', { id: row.id, studentId: student.id });
+    try { window.dispatchEvent(new CustomEvent(DSR_EVENT)); } catch (e) {}
+    return row;
+  },
+  setStatus: (id, status) => {
+    try { localStorage.setItem(DSR_KEY, JSON.stringify(dsrAll().map(r => r.id === id ? { ...r, status, completedAt: status === 'completed' ? new Date().toISOString() : r.completedAt } : r))); } catch (e) {}
+    try { window.dispatchEvent(new CustomEvent(DSR_EVENT)); } catch (e) {}
+  },
+  EVENT: DSR_EVENT,
+};
+
+const stuDailyMethod = (a) => a.dailyMethod || (a.underThirteen ? 'pin' : a.setupMethod === 'pin' ? 'pin' : a.setupMethod === 'qr' ? 'qr' : 'password');
+const STU_METHOD_LABEL = { pin: '6-digit PIN', password: 'Password', qr: 'QR badge' };
+const stuFmtDate = (iso) => { try { return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }); } catch (e) { return iso; } };
+
+// Change PIN / password — needs the current one. Prototype: nothing typed is
+// stored (the claim model keeps no secret); only the change date is recorded.
+const StudentCredentialModal = ({ open, method, onClose, onDone }) => {
+  const [cur, setCur] = React.useState('');
+  const [next, setNext] = React.useState('');
+  const [again, setAgain] = React.useState('');
+  const [tried, setTried] = React.useState(false);
+  React.useEffect(() => { if (open) { setCur(''); setNext(''); setAgain(''); setTried(false); } }, [open]);
+  const pin = method === 'pin';
+  const clean = (v) => pin ? v.replace(/\D/g, '').slice(0, 6) : v;
+  const errs = {
+    cur: pin ? (!/^\d{6}$/.test(cur) ? 'Enter your current 6-digit PIN' : '') : (!cur ? 'Enter your current password' : ''),
+    next: pin ? (!/^\d{6}$/.test(next) ? 'Choose a new 6-digit PIN' : next === cur ? 'Pick a PIN you haven’t used' : '')
+              : (next.length < 8 ? 'Use at least 8 characters' : next === cur ? 'Pick a password you haven’t used' : ''),
+    again: again !== next ? `The two ${pin ? 'PINs' : 'passwords'} don’t match` : '',
+  };
+  const ok = !errs.cur && !errs.next && !errs.again;
+  const save = () => { setTried(true); if (ok) onDone(); };
+  const mono = pin ? { letterSpacing: '8px', textAlign: 'center', fontFamily: "'JetBrains Mono', monospace", fontSize: 16 } : undefined;
+  const field = (label, value, set, err) => (
+    <Field label={label} required error={tried ? err : ''}>
+      <Input type={pin ? 'text' : 'password'} inputMode={pin ? 'numeric' : undefined} value={value} onChange={e => set(clean(e.target.value))} invalid={(tried && !!err) || undefined} style={mono} />
+    </Field>
+  );
+  return (
+    <Modal open={open} onClose={onClose} icon="lock" title={pin ? 'Change your PIN' : 'Change your password'}
+      subtitle="You'll use the new one next time you sign in."
+      footer={<><Btn variant="secondary" onClick={onClose}>Cancel</Btn><Btn variant="primary" icon="check" onClick={save}>Save</Btn></>}>
+      {field(pin ? 'Current PIN' : 'Current password', cur, setCur, errs.cur)}
+      {field(pin ? 'New PIN' : 'New password', next, setNext, errs.next)}
+      {field(pin ? 'Type the new PIN again' : 'Type the new password again', again, setAgain, errs.again)}
+      <div style={{ fontSize: 11.5, color: DS.faint, display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="alert" size={12} />Prototype — nothing you type is stored.</div>
+    </Modal>
+  );
+};
+
+const StudentSettingsPage = () => {
+  const K = window.klasioStudent;
+  const admin = useAdminStore();
+  const [, setTick] = React.useState(0);
+  React.useEffect(() => {
+    const fn = () => setTick(t => t + 1);
+    window.addEventListener(STU_PREFS_EVENT, fn);
+    window.addEventListener(DSR_EVENT, fn);
+    return () => { window.removeEventListener(STU_PREFS_EVENT, fn); window.removeEventListener(DSR_EVENT, fn); };
+  }, []);
+  const [credOpen, setCredOpen] = React.useState(false);
+  const [flash, setFlash] = React.useState('');
+  const [confirmData, setConfirmData] = React.useState(false);
+
+  const cs = K ? K.currentStudent : {};
+  const st = (admin.students || []).find(s => s.id === cs.id) || (K ? K.student : {}) || {};
+  const a = st.account || {};
+  const method = stuDailyMethod(a);
+  const under13 = !!a.underThirteen;
+  const prefs = window.klasioStudentPrefs.get(st);
+  const openReq = window.klasioDataRequests.openForStudent(st.id);
+  const say = (m) => { setFlash(m); setTimeout(() => setFlash(''), 4000); };
+
+  const forgotLine = under13
+    ? `If you forget it, your parent or guardian resets it from the link we send to ${st.guardianEmail || 'their email'}.`
+    : st.email
+      ? `If you forget it, we'll email a reset link to ${st.email}.`
+      : 'If you forget it, ask your teacher or centre admin to reset it for you.';
+
+  const row = (label, value, extra) => (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '12px 0', borderBottom: `1px solid ${DS.border}` }}>
+      <span style={{ fontSize: 13, color: DS.muted, flexShrink: 0 }}>{label}</span>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, textAlign: 'right' }}>{value}{extra}</span>
+    </div>
+  );
+  const lockPill = (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 600, color: DS.muted, background: DS.surface, border: `1px solid ${DS.border}`, borderRadius: 999, padding: '3px 9px', whiteSpace: 'nowrap' }}>
+      <Icon name="lock" size={11} color={DS.muted} /> Managed by your centre
+    </span>
+  );
+  const strong = (t) => <span style={{ fontSize: 13.5, fontWeight: 600, color: DS.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t}</span>;
+
+  const credDone = () => {
+    admin.updateStudent(st.id, { account: { ...a, credentialChangedAt: new Date().toISOString() } });
+    setCredOpen(false);
+    say(method === 'pin' ? 'Your PIN has been changed.' : 'Your password has been changed.');
+  };
+  const requestData = () => {
+    window.klasioDataRequests.requestMyData(st, cs.centreName);
+    setConfirmData(false);
+    say('Request sent to your centre.');
+  };
+
+  return (
+    <div style={pageFrame({ narrow: true })}>
+      <PageHeader title="Settings" subtitle="Your account and what you're notified about. Changes save straight away." />
+      {flash && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '11px 16px', marginBottom: 16, background: DS.successBg, border: `1px solid ${DS.successBorder}`, borderRadius: 10, fontSize: 13, color: DS.text }}>
+          <Icon name="check" size={15} color={DS.success} /> {flash}
+        </div>
+      )}
+
+      <SettingsSection title="My account" subtitle="Your centre set this up — ask them if something's wrong" icon="user">
+        {row('Name', strong(cs.fullName))}
+        {row('Year', strong(cs.yearGroup))}
+        {row('Centre', strong(cs.centreName))}
+        {row('Username', <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13, fontWeight: 600, color: DS.text }}>{a.username || '—'}</span>)}
+        <div style={{ padding: '12px 0', borderBottom: `1px solid ${DS.border}` }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
+            <span style={{ fontSize: 13, color: DS.muted }}>Signs in with</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              {strong(STU_METHOD_LABEL[method])}
+              {method !== 'qr' && <Btn variant="secondary" small icon="lock" onClick={() => setCredOpen(true)}>Change {method === 'pin' ? 'PIN' : 'password'}</Btn>}
+            </span>
+          </div>
+          <div style={{ fontSize: 12, color: DS.muted, marginTop: 8, lineHeight: 1.5 }}>
+            {method === 'qr'
+              ? 'Your QR badge is issued by your centre. Lost it? Ask your teacher or centre admin for a new one.'
+              : forgotLine}
+            {a.credentialChangedAt ? ` Last changed ${stuFmtDate(a.credentialChangedAt)}.` : ''}
+          </div>
+        </div>
+        {row('Guardian', strong([st.guardianName, st.guardianEmail].filter(Boolean).join(' · ') || '—'), lockPill)}
+        <div style={{ fontSize: 12, color: DS.muted, padding: '12px 0 4px', lineHeight: 1.5 }}>
+          Your reports are shared with your guardian by your centre.
+        </div>
+      </SettingsSection>
+
+      <SettingsSection title="Notifications" subtitle="Shown in the bell at the top of the page — Klasio doesn't email pupils" icon="bell">
+        {STU_NOTIF_TOPICS.map((t, i) => (
+          <SettingRow key={t.key} title={t.title} desc={t.desc} checked={!!prefs[t.key]}
+            onToggle={v => window.klasioStudentPrefs.set(st, t.key, v)} last={i === STU_NOTIF_TOPICS.length - 1} />
+        ))}
+      </SettingsSection>
+
+      <SettingsSection title="Your data" subtitle="You can ask for a copy of the information we hold about you" icon="download">
+        <div style={{ padding: '12px 0 6px' }}>
+          {under13 ? (
+            <div style={{ fontSize: 13, color: DS.sub, lineHeight: 1.55 }}>
+              Ask your parent or guardian, or your centre, if you'd like a copy of your data — they can request it for you.
+            </div>
+          ) : openReq ? (
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+              <StatusPill tone="accent">Requested</StatusPill>
+              <div style={{ fontSize: 13, color: DS.sub, lineHeight: 1.55 }}>
+                You asked on {stuFmtDate(openReq.receivedAt)}. Your centre has until {stuFmtDate(openReq.dueAt)} to send it to you.
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+              <div style={{ fontSize: 13, color: DS.sub, lineHeight: 1.55, maxWidth: 460 }}>
+                Your centre will put together your details, classes, attendance, homework, results and reports, and must send them within one month.
+              </div>
+              <Btn variant="secondary" icon="download" small onClick={() => setConfirmData(true)}>Request a copy of my data</Btn>
+            </div>
+          )}
+        </div>
+      </SettingsSection>
+
+      <StudentCredentialModal open={credOpen} method={method} onClose={() => setCredOpen(false)} onDone={credDone} />
+      <Modal open={confirmData} onClose={() => setConfirmData(false)} icon="download" title="Request a copy of your data?"
+        subtitle={`This goes to ${cs.centreName || 'your centre'}.`}
+        footer={<><Btn variant="secondary" onClick={() => setConfirmData(false)}>Cancel</Btn><Btn variant="primary" icon="check" onClick={requestData}>Send request</Btn></>}>
+        <div style={{ fontSize: 13, color: DS.sub, lineHeight: 1.6 }}>
+          Your centre has one month to send you a copy of the information they hold about you. You'll see the request here until it's done.
+        </div>
+      </Modal>
+    </div>
+  );
 };
 
 // Admin → Comms (safety posture). Reads/writes the lifted comms config via the
@@ -1073,7 +1365,10 @@ const BillingTab = () => {
   }
 
   const fmtDate = d => d ? new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
-  const plans = plansStore.plans.filter(p => !p.archived);
+  // Only plans Stripe would charge exactly as shown are on offer (planIsSellable);
+  // the current plan always stays visible so an account can see what it's on.
+  const sellable = window.planIsSellable || (p => !p.archived);
+  const plans = plansStore.plans.filter(p => p.audience === 'centre' && (sellable(p) || p.id === sub.planId));
   const plan = sub.plan;
   const ov = sub.override || {};
   // Free trial stamped on this account at signup (from the platform's global offer).
@@ -1083,6 +1378,29 @@ const BillingTab = () => {
   const overCap = plan.maxCentres < ownedCentres;
   const b = sub.billing || {};
   const setB = (k, v) => sub.setBilling({ [k]: v });
+
+  // Payment method = a READ-ONLY mirror of what Stripe holds (brand · last 4 ·
+  // expiry, written by the webhook). Card details are entered and changed only in
+  // Stripe's Customer Portal — they never touch Klasio, which keeps us out of PCI
+  // scope. The prototype can't open a portal, so the button is shown disabled.
+  const pm = sub.paymentMethod || null;
+  const pmExpiry = pm ? `${String(pm.expMonth).padStart(2, '0')}/${String(pm.expYear).slice(-2)}` : '';
+  // Expiry warning: a card that lapses silently becomes a failed renewal, then
+  // dunning, then a suspended centre mid-term. Warn from the month before.
+  const pmWarn = (() => {
+    if (!pm) return null;
+    const now = new Date();
+    const monthsLeft = (pm.expYear - now.getFullYear()) * 12 + (pm.expMonth - (now.getMonth() + 1));
+    const monthName = new Date(pm.expYear, pm.expMonth - 1, 1).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+    if (monthsLeft < 0) return { tone: 'danger', text: `This card expired at the end of ${monthName}. Your next payment will fail until you update it.` };
+    if (monthsLeft === 0) return { tone: 'danger', text: `This card expires at the end of this month. Update it before your next payment is due.` };
+    if (monthsLeft === 1) return { tone: 'warning', text: `This card expires at the end of ${monthName}. Update it before then so your next payment goes through.` };
+    return null;
+  })();
+  // Every capability a plan can unlock — each plan card lists all of them, with
+  // the ones it doesn't include greyed rather than hidden, so upgrading shows
+  // exactly what it adds. (Pricing bullets are marketing copy and gate nothing.)
+  const CAPS = window.PLAN_CAPABILITIES || [];
   // Per-plan glyph + colour (mirrors SuperAdmin's plan cards).
   const planVis = id => ({ starter: { color: '#9CA3AF', icon: 'book' }, growth: { color: DS.accent, icon: 'chart' }, scale: { color: '#7C3AED', icon: 'zap' } }[id] || { color: DS.accent, icon: 'invoice' });
 
@@ -1174,12 +1492,19 @@ const BillingTab = () => {
                   <span style={{ fontSize: 24, fontWeight: 800, color: DS.text, letterSpacing: '-0.5px' }}>£{p.price}</span>
                   <span style={{ fontSize: 12, color: DS.muted }}> /mo</span>
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                  {(p.features || []).slice(0, 3).map(f => (
-                    <div key={f} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: DS.sub }}>
-                      <Icon name="check" size={12} color={vis.color} />{f}
-                    </div>
-                  ))}
+                <div style={{ fontSize: 11.5, color: DS.muted }}>
+                  {p.maxCentres} centre{p.maxCentres === 1 ? '' : 's'} · {Number(p.studentSeats || 0).toLocaleString()} student seats · {p.teacherSeats} staff seats
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {[...CAPS.filter(c => (p.capabilities || {})[c.key]), ...CAPS.filter(c => !(p.capabilities || {})[c.key])].map(c => {
+                    const has = !!(p.capabilities || {})[c.key];
+                    return (
+                      <div key={c.key} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: has ? DS.sub : DS.faint }}>
+                        <Icon name={has ? 'check' : 'x'} size={12} color={has ? vis.color : DS.border} />
+                        <span style={{ textDecoration: has ? 'none' : 'line-through', textDecorationColor: DS.border }}>{c.label}</span>
+                      </div>
+                    );
+                  })}
                 </div>
                 {sel && (
                   <div style={{ marginTop: 'auto', paddingTop: 4 }}>
@@ -1209,24 +1534,28 @@ const BillingTab = () => {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 20, alignItems: 'stretch' }}>
         <Card title="Payment method" icon="lock">
           <div style={{ padding: 18 }}>
-            <div style={{ borderRadius: 12, padding: '16px 18px', background: `linear-gradient(135deg, ${DS.accent}, ${DS.accentHover})`, color: '#fff', marginBottom: 16 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: '0.02em' }}>{b.cardBrand || 'Card'}</span>
-                <Icon name="lock" size={14} color="#fff" />
+            {pm ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px', borderRadius: 12, border: `1px solid ${DS.border}`, background: DS.surface, marginBottom: 14 }}>
+                <div style={{ width: 46, height: 32, borderRadius: 6, background: DS.bg, border: `1px solid ${DS.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 800, color: DS.text, letterSpacing: '0.04em', flexShrink: 0 }}>{(pm.brand || 'Card').toUpperCase().slice(0, 4)}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: DS.text, fontFamily: 'JetBrains Mono, monospace', letterSpacing: '1px' }}>{pm.brand} •••• {pm.last4}</div>
+                  <div style={{ fontSize: 12, color: pmWarn ? (pmWarn.tone === 'danger' ? DS.danger : DS.warning) : DS.muted, marginTop: 2 }}>Expires {pmExpiry}</div>
+                </div>
               </div>
-              <div style={{ fontSize: 16, letterSpacing: '3px', marginTop: 20, fontFamily: 'JetBrains Mono, monospace' }}>•••• •••• •••• {b.cardLast4 || '––––'}</div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 14, fontSize: 11.5, opacity: 0.92 }}>
-                <span>{b.cardName || 'Name on card'}</span>
-                <span>{b.cardExpiry || 'MM/YY'}</span>
+            ) : (
+              <div style={{ fontSize: 12.5, color: DS.muted, marginBottom: 14 }}>No payment method on file yet.</div>
+            )}
+            {pmWarn && (
+              <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start', padding: '10px 12px', borderRadius: 9, marginBottom: 14, fontSize: 12.5, lineHeight: 1.5,
+                background: pmWarn.tone === 'danger' ? DS.dangerBg : DS.warningBg, border: `1px solid ${pmWarn.tone === 'danger' ? DS.dangerBorder : DS.warningBorder}`, color: pmWarn.tone === 'danger' ? DS.danger : DS.warning }}>
+                <span style={{ display: 'flex', marginTop: 2 }}><Icon name="alert" size={14} /></span>
+                <span>{pmWarn.text}</span>
               </div>
+            )}
+            <Btn variant="secondary" icon="lock" disabled style={{ width: '100%', justifyContent: 'center' }}>{pm ? 'Manage payment method' : 'Add a payment method'}</Btn>
+            <div style={{ fontSize: 11.5, color: DS.faint, marginTop: 10, lineHeight: 1.5 }}>
+              Opens Stripe's secure billing portal. Card details are entered there and never reach {(window.BRAND && window.BRAND.name) || 'Klasio'} — we only see the brand, last four digits and expiry. (Not connected in this prototype.)
             </div>
-            <SetGrid>
-              <Field label="Name on card"><Input value={b.cardName || ''} onChange={e => setB('cardName', e.target.value)} /></Field>
-              <Field label="Card ending"><Input value={b.cardLast4 || ''} onChange={e => setB('cardLast4', e.target.value.replace(/\D/g, '').slice(-4))} placeholder="4242" /></Field>
-              <Field label="Expiry"><Input value={b.cardExpiry || ''} onChange={e => setB('cardExpiry', e.target.value)} placeholder="MM/YY" /></Field>
-              <Field label="Card brand"><Input value={b.cardBrand || ''} onChange={e => setB('cardBrand', e.target.value)} placeholder="Visa" /></Field>
-            </SetGrid>
-            <div style={{ fontSize: 11, color: DS.faint }}>Demo only — no real payment is taken.</div>
           </div>
         </Card>
 
@@ -1301,7 +1630,7 @@ const ROLE_TABS = {
   superadmin: { label: 'Platform Owner', tab: { id: 'platform', label: 'Platform Defaults', Comp: PlatformTab, icon: 'grid' } },
   admin:      { label: 'Centre Admin',   tab: { id: 'centre',   label: 'Centre',            Comp: CentreTab,   icon: 'home' } },
   teacher:    { label: 'Teacher',        tab: { id: 'teaching', label: 'Teaching',          Comp: TeachingTab, icon: 'clip' } },
-  student:    { label: 'Student',        tab: { id: 'learning', label: 'Learning',          Comp: LearningTab, icon: 'book' } },
+  // student has no tabbed page — SettingsPage renders StudentSettingsPage.
 };
 
 // ─── Page ───────────────────────────────────────────────────────────────────────────
@@ -1309,6 +1638,11 @@ const ROLE_TABS = {
 // (settings:centre, settings:notifications, …). Tab order here mirrors SETTINGS_SUB
 // in shared.jsx so the dropdown and the page stay aligned.
 const SettingsPage = ({ role = 'admin', section, comms }) => {
+  if (role === 'student') return <StudentSettingsPage />;
+  return <StaffSettingsPage role={role} section={section} comms={comms} />;
+};
+
+const StaffSettingsPage = ({ role = 'admin', section, comms }) => {
   const { data, set, reset } = useSettingsStore(role);
   const roleMeta = ROLE_TABS[role] || ROLE_TABS.admin;
   const [saved, setSaved] = React.useState(false);
@@ -1339,14 +1673,13 @@ const SettingsPage = ({ role = 'admin', section, comms }) => {
   // Storage panels live in Storage.jsx (loaded AFTER Settings.jsx) — resolve at
   // render time via window, mirroring how BillingTab reaches useSubscriptionStore.
   const StorageAdmin = () => { const C = window.StorageAdminPanel; return C ? <C /> : <div style={{ padding: 20, fontSize: 13, color: DS.muted }}>Storage is still loading…</div>; };
-  const StorageOwner = () => { const C = window.StorageOwnerPanel; return C ? <C /> : <div style={{ padding: 20, fontSize: 13, color: DS.muted }}>Storage is still loading…</div>; };
 
   const tabs = [
     { id: roleMeta.tab.id, label: roleMeta.tab.label, icon: roleMeta.tab.icon, render: () => <roleMeta.tab.Comp data={data} set={set} wide={wide} /> },
     // NOTE (§3): admin "Plans & Billing" and "Storage" moved OUT of Settings into
     // their own ACCOUNT-tier routes (owner-only) — they are account-wide, not
-    // centre-scoped or personal. The superadmin platform view keeps its Storage tab.
-    ...(role === 'superadmin' ? [{ id: 'storage', label: 'Storage', icon: 'cloud', render: () => <StorageOwner /> }] : []),
+    // centre-scoped or personal. Platform storage is likewise its own owner-console
+    // page (superadmin `storage`), not a Settings tab.
     // Comms settings (safety preset, wordlist, DSL) used to be a section of the
     // Communications page. It's a centre-wide configuration, not a comms surface,
     // so it now lives here — reached as settings:comms.
@@ -1391,18 +1724,18 @@ const SettingsPage = ({ role = 'admin', section, comms }) => {
 
 // Platform new-centre defaults, read by the owner console's Onboard-Centre
 // wizard (SuperAdmin.jsx) so account provisioning matches the tenant path.
-// Trial length/on-off are NOT stored here — they come from the one global free
-// trial the platform owner sets in Platform Controls (Plans.jsx trial store).
+// Trial length/on-off are NOT stored here — they come from the centre free trial
+// the platform owner sets on the Pricing page (Plans.jsx trial store).
 function saPlatformDefaults() {
   const p = ((setLoad().superadmin || {}).platform) || {};
-  const t = (typeof window.getPlatformTrial === 'function') ? window.getPlatformTrial() : { enabled: true, days: 14 };
+  const t = (typeof window.getPlatformTrial === 'function') ? window.getPlatformTrial('centre') : { enabled: true, days: 14 };
   return { planId: p.defaultPlan || 'growth', trialDays: t.days ?? 14, trialEnabled: !!t.enabled, seats: p.defaultSeats ?? 10, currency: p.currency || 'GBP', autoSuspend: !!p.autoSuspend, retention: p.retention || '90d' };
 }
 
 Object.assign(window, {
   useSettingsStore, SettingsPage, CommsTab, saPlatformDefaults,
   AccountTab, NotificationsTab, AppearanceTab,
-  PlatformTab, CentreTab, TeachingTab, LearningTab, BillingTab,
+  PlatformTab, CentreTab, TeachingTab, BillingTab, StudentSettingsPage,
 });
 
 })();

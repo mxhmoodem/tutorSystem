@@ -94,8 +94,10 @@ const DEFAULT_TRACKERS = [
     description: 'Half-term assessments',
     classGroup: 'Year 10 – Group A',
     columns: [
-      { id: 'c1', name: 'Mock Paper 1',  type: 'score', max: 100 },
-      { id: 'c2', name: 'Mock Paper 2',  type: 'score', max: 100 },
+      // Both mock papers COUNT AS ASSESSMENTS (decision #50): their marks feed the
+      // pupils' attainment series without being typed into a second grid.
+      { id: 'c1', name: 'Mock Paper 1',  type: 'score', max: 100, countsAsAssessment: true, assessedOn: '2026-05-22' },
+      { id: 'c2', name: 'Mock Paper 2',  type: 'score', max: 100, countsAsAssessment: true, assessedOn: '2026-06-19' },
       { id: 'c3', name: 'Predicted',     type: 'grade' },
     ],
     entries: {

@@ -70,26 +70,6 @@ const REPORTS_CONFIG = {
   },
 };
 
-// ─── Financial summary (drives the admin "Financial Overview" report) ───────────
-// Mirrors the invoices on AdminInvoicesPage so the financial report stays coherent.
-const REPORTS_INVOICES = [
-  { student: 'Emma Thompson',    plan: 'GCSE Maths — Weekly',     amount: 220, status: 'paid',     due: '2026-04-01' },
-  { student: 'Oliver Chen',      plan: 'A-Level Bundle',          amount: 480, status: 'paid',     due: '2026-04-01' },
-  { student: 'Sophia Patel',     plan: 'GCSE Maths — Weekly',     amount: 220, status: 'paid',     due: '2026-04-01' },
-  { student: 'James Wilson',     plan: 'GCSE Dual — Weekly',      amount: 360, status: 'outstanding', due: '2026-04-15' },
-  { student: 'Amelia Roberts',   plan: 'GCSE English — Weekly',   amount: 180, status: 'overdue',  due: '2026-03-20' },
-  { student: 'Noah Fitzgerald',  plan: 'GCSE Dual — Weekly',      amount: 360, status: 'overdue',  due: '2026-03-25' },
-  { student: 'Isabella Martinez',plan: 'A-Level Bundle',          amount: 480, status: 'paid',     due: '2026-04-01' },
-  { student: 'Ethan Huang',      plan: 'GCSE Dual — Weekly',      amount: 360, status: 'paid',     due: '2026-04-01' },
-  { student: 'Mia Okonkwo',      plan: 'GCSE Dual — Weekly',      amount: 360, status: 'outstanding', due: '2026-04-15' },
-  { student: 'Liam Thornton',    plan: 'GCSE Science — Weekly',   amount: 240, status: 'paid',     due: '2026-04-01' },
-  { student: 'Zoe Patterson',    plan: 'A-Level Chem — Weekly',   amount: 260, status: 'overdue',  due: '2026-03-28' },
-  { student: 'Aiden Foster',     plan: 'GCSE Maths — Weekly',     amount: 220, status: 'paid',     due: '2026-04-01' },
-  { student: 'Priya Nair',       plan: 'GCSE Dual — Weekly',      amount: 360, status: 'paid',     due: '2026-04-01' },
-  { student: 'Thomas Hughes',    plan: 'A-Level Bundle',          amount: 480, status: 'paid',     due: '2026-04-01' },
-  { student: 'Aisha Rahman',     plan: 'GCSE Dual — Weekly',      amount: 360, status: 'outstanding', due: '2026-04-15' },
-];
-
 // ─── Tags ──────────────────────────────────────────────────────────────────────
 const REPORTS_TAGS = [
   { id: 't_pe',    label: "Parents' Evening", color: '#7C3AED' },

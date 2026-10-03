@@ -68,7 +68,12 @@ const ONB_SUBSCRIPTION = {
   // Billing details + an applied price-override code (issued by the superadmin and
   // redeemed in the admin's Billing settings). Defaults backfill onto older stored
   // blobs via readSub's spread (Centres.jsx).
-  billing: { company: 'Bright Minds Tuition Ltd', email: 'accounts@brightminds.co.uk', vat: 'GB 432 1098 76', address: '14 Kingsway, London WC2B 6LH', cardName: 'Taqqy', cardBrand: 'Visa', cardLast4: '4242', cardExpiry: '08/27' },
+  billing: { company: 'Bright Minds Tuition Ltd', email: 'accounts@brightminds.co.uk', vat: 'GB 432 1098 76', address: '14 Kingsway, London WC2B 6LH' },
+  // Payment method — a READ-ONLY mirror of the card Stripe holds (the webhook
+  // writes brand · last 4 · expiry; the card itself never reaches Klasio). Changed
+  // only in Stripe's Customer Portal. Expires next month so the demo shows the
+  // expiry warning on Plans & Billing.
+  paymentMethod: { brand: 'Visa', last4: '4242', expMonth: 10, expYear: 2026 },
   redeemedCode: null,
   // Free-trial stamp, written ONCE at signup from the global offer in Platform
   // Controls (planStartTrial → {days,planId,startedAt,endsAt,onEnd}). null here because

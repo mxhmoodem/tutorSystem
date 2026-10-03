@@ -230,10 +230,11 @@ const MiniMonthCalendar = ({ selectedISO, todayISO, sessionDays, onSelect }) => 
 };
 
 // ── Schedule content — list (scrolling rows) vs board (carousel of cards) ────
+// Each row/card opens THAT session (class on a date), never a generic grid.
 const ScheduleList = ({ sessions, onOpen }) => (
   <div style={{ maxHeight: 300, overflowY: 'auto', marginRight: -6 }}>
     {sessions.map((s, i, arr) => (
-      <AdminSessionRow key={i} s={s} last={i === arr.length - 1} onClick={onOpen} pad="9px 8px" />
+      <AdminSessionRow key={i} s={s} last={i === arr.length - 1} onClick={() => onOpen(s)} pad="9px 8px" />
     ))}
   </div>
 );
@@ -298,7 +299,7 @@ const ScheduleBoard = ({ sessions, onOpen }) => {
         display: 'flex', gap: 12, overflowX: 'auto', overflowY: 'hidden',
         scrollSnapType: 'x mandatory', padding: '2px 2px 12px',
       }}>
-        {sessions.map((s, i) => <SessionBoardCard key={i} s={s} onClick={onOpen} />)}
+        {sessions.map((s, i) => <SessionBoardCard key={i} s={s} onClick={() => onOpen(s)} />)}
       </div>
     </div>
   );
@@ -354,16 +355,15 @@ const AdminDashboard = () => {
 
   const go = (pg) => window.__navigate && window.__navigate('admin', pg);
 
-  // Post-signup "Set up your centre" prompt. Reads the onboarding checklist state
-  // (set by the Onboarding module) without a hook so the dashboard stays decoupled;
-  // hidden once all three setup steps are done.
-  const setupState = (() => {
-    try { return JSON.parse(localStorage.getItem('tutoros.onboarding.v2::bm') || 'null'); }
-    catch (e) { return null; }
-  })();
-  const setupSteps = (setupState && setupState.steps) || {};
-  const setupRemaining = ['invite', 'students', 'classes'].filter(k => !setupSteps[k]).length;
-  const setupDone = 3 - setupRemaining;
+  // "Finish setting up" prompt — the ACTIVE centre's checklist, from the one
+  // status object the Centres drawer and Settings → Centre also read
+  // (centreSetupStatus). Completion is derived from the centre's data; the only
+  // stored bit is a per-centre dismissal, undone from Settings → Centre. The
+  // subscription hook is here for reactivity: a dismiss re-renders at once.
+  if (window.useSubscriptionStore) window.useSubscriptionStore();
+  const setup = window.centreSetupStatus ? window.centreSetupStatus() : null;
+  const showSetup = !!(setup && setup.centre && !setup.complete && !setup.dismissed);
+  const nextSetupStep = setup ? setup.steps.find(s => !s.done) : null;
 
   // ── Everything below derives from the centre-metrics selector layer
   //    (single source of truth). No hardcoded student / at-risk / session /
@@ -382,14 +382,10 @@ const AdminDashboard = () => {
     subject: (s.subjects || [])[0] || '—',
     reason: cm.atRiskReason(s),
     severity: ((typeof s.attendance === 'number' && s.attendance < 70) ||
-               (typeof s.score === 'number' && s.score < 55)) ? 'danger' : 'warning',
+               (window.studentAttainment(s) != null && window.studentAttainment(s) < 55)) ? 'danger' : 'warning',
   }));
   const flaggedCount = flaggedRows.length;
 
-  // ── Alerts (render a chip only when its count > 0) — all derived ──
-  const classesToday   = cm.getClassesForCentre().filter(c => c.day ===
-    ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date().getDay()] && c.status !== 'archived');
-  const unstaffedToday = classesToday.filter(c => !c.teacher).length;
   // useAttendanceStore is window-exported; useAdminStore is a bare global const
   // (classic scripts don't attach top-level `const` to window), so fall back to it.
   const attStore   = window.useAttendanceStore ? window.useAttendanceStore() : null;
@@ -410,30 +406,6 @@ const AdminDashboard = () => {
     return { total: needs.length, lapsed: needs.filter(x => x.derived.state === 'lapsed').length };
   }, [attStore, adminStore]);
 
-  const alerts = [
-    invRollup.overdue > 0 && { key: 'inv', tone: 'danger', icon: 'invoice',
-      text: `${money(invRollup.overdue)} in overdue invoices to chase`, cta: 'View invoices', onClick: () => go('invoices') },
-    unstaffedToday > 0 && { key: 'staff', tone: 'warning', icon: 'calendar',
-      text: `${unstaffedToday} session${unstaffedToday !== 1 ? 's' : ''} today without a teacher`, cta: 'Open schedule', onClick: () => go('schedule') },
-    registerGap.total > 0 && { key: 'reg', tone: registerGap.lapsed ? 'danger' : 'warning', icon: 'clock',
-      text: `${registerGap.total} session${registerGap.total !== 1 ? 's' : ''} with no register taken`, cta: 'Open attendance', onClick: () => go('attendance') },
-    flaggedCount > 0 && { key: 'flag', tone: 'warning', icon: 'alert',
-      text: `${flaggedCount} student${flaggedCount !== 1 ? 's' : ''} flagged on attendance or progress`, cta: 'Review students', onClick: () => go('students') },
-  ].filter(Boolean);
-
-  // ── KPIs — every hero value is wired (no dashes, §8). ──
-  // Every figure here is something an admin can act on the SAME DAY. Capacity used
-  // moved to the Classes page (it barely moves week to week and belongs next to the
-  // classes it describes); sessions became "today" rather than "this week"; and
-  // registers outstanding — the thing actually chased each morning — took its place.
-  const kpis = [
-    { label: 'Active students',   value: String(cm.getActiveStudentCount()), sub: `${cm.getClassEnrolments()} enrolments` },
-    { label: 'Attendance (week)', value: `${cm.getAttendanceWeek()}%`,        sub: 'across active students' },
-    { label: 'Sessions today',    value: String(sessions.today),              sub: `${sessions.total} this week` },
-    { label: 'Registers out',     value: String(registerGap.total),           sub: registerGap.total ? `${registerGap.lapsed} past the late window` : 'all taken' },
-    { label: 'Outstanding',       value: money(invRollup.outstanding),        sub: invRollup.overdue > 0 ? `${money(invRollup.overdue)} overdue` : 'all current' },
-  ];
-
   // ── Schedule browser — centre-wide sessions materialised from the same
   //    source the attendance screen uses (derive-don't-store), grouped by day so
   //    the mini-calendar can browse any date. A wide window covers a few months
@@ -441,6 +413,8 @@ const AdminDashboard = () => {
   const todayISO = window.attIso ? window.attIso(new Date(window.getNow())) : adminIsoOf(new Date());
   const [selectedDate, setSelectedDate] = React.useState(todayISO);
   const [scheduleView, setScheduleView] = React.useState('list');
+  const [alertsExpanded, setAlertsExpanded] = React.useState(false);
+  const [openSessionRef, setOpenSessionRef] = React.useState(null);   // { classId, date } in the session drawer
 
   const schedule = React.useMemo(() => {
     const empty = { byDay: new Map(), days: new Set() };
@@ -458,7 +432,62 @@ const AdminDashboard = () => {
     return { byDay, days: new Set(byDay.keys()) };
   }, [attStore, adminStore]);
 
+  // ── Alerts (a chip only when its count > 0) — all derived ──
+  // "What's on today" is asked ONCE: the unstaffed check reads the same
+  // materialised sessions the schedule card below renders, so the alert and the
+  // card can never disagree about today.
+  const unstaffedToday = (schedule.byDay.get(todayISO) || []).filter(s => !s.teacher).length;
+  // Teacher class-change requests waiting on an admin (decision #46) — only while
+  // any are pending; lands on the Classes page's Requests view.
+  const classRequests = window.useClassRequests ? window.useClassRequests() : [];
+  const openClassRequests = classRequests.filter(r => r.status === 'open').length;
+
+  // Ranked most-urgent first (money, then today's cover, then registers, then
+  // pupils, then teacher requests) and capped: past ALERT_CAP the rest fold behind
+  // "+N more", so the hero stays scannable however many alert types are added later.
+  const ALERT_CAP = 3;
+  const alerts = [
+    invRollup.overdue > 0 && { key: 'inv', tone: 'danger', icon: 'invoice',
+      text: `${money(invRollup.overdue)} in overdue invoices to chase`, cta: 'View invoices', onClick: () => go('invoices') },
+    unstaffedToday > 0 && { key: 'staff', tone: 'warning', icon: 'calendar',
+      text: `${unstaffedToday} session${unstaffedToday !== 1 ? 's' : ''} today without a teacher`, cta: 'Open schedule', onClick: () => go('schedule') },
+    registerGap.total > 0 && { key: 'reg', tone: registerGap.lapsed ? 'danger' : 'warning', icon: 'clock',
+      text: `${registerGap.total} session${registerGap.total !== 1 ? 's' : ''} with no register taken`, cta: 'Open attendance', onClick: () => go('attendance') },
+    flaggedCount > 0 && { key: 'flag', tone: 'warning', icon: 'alert',
+      text: `${flaggedCount} student${flaggedCount !== 1 ? 's' : ''} flagged on attendance or progress`, cta: 'Review students', onClick: () => go('students') },
+    openClassRequests > 0 && { key: 'creq', tone: 'info', icon: 'send',
+      text: `${openClassRequests} class request${openClassRequests !== 1 ? 's' : ''} from teachers waiting`, cta: 'Review requests',
+      onClick: () => { window.__classesPane = 'requests'; go('classes'); } },
+  ].filter(Boolean);
+  const visibleAlerts = alertsExpanded ? alerts : alerts.slice(0, ALERT_CAP);
+  const hiddenAlerts = alerts.length - visibleAlerts.length;
+
+  // ── KPIs — every hero value is wired (no dashes, §8). ──
+  // Every figure here is something an admin can act on the SAME DAY. Capacity used
+  // moved to the Classes page (it barely moves week to week and belongs next to the
+  // classes it describes); sessions became "today" rather than "this week"; and
+  // registers outstanding — the thing actually chased each morning — took its place.
+  // Active students carries net MOVEMENT underneath: level says where the centre
+  // is, change says where it's going.
+  const movement = cm.getStudentMovement ? cm.getStudentMovement() : null;
+  const movementSub = movement && (movement.joined || movement.left)
+    ? `+${movement.joined} joined · −${movement.left} left this month`
+    : `${cm.getClassEnrolments()} enrolments`;
+  const kpis = [
+    { label: 'Active students',   value: String(cm.getActiveStudentCount()), sub: movementSub },
+    { label: 'Attendance (week)', value: `${cm.getAttendanceWeek()}%`,        sub: 'across active students' },
+    { label: 'Sessions today',    value: String(sessions.today),              sub: `${sessions.total} this week` },
+    { label: 'Registers out',     value: String(registerGap.total),           sub: registerGap.total ? `${registerGap.lapsed} past the late window` : 'all taken' },
+    { label: 'Outstanding',       value: money(invRollup.outstanding),        sub: invRollup.overdue > 0 ? `${money(invRollup.overdue)} overdue` : 'all current' },
+  ];
+
+  // Clicking a session on the mini-calendar opens THAT session in the same right-hand
+  // session drawer the Timetable uses, over the dashboard — no page change.
+  const openSession = (s) => setOpenSessionRef({ classId: s.classId, date: s.dateISO });
+
   const daySessions = (schedule.byDay.get(selectedDate) || []).map(s => ({
+    classId: s.classId,
+    dateISO: s.dateISO,
     time: new Date(s.starts_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
     subject: s.name,
     teacher: s.teacher || '',
@@ -520,12 +549,20 @@ const AdminDashboard = () => {
         {show('alerts') && (
           alerts.length > 0 ? (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 18 }}>
-              {alerts.map(a => <HeroAlertChip key={a.key} {...a} />)}
+              {visibleAlerts.map(a => <HeroAlertChip key={a.key} {...a} />)}
+              {hiddenAlerts > 0 && (
+                <button onClick={() => setAlertsExpanded(true)} style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 10, cursor: 'pointer',
+                  background: 'transparent', border: '1px dashed rgba(255,255,255,0.22)', color: HERO_TXT.soft, fontSize: 12.5, fontWeight: 600,
+                }}>+{hiddenAlerts} more</button>
+              )}
             </div>
           ) : (
+            // Names every check it ran, so "nothing shown" reads as a clean bill of
+            // health — and teaches the admin what the alerts would tell them.
             <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 18, fontSize: 12.5, color: HERO_TXT.soft }}>
               <span style={{ display: 'flex', color: '#86EFAC' }}><Icon name="check" size={14} /></span>
-              All clear — no overdue invoices, unstaffed sessions or missing registers.
+              Nothing needs attention — no overdue invoices, every session today has a teacher, every register is in and no students are flagged.
             </div>
           )
         )}
@@ -534,8 +571,8 @@ const AdminDashboard = () => {
         {show('kpis') && <HeroStatBand stats={kpis} />}
       </section>
 
-      {/* ── Set up your centre (post-signup checklist prompt) ─────── */}
-      {setupRemaining > 0 && (
+      {/* ── Set up your centre (per-centre checklist prompt) ─────── */}
+      {showSetup && (
         <div style={{
           display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', marginBottom: 24,
           padding: '16px 20px', borderRadius: 12,
@@ -550,24 +587,32 @@ const AdminDashboard = () => {
             <Icon name="zap" size={20} />
           </div>
           <div style={{ flex: 1, minWidth: 200 }}>
-            <div style={{ fontSize: 15, fontWeight: 700, color: DS.text }}>Finish setting up your centre</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 6 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: DS.text }}>Finish setting up {setup.centre.name}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 6, flexWrap: 'wrap' }}>
               <div style={{ display: 'flex', gap: 4 }}>
-                {[0, 1, 2].map(i => (
-                  <span key={i} style={{
+                {setup.steps.map(s => (
+                  <span key={s.id} title={s.title} style={{
                     width: 30, height: 5, borderRadius: 3,
-                    background: i < setupDone ? DS.accent : DS.border,
+                    background: s.done ? DS.accent : DS.border,
                   }} />
                 ))}
               </div>
               <span style={{ fontSize: 12.5, color: DS.muted }}>
-                {setupRemaining} of 3 steps to go — invite teachers, add students and create classes.
+                {setup.total - setup.done} of {setup.total} steps to go
+                {nextSetupStep ? <> — next: {nextSetupStep.title.toLowerCase()}.</> : '.'}
               </span>
             </div>
           </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <Btn variant="secondary" icon="send" onClick={() => go('people')}>People &amp; invites</Btn>
-            <Btn variant="primary" icon="chevron_r" onClick={() => go('setup')}>Continue setup</Btn>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            {/* Straight to the next step's flow — works for every centre admin, not
+                only the account owner who can open the Centres page. */}
+            {nextSetupStep && <Btn variant="primary" icon="chevron_r" onClick={() => go(nextSetupStep.route)}>{nextSetupStep.cta}</Btn>}
+            <button
+              onClick={() => window.setSetupDismissed && window.setSetupDismissed(setup.centre.id, true)}
+              title="Hide for this centre — bring it back from Settings → Centre"
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: DS.faint, padding: 6, borderRadius: 6, display: 'flex' }}>
+              <Icon name="x" size={16} />
+            </button>
           </div>
         </div>
       )}
@@ -612,9 +657,9 @@ const AdminDashboard = () => {
                 <div style={{ fontSize: 13 }}>No sessions scheduled for this day.</div>
               </div>
             ) : scheduleView === 'list' ? (
-              <ScheduleList sessions={daySessions} onOpen={() => go('schedule')} />
+              <ScheduleList sessions={daySessions} onOpen={openSession} />
             ) : (
-              <ScheduleBoard sessions={daySessions} onOpen={() => go('schedule')} />
+              <ScheduleBoard sessions={daySessions} onOpen={openSession} />
             )}
           </div>
         </div>
@@ -796,6 +841,10 @@ const AdminDashboard = () => {
           </>
         )}
       </Modal>
+
+      {openSessionRef && window.SessionDrawer && (
+        <window.SessionDrawer classId={openSessionRef.classId} date={openSessionRef.date} role="admin" onClose={() => setOpenSessionRef(null)} />
+      )}
     </div>
   );
 };

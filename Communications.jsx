@@ -64,7 +64,11 @@ function cmLoad() {
     messages:      raw.messages      || seed.messages,
     config:        raw.config        || seed.config,
     flags:         raw.flags         || seed.flags,
-    concerns:      raw.concerns      || seed.concerns,
+    // Concerns are append-only (never deleted), so seed rows missing from an older
+    // blob can be merged in by id without resurrecting anything someone removed.
+    concerns:      raw.concerns
+      ? [...raw.concerns, ...seed.concerns.filter(c => !raw.concerns.some(r => r.id === c.id))]
+      : seed.concerns,
   };
 }
 function cmSave(store) {
@@ -79,6 +83,97 @@ function commsContext(role) {
   const user = userById(userId);
   return { role, userId, user, centreId: user ? user.centreId : null };
 }
+
+// ══════════════════════════════════════════════════════════════════════════════════
+//  SAFEGUARDING CONCERN RECORD  (reference: safeguarding_incidents + _notes)
+// ══════════════════════════════════════════════════════════════════════════════════
+// A concern is about a PUPIL or a MEMBER OF STAFF — never "about a message". Most
+// safeguarding records start nowhere near a chat (a pupil who flinched, something
+// said in the corridor), so any staff member can raise one from anywhere via the
+// header button; a flagged message is just one more `source`. The raiser keeps
+// sight of their own row and its STATUS (they must be able to show they reported
+// it) but never the DSL's notes. A concern about a DSL is `restricted`: it leaves
+// every DSL's view, including the subject's, and only the account owner sees it.
+const CONCERN_CATEGORIES = [
+  'Wellbeing or emotional', 'Physical injury or harm', 'Neglect', 'Disclosure by a pupil',
+  'Online safety', 'Sexual harm or exploitation', 'Change in behaviour', 'Staff conduct or allegation', 'Other',
+];
+const CONCERN_STATUS = {
+  open:       { label: 'Open',       tone: 'warning' },
+  monitoring: { label: 'Monitoring', tone: 'info' },
+  closed:     { label: 'Closed',     tone: 'neutral' },
+};
+const CONCERN_SOURCE = {
+  staff_concern:   'Raised by staff',
+  flag_escalation: 'From a flagged message',
+  dsl_opened:      'Opened by a DSL',
+};
+const CONCERN_SEVERITY = { low: 'Low', medium: 'Medium', high: 'High' };
+
+// The canonical pupil is the ROSTER student (admin store, s*) — the same id the
+// student profile uses. The comms mock predates a shared id, so a comms identity
+// (u_*) maps to the roster by name; production has one profile id throughout.
+const concernRoster = (centreId) => {
+  const cm = window.centreMetrics;
+  return cm ? cm.getStudentsForCentre(centreId || 'bm') : (window.SEED_STUDENTS || []);
+};
+const rosterName = (s) => (s ? (s.name || `${s.firstName || ''} ${s.lastName || ''}`.trim()) : '');
+const rosterIdForCommsUser = (userId, centreId) => {
+  const u = userById(userId);
+  if (!u) return null;
+  const hit = concernRoster(centreId || u.centreId).find(s => rosterName(s) === u.name);
+  return hit ? hit.id : null;
+};
+// Colleagues a concern can be about — the centre's staff identities.
+const concernStaff = (centreId) => usersArr().filter(u => u.centreId === centreId && (u.role === 'admin' || u.role === 'teacher'));
+const isDslUser = (cfg, userId) => !!userId && (cfg.dslLeadId === userId || (cfg.dslDeputyIds || []).includes(userId));
+// Account ownership lives on the subscription (permissions.jsx isAccountOwner),
+// matched by the staff identity's email.
+const isOwnerUser = (userId) => {
+  const u = userById(userId);
+  if (!u || !u.email || !window.isAccountOwner) return false;
+  const sub = window.readSubscription ? window.readSubscription() : window.ONB_SUBSCRIPTION;
+  return window.isAccountOwner(u.email, sub);
+};
+
+// Older seeds / stored blobs used { aboutUserId, reason, level, note, by } — lift
+// them onto the record shape so one renderer handles every row.
+const normConcern = (c) => {
+  if (!c) return c;
+  if (c.subjectType) return { notes: [], status: 'open', ...c };
+  const about = userById(c.aboutUserId);
+  const studentId = about && about.role === 'student' ? rosterIdForCommsUser(about.id, c.centreId) : null;
+  return {
+    id: c.id, centreId: c.centreId,
+    subjectType: about && about.role !== 'student' ? 'staff' : 'student',
+    studentId, staffId: about && about.role !== 'student' ? about.id : null,
+    subjectName: about ? about.name : 'Pupil',
+    category: c.reason || 'Other', severity: c.level || 'low',
+    summary: c.note || '', source: c.threadId ? 'flag_escalation' : 'staff_concern',
+    threadId: c.threadId || null, messageId: c.messageId || null,
+    raisedBy: c.by, at: c.at, status: c.status || 'open', restricted: !!c.restricted, notes: c.notes || [],
+  };
+};
+
+// Who may read a concern, and how much of it:
+//   'full'   → the DSL chronology (notes, status changes)
+//   'status' → the raiser's own row: subject, category, date and status only
+//   null     → not visible at all
+// Restricted rows (about a DSL) are the account owner's alone — never a DSL's,
+// even the subject's. A concern about the owner themselves is visible to nobody
+// in-app beyond the raiser: the escalation contacts (LADO) are the route out.
+const concernAccess = (c, ctx, cfg) => {
+  if (ctx.role === 'superadmin') return null;             // never tenant safeguarding data (support-session rule)
+  if (c.centreId !== ctx.centreId) return null;
+  const mine = c.raisedBy === ctx.userId;
+  if (c.restricted) {
+    const aboutMe = c.subjectType === 'staff' && c.staffId === ctx.userId;
+    if (!aboutMe && isOwnerUser(ctx.userId)) return 'full';
+    return mine ? 'status' : null;
+  }
+  if (ctx.role === 'admin' || isDslUser(cfg, ctx.userId)) return 'full';
+  return mine ? 'status' : null;
+};
 
 // ══════════════════════════════════════════════════════════════════════════════════
 //  SAFETY POSTURE — presets + per-centre config
@@ -210,9 +305,12 @@ function computeFlags(store, ctx) {
 // ══════════════════════════════════════════════════════════════════════════════════
 
 // Can `user` post an announcement at this scope?
+// The platform owner reaches ACCOUNT ADMINS ONLY (centre admins, which always
+// includes each account owner) — the same rule as owner DMs. The centre is the
+// data controller; its teachers and pupils are its people, reached through it.
 function canAnnounce(user, scope) {
   if (!user) return false;
-  if (user.role === 'superadmin') return ['platform', 'centre', 'class', 'year', 'subject'].includes(scope);
+  if (user.role === 'superadmin') return scope === 'platform';
   if (user.role === 'admin')      return ['centre', 'class', 'year', 'subject'].includes(scope);
   if (user.role === 'teacher')    return scope === 'class';
   return false; // students / parents receive only
@@ -223,7 +321,7 @@ const canCompose = (user) => !!user && (user.role === 'superadmin' || user.role 
 // The scopes a given user may choose from in the composer.
 function allowedScopes(user) {
   if (!user) return [];
-  if (user.role === 'superadmin') return ['platform', 'centre', 'class', 'year', 'subject'];
+  if (user.role === 'superadmin') return ['platform'];
   if (user.role === 'admin')      return ['centre', 'class', 'year', 'subject'];
   if (user.role === 'teacher')    return ['class'];
   return [];
@@ -260,8 +358,9 @@ function commsRecipients(scope, audience, authorCentreId) {
   return usersArr().filter(u => {
     if (u.role === 'superadmin') return false; // owners aren't an announcement audience
     if (scope === 'platform') {
+      // Platform (owner) notices reach admins only, whatever the stored roles say.
       const cOk = audience.centreIds === 'all' || (Array.isArray(audience.centreIds) && audience.centreIds.includes(u.centreId));
-      return cOk && roleOk(u.role);
+      return cOk && u.role === 'admin';
     }
     if (scope === 'centre') return u.centreId === authorCentreId && roleOk(u.role);
     if (scope === 'class') {
@@ -283,13 +382,14 @@ const isScheduled = (a) => !!a.publishAt && new Date(a.publishAt) > cmNow();
 // Is announcement `a` visible to context `ctx`? (tenant + targeting)
 function announcementVisible(a, ctx) {
   if (!ctx.user) return false;
-  if (ctx.role === 'superadmin') return true; // platform-scoped view sees all
+  // The owner reads no tenant content: their feed is the platform notices only.
+  if (ctx.role === 'superadmin') return a.scope === 'platform';
   if (a.authorId === ctx.userId) return true; // authors always see their own posts
   if (isScheduled(a)) return false;            // recipients don't see future posts
   // Tenant boundary first.
   if (a.scope === 'platform') {
     const cOk = a.audience.centreIds === 'all' || (Array.isArray(a.audience.centreIds) && a.audience.centreIds.includes(ctx.centreId));
-    if (!cOk) return false;
+    if (!cOk || ctx.role !== 'admin') return false;   // owner notices reach admins only
   } else if (a.centreId !== ctx.centreId) {
     return false;
   }
@@ -494,21 +594,44 @@ function useComms(ctx) {
 
     // ── Safeguarding (DSL) ──
     flags: computeFlags(store, ctx),
-    concerns: (store.concerns || [])
-      .filter(c => ctx.role === 'superadmin' || c.centreId === ctx.centreId)
+    // The concern log THIS viewer may read (full rows for DSLs/admins, the owner's
+    // restricted rows, and — for anyone — the status of concerns they raised).
+    concerns: (store.concerns || []).map(normConcern)
+      .map(c => ({ ...c, access: concernAccess(c, ctx, cfg) }))
+      .filter(c => c.access)
       .sort((x, y) => (x.at > y.at ? -1 : 1)),
     resolveFlag(messageId, status, note) {
       persist({ ...store, flags: { ...store.flags, [messageId]: { status, note: note || '', by: ctx.userId, at: stamp() } } });
     },
-    // Optionally acknowledges the originating flag in the SAME persist — calling two
-    // mutators in a row would each spread a stale `store` and clobber each other.
-    recordConcern(entry, acknowledgeMessageId) {
-      const c = { id: newId('cn'), centreId: ctx.centreId, by: ctx.userId, at: stamp(), ...entry };
+    // raise_concern — ANY staff member, from any screen. Stamps the source, sets
+    // `restricted` when the subject holds a DSL role, and (for a flagged message)
+    // acknowledges the flag in the SAME persist: two mutators in a row would each
+    // spread a stale `store` and clobber each other.
+    raiseConcern(entry, acknowledgeMessageId) {
+      const restricted = entry.subjectType === 'staff' && isDslUser(cfg, entry.staffId);
+      const c = {
+        id: newId('cn'), centreId: ctx.centreId, raisedBy: ctx.userId, at: stamp(),
+        status: 'open', notes: [], source: 'staff_concern', severity: 'low', ...entry, restricted,
+      };
       const next = { ...store, concerns: [c, ...(store.concerns || [])] };
       if (acknowledgeMessageId) {
-        next.flags = { ...store.flags, [acknowledgeMessageId]: { status: 'acknowledged', note: 'Concern recorded', by: ctx.userId, at: stamp() } };
+        next.flags = { ...store.flags, [acknowledgeMessageId]: { status: 'acknowledged', note: 'Concern raised', by: ctx.userId, at: stamp() } };
       }
       persist(next);
+      return c;
+    },
+    // Compat for older callers (flag queue): same record, source = flag_escalation.
+    recordConcern(entry, acknowledgeMessageId) {
+      return api.raiseConcern({ source: 'flag_escalation', ...entry }, acknowledgeMessageId);
+    },
+    // The chronology is APPEND-ONLY: a note is added, never edited or removed.
+    // Status changes are themselves notes, so the timeline is the whole history.
+    addConcernNote(id, text, statusChange) {
+      const list = (store.concerns || []).map(normConcern);
+      const cur = list.find(c => c.id === id);
+      if (!cur || concernAccess(cur, ctx, cfg) !== 'full') return;
+      const note = { id: newId('cnn'), by: ctx.userId, at: stamp(), text: (text || '').trim(), status: statusChange || null };
+      persist({ ...store, concerns: list.map(c => c.id === id ? { ...c, status: statusChange || c.status, notes: [...(c.notes || []), note] } : c) });
     },
   };
   return api;
@@ -776,17 +899,19 @@ const AnnouncementsInbox = ({ comms, onNavigate, author, onCompose }) => {
       {/* Toolbar — search, filters, and the Compose entry point */}
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
         <SearchInput value={q} onChange={e => setQ(e.target.value)} placeholder="Search notices…" style={{ maxWidth: 280 }} />
-        <Select value={scope} onChange={e => setScope(e.target.value)} style={{ width: 150 }}>
-          <option value="all">All scopes</option>
-          {(ctx.role === 'superadmin' ? ['platform','centre','class','year','subject'] : ['centre','class','year','subject']).map(s =>
-            <option key={s} value={s}>{(SCOPE_META[s] || {}).label}</option>)}
-        </Select>
-        <Select value={roleFilter} onChange={e => setRoleFilter(e.target.value)} style={{ width: 150 }}>
-          <option value="all">All audiences</option>
-          <option value="teacher">Teachers</option>
-          <option value="student">Students</option>
-          <option value="parent">Parents</option>
-        </Select>
+        {ctx.role !== 'superadmin' && <>
+          <Select value={scope} onChange={e => setScope(e.target.value)} style={{ width: 150 }}>
+            <option value="all">All scopes</option>
+            {['centre', 'class', 'year', 'subject'].map(s =>
+              <option key={s} value={s}>{(SCOPE_META[s] || {}).label}</option>)}
+          </Select>
+          <Select value={roleFilter} onChange={e => setRoleFilter(e.target.value)} style={{ width: 150 }}>
+            <option value="all">All audiences</option>
+            <option value="teacher">Teachers</option>
+            <option value="student">Students</option>
+            <option value="parent">Parents</option>
+          </Select>
+        </>}
         <button onClick={() => setUnreadOnly(v => !v)} style={{
           display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 12px', borderRadius: 8, cursor: 'pointer',
           border: `1px solid ${unreadOnly ? DS.accentBorder : DS.border}`, background: unreadOnly ? DS.accentLight : DS.bg,
@@ -857,6 +982,8 @@ const AUDIENCE_CARDS = [
   { mode: 'year',     scope: 'year',     icon: 'chart', title: 'By year group',    desc: 'Year 9 – Year 13' },
   { mode: 'subject',  scope: 'subject',  icon: 'zap',   title: 'By subject',       desc: 'Mathematics · Physics · Chemistry…' },
 ];
+// The owner console's only audience (see canAnnounce).
+const OWNER_AUDIENCE_CARD = { mode: 'platform', scope: 'platform', icon: 'shield', title: 'Account admins', desc: 'Centre admins and account owners — every centre, or the ones you pick' };
 const EXPIRY_OPTS = [['never', "Don't expire"], ['3d', '3 days'], ['1w', '1 week'], ['2w', '2 weeks'], ['1m', '1 month']];
 const EXPIRY_DAYS = { '3d': 3, '1w': 7, '2w': 14, '1m': 30 };
 
@@ -897,11 +1024,11 @@ const commsTakePrefill = () => {
 const AnnouncementCompose = ({ comms, onPublished, prefill }) => {
   const { ctx } = comms;
   const user = ctx.user;
-  // Owner console targets at the PLATFORM level only — All centres / specific
-  // centres / by role across the platform. By class / year group / subject are
-  // centre-admin concerns and must never leak into the owner's audience picker.
+  // The owner has ONE audience: account admins, across all centres or the ones
+  // picked. No role picker, no class / year / subject — teachers and pupils are
+  // reached through their own centre, never over its head.
   const cards = user.role === 'superadmin'
-    ? AUDIENCE_CARDS.filter(c => c.mode === 'platform' || c.mode === 'role')
+    ? [OWNER_AUDIENCE_CARD]
     : AUDIENCE_CARDS.filter(c => c.mode === 'platform' ? false : canAnnounce(user, c.scope));
 
   const pre = prefill || {};
@@ -922,9 +1049,7 @@ const AnnouncementCompose = ({ comms, onPublished, prefill }) => {
   const [pinned, setPinned] = React.useState(false);
 
   const card = cards.find(c => c.mode === mode) || cards[0];
-  // For the owner, "By role" is platform-wide (there's no owning centre), so a
-  // centre-scoped card resolves to a platform scope across all centres.
-  const scope = (user.role === 'superadmin' && card.scope === 'centre') ? 'platform' : card.scope;
+  const scope = card.scope;
 
   const myClasses = React.useMemo(() => {
     const all = seedClasses();
@@ -942,7 +1067,7 @@ const AnnouncementCompose = ({ comms, onPublished, prefill }) => {
 
   const audience = (() => {
     const r = mode === 'role' ? (roles.length ? roles : 'all') : 'all';
-    if (scope === 'platform') return { centreIds, roles: r, classIds: [] };
+    if (scope === 'platform') return { centreIds, roles: ['admin'], classIds: [] };
     if (scope === 'class')    return { centreIds: [ctx.centreId], roles: 'all', classIds };
     if (scope === 'year')     return { centreIds: [ctx.centreId], roles: r, years };
     if (scope === 'subject')  return { centreIds: [ctx.centreId], roles: r, subjects };
@@ -1696,34 +1821,23 @@ const SafeStat = ({ icon, value, label, tone }) => (
   </div>
 );
 
+// From the flag queue: the same concern record as the header button, pre-filled
+// with the pupil in the thread and stamped `flag_escalation`. The flag is
+// acknowledged in the same write.
 const RecordConcernModal = ({ open, onClose, comms, flag }) => {
   const thread = flag ? comms.store.threads[flag.threadId] : null;
-  const about = flag ? userById(flag.msg.senderId) : null;
-  const [reason, setReason] = React.useState('');
-  const [level, setLevel] = React.useState('low');
-  const [note, setNote] = React.useState('');
-  React.useEffect(() => { if (open) { setReason(flag ? FLAG_REASONS[flag.primary].label : ''); setLevel('low'); setNote(''); } }, [open, flag]);
-  const save = () => {
-    comms.recordConcern(
-      { aboutUserId: about ? about.id : null, threadId: thread ? thread.id : null, reason: reason.trim() || 'Concern', level, note: note.trim() },
-      flag ? flag.messageId : null,
-    );
-    onClose();
-  };
+  // The pupil in the conversation is who the concern is about — whoever sent it.
+  const pupilId = thread ? (thread.participants || []).find(id => (userById(id) || {}).role === 'student') : null;
+  const prefill = flag ? {
+    subjectType: 'student', studentId: rosterIdForCommsUser(pupilId, thread && thread.centreId),
+    category: flag.primary === 'external' ? 'Online safety' : 'Wellbeing or emotional',
+  } : null;
   return (
-    <Modal open={open} onClose={onClose} title="Record a concern" subtitle={about ? `About ${about.name}` : ''} icon="flag" width={480}
-      footer={[
-        <Btn key="c" variant="secondary" small onClick={onClose}>Cancel</Btn>,
-        <Btn key="s" variant="primary" small icon="check" onClick={save} style={{ opacity: note.trim() ? 1 : 0.5, pointerEvents: note.trim() ? 'auto' : 'none' }}>Log concern</Btn>,
-      ]}>
-      <Field label="Reason"><Input value={reason} onChange={e => setReason(e.target.value)} placeholder="e.g. Wellbeing — exam stress" /></Field>
-      <Field label="Level">
-        <Segmented fullWidth value={level} onChange={setLevel}
-          options={[{ id: 'low', label: 'Low' }, { id: 'medium', label: 'Medium' }, { id: 'high', label: 'High' }]} />
-      </Field>
-      <Field label="Notes" required>
-        <Textarea value={note} onChange={e => setNote(e.target.value)} style={{ minHeight: 90 }} placeholder="What happened and what action was taken…" />
-      </Field>
+    <Modal open={open} onClose={onClose} title="Raise a concern" subtitle="From a flagged message — it goes to the concern log with the thread attached" icon="flag" width={540}>
+      {open && <ConcernForm comms={comms} prefill={prefill}
+        extra={{ source: 'flag_escalation', threadId: thread ? thread.id : null, messageId: flag ? flag.messageId : null }}
+        acknowledgeMessageId={flag ? flag.messageId : null}
+        onDone={onClose} onCancel={onClose} />}
     </Modal>
   );
 };
@@ -1772,6 +1886,340 @@ const FlagListItem = ({ f, comms, active, onClick }) => {
   );
 };
 
+// ─── Concern form (header panel, flag queue, student profile) ─────────────────────
+const ConcernForm = ({ comms, prefill, extra, acknowledgeMessageId, onDone, onCancel }) => {
+  const { ctx } = comms;
+  const cfg = comms.config || {};
+  const pupils = concernRoster(ctx.centreId).filter(s => !(s.account && (s.account.status === 'pending' || s.account.status === 'invited')));
+  const staff = concernStaff(ctx.centreId).filter(u => u.id !== ctx.userId);
+  const [subjectType, setSubjectType] = React.useState((prefill && prefill.subjectType) || 'student');
+  const [studentId, setStudentId] = React.useState((prefill && prefill.studentId) || '');
+  const [staffId, setStaffId] = React.useState((prefill && prefill.staffId) || '');
+  const [category, setCategory] = React.useState((prefill && prefill.category) || '');
+  const [severity, setSeverity] = React.useState('low');
+  const [summary, setSummary] = React.useState('');
+  const [done, setDone] = React.useState(null);
+
+  const subjectId = subjectType === 'student' ? studentId : staffId;
+  const subjectName = subjectType === 'student'
+    ? rosterName(pupils.find(s => s.id === studentId))
+    : ((staff.find(u => u.id === staffId) || {}).name || '');
+  const aboutDsl = subjectType === 'staff' && isDslUser(cfg, staffId);
+  const aboutOwner = subjectType === 'staff' && isOwnerUser(staffId);
+  const valid = subjectId && category && summary.trim().length >= 10;
+  const dslNames = [cfg.dslLeadId, ...(cfg.dslDeputyIds || [])].map(userById).filter(Boolean).map(u => u.name);
+
+  const submit = () => {
+    if (!valid) return;
+    const c = comms.raiseConcern({
+      subjectType, studentId: subjectType === 'student' ? studentId : null, staffId: subjectType === 'staff' ? staffId : null,
+      subjectName, category, severity, summary: summary.trim(), ...(extra || {}),
+    }, acknowledgeMessageId);
+    setDone(c);
+  };
+
+  if (done) {
+    return (
+      <div>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: '14px 16px', borderRadius: 10, background: DS.successBg, border: `1px solid ${DS.successBorder}`, marginBottom: 14 }}>
+          <span style={{ display: 'flex', color: DS.success, marginTop: 1 }}><Icon name="check" size={17} /></span>
+          <div style={{ fontSize: 13, color: DS.sub, lineHeight: 1.55 }}>
+            <b style={{ color: DS.text }}>Concern about {done.subjectName} raised.</b>{' '}
+            {done.restricted
+              ? (aboutOwner
+                  ? 'Because it is about the account owner, nobody inside Klasio will see it. Contact the local authority designated officer (LADO) directly — the contacts are below.'
+                  : 'Because it is about a DSL, it goes to the account owner only — no DSL can see it, including the person it is about.')
+              : `Your DSL${dslNames.length > 1 ? 's' : ''} (${dslNames.join(', ') || 'the centre admin'}) ${dslNames.length > 1 ? 'have' : 'has'} been notified.`}
+            {' '}You can check its status under “Concerns I raised”.
+          </div>
+        </div>
+        {done.restricted && aboutOwner && <EscalationContacts centreId={ctx.centreId} />}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
+          <Btn variant="primary" onClick={onDone}>Done</Btn>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <Field label="Who is this about?">
+        <Segmented fullWidth value={subjectType} onChange={v => { setSubjectType(v); if (v === 'staff' && !category) setCategory('Staff conduct or allegation'); }}
+          options={[{ id: 'student', label: 'A pupil' }, { id: 'staff', label: 'A member of staff' }]} />
+      </Field>
+      {subjectType === 'student' ? (
+        <Field label="Pupil" required>
+          <Select value={studentId} onChange={e => setStudentId(e.target.value)}>
+            <option value="">Choose a pupil…</option>
+            {pupils.slice().sort((a, b) => rosterName(a).localeCompare(rosterName(b))).map(st => <option key={st.id} value={st.id}>{rosterName(st)}{st.year ? ` · ${st.year}` : ''}</option>)}
+          </Select>
+        </Field>
+      ) : (
+        <Field label="Member of staff" required hint={aboutDsl ? 'This person is a DSL, so the concern goes to the account owner only.' : 'An allegation about a colleague is recorded the same way — the DSL decides what happens next.'}>
+          <Select value={staffId} onChange={e => setStaffId(e.target.value)}>
+            <option value="">Choose a colleague…</option>
+            {staff.map(u => <option key={u.id} value={u.id}>{u.name} · {ROLE_LABEL[u.role] || u.role}</option>)}
+          </Select>
+        </Field>
+      )}
+      <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 12 }}>
+        <Field label="What kind of concern?" required>
+          <Select value={category} onChange={e => setCategory(e.target.value)}>
+            <option value="">Choose…</option>
+            {CONCERN_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+          </Select>
+        </Field>
+        <Field label="How urgent?">
+          <Segmented fullWidth value={severity} onChange={setSeverity} options={[{ id: 'low', label: 'Low' }, { id: 'medium', label: 'Med' }, { id: 'high', label: 'High' }]} />
+        </Field>
+      </div>
+      <Field label="What did you see or hear?" required hint="Facts, in the words used where you can. Say when and where. Don't investigate — that's the DSL's job.">
+        <Textarea value={summary} onChange={e => setSummary(e.target.value)} style={{ minHeight: 110 }} placeholder="e.g. Before the 4pm lesson, Amelia said she didn't want to go home tonight and had a bruise on her forearm she said was from…" />
+      </Field>
+      {severity === 'high' && (
+        <div style={{ fontSize: 12.5, color: DS.danger, background: DS.dangerBg, border: `1px solid ${DS.dangerBorder}`, borderRadius: 9, padding: '9px 12px', marginBottom: 12, lineHeight: 1.5 }}>
+          If a child is in immediate danger, call <b>999</b> now, then tell your DSL in person. Recording it here is not a substitute.
+        </div>
+      )}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+        {onCancel && <Btn variant="ghost" onClick={onCancel}>Cancel</Btn>}
+        <Btn variant="primary" icon="shield" onClick={submit} disabled={!valid}>Raise concern</Btn>
+      </div>
+    </div>
+  );
+};
+
+// ─── Where to escalate — shown beside the log, never buried in settings ──────────
+const EscalationContacts = ({ centreId }) => {
+  const list = ((typeof COMMS_ESCALATION !== 'undefined' ? COMMS_ESCALATION : {})[centreId]) || [];
+  if (!list.length) return null;
+  return (
+    <div style={{ border: `1px solid ${DS.border}`, borderRadius: 10, background: DS.bg, overflow: 'hidden' }}>
+      <div style={{ padding: '10px 14px', borderBottom: `1px solid ${DS.border}`, fontSize: 12.5, fontWeight: 700, color: DS.text, display: 'flex', alignItems: 'center', gap: 7 }}>
+        <Icon name="phone" size={14} color={DS.accent} /> Where to escalate
+      </div>
+      {list.map((c, i) => (
+        <div key={i} style={{ padding: '9px 14px', borderTop: i ? `1px solid ${DS.border}` : 'none' }}>
+          <div style={{ fontSize: 12.5, fontWeight: 600, color: DS.text }}>{c.label}</div>
+          <div style={{ fontSize: 12, color: DS.muted, marginTop: 1 }}>{[c.name, c.phone, c.email].filter(Boolean).join(' · ')}</div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+// ─── "Raise a concern" — in the app header for EVERY staff member, every screen ──
+// The person who notices is almost never the DSL, and an ordinary teacher never
+// opens the Safeguarding page — so the action lives in the chrome. A page can
+// pre-fill the subject by setting window.__concernContext (the student profile
+// does); the panel also lists "Concerns I raised" with status only.
+const RaiseConcernButton = ({ comms }) => {
+  const [open, setOpen] = React.useState(false);
+  const [tab, setTab] = React.useState('raise');
+  const [prefill, setPrefill] = React.useState(null);
+  const [formKey, setFormKey] = React.useState(0);
+  const openPanel = (prefillOverride) => { setPrefill(prefillOverride || window.__concernContext || null); setTab('raise'); setFormKey(k => k + 1); setOpen(true); };
+  // Any page can open the panel pre-filled (e.g. the student profile's "Raise").
+  React.useEffect(() => {
+    window.__openConcernPanel = openPanel;
+    return () => { if (window.__openConcernPanel === openPanel) window.__openConcernPanel = null; };
+  });
+  if (!comms || !comms.ctx || !comms.ctx.user) return null;
+  const { ctx } = comms;
+  if (ctx.role !== 'admin' && ctx.role !== 'teacher') return null;
+  const mine = comms.concerns.filter(c => c.raisedBy === ctx.userId);
+  return (
+    <React.Fragment>
+      <button onClick={() => openPanel()} title="Raise a safeguarding concern"
+        style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6B7280', padding: 5, borderRadius: 7, display: 'flex' }}
+        onMouseEnter={(e) => { e.currentTarget.style.background = DS.surface; }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = 'none'; }}>
+        <Icon name="shield" size={17} />
+      </button>
+      <SlideOver open={open} onClose={() => setOpen(false)} title="Safeguarding concern" subtitle="Anyone on the staff can raise one — it goes straight to your DSL" icon="shield" width={520}>
+        <div style={{ marginBottom: 16 }}>
+          <Segmented value={tab} onChange={setTab} options={[{ id: 'raise', label: 'Raise a concern' }, { id: 'mine', label: 'Concerns I raised', count: mine.length || undefined }]} />
+        </div>
+        {tab === 'raise'
+          ? <ConcernForm key={formKey} comms={comms} prefill={prefill} onDone={() => setOpen(false)} onCancel={() => setOpen(false)} />
+          : (mine.length === 0
+              ? <EmptyState icon="shield" title="You haven't raised any concerns" message="Anything you raise shows here with its status, so you can always show that you reported it." />
+              : <div style={{ border: `1px solid ${DS.border}`, borderRadius: 10, overflow: 'hidden' }}>
+                  {mine.map((c, i) => (
+                    <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px', borderTop: i ? `1px solid ${DS.border}` : 'none' }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>{c.subjectName}</div>
+                        <div style={{ fontSize: 11.5, color: DS.muted, marginTop: 1 }}>{c.category} · {new Date(c.at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</div>
+                      </div>
+                      <StatusPill tone={(CONCERN_STATUS[c.status] || CONCERN_STATUS.open).tone}>{(CONCERN_STATUS[c.status] || CONCERN_STATUS.open).label}</StatusPill>
+                    </div>
+                  ))}
+                  <div style={{ padding: '9px 14px', borderTop: `1px solid ${DS.border}`, background: DS.surface, fontSize: 11.5, color: DS.faint }}>You see the status only. The DSL's notes stay with the DSL.</div>
+                </div>)}
+      </SlideOver>
+    </React.Fragment>
+  );
+};
+
+// ─── One concern's chronology (append-only) ───────────────────────────────────────
+const ConcernDetail = ({ comms, c }) => {
+  const [note, setNote] = React.useState('');
+  const [nextStatus, setNextStatus] = React.useState('');
+  React.useEffect(() => { setNote(''); setNextStatus(''); }, [c && c.id]);
+  if (!c) return <EmptyState icon="book" title="Choose a concern" message="Its full chronology shows here." />;
+  const raiser = userById(c.raisedBy);
+  const fmt = iso => new Date(iso).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const st = CONCERN_STATUS[c.status] || CONCERN_STATUS.open;
+  // Closing needs a reason on the record; any other note just needs text.
+  const canAdd = note.trim().length > 0 && (nextStatus !== 'closed' || note.trim().length >= 10);
+  const add = () => { if (!canAdd) return; comms.addConcernNote(c.id, note, nextStatus || null); setNote(''); setNextStatus(''); };
+  return (
+    <div style={{ padding: '16px 18px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
+        <span style={{ fontSize: 16, fontWeight: 700, color: DS.text }}>{c.subjectName}</span>
+        <Badge variant={c.subjectType === 'staff' ? 'warning' : 'default'}>{c.subjectType === 'staff' ? 'Member of staff' : 'Pupil'}</Badge>
+        {c.restricted && <Badge variant="danger">Restricted · owner only</Badge>}
+        <span style={{ marginLeft: 'auto' }}><StatusPill tone={st.tone}>{st.label}</StatusPill></span>
+      </div>
+      <div style={{ fontSize: 12, color: DS.muted, marginBottom: 14 }}>
+        {c.category} · {CONCERN_SEVERITY[c.severity] || c.severity} · {CONCERN_SOURCE[c.source] || c.source}
+      </div>
+      {/* Timeline: the original account, then every note in order. */}
+      <div style={{ borderLeft: `2px solid ${DS.border}`, marginLeft: 6, paddingLeft: 16 }}>
+        <div style={{ position: 'relative', marginBottom: 16 }}>
+          <span style={{ position: 'absolute', left: -23, top: 3, width: 12, height: 12, borderRadius: '50%', background: DS.warning, border: `2px solid ${DS.bg}` }} />
+          <div style={{ fontSize: 11.5, color: DS.faint }}>{fmt(c.at)} · raised by {raiser ? raiser.name : 'staff'}</div>
+          <div style={{ fontSize: 13, color: DS.sub, lineHeight: 1.55, marginTop: 4, whiteSpace: 'pre-wrap' }}>{c.summary}</div>
+          {c.threadId && (
+            <Btn small variant="ghost" icon="message" onClick={() => { const t = comms.store.threads[c.threadId]; if (t) exportThread(t, comms); }} style={{ marginTop: 6 }}>Export the linked thread</Btn>
+          )}
+        </div>
+        {(c.notes || []).map(n => {
+          const by = userById(n.by);
+          return (
+            <div key={n.id} style={{ position: 'relative', marginBottom: 14 }}>
+              <span style={{ position: 'absolute', left: -22, top: 4, width: 10, height: 10, borderRadius: '50%', background: n.status ? DS.accent : DS.borderDark, border: `2px solid ${DS.bg}` }} />
+              <div style={{ fontSize: 11.5, color: DS.faint }}>{fmt(n.at)} · {by ? by.name : 'DSL'}{n.status ? ` · marked ${(CONCERN_STATUS[n.status] || {}).label || n.status}` : ''}</div>
+              <div style={{ fontSize: 13, color: DS.sub, lineHeight: 1.55, marginTop: 3, whiteSpace: 'pre-wrap' }}>{n.text}</div>
+            </div>
+          );
+        })}
+      </div>
+      {/* Add to the record — append-only, never edited. */}
+      <div style={{ marginTop: 8, paddingTop: 14, borderTop: `1px solid ${DS.border}` }}>
+        <Textarea value={note} onChange={e => setNote(e.target.value)} style={{ minHeight: 70 }} placeholder="Add to the chronology — what was done, who was contacted, what was decided…" />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12, color: DS.muted }}>and set status</span>
+          <Select value={nextStatus} onChange={e => setNextStatus(e.target.value)} style={{ width: 150 }}>
+            <option value="">(no change)</option>
+            {Object.entries(CONCERN_STATUS).filter(([k]) => k !== c.status).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </Select>
+          <span style={{ flex: 1 }} />
+          <Btn small variant="primary" icon="plus" onClick={add} disabled={!canAdd}>Add note</Btn>
+        </div>
+        <div style={{ fontSize: 11.5, color: DS.faint, marginTop: 6 }}>Notes can't be edited or deleted.{nextStatus === 'closed' ? ' Closing needs the reason on the record.' : ''}</div>
+      </div>
+    </div>
+  );
+};
+
+// ─── Concern log (Safeguarding page tab) ──────────────────────────────────────────
+const ConcernLog = ({ comms }) => {
+  const rows = comms.concerns.filter(c => c.access === 'full');
+  const [status, setStatus] = React.useState('active');
+  const [q, setQ] = React.useState('');
+  const shown = rows.filter(c => (status === 'all' || (status === 'active' ? c.status !== 'closed' : c.status === status))
+    && (!q.trim() || (c.subjectName || '').toLowerCase().includes(q.trim().toLowerCase())));
+  const [selId, setSelId] = React.useState(shown[0] ? shown[0].id : null);
+  const sel = rows.find(c => c.id === selId) || shown[0] || null;
+  const PANE_H = 'calc(100vh - 360px)';
+  return (
+    <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+      <div style={{ flex: '1 1 320px', minWidth: 280, border: `1px solid ${DS.cardBorder}`, borderRadius: 12, overflow: 'hidden', background: DS.bg }}>
+        <div style={{ padding: '10px 12px', borderBottom: `1px solid ${DS.border}`, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <Segmented value={status} onChange={setStatus} options={[{ id: 'active', label: 'Open & monitoring' }, { id: 'closed', label: 'Closed' }, { id: 'all', label: 'All' }]} />
+          <Input value={q} onChange={e => setQ(e.target.value)} placeholder="Find a pupil or colleague…" icon="search" />
+        </div>
+        <div style={{ overflow: 'auto', maxHeight: PANE_H }}>
+          {shown.length === 0
+            ? <div style={{ padding: 20 }}><EmptyState icon="book" title="Nothing here" message="No concerns match this view." /></div>
+            : shown.map(c => {
+                const st = CONCERN_STATUS[c.status] || CONCERN_STATUS.open;
+                const active = sel && c.id === sel.id;
+                return (
+                  <button key={c.id} onClick={() => setSelId(c.id)} style={{
+                    display: 'block', width: '100%', textAlign: 'left', padding: '12px 14px', cursor: 'pointer',
+                    borderStyle: 'solid', borderWidth: 0, borderBottomWidth: 1, borderBottomColor: DS.border,
+                    borderLeftWidth: 3, borderLeftColor: active ? DS.accent : (c.severity === 'high' ? DS.danger : 'transparent'),
+                    background: active ? DS.accentLight : 'transparent',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>{c.subjectName}</span>
+                      {c.subjectType === 'staff' && <Badge variant="warning">Staff</Badge>}
+                      {c.restricted && <Badge variant="danger">Restricted</Badge>}
+                      <span style={{ marginLeft: 'auto', fontSize: 11, color: DS.faint }}>{relTime(c.at)}</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 5 }}>
+                      <StatusPill tone={st.tone}>{st.label}</StatusPill>
+                      <span style={{ fontSize: 11.5, color: DS.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.category} · {CONCERN_SEVERITY[c.severity] || c.severity}</span>
+                    </div>
+                  </button>
+                );
+              })}
+        </div>
+      </div>
+      <div style={{ flex: '1.5 1 420px', minWidth: 320, display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ border: `1px solid ${DS.cardBorder}`, borderRadius: 12, background: DS.bg, maxHeight: PANE_H, overflow: 'auto' }}>
+          <ConcernDetail comms={comms} c={sel} />
+        </div>
+        <EscalationContacts centreId={comms.ctx.centreId} />
+      </div>
+    </div>
+  );
+};
+
+// ─── A pupil's safeguarding chronology (student profile — DSL / admin only) ───────
+// Everything logged about ONE child in one place. Rendered only for viewers with
+// full access; a teacher's view of the profile never shows it.
+const StudentConcernsPanel = ({ comms, studentId, studentName }) => {
+  const rows = comms ? comms.concerns.filter(c => c.access === 'full' && c.subjectType === 'student' && c.studentId === studentId) : [];
+  const [selId, setSelId] = React.useState(rows[0] ? rows[0].id : null);
+  if (!comms) return null;
+  const sel = rows.find(c => c.id === selId) || rows[0] || null;
+  const raise = () => window.__openConcernPanel && window.__openConcernPanel({ subjectType: 'student', studentId });
+  return (
+    <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+      <div style={{ flex: '1 1 300px', minWidth: 260, border: `1px solid ${DS.cardBorder}`, borderRadius: 12, overflow: 'hidden', background: DS.bg }}>
+        <div style={{ padding: '11px 14px', borderBottom: `1px solid ${DS.border}`, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: DS.text, flex: 1 }}>Concerns about {studentName}</span>
+          <Btn small variant="secondary" icon="shield" onClick={raise}>Raise</Btn>
+        </div>
+        {rows.length === 0
+          ? <div style={{ padding: 18 }}><EmptyState icon="shield" title="Nothing logged" message={`No concerns have been raised about ${studentName}.`} /></div>
+          : rows.map(c => {
+              const st = CONCERN_STATUS[c.status] || CONCERN_STATUS.open;
+              return (
+                <button key={c.id} onClick={() => setSelId(c.id)} style={{
+                  display: 'block', width: '100%', textAlign: 'left', padding: '11px 14px', cursor: 'pointer',
+                  border: 'none', borderBottom: `1px solid ${DS.border}`, background: sel && sel.id === c.id ? DS.accentLight : 'transparent',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 600, color: DS.text }}>{c.category}</span>
+                    <span style={{ marginLeft: 'auto' }}><StatusPill tone={st.tone}>{st.label}</StatusPill></span>
+                  </div>
+                  <div style={{ fontSize: 11.5, color: DS.muted, marginTop: 3 }}>{new Date(c.at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })} · {(c.notes || []).length} note{(c.notes || []).length === 1 ? '' : 's'}</div>
+                </button>
+              );
+            })}
+        <div style={{ padding: '9px 14px', background: DS.surface, fontSize: 11.5, color: DS.faint }}>Visible to DSLs and centre admins only.</div>
+      </div>
+      <div style={{ flex: '1.5 1 380px', minWidth: 300, border: `1px solid ${DS.cardBorder}`, borderRadius: 12, background: DS.bg }}>
+        <ConcernDetail comms={comms} c={sel} />
+      </div>
+    </div>
+  );
+};
+
 const SafeguardingPage = ({ comms }) => {
   const { ctx } = comms;
   const config = comms.config;
@@ -1806,14 +2254,14 @@ const SafeguardingPage = ({ comms }) => {
         <SafeStat icon="flag"   value={openFlags.length} label="Open flags · awaiting review" tone={{ bg: DS.warningBg, color: DS.warning }} />
         <SafeStat icon="check"  value={resolvedCount}    label="Resolved · acknowledged" tone={{ bg: DS.accentLight, color: DS.success }} />
         <SafeStat icon="eye"    value={monitored.length} label="Monitored threads · staff↔student" />
-        <SafeStat icon="book"   value={comms.concerns.length} label="Concerns logged · this term" tone={{ bg: DS.surface, color: DS.muted }} />
+        <SafeStat icon="book"   value={comms.concerns.filter(c => c.access === 'full' && c.status !== 'closed').length} label="Open concerns · pupils & staff" tone={{ bg: DS.surface, color: DS.muted }} />
       </div>
 
       <div style={{ marginBottom: 16 }}>
         <Segmented value={tab} onChange={setTab} options={[
           { id: 'queue',    label: 'Flag queue', count: openFlags.length || undefined },
           { id: 'channels', label: 'Channel browser' },
-          { id: 'concerns', label: 'Concerns log' },
+          { id: 'concerns', label: 'Concern log', count: comms.concerns.filter(c => c.access === 'full' && c.status === 'open').length || undefined },
         ]} />
       </div>
 
@@ -1859,41 +2307,12 @@ const SafeguardingPage = ({ comms }) => {
         </div>
       )}
 
-      {/* Concerns log */}
-      {tab === 'concerns' && (
-        comms.concerns.length === 0
-          ? <EmptyState icon="book" title="No concerns logged" message="Recorded concerns will appear here for your safeguarding record." />
-          : <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {comms.concerns.map(c => {
-                const about = userById(c.aboutUserId);
-                const by = userById(c.by);
-                return (
-                  <div key={c.id} style={{ border: `1px solid ${DS.border}`, borderRadius: 10, padding: '14px 18px', background: DS.bg }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
-                      <Chip icon="flag" color={DS.warning} bg={DS.warningBg}>{c.reason}</Chip>
-                      <span style={{ fontSize: 11, fontWeight: 700, color: c.level === 'high' ? DS.danger : c.level === 'medium' ? DS.warning : DS.muted, textTransform: 'capitalize' }}>{c.level} concern</span>
-                      <span style={{ marginLeft: 'auto', fontSize: 11.5, color: DS.faint }}>{relTime(c.at)}</span>
-                    </div>
-                    <div style={{ fontSize: 13.5, color: DS.text, fontWeight: 600 }}>{about ? about.name : 'Student'}</div>
-                    <div style={{ fontSize: 13, color: DS.sub, lineHeight: 1.5, marginTop: 4 }}>{c.note}</div>
-                    <div style={{ fontSize: 11.5, color: DS.faint, marginTop: 8 }}>Logged by {by ? by.name : '—'}</div>
-                  </div>
-                );
-              })}
-            </div>
-      )}
+      {/* Concerns log — the safeguarding record, keyed to a pupil or a colleague */}
+      {tab === 'concerns' && <ConcernLog comms={comms} />}
 
       <RecordConcernModal open={concernOpen} onClose={() => setConcernOpen(false)} comms={comms} flag={selFlag} />
     </div>
   );
-};
-
-// ══════════════════════════════════════════════════════════════════════════════════
-//  SUPERADMIN SUPPORT (preserves the old SACommsPage content as a 3rd section)
-// ══════════════════════════════════════════════════════════════════════════════════
-const SupportSection = () => {
-  if (typeof window.SACommsPage === 'function') return <window.SACommsPage embedded />;
-  return <EmptyState icon="alert" title="Support" message="Support tickets are unavailable." />;
 };
 
 // ══════════════════════════════════════════════════════════════════════════════════
@@ -1902,8 +2321,7 @@ const SupportSection = () => {
 const SECTION_META = {
   announcements: { title: 'Announcements', sub: 'Broadcast one-way notices — with optional read & acknowledgement tracking.' },
   messages:      { title: 'Messages',      sub: 'Direct messages and class channels. Staff↔student chats are always monitored.' },
-  safeguarding:  { title: 'Safeguarding',  sub: 'Surfaced messages, full thread visibility, and a record of low-level concerns.' },
-  support:       { title: 'Support',       sub: 'Support tickets and email activity across all centres.' },
+  safeguarding:  { title: 'Safeguarding',  sub: 'Flagged messages, monitored threads, and the concern log for every pupil and member of staff.' },
   settings:      { title: 'Comms settings', sub: 'Choose a safety preset, then fine-tune. These apply to every conversation in your centre.' },
 };
 
@@ -1928,7 +2346,7 @@ const CommunicationsPage = ({ role, section, comms }) => {
   const onNavigate = (r, p) => window.__navigate && window.__navigate(r, p);
 
   const subtitle = sec === 'announcements' && isSuper
-    ? 'Platform-wide notices across all centres'
+    ? 'Notices to account admins — they pass on to their own staff what their staff need to know'
     : meta.sub;
 
   // Messages is a full-height chat workspace: no page header, just a small gap
@@ -1947,7 +2365,6 @@ const CommunicationsPage = ({ role, section, comms }) => {
 
       {sec === 'announcements' && <AnnouncementsSection comms={comms} onNavigate={onNavigate} />}
       {sec === 'safeguarding' && <SafeguardingPage comms={comms} />}
-      {sec === 'support' && isSuper && <SupportSection />}
     </div>
   );
 };
@@ -1986,6 +2403,14 @@ const activityToneMeta = (tone) => ({
   info:    { bg: DS.accentLight, color: DS.accent },
 }[tone] || { bg: DS.surface, color: DS.muted });
 
+// The active pupil's in-app notification topics (Settings.jsx). All on when the
+// store isn't loaded, so the bell never silently empties.
+const studentBellPrefs = () => {
+  const K = window.klasioStudent;
+  if (!window.klasioStudentPrefs || !K) return { homeworkDue: true, marksReleased: true, announcements: true, messages: true };
+  return window.klasioStudentPrefs.get(K.student);
+};
+
 // Cross-module activity feed (homework submissions / marked feedback). Guarded so
 // load order can never break the bell. Each item carries a stable `sig` used for
 // dismissal, and its own `go` target.
@@ -2006,16 +2431,41 @@ function activityItems(ctx) {
     tone: it.tone || 'info',
   }));
 
+  if (ctx.role === 'superadmin' && typeof window.saOwnerAlerts === 'function') {
+    window.saOwnerAlerts().forEach(al => out.push({ kind: 'owner', id: al.id, sig: al.sig, icon: al.icon, page: al.page, title: al.title, sub: al.sub, time: null, tone: al.tone }));
+  }
+
   const badges = (typeof window !== 'undefined' && window.getHomeworkBadges) ? window.getHomeworkBadges() : null;
   if (badges && ctx.role === 'teacher' && badges.teacherToMark > 0) {
     const n = badges.teacherToMark;
     out.push({ kind: 'hw', id: 'hw-mark', sig: 'hw-mark:' + n, icon: 'notebook_pen', page: 'homework', tone: 'success',
       title: `${n} submission${n === 1 ? '' : 's'} awaiting marking`, sub: 'Homework · needs your review' });
   }
-  if (badges && ctx.role === 'student' && badges.studentUnreadFeedback > 0) {
+  // A pupil's bell obeys their in-app notification topics (Settings, decision #61).
+  const stuPrefs = ctx.role === 'student' ? studentBellPrefs() : null;
+  if (badges && ctx.role === 'student' && badges.studentUnreadFeedback > 0 && (!stuPrefs || stuPrefs.marksReleased)) {
     const n = badges.studentUnreadFeedback;
     out.push({ kind: 'hw', id: 'hw-feedback', sig: 'hw-feedback:' + n, icon: 'star', page: 'homework', tone: 'success',
-      title: `${n} assignment${n === 1 ? '' : 's'} marked`, sub: 'Homework · feedback ready' });
+      title: `${n} assignment${n === 1 ? '' : 's'} marked`, sub: 'Homework · marks released' });
+  }
+  if (ctx.role === 'student' && stuPrefs && stuPrefs.homeworkDue && window.klasioStudent) {
+    const K = window.klasioStudent;
+    const soon = K.metrics.homeworkSummary().pending.filter(h => K.dueState(h) !== 'upcoming');
+    const overdue = soon.filter(h => K.dueState(h) === 'overdue').length;
+    if (soon.length) out.push({ kind: 'hw', id: 'hw-due', sig: `hw-due:${soon.map(h => h.id).join(',')}`, icon: 'clip', page: 'homework',
+      tone: overdue ? 'danger' : 'warning',
+      title: `${soon.length} piece${soon.length === 1 ? '' : 's'} of homework due soon`,
+      sub: overdue ? `${overdue} overdue · due today or tomorrow` : 'Due today or tomorrow' });
+  }
+  // A pupil's own data request reaches the centre admin (decision #62) — the
+  // statutory clock has started, so it isn't something to find by browsing.
+  if (ctx.role === 'admin' && window.klasioDataRequests) {
+    window.klasioDataRequests.list().filter(r => r.status === 'open' && (!ctx.user || !ctx.user.centreId || r.centreId === ctx.user.centreId)).forEach(r => out.push({
+      kind: 'dsr', id: r.id, sig: 'dsr:' + r.id, icon: 'download', page: 'students', tone: 'warning',
+      title: `${r.subjectName} asked for a copy of their data`,
+      sub: `Subject access request · due ${new Date(r.dueAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`,
+      time: r.receivedAt,
+    }));
   }
   return out.sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0));
 }
@@ -2037,6 +2487,15 @@ const NotificationBell = ({ comms, onNavigate }) => {
     if (ctx.user) setDismissed(loadDismissed(ctx.userId));
   }, [ctx.userId]);
 
+  // Notification preferences and data requests live in other modules' stores.
+  const [, setPrefTick] = React.useState(0);
+  React.useEffect(() => {
+    const fn = () => setPrefTick(t => t + 1);
+    const evs = [window.klasioStudentPrefs && window.klasioStudentPrefs.EVENT, window.klasioDataRequests && window.klasioDataRequests.EVENT].filter(Boolean);
+    evs.forEach(e => window.addEventListener(e, fn));
+    return () => evs.forEach(e => window.removeEventListener(e, fn));
+  }, []);
+
   // Close on Escape while the drawer is open.
   React.useEffect(() => {
     if (!open) return;
@@ -2048,17 +2507,20 @@ const NotificationBell = ({ comms, onNavigate }) => {
   if (!ctx.user) return null;
 
   // ── Build the feed ────────────────────────────────────────────────────────
-  const msgItems = comms.threads
+  // A pupil's bell shows only the topics they left on (Settings, decision #61).
+  const isStudent = ctx.role === 'student';
+  const sp = isStudent ? studentBellPrefs() : null;
+  const msgItems = (sp && !sp.messages ? [] : comms.threads)
     .map(t => ({ t, n: comms.threadUnread(t) }))
     .filter(x => x.n > 0)
     .map(({ t, n }) => ({
-      kind: 'msg', id: t.id, icon: 'mail', page: 'comms:messages',
+      kind: 'msg', id: t.id, icon: 'mail', page: 'comms:messages', count: n,
       title: threadTitle(t, ctx), sub: `${n} new message${n === 1 ? '' : 's'}`, time: t.lastMessageAt,
       chipBg: DS.accentLight, chipColor: DS.accent,
       clear: () => comms.markThreadRead(t.id),
     }));
 
-  const annItems = comms.announcements
+  const annItems = (sp && !sp.announcements ? [] : comms.announcements)
     .filter(a => a.authorId !== ctx.userId && !a.reads[ctx.userId] && !isExpired(a))
     .map(a => {
       const pm = PRIORITY_META[a.priority] || PRIORITY_META.normal;
@@ -2085,7 +2547,22 @@ const NotificationBell = ({ comms, onNavigate }) => {
       };
     });
 
-  const total = unread.total + actItems.length;
+  // New concerns reach whoever can act on them (DSLs / admins; the owner for a
+  // restricted one) — raising a concern notifies, it doesn't wait to be found.
+  const concernItems = comms.concerns
+    .filter(c => c.access === 'full' && c.raisedBy !== ctx.userId && c.status === 'open' && !(c.notes || []).length && !dismissed['concern:' + c.id])
+    .map(c => ({
+      kind: 'concern', id: c.id, icon: 'shield', page: 'comms:safeguarding',
+      title: `Concern raised: ${c.subjectName}`, sub: `${c.category} · ${(userById(c.raisedBy) || {}).name || 'Staff'} · ${relTime(c.at)}`, time: c.at,
+      chipBg: DS.dangerBg, chipColor: DS.danger,
+      clear: () => { const next = { ...dismissed, ['concern:' + c.id]: true }; setDismissed(next); saveDismissed(ctx.userId, next); },
+    }));
+  actItems.unshift(...concernItems);
+
+  // A pupil's badge counts only what their bell shows; staff keep the unread total.
+  const total = isStudent
+    ? msgItems.reduce((n, it) => n + (it.count || 1), 0) + annItems.length + actItems.length
+    : unread.total + actItems.length;
 
   const go = (page) => { setOpen(false); onNavigate && onNavigate(ctx.role, page); };
   const clearAll = () => {
@@ -2099,7 +2576,7 @@ const NotificationBell = ({ comms, onNavigate }) => {
   const sections = [
     { key: 'msg', label: 'Messages', items: msgItems },
     { key: 'ann', label: 'Announcements', items: annItems },
-    { key: 'hw', label: 'Activity', items: actItems },
+    { key: 'hw', label: ctx.role === 'superadmin' ? 'Platform alerts' : 'Activity', items: actItems },
   ].filter(s => s.items.length > 0);
 
   const Row = ({ it }) => (
@@ -2254,6 +2731,8 @@ function classAnnouncementsFor(centreId, classId) {
 Object.assign(window, {
   useComms, commsContext, CommunicationsPage, NotificationBell,
   commsUnreadCount, canAnnounce, canMessage, commsRecipients, classAnnouncementsFor,
+  // Safeguarding concern record — header button + student-profile chronology.
+  RaiseConcernButton, StudentConcernsPanel, CONCERN_STATUS,
   // Used by the Settings → Comms tab (Settings.jsx) to render the preset cards.
   COMMS_PRESETS, commsUserById: userById, commsDslRoleByName,
 });

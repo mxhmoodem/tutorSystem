@@ -2,12 +2,14 @@
 //  Klasio — Plans & override codes (platform-wide)
 // ══════════════════════════════════════════════════════════════
 //
-//  Single source of truth for the subscription PLAN CATALOGUE, the superadmin's
-//  price-OVERRIDE CODES and the GLOBAL FREE TRIAL. Consumers:
-//    • SuperAdmin → Platform Controls  — edits plans, issues codes, sets the global trial (SAControlsPage)
+//  Single source of truth for the subscription PLAN CATALOGUE (centre AND solo
+//  plans — `audience`), the superadmin's price-OVERRIDE CODES and the FREE TRIAL
+//  offered to each audience. Consumers:
+//    • SuperAdmin → Pricing            — edits plans, trials and codes (SAPricingPage)
 //    • admin subscription              — resolves the live plan + trial (Centres.jsx useSubscriptionStore)
-//    • admin → Settings → Billing      — change plan, redeem a code, save billing (Settings.jsx)
-//    • public signup                   — promises the live trial (Auth.jsx)
+//    • admin → Plans & Billing         — change plan, redeem a code, save billing (Settings.jsx)
+//    • public signup                   — lists the sellable centre plans + promises the centre trial (Auth.jsx)
+//    • solo demo                       — soloCapabilities.jsx seeds the solo plans and reads them back
 //
 //  Loads after Settings.jsx and BEFORE SuperAdmin.jsx + Centres.jsx (index.html),
 //  and after mocks/plans.mock.jsx (PLAN_CATALOG_SEED / PLAN_CODES_SEED / PLAN_TRIAL_SEED).
@@ -27,25 +29,98 @@ const planRand = (n = 4, chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789') =>
 const planTodayIso = () => new Date().toISOString().slice(0, 10);
 const planMoney = n => `£${Number(n || 0).toLocaleString()}`;
 
+// ─── Capabilities (decision #25) ─────────────────────────────────────────────────
+// The machine-checked keys a plan can unlock — the same list as `plans.capabilities`
+// in the data-layer reference. Anything a plan GATES is one of these; pricing-page
+// bullets are separate display copy and gate nothing. Safeguarding, guardian and
+// health records are never here — they are on every plan.
+const PLAN_CAPABILITIES = [
+  { key: 'group_lessons',     label: 'Group lessons' },
+  { key: 'lesson_planner',    label: 'Lesson planner' },
+  { key: 'tracking',          label: 'Tracking' },
+  { key: 'homework',          label: 'Homework' },
+  { key: 'homework_bank',     label: 'Homework bank' },
+  { key: 'reports',           label: 'Student reports' },
+  { key: 'report_rules',      label: 'Report rules' },
+  { key: 'at_risk_flags',     label: 'At-risk flags' },
+  { key: 'payment_reminders', label: 'Payment reminders' },
+  { key: 'vat',               label: 'VAT on invoices' },
+  { key: 'analytics_exports', label: 'Analytics exports' },
+  { key: 'waiting_list',      label: 'Waiting list' },
+];
+
+// ─── Audiences ───────────────────────────────────────────────────────────────────
+// Every plan is sold to one audience (`plans.audience`): centre accounts, or solo
+// tutors. Only plans matching an account's kind are ever offered to it.
+const PLAN_AUDIENCES = [
+  { id: 'centre', label: 'Centres',     noun: 'centre',      nouns: 'centres' },
+  { id: 'solo',   label: 'Solo tutors', noun: 'solo tutor',  nouns: 'solo tutors' },
+];
+const planAudience = id => PLAN_AUDIENCES.find(a => a.id === id) || PLAN_AUDIENCES[0];
+
 // ─── Plan catalogue store (tutoros.plans.v1) ─────────────────────────────────────
 const PLAN_STORE_KEY = 'tutoros.plans.v1';
 const planListeners = new Set();
-const planSeed = () => JSON.parse(JSON.stringify(window.PLAN_CATALOG_SEED || []));
+// Centre plans come from mocks/plans.mock.jsx; solo plans from soloCapabilities.jsx,
+// the one file that names solo tier ids (it loads later — this runs at read time).
+const planSeed = () => JSON.parse(JSON.stringify([
+  ...(window.PLAN_CATALOG_SEED || []),
+  ...(typeof window.soloPlanSeed === 'function' ? window.soloPlanSeed() : []),
+]));
+// Bring a stored plan up to the current shape: a blob saved before capabilities /
+// bullets / the Stripe link / audiences / yearly prices existed takes them from
+// the seed plan of the same id (old free-text `features` become bullets — they
+// were display copy all along).
+const planNormalize = (p, seeds) => {
+  const seed = (seeds || planSeed()).find(s => s.id === p.id) || {};
+  const pick = (k, fallback) => (p[k] !== undefined ? p[k] : (seed[k] !== undefined ? seed[k] : fallback));
+  const out = {
+    ...p,
+    audience: p.audience || seed.audience || 'centre',
+    tagline: pick('tagline', ''),
+    priceYearly: pick('priceYearly', 0),   // a plan made before yearly prices offers none
+    maxInvoicesPerMonth: pick('maxInvoicesPerMonth', null),
+    capabilities: p.capabilities || seed.capabilities || {},
+    bullets: p.bullets || p.features || seed.bullets || [],
+    stripePriceId: pick('stripePriceId', null),
+    stripePrice: pick('stripePrice', null),
+    stripePriceIdYearly: pick('stripePriceIdYearly', null),
+    stripePriceYearly: pick('stripePriceYearly', null),
+  };
+  delete out.features;
+  return out;
+};
 const readPlans = () => {
   try {
     const raw = localStorage.getItem(PLAN_STORE_KEY);
-    if (raw) { const arr = JSON.parse(raw); if (Array.isArray(arr) && arr.length) return arr; }
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr) && arr.length) {
+        const seeds = planSeed();
+        const plans = arr.map(p => planNormalize(p, seeds));
+        // A catalogue saved before plans had audiences holds centre plans only: add
+        // the solo plans. Once any plan is saved with an audience this never runs
+        // again, so deleting a solo plan later sticks.
+        if (!arr.some(p => p.audience)) seeds.filter(s => s.audience === 'solo' && !plans.some(x => x.id === s.id)).forEach(s => plans.push(s));
+        return plans;
+      }
+    }
   } catch (e) { /* ignore */ }
   return planSeed();
 };
 const writePlans = next => {
   try { localStorage.setItem(PLAN_STORE_KEY, JSON.stringify(next)); } catch (e) {}
   planListeners.forEach(fn => fn(next));
+  // Non-React listeners (the solo demo's model) rebuild from the new catalogue.
+  window.dispatchEvent(new Event('klasio-plans-changed'));
 };
 
 // Non-hook accessors — read live so the subscription store + sidebar `planUsage`
-// pick up superadmin edits (fall back to the back-compat PLANS global).
-const getPlans = () => [...readPlans()].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+// pick up superadmin edits (fall back to the back-compat PLANS global). Pass an
+// audience to get only that audience's plans.
+const getPlans = (audience) => [...readPlans()]
+  .filter(p => !audience || p.audience === audience)
+  .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 const getPlan = id => readPlans().find(p => p.id === id) || (window.PLANS && window.PLANS[id]) || null;
 
 const usePlansStore = () => {
@@ -57,11 +132,18 @@ const usePlansStore = () => {
   const addPlan = (fields = {}) => {
     const id = (fields.id || (fields.name || '').toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 16)) || ('plan' + planRand(3).toLowerCase());
     if (state.some(p => p.id === id)) return null;            // ids are unique
+    const audience = fields.audience || 'centre';
     const plan = {
-      id, name: fields.name || 'New plan', price: +fields.price || 0,
+      id, audience, name: fields.name || 'New plan', tagline: fields.tagline || '',
+      price: +fields.price || 0, priceYearly: +fields.priceYearly || 0,
       maxCentres: +fields.maxCentres || 1, studentSeats: +fields.studentSeats || 0, teacherSeats: +fields.teacherSeats || 0,
-      storageGb: +fields.storageGb || 0,
-      features: fields.features || [], order: state.length, archived: false,
+      storageGb: +fields.storageGb || 0, maxInvoicesPerMonth: fields.maxInvoicesPerMonth ?? null,
+      capabilities: fields.capabilities || {}, bullets: fields.bullets || [],
+      // Not sellable until a Stripe price exists (unless it's free).
+      stripePriceId: null, stripePrice: null, stripePriceIdYearly: null, stripePriceYearly: null,
+      // New plans go to the end of their own audience's list.
+      order: Math.max(audience === 'solo' ? 9 : -1, ...state.filter(p => p.audience === audience).map(p => p.order ?? 0)) + 1,
+      archived: false,
     };
     writePlans([...state, plan]);
     return plan;
@@ -70,9 +152,49 @@ const usePlansStore = () => {
   const restorePlan = id => writePlans(state.map(p => p.id === id ? { ...p, archived: false } : p));
   const deletePlan = id => writePlans(state.filter(p => p.id !== id));
   const reset = () => writePlans(planSeed());
+  // Stripe Prices are immutable: a new catalogue price needs a NEW Stripe price,
+  // never an edit. Prototype stand-in for POST /v1/admin/plans/:id/stripe-prices.
+  // New customers get it; existing subscribers stay on their old price unless
+  // they're given 30 days' notice and moved deliberately.
+  const createStripePrice = id => {
+    const plan = state.find(p => p.id === id);
+    if (!plan) return null;
+    const fresh = () => `price_${planRand(14, 'abcdefghijklmnopqrstuvwxyz0123456789')}`;
+    // One Stripe Price per paid cycle; a cycle that is free (or not offered) has none.
+    const patch = {
+      stripePriceId: +plan.price > 0 ? fresh() : null, stripePrice: +plan.price > 0 ? +plan.price : null,
+      stripePriceIdYearly: +plan.priceYearly > 0 ? fresh() : null, stripePriceYearly: +plan.priceYearly > 0 ? +plan.priceYearly : null,
+    };
+    writePlans(state.map(p => p.id === id ? { ...p, ...patch } : p));
+    return patch;
+  };
 
-  return { plans, updatePlan, addPlan, archivePlan, restorePlan, deletePlan, reset };
+  return { plans, updatePlan, addPlan, archivePlan, restorePlan, deletePlan, reset, createStripePrice };
 };
+
+// Does the catalogue agree with Stripe? Derived, never stored, checked per cycle.
+//   free          — nothing to charge, so nothing in Stripe (e.g. Solo Free)
+//   not_in_stripe — a paid cycle has no Stripe price yet
+//   price_changed — a price moved in the catalogue; Stripe still charges the old one
+//   synced        — what the pricing page shows is what Stripe charges
+const planStripeState = (plan) => {
+  if (!plan) return { id: 'not_in_stripe', label: 'Not in Stripe', tone: 'danger', cycles: [] };
+  const cycles = [
+    { id: 'monthly', price: +plan.price || 0, priceId: plan.stripePriceId, charged: plan.stripePrice },
+    { id: 'yearly', price: +plan.priceYearly || 0, priceId: plan.stripePriceIdYearly, charged: plan.stripePriceYearly },
+  ].filter(c => c.price > 0);
+  if (!cycles.length) return { id: 'free', label: 'Free — no Stripe price needed', tone: 'default', cycles: [] };
+  const missing = cycles.filter(c => !c.priceId);
+  if (missing.length) return { id: 'not_in_stripe', label: missing.length === cycles.length ? 'Not in Stripe' : `No ${missing[0].id} Stripe price`, tone: 'danger', cycles: missing };
+  const moved = cycles.filter(c => +c.charged !== c.price);
+  if (moved.length) return { id: 'price_changed', label: `${moved.length === 2 ? 'Prices' : moved[0].id === 'monthly' ? 'Monthly price' : 'Yearly price'} changed — not live in Stripe`, tone: 'warning', cycles: moved };
+  return { id: 'synced', label: 'Live in Stripe', tone: 'success', cycles: [] };
+};
+// A plan is offered at signup and checkout only while Stripe would charge exactly
+// the prices we show (or there is nothing to charge).
+const planIsSellable = (plan) => !!plan && !plan.archived && ['synced', 'free'].includes(planStripeState(plan).id);
+// The public catalogue for one audience — the prototype twin of GET /v1/plans.
+const getPublicPlans = (audience = 'centre') => getPlans(audience).filter(planIsSellable);
 
 // ─── Override-codes store (tutoros.plancodes.v1) ─────────────────────────────────
 const PLAN_CODES_KEY = 'tutoros.plancodes.v1';
@@ -175,45 +297,53 @@ const PLAN_CODE_KINDS = [
   { id: 'fixed_price', label: 'Fixed price override' },
 ];
 
-// ─── Global free trial (tutoros.trial.v1) ────────────────────────────────────────
-// One platform-wide offer, set by the platform owner in Platform Controls. Unlike an
-// override CODE (issued to one centre, redeemed by hand) this applies automatically to
-// EVERY new centre, so it's the promise the signup page and marketing site make.
-// Same cross-instance-reactive pattern as the two stores above.
+// ─── Free trials (tutoros.trial.v1) — one offer per audience ─────────────────────
+// Set by the platform owner on the Pricing page. Unlike an override CODE (issued to
+// one account, redeemed by hand) a trial applies automatically to EVERY new account
+// of its audience, so it's the promise the signup page and marketing site make.
+// One offer per audience because one offer can't be pinned to a plan both audiences
+// can buy. Same cross-instance-reactive pattern as the two stores above.
 const PLAN_TRIAL_KEY = 'tutoros.trial.v1';
 const planTrialListeners = new Set();
 const PLAN_TRIAL_FALLBACK = { enabled: true, days: 14, planId: null, requireCard: false, onEnd: 'bill', updatedAt: null };
-const planTrialSeed = () => JSON.parse(JSON.stringify(window.PLAN_TRIAL_SEED || PLAN_TRIAL_FALLBACK));
-const planReadTrial = () => {
+const planTrialSeed = () => JSON.parse(JSON.stringify(window.PLAN_TRIAL_SEED || { centre: PLAN_TRIAL_FALLBACK, solo: PLAN_TRIAL_FALLBACK }));
+const planReadTrials = () => {
   let stored = null;
   try { const raw = localStorage.getItem(PLAN_TRIAL_KEY); if (raw) stored = JSON.parse(raw); } catch (e) { /* ignore */ }
-  // Merge over the seed so a stored blob written before a new field existed still resolves.
-  return { ...PLAN_TRIAL_FALLBACK, ...planTrialSeed(), ...(stored && typeof stored === 'object' ? stored : {}) };
+  const seed = planTrialSeed();
+  // A blob saved before trials were per audience is the one centre offer.
+  if (stored && typeof stored === 'object' && !stored.centre && !stored.solo) stored = { centre: stored };
+  const out = {};
+  PLAN_AUDIENCES.forEach(a => {
+    // Merge over the seed so a stored offer written before a new field existed still resolves.
+    out[a.id] = { ...PLAN_TRIAL_FALLBACK, ...(seed[a.id] || {}), ...((stored && stored[a.id]) || {}) };
+  });
+  return out;
 };
-const planWriteTrial = next => {
+const planWriteTrials = next => {
   try { localStorage.setItem(PLAN_TRIAL_KEY, JSON.stringify(next)); } catch (e) {}
   planTrialListeners.forEach(fn => fn(next));
 };
 
 // Non-hook live accessor (signup page, marketing copy, saPlatformDefaults).
-const getPlatformTrial = () => planReadTrial();
+const getPlatformTrial = (audience = 'centre') => planReadTrials()[audience] || planReadTrials().centre;
 
 const usePlatformTrialStore = () => {
-  const [state, setState] = React.useState(planReadTrial);
+  const [state, setState] = React.useState(planReadTrials);
   React.useEffect(() => { const fn = n => setState(n); planTrialListeners.add(fn); return () => { planTrialListeners.delete(fn); }; }, []);
 
-  const updateTrial = patch => {
-    const next = { ...state, ...patch, updatedAt: planTodayIso() };
+  const updateTrial = (audience, patch) => {
+    const next = { ...state[audience], ...patch, updatedAt: planTodayIso() };
     next.days = Math.max(1, Math.min(365, +next.days || 1));      // guardrail: 1–365 days
-    planWriteTrial(next);
+    planWriteTrials({ ...state, [audience]: next });
     return next;
   };
-  const resetTrial = () => planWriteTrial(planTrialSeed());
-  return { trial: state, updateTrial, resetTrial };
+  const resetTrial = () => planWriteTrials(planTrialSeed());
+  return { trials: state, trial: state.centre, updateTrial, resetTrial };
 };
 
 // What happens the day a trial expires. `label`/`desc` address the platform owner
-// (Platform Controls); `tenant` is the same outcome told to the centre (Billing tab).
+// (Pricing page); `tenant` is the same outcome told to the account (Billing tab).
 const PLAN_TRIAL_END_ACTIONS = [
   { id: 'bill',      label: 'Start billing the plan',      desc: 'The first invoice is raised automatically.',          tenant: 'your first invoice is raised' },
   { id: 'downgrade', label: 'Move to the cheapest plan',   desc: 'They keep access on the lowest-priced live plan.',    tenant: 'you move to the cheapest plan' },
@@ -260,8 +390,9 @@ const planTrialStatus = stamp => {
   };
 };
 
-// ─── Global free-trial editor (superadmin → Platform Controls) ───────────────────
-const PlanTrialModal = ({ open, trial, plans = [], onClose, onSave }) => {
+// ─── Free-trial editor (superadmin → Pricing), one audience at a time ────────────
+const PlanTrialModal = ({ open, trial, plans = [], audience = 'centre', onClose, onSave }) => {
+  const aud = planAudience(audience);
   const blank = { enabled: true, days: 14, planId: '', requireCard: false, onEnd: 'bill' };
   const [d, setD] = React.useState(blank);
   React.useEffect(() => {
@@ -280,16 +411,16 @@ const PlanTrialModal = ({ open, trial, plans = [], onClose, onSave }) => {
 
   return (
     <Modal open={open} onClose={onClose} icon="zap" iconColor={DS.accent} width={560}
-      title="Global free trial"
-      subtitle="Applies automatically to every new centre — no code needed."
+      title={`Free trial for ${aud.nouns}`}
+      subtitle={`Applies automatically to every new ${aud.noun} — no code needed.`}
       footer={<>
         <Btn variant="secondary" small onClick={onClose}>Cancel</Btn>
         <Btn variant="primary" small icon="check" onClick={save}>Save trial</Btn>
       </>}>
-      <Field label="Offer free trials" hint="Off means new centres are billed from day one.">
+      <Field label="Offer free trials" hint={`Off means new ${aud.nouns} are billed from day one.`}>
         <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, color: DS.sub, cursor: 'pointer' }}>
           <input type="checkbox" checked={!!d.enabled} onChange={e => upd('enabled', e.target.checked)} />
-          {d.enabled ? 'Every new centre starts on a free trial' : 'No free trial — bill immediately'}
+          {d.enabled ? `Every new ${aud.noun} starts on a free trial` : 'No free trial — bill immediately'}
         </label>
       </Field>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
@@ -322,75 +453,125 @@ const PlanTrialModal = ({ open, trial, plans = [], onClose, onSave }) => {
       }}>
         <Icon name="zap" size={14} color={DS.accent} />
         <span>{d.enabled
-          ? <>New centres get <b>{days} day{days === 1 ? '' : 's'} free</b>{pinned ? <> on <b>{pinned.name}</b></> : ' on the plan they choose'}
+          ? <>New {aud.nouns} get <b>{days} day{days === 1 ? '' : 's'} free</b>{pinned ? <> on <b>{pinned.name}</b></> : ' on the plan they choose'}
             {d.requireCard ? ', card taken up front' : ', no card required'}. Then: {planTrialEndAction(d.onEnd).label.toLowerCase()}.</>
-          : <>Free trials are <b>off</b> — new centres are billed from day one.</>}</span>
+          : <>Free trials are <b>off</b> — new {aud.nouns} are billed from day one.</>}</span>
       </div>
     </Modal>
   );
 };
 
 // ─── Plan editor modal (superadmin) ──────────────────────────────────────────────
-const PlanEditorModal = ({ open, plan, onClose, onSave }) => {
-  const blank = { name: '', price: 0, maxCentres: 1, studentSeats: 0, teacherSeats: 0, storageGb: 0, features: [] };
+// Two lists, deliberately separate: CAPABILITIES are what the plan unlocks (checked
+// by the app), BULLETS are what the pricing page says (checked by nobody). The
+// limits differ by audience: a centre plan counts centres and per-centre seats, a
+// solo plan counts students and invoices for its one tutor.
+const PlanEditorModal = ({ open, plan, audience: audienceProp = 'centre', onClose, onSave }) => {
+  const audience = (plan && plan.audience) || audienceProp;
+  const solo = audience === 'solo';
+  const blank = { audience, name: '', tagline: '', price: 0, priceYearly: 0, maxCentres: 1, studentSeats: 0, teacherSeats: solo ? 1 : 0, storageGb: 0, maxInvoicesPerMonth: '', capabilities: {}, bullets: [] };
   const [d, setD] = React.useState(blank);
   React.useEffect(() => {
-    if (open) setD(plan ? { ...blank, ...plan, features: [...(plan.features || [])] } : blank);
-  }, [open, plan && plan.id]);
+    if (open) setD(plan
+      ? { ...blank, ...plan, maxInvoicesPerMonth: plan.maxInvoicesPerMonth == null ? '' : plan.maxInvoicesPerMonth, capabilities: { ...(plan.capabilities || {}) }, bullets: [...(plan.bullets || [])] }
+      : blank);
+  }, [open, plan && plan.id, audience]);
 
   const upd = (k, v) => setD(s => ({ ...s, [k]: v }));
-  const setFeat = (i, v) => setD(s => ({ ...s, features: s.features.map((f, idx) => idx === i ? v : f) }));
-  const addFeat = () => setD(s => ({ ...s, features: [...s.features, ''] }));
-  const rmFeat = i => setD(s => ({ ...s, features: s.features.filter((_, idx) => idx !== i) }));
+  const setCap = (k) => setD(s => ({ ...s, capabilities: { ...s.capabilities, [k]: !s.capabilities[k] } }));
+  const setBullet = (i, v) => setD(s => ({ ...s, bullets: s.bullets.map((f, idx) => idx === i ? v : f) }));
+  const addBullet = () => setD(s => ({ ...s, bullets: [...s.bullets, ''] }));
+  const rmBullet = i => setD(s => ({ ...s, bullets: s.bullets.filter((_, idx) => idx !== i) }));
+  const priceMoved = plan && (+d.price !== +plan.price || +d.priceYearly !== +(plan.priceYearly || 0));
+  const monthsFree = +d.price > 0 && +d.priceYearly > 0 ? Math.round(12 - (+d.priceYearly) / (+d.price)) : null;
   const save = () => {
     onSave({
-      ...d, price: +d.price || 0, maxCentres: +d.maxCentres || 1,
-      studentSeats: +d.studentSeats || 0, teacherSeats: +d.teacherSeats || 0, storageGb: +d.storageGb || 0,
-      features: d.features.map(f => f.trim()).filter(Boolean),
+      ...d, audience, name: d.name.trim() || 'New plan', tagline: (d.tagline || '').trim(),
+      price: +d.price || 0, priceYearly: +d.priceYearly || 0,
+      maxCentres: solo ? 1 : (+d.maxCentres || 1),
+      studentSeats: +d.studentSeats || 0, teacherSeats: solo ? 1 : (+d.teacherSeats || 0), storageGb: +d.storageGb || 0,
+      maxInvoicesPerMonth: d.maxInvoicesPerMonth === '' || d.maxInvoicesPerMonth == null ? null : Math.max(0, +d.maxInvoicesPerMonth),
+      capabilities: PLAN_CAPABILITIES.reduce((o, c) => ({ ...o, [c.key]: !!d.capabilities[c.key] }), {}),
+      bullets: d.bullets.map(f => f.trim()).filter(Boolean),
     });
     onClose && onClose();
   };
 
   return (
-    <Modal open={open} onClose={onClose} icon="invoice" iconColor={DS.accent} width={580}
-      title={plan ? `Edit ${plan.name} plan` : 'New plan'}
-      subtitle="Set the price and what this plan allows. Applies platform-wide."
+    <Modal open={open} onClose={onClose} icon="invoice" iconColor={DS.accent} width={620}
+      title={plan ? `Edit ${plan.name} plan` : `New ${solo ? 'solo tutor' : 'centre'} plan`}
+      subtitle={`What this ${solo ? 'solo tutor' : 'centre'} plan is: its prices, limits, what it unlocks, and how the pricing page describes it.`}
       footer={<>
         <Btn variant="secondary" small onClick={onClose}>Cancel</Btn>
         <Btn variant="primary" small icon="check" onClick={save}>Save plan</Btn>
       </>}>
-      <Field label="Plan name">
-        <Input value={d.name} onChange={e => upd('name', e.target.value)} placeholder="e.g. Growth" />
-      </Field>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 18px' }}>
-        <Field label="Price (£ / month)">
-          <Input type="number" min="0" value={d.price} onChange={e => upd('price', e.target.value)} />
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.4fr', gap: '0 18px' }}>
+        <Field label="Plan name">
+          <Input value={d.name} onChange={e => upd('name', e.target.value)} placeholder={solo ? 'e.g. Solo Pro' : 'e.g. Growth'} />
         </Field>
-        <Field label="Centres included">
-          <Input type="number" min="1" value={d.maxCentres} onChange={e => upd('maxCentres', e.target.value)} />
-        </Field>
-        <Field label="Student seats / centre">
-          <Input type="number" min="0" value={d.studentSeats} onChange={e => upd('studentSeats', e.target.value)} />
-        </Field>
-        <Field label="Teacher seats / centre">
-          <Input type="number" min="0" value={d.teacherSeats} onChange={e => upd('teacherSeats', e.target.value)} />
-        </Field>
-        <Field label="Cloud storage (GB)">
-          <Input type="number" min="0" value={d.storageGb} onChange={e => upd('storageGb', e.target.value)} />
+        <Field label="Who it's for" hint="One line under the plan name on pricing cards.">
+          <Input value={d.tagline} onChange={e => upd('tagline', e.target.value)} placeholder={solo ? 'e.g. A full book, run tightly' : 'e.g. Growing groups of centres'} />
         </Field>
       </div>
-      <Field label="Features" hint="Shown on the plan card and pricing page.">
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 18px' }}>
+        <Field label="Price (£ / month)" hint={priceMoved ? 'Not live until you create new Stripe prices. Existing subscribers keep theirs.' : '0 for a free plan.'}>
+          <Input type="number" min="0" value={d.price} onChange={e => upd('price', e.target.value)} />
+        </Field>
+        <Field label="Price (£ / year)" hint={monthsFree != null ? (monthsFree > 0 ? `${monthsFree} month${monthsFree === 1 ? '' : 's'} free against monthly` : 'No saving against monthly') : '0 if there is no yearly option.'}>
+          <Input type="number" min="0" value={d.priceYearly} onChange={e => upd('priceYearly', e.target.value)} />
+        </Field>
+        {solo ? <>
+          <Field label="Students">
+            <Input type="number" min="1" value={d.studentSeats} onChange={e => upd('studentSeats', e.target.value)} />
+          </Field>
+          <Field label="Invoices a month" hint="Blank = unlimited.">
+            <Input type="number" min="0" value={d.maxInvoicesPerMonth} onChange={e => upd('maxInvoicesPerMonth', e.target.value)} placeholder="Unlimited" />
+          </Field>
+        </> : <>
+          <Field label="Centres included">
+            <Input type="number" min="1" value={d.maxCentres} onChange={e => upd('maxCentres', e.target.value)} />
+          </Field>
+          <Field label="Student seats / centre">
+            <Input type="number" min="0" value={d.studentSeats} onChange={e => upd('studentSeats', e.target.value)} />
+          </Field>
+          <Field label="Teacher seats / centre">
+            <Input type="number" min="0" value={d.teacherSeats} onChange={e => upd('teacherSeats', e.target.value)} />
+          </Field>
+        </>}
+        <Field label="Cloud storage (GB)">
+          <Input type="number" min="0" step="0.25" value={d.storageGb} onChange={e => upd('storageGb', e.target.value)} />
+        </Field>
+      </div>
+      <Field label="Capabilities" hint="What this plan unlocks — the app checks these. Safeguarding, guardians and health records are on every plan and are never listed here.">
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+          {PLAN_CAPABILITIES.map(c => {
+            const on = !!d.capabilities[c.key];
+            return (
+              <button key={c.key} type="button" onClick={() => setCap(c.key)} style={{
+                display: 'flex', alignItems: 'center', gap: 7, padding: '7px 9px', borderRadius: 7, cursor: 'pointer', textAlign: 'left',
+                border: `1px solid ${on ? DS.accentBorder : DS.border}`, background: on ? DS.accentLight : DS.bg, color: on ? DS.text : DS.muted, fontSize: 12,
+              }}>
+                <span style={{ width: 14, height: 14, borderRadius: 4, flexShrink: 0, border: `1.5px solid ${on ? DS.accent : DS.borderDark}`, background: on ? DS.accent : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  {on && <Icon name="check" size={10} color="#fff" />}
+                </span>
+                {c.label}
+              </button>
+            );
+          })}
+        </div>
+      </Field>
+      <Field label="Pricing-page bullets" hint="Display copy for the plan cards and the marketing site. Gates nothing — if you change a limit above, update the bullet that states it.">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {d.features.map((f, i) => (
+          {d.bullets.map((f, i) => (
             <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <Input value={f} onChange={e => setFeat(i, e.target.value)} placeholder="Feature description" style={{ flex: 1 }} />
-              <button onClick={() => rmFeat(i)} title="Remove" style={{
+              <Input value={f} onChange={e => setBullet(i, e.target.value)} placeholder="e.g. Lesson planner & student reports" style={{ flex: 1 }} />
+              <button onClick={() => rmBullet(i)} title="Remove" style={{
                 background: 'none', border: `1px solid ${DS.border}`, borderRadius: 7, cursor: 'pointer',
                 color: DS.faint, padding: 8, display: 'flex', flexShrink: 0,
               }}><Icon name="x" size={14} /></button>
             </div>
           ))}
-          <Btn variant="secondary" small icon="plus" onClick={addFeat} style={{ alignSelf: 'flex-start' }}>Add feature</Btn>
+          <Btn variant="secondary" small icon="plus" onClick={addBullet} style={{ alignSelf: 'flex-start' }}>Add bullet</Btn>
         </div>
       </Field>
     </Modal>
@@ -415,7 +596,7 @@ const PlanCodeModal = ({ open, code, plans = [], onClose, onSave }) => {
   return (
     <Modal open={open} onClose={onClose} icon="zap" iconColor={DS.accent} width={560}
       title={editing ? `Edit code ${code.code}` : 'New override code'}
-      subtitle="Give a centre a discounted or free price for a fixed window."
+      subtitle="Give an account a discounted or free price for a fixed window."
       footer={<>
         <Btn variant="secondary" small onClick={onClose}>Cancel</Btn>
         <Btn variant="primary" small icon="check" onClick={save}>{editing ? 'Save code' : 'Create code'}</Btn>
@@ -443,7 +624,10 @@ const PlanCodeModal = ({ open, code, plans = [], onClose, onSave }) => {
         <Field label="Restrict to plan">
           <Select value={d.planId} onChange={e => upd('planId', e.target.value)}>
             <option value="">Any plan</option>
-            {plans.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            {PLAN_AUDIENCES.map(a => {
+              const group = plans.filter(p => (p.audience || 'centre') === a.id);
+              return group.length ? <optgroup key={a.id} label={a.label}>{group.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</optgroup> : null;
+            })}
           </Select>
         </Field>
         <Field label="Max redemptions" hint="Blank = unlimited.">
@@ -468,7 +652,8 @@ const PlanCodeModal = ({ open, code, plans = [], onClose, onSave }) => {
 };
 
 Object.assign(window, {
-  usePlansStore, getPlans, getPlan,
+  usePlansStore, getPlans, getPlan, getPublicPlans,
+  PLAN_CAPABILITIES, PLAN_AUDIENCES, planAudience, planStripeState, planIsSellable,
   usePlanCodesStore, planFindCode, planRedeemCode,
   planCodeSummary, planApplyCode, planOverrideStatus, planMoney,
   PLAN_CODE_KINDS, PlanEditorModal, PlanCodeModal,

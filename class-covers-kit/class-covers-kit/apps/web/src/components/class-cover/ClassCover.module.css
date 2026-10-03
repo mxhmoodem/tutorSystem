@@ -1,0 +1,13 @@
+.cover {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  border-radius: var(--radius-card, 16px);
+  color: var(--cover-ink);
+}
+
+.content {
+  position: relative;
+  z-index: 1;
+  height: 100%;
+}

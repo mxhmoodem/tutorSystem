@@ -7,7 +7,8 @@
 //
 //  Exposes on window:
 //    useReportsStore, TeacherReports, StudentReports,
-//    AdminReportsConfig (hub: Overview/Generate/Settings),
+//    AdminReportsConfig (one page: figures + every report; Settings via a button) — the student-report
+//    product only; the centre exports live on their own page, AdminAnalyticsPage,
 //    printReportPDF, printCentreReport
 // ══════════════════════════════════════════════════════════════
 
@@ -1133,7 +1134,9 @@ function blankReport(template, opts) {
     title: `${opts.period || 'Summer Term 2026'} — ${opts.subject || 'Subject'} Progress Report`,
     studentId: opts.studentId || 's_new', studentName: opts.studentName || '', year: rptNormYear(opts.year) || 'Year 12',
     className: opts.className || '', subject: opts.subject || '', subjectColor: opts.subjectColor || DS.accent,
-    teacher: REPORTS_TEACHER_SELF, predicted: '',
+    // Starts from the teacher's stored prediction for this pupil + class (decision
+    // #28, klasioTargets); still editable here, and publishing snapshots it.
+    teacher: REPORTS_TEACHER_SELF, predicted: opts.predicted || '',
     period: opts.period || 'Summer Term 2026', reportType: (template && template.name) || 'Termly Progress',
     // the template's shape travels with the report — sections drive the editor/PDF/reading view
     templateId: template ? template.id : null,
@@ -1152,11 +1155,15 @@ function blankReport(template, opts) {
 // Class-driven creation: pick one of YOUR classes, then one/some/all of its actual
 // roster. Reports are keyed by the roster studentId (never free-typed names) so
 // due-date tracking and the student's own view stay linked.
-const NewReportModal = ({ open, onClose, store, onCreated }) => {
+const NewReportModal = ({ open, onClose, store, onCreated, prefill }) => {
   const myClasses = reportClasses().filter(c => (c.teacher || '').split(' / ').includes(REPORTS_TEACHER_SELF_SHORT));
   const [mode, setMode] = React.useState('single');  // single | class | multiple
   const [classId, setClassId] = React.useState((myClasses[0] || {}).id || '');
   const [studentId, setStudentId] = React.useState('');
+  // Opened from a due/overdue worklist row: start on that pupil's report.
+  React.useEffect(() => {
+    if (open && prefill && prefill.classId) { setMode('single'); setClassId(prefill.classId); setStudentId(prefill.studentId || ''); }
+  }, [open, prefill && prefill.studentId]);
   const [selected, setSelected] = React.useState([]);
   const cls = reportClassById(classId);
   const classLabel = cls ? `${cls.name} — ${cls.group}` : '';
@@ -1185,6 +1192,7 @@ const NewReportModal = ({ open, onClose, store, onCreated }) => {
     const reps = targets.map(s => blankReport(tpl, {
       studentId: s.id, studentName: reportStudentLabel(s), year: s.year,
       className: classLabel, subject: cls.name,
+      predicted: ((window.klasioTargets && window.klasioTargets.get(s.id, cls.id)) || {}).predicted || '',
     }));
     const ids = store.addReports(reps);   // one atomic persist — a loop of addReport() drops all but the last
     onCreated(count, ids[0] || null);
@@ -1241,7 +1249,10 @@ const TeacherReports = () => {
   const [search, setSearch] = React.useState('');
   const [subjectF, setSubjectF] = React.useState('all');
   const [sort, setSort] = React.useState('newest');
-  const [layout, setLayout] = React.useState('table');
+  // Grid ⇄ list, remembered like Homework's (klasio.homework.view).
+  const [layout, setLayoutState] = React.useState(() => { try { return localStorage.getItem('klasio.reports.view') === 'grid' ? 'grid' : 'table'; } catch (e) { return 'table'; } });
+  const setLayout = (v) => { setLayoutState(v); try { localStorage.setItem('klasio.reports.view', v); } catch (e) {} };
+  const [newPrefill, setNewPrefill] = React.useState(null);   // { classId, studentId } from a worklist row
   const [page, setPage] = React.useState(1);
   const PER_PAGE = 10;   // matches the shared Table page size (§8)
   const [sel, setSel] = React.useState([]);
@@ -1262,14 +1273,14 @@ const TeacherReports = () => {
     : store.reportsArr;
   const subjects = Array.from(new Set(reports.map(r => r.subject)));
 
-  // analytics
+  // Counts live on the rail items (the Homework pattern), not in stat cards that
+  // restated filters sitting just below them (decision #51). "Due this week" and
+  // "Overdue" are worklists from the one due engine, so no number here can
+  // disagree with the dashboard's "Reports due".
   const drafts = reports.filter(r => r.status === 'draft');
-  const published = reports.filter(r => r.status === 'published');
-  const recentlyPublished = published.filter(r => r.datePublished && r.datePublished >= '2026-04-01');
-  // "Due this week" comes from the same engine as the Reports-due widget below,
-  // so the two numbers on this page can never disagree.
   const dueRows = computeUpcomingReports(config, store, { teacherName: REPORTS_TEACHER_SELF_SHORT });
-  const dueThisWeek = dueRows.filter(d => d.overdue || d.dueInDays <= 7).length;
+  const due = rptDueBuckets(dueRows);
+  const worklist = folder === 'overdue' ? due.overdue : folder === 'week' ? due.week : null;
 
   // "Recently viewed" means viewed in the last 14 days, not ever.
   const recentCutoff = rptAddDays(REPORTS_TODAY, -14);
@@ -1324,15 +1335,10 @@ const TeacherReports = () => {
     );
   }
 
-  if (view === 'due') {
-    return (
-      <UpcomingReportsPage config={config} store={store} teacherName={REPORTS_TEACHER_SELF_SHORT}
-        onBack={() => setView('list')}
-        onOpenStudent={(r) => { setView('list'); setFolder('all'); setTagFilter(null); setSearch(r.name); }} />
-    );
-  }
+  const findDrafts = (r) => { setFolder('all'); setTagFilter(null); setSearch(r.name); };
+  const startFor = (r) => { setNewPrefill({ classId: r.classId, studentId: r.studentId }); setShowNew(true); };
 
-  const RailItem = ({ id, icon, label, count, color, indent }) => (
+  const RailItem = ({ id, icon, label, count, color, indent, countColor }) => (
     <button onClick={() => { setFolder(id); setSel([]); }} style={{
       display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left',
       padding: indent ? '7px 10px 7px 26px' : '7px 10px', borderRadius: 7, border: 'none', cursor: 'pointer',
@@ -1340,7 +1346,7 @@ const TeacherReports = () => {
       fontSize: 13, fontWeight: folder === id ? 600 : 400 }}>
       <Icon name={icon} size={15} color={color || (folder === id ? DS.accent : DS.muted)} />
       <span style={{ flex: 1 }}>{label}</span>
-      {count != null && <span style={{ fontSize: 11, color: DS.faint }}>{count}</span>}
+      {count != null && <span style={{ fontSize: 11, color: countColor || DS.faint, fontWeight: countColor ? 700 : 400 }}>{count}</span>}
     </button>
   );
 
@@ -1349,22 +1355,17 @@ const TeacherReports = () => {
       <PageHeader title="Reports" subtitle="Create, organise and publish progress reports for students and parents" actions={[
         (config.defaultRule || {}).requirement === 'OFF' && (config.reportRules || []).every(r => r.requirement === 'OFF')
           ? <Badge key="d" variant="warning">Reports turned off by admin</Badge>
-          : <Btn key="n" variant="primary" icon="plus" small onClick={() => setShowNew(true)}>New report</Btn>
-      ]} />
-
-      <StatBand style={{ marginBottom: 22 }} stats={[
-        { label: 'Awaiting completion', value: drafts.length, sub: 'drafts to finish', tone: drafts.length ? DS.warning : undefined },
-        { label: 'Due this week', value: dueThisWeek, sub: `default: ${rptFreqLabel((config.defaultRule || {}).frequency).toLowerCase()}` },
-        { label: 'Recently published', value: recentlyPublished.length, sub: 'this term' },
-        { label: 'Published total', value: published.length, sub: `${reports.length} reports` },
+          : <Btn key="n" variant="primary" icon="plus" small onClick={() => { setNewPrefill(null); setShowNew(true); }}>New report</Btn>
       ]} />
 
       <div style={{ display: 'grid', gridTemplateColumns: '232px 1fr', gap: 24, alignItems: 'start' }}>
-        {/* sidebar: the filters rail, with "Reports due" as its own card underneath */}
+        {/* sidebar: the filters rail — worklists, states, folders, tags */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16, position: 'sticky', top: 16 }}>
           {/* folder / filter rail */}
           <div style={{ background: DS.bg, border: `1px solid ${DS.cardBorder}`, borderRadius: 12, padding: 12 }}>
             <RailItem id="all" icon="file" label="All reports" count={reports.filter(r => r.status !== 'archived').length} />
+            <RailItem id="week" icon="clock" label="Due this week" count={due.week.length} />
+            <RailItem id="overdue" icon="flag" label="Overdue" count={due.overdue.length} countColor={due.overdue.length ? DS.danger : null} color={due.overdue.length ? DS.danger : null} />
             <RailItem id="pinned" icon="pin" label="Pinned" count={reports.filter(r => r.pinned).length} />
             <RailItem id="recent" icon="clock" label="Recently viewed" count={reports.filter(isRecent).length} />
             <RailItem id="drafts" icon="edit" label="Drafts" count={drafts.length} />
@@ -1405,14 +1406,22 @@ const TeacherReports = () => {
               ))}
             </div>
           </div>
-
-          {/* Reports due — its own card under the filters; overdue first, opens the full due page */}
-          <UpcomingReports config={config} store={store} teacherName={REPORTS_TEACHER_SELF_SHORT} limit={5}
-            compact onView={() => setView('due')} />
         </div>
 
         {/* main column */}
         <div>
+          {folder !== 'overdue' && <OverdueBanner overdue={due.overdue} onShow={() => { setFolder('overdue'); setSel([]); }} />}
+
+          {worklist ? (
+            <>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 12 }}>
+                <span style={{ fontSize: 15, fontWeight: 700, color: DS.text }}>{folder === 'overdue' ? 'Overdue reports' : 'Due in the next 7 days'}</span>
+                <span style={{ fontSize: 12.5, color: DS.muted }}>{folder === 'overdue' ? 'Most late first — pupils your centre expects a report for' : 'Soonest first'}</span>
+              </div>
+              <DueWorklist rows={worklist} mode={folder === 'overdue' ? 'overdue' : 'week'} onStart={startFor} onFind={findDrafts} />
+            </>
+          ) : (
+          <>
           {/* toolbar */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
             <SearchInput value={search} onChange={e => setSearch(e.target.value)} placeholder="Search reports…" style={{ width: 240 }} />
@@ -1426,7 +1435,7 @@ const TeacherReports = () => {
               <option value="az">Name A–Z</option>
             </Select>
             <div style={{ flex: 1 }} />
-            <Segmented options={[{ value: 'grid', label: '▦' }, { value: 'table', label: '☰' }]} value={layout} onChange={setLayout} />
+            <Segmented options={[{ value: 'grid', label: 'Cards' }, { value: 'table', label: 'List' }]} value={layout} onChange={setLayout} />
           </div>
 
           {/* bulk bar */}
@@ -1475,10 +1484,12 @@ const TeacherReports = () => {
               statusMeta={RPT_STATUS_META} />
           )}
           {list.length > 0 && pageCount > 1 && <Pager page={curPage} pageCount={pageCount} onPage={setPage} total={list.length} perPage={PER_PAGE} />}
+          </>
+          )}
         </div>
       </div>
 
-      <NewReportModal open={showNew} onClose={() => setShowNew(false)} store={store}
+      <NewReportModal open={showNew} onClose={() => setShowNew(false)} store={store} prefill={newPrefill}
         onCreated={(n, firstId) => { setShowNew(false); flash(`Created ${n} report(s).`); }} />
 
       {/* move-to-folder modal */}
@@ -1863,7 +1874,7 @@ function computeUpcomingReports(config, store, opts = {}) {
     const dueInDays = rptDaysBetween(today, due);
     const tpl = store.store.templates.find(t => t.id === pol.templateId);
     return {
-      id: s.id, studentId: s.id, name,
+      id: s.id, studentId: s.id, name, classId,
       className: klass ? klass.name : '—', classGroup: klass ? klass.group : '',
       subject: klass ? klass.name : (s.subjects || [])[0] || '—',
       teacher: klass ? klass.teacher : '',
@@ -1981,62 +1992,61 @@ const UpcomingReports = ({ config, store, teacherName, showTeacher = false, limi
   );
 };
 
-// Full-page "Reports due" surface: every due report in order (overdue first), with a
-// grouped/flat toggle and a back button. Opened from the compact sidebar widget or the
-// admin overview card. Pure presentation — reuses computeUpcomingReports.
-const UpcomingReportsPage = ({ config, store, teacherName, showTeacher = false, onBack, onOpenStudent }) => {
-  const [groupBy, setGroupBy] = React.useState('none');   // none | class | subject
-  usePageTrail([{ label: 'Reports due' }]);
-  const rows = computeUpcomingReports(config, store, { teacherName });
-  const overdue = rows.filter(r => r.overdue).length;
-  const soon = rows.filter(r => r.soon || r.dueInDays === 0).length;
-
-  // Group rows; each group keeps the overdue-first order from computeUpcomingReports.
-  const groups = (() => {
-    if (groupBy === 'none') return [{ key: 'all', label: null, items: rows }];
-    const keyOf = (r) => groupBy === 'class' ? (r.classGroup ? `${r.subject} · ${r.classGroup}` : r.subject) : r.subject;
-    const map = new Map();
-    rows.forEach(r => { const k = keyOf(r); if (!map.has(k)) map.set(k, []); map.get(k).push(r); });
-    // groups ordered by their soonest due item
-    return Array.from(map.entries())
-      .map(([label, items]) => ({ key: label, label, items }))
-      .sort((a, b) => a.items[0].due.localeCompare(b.items[0].due));
-  })();
-
+// ─── Due worklists — "Due this week" and "Overdue" as rail filters (decision #51) ──
+// Overdue is a PLACE you click, not a widget: selecting it lists the reports owed
+// in the main column, most-late first — pupil · class · what's owed · how late —
+// through the same due engine as every other surface. Replaced the standalone
+// "Reports due" page and the "Due this week" stat card.
+const rptDueBuckets = (rows) => ({
+  overdue: rows.filter(r => r.overdue).sort((a, b) => a.due.localeCompare(b.due)),
+  week: rows.filter(r => !r.overdue && r.dueInDays <= 7).sort((a, b) => a.due.localeCompare(b.due)),
+});
+const DueWorklist = ({ rows, mode, showTeacher, onStart, onFind }) => {
+  const list = rows;
+  if (!list.length) {
+    return (
+      <Card><EmptyState icon="check" title={mode === 'overdue' ? 'Nothing overdue' : 'Nothing due this week'}
+        message={mode === 'overdue' ? 'Every pupil who is expected a report is up to date.' : 'No pupil you report on is due a report in the next seven days.'} /></Card>
+    );
+  }
   return (
-    <div style={pageFrame()}>
-      <BackLink onClick={onBack} label="Reports" />
-      <PageHeader title="Reports due" subtitle={teacherName ? 'Every student you teach with a report coming up, soonest first' : 'Every student with a report coming up, soonest first'} actions={[
-        overdue > 0 && <Badge key="o" variant="danger"><Icon name="flag" size={11} /> {overdue} overdue</Badge>,
-        soon > 0 && <Badge key="s" variant="warning"><Icon name="clock" size={11} /> {soon} due soon</Badge>,
-        <Badge key="t" variant="accent">{rows.length} total</Badge>,
-      ].filter(Boolean)} />
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-        <span style={{ fontSize: 12.5, color: DS.muted }}>Group by</span>
-        <Segmented value={groupBy} onChange={setGroupBy} options={[
-          { value: 'none', label: 'None' }, { value: 'class', label: 'Class' }, { value: 'subject', label: 'Subject' },
-        ]} />
-      </div>
-
-      {rows.length === 0 ? (
-        <EmptyState icon="check" title="Nothing due" message="No student in scope is expected a report right now, or everyone is up to date." />
-      ) : groups.map(g => (
-        <div key={g.key} style={{ marginBottom: g.label ? 18 : 0 }}>
-          {g.label && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '6px 2px 8px' }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: DS.muted, letterSpacing: '0.04em', textTransform: 'uppercase' }}>{g.label}</span>
-              <span style={{ fontSize: 11, color: DS.faint }}>· {g.items.length}</span>
-            </div>
-          )}
-          <div style={{ background: DS.bg, border: `1px solid ${DS.cardBorder}`, borderRadius: 12, overflow: 'hidden' }}>
-            {g.items.map(r => (
-              <UpcomingReportRow key={r.id} r={r} showTeacher={showTeacher}
-                onClick={onOpenStudent ? () => onOpenStudent(r) : undefined} />
-            ))}
-          </div>
-        </div>
-      ))}
+    <Card>
+      <Table
+        cols={['Pupil', 'Class', 'Report owed', ...(showTeacher ? ['Teacher'] : []), mode === 'overdue' ? { label: 'Days over', align: 'right' } : { label: 'Due', align: 'right' }, { label: '', align: 'right' }]}
+        rows={list.map(r => ({
+          cells: [
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 600, color: DS.text }}>{r.name}</div>
+              <div style={{ fontSize: 11.5, color: DS.faint }}>{r.lastPublished ? `Last report ${rptFmtDue(r.lastPublished)}` : 'No report yet'}</div>
+            </div>,
+            <span style={{ fontSize: 12.5, color: DS.sub }}>{r.className}{r.classGroup ? ` · ${r.classGroup}` : ''}</span>,
+            <span style={{ fontSize: 12.5, color: DS.muted }}>{rptFreqLabel(r.frequency)} · {r.templateName}</span>,
+            ...(showTeacher ? [<span style={{ fontSize: 12.5, color: DS.sub, whiteSpace: 'nowrap' }}>{r.teacher || '—'}</span>] : []),
+            mode === 'overdue'
+              ? <span style={{ fontSize: 13, fontWeight: 700, color: DS.danger, fontVariantNumeric: 'tabular-nums' }}>{Math.abs(r.dueInDays)} day{Math.abs(r.dueInDays) === 1 ? '' : 's'}</span>
+              : <span style={{ fontSize: 12.5, color: DS.sub, whiteSpace: 'nowrap' }}>{r.dueInDays === 0 ? 'Today' : `${rptFmtDue(r.due)} · in ${r.dueInDays}d`}</span>,
+            <span style={{ display: 'inline-flex', gap: 6 }}>
+              {onFind && <Btn variant="ghost" small onClick={() => onFind(r)}>Find drafts</Btn>}
+              {onStart && <Btn variant="secondary" icon="plus" small onClick={() => onStart(r)}>Start report</Btn>}
+            </span>,
+          ],
+        }))} />
+    </Card>
+  );
+};
+// One line, only while something is overdue — then gone.
+const OverdueBanner = ({ overdue, onShow }) => {
+  if (!overdue.length) return null;
+  const worst = Math.max(...overdue.map(r => Math.abs(r.dueInDays)));
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', marginBottom: 14, background: DS.dangerBg, border: `1px solid ${DS.dangerBg}`, borderRadius: 10, fontSize: 13, color: DS.text }}>
+      <Icon name="flag" size={15} color={DS.danger} />
+      <span style={{ flex: 1 }}>
+        <strong>{overdue.length} report{overdue.length === 1 ? ' is' : 's are'} overdue</strong> — the oldest is {worst} day{worst === 1 ? '' : 's'} late.
+      </span>
+      <button onClick={onShow} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600, color: DS.danger, display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: 'inherit' }}>
+        Show {overdue.length === 1 ? 'it' : 'them'} <Icon name="chevron_r" size={13} color={DS.danger} />
+      </button>
     </div>
   );
 };
@@ -2271,7 +2281,8 @@ const AdminTemplateBuilder = ({ template, store, onClose, onSaved }) => {
   const withRequired = (tpl) => ({ ...tpl, sections: Array.from(new Set([...(tpl.sections || []), ...requiredSections])) });
   const [t, setT] = React.useState(withRequired(template ? { ...blankTemplate(), ...template } : blankTemplate()));
   const [newCat, setNewCat] = React.useState('');
-  usePageTrail([{ label: isNew ? 'New template' : (t.name || 'Edit template') }]);
+  // Layer 1: the Reports hub declares "Settings" at layer 0 as the level this returns to.
+  usePageTrail([{ label: isNew ? 'New template' : (t.name || 'Edit template') }], 1);
   const set = (patch) => setT(prev => ({ ...prev, ...patch }));
   const isRequired = (s) => requiredSections.includes(s);
 
@@ -2546,115 +2557,135 @@ function templateSampleReport(t, branding) {
   };
 }
 
-// ─── Admin All-Reports browser (view every report by every teacher) ──────────────
-const AdminReportsBrowser = ({ store }) => {
-  const reports = store.reportsArr;
-  const [reading, setReading] = React.useState(null);
-  const [search, setSearch] = React.useState('');
-  const [teacher, setTeacher] = React.useState('all');
-  const [subject, setSubject] = React.useState('all');
-  const [year, setYear] = React.useState('all');
-  const [klass, setKlass] = React.useState('all');
-  const [status, setStatus] = React.useState('all');
-  const [sort, setSort] = React.useState('newest');
+// ─── Admin Reports list (every report by every teacher) ──────────────────────────
+// The rail picks a state view and the toolbar narrows by who/what. Both live in
+// the hub's `filters` so they survive opening a report and coming back.
+const RPT_ADMIN_VIEWS = [
+  { id: 'active',    icon: 'file',    label: 'All reports',  test: r => r.status !== 'archived' },
+  { id: 'draft',     icon: 'edit',    label: 'Drafts',       test: r => r.status === 'draft' },
+  { id: 'published', icon: 'check',   label: 'Published',    test: r => r.status === 'published' },
+  { id: 'unread',    icon: 'eye',     label: 'Not yet read', test: r => r.status === 'published' && !(r.acknowledgement && r.acknowledgement.ack) },
+  { id: 'archived',  icon: 'archive', label: 'Archived',     test: r => r.status === 'archived' },
+];
+const RPT_ADMIN_FILTERS = { view: 'active', search: '', teacher: 'all', subject: 'all', year: 'all', klass: 'all' };
+const rptUpdated = (r) => r.datePublished || r.dateModified || r.dateCreated || '';
 
+// The shared Table sorts on a cell's text, falling back to its `value` prop when it
+// has no children, so this cell sorts by the ISO date rather than by "6 Apr 2026".
+const RptDateCell = ({ value }) => (
+  <span style={{ fontSize: 12.5, color: DS.muted, whiteSpace: 'nowrap' }}>
+    {value ? new Date(value + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}
+  </span>
+);
+
+// Left rail: the state views (styled like the teacher page's folder rail) with
+// "Reports due" as its own card underneath.
+const AdminReportsRail = ({ reports, view, onView, config, store, onViewDue, due }) => (
+  <div style={{ display: 'flex', flexDirection: 'column', gap: 16, position: 'sticky', top: 16 }}>
+    <div style={{ background: DS.bg, border: `1px solid ${DS.cardBorder}`, borderRadius: 12, padding: 12 }}>
+      {/* Worklists first (decision #51) — reports OWED, not report records. */}
+      {[{ id: 'due_week', icon: 'clock', label: 'Due this week', n: due.week.length }, { id: 'due_overdue', icon: 'flag', label: 'Overdue', n: due.overdue.length, danger: true }].map(v => {
+        const on = view === v.id;
+        const red = v.danger && v.n > 0;
+        return (
+          <button key={v.id} onClick={() => onView(v.id)} style={{
+            display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left',
+            padding: '7px 10px', borderRadius: 7, border: 'none', cursor: 'pointer',
+            background: on ? DS.accentLight : 'transparent', color: on ? DS.accent : DS.sub,
+            fontSize: 13, fontWeight: on ? 600 : 400 }}>
+            <Icon name={v.icon} size={15} color={red ? DS.danger : on ? DS.accent : DS.muted} />
+            <span style={{ flex: 1 }}>{v.label}</span>
+            <span style={{ fontSize: 11, color: red ? DS.danger : DS.faint, fontWeight: red ? 700 : 400, fontVariantNumeric: 'tabular-nums' }}>{v.n}</span>
+          </button>
+        );
+      })}
+      <div style={{ height: 1, background: DS.border, margin: '8px 4px' }} />
+      {RPT_ADMIN_VIEWS.map(v => {
+        const on = view === v.id;
+        return (
+          <button key={v.id} onClick={() => onView(v.id)} style={{
+            display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left',
+            padding: '7px 10px', borderRadius: 7, border: 'none', cursor: 'pointer',
+            background: on ? DS.accentLight : 'transparent', color: on ? DS.accent : DS.sub,
+            fontSize: 13, fontWeight: on ? 600 : 400 }}>
+            <Icon name={v.icon} size={15} color={on ? DS.accent : DS.muted} />
+            <span style={{ flex: 1 }}>{v.label}</span>
+            <span style={{ fontSize: 11, color: DS.faint, fontVariantNumeric: 'tabular-nums' }}>{reports.filter(v.test).length}</span>
+          </button>
+        );
+      })}
+    </div>
+    <UpcomingReports config={config} store={store} showTeacher compact limit={5} onView={onViewDue} />
+  </div>
+);
+
+const AdminReportsList = ({ reports, filters, setFilters, onOpen }) => {
+  const set = (patch) => setFilters(f => ({ ...f, ...patch }));
   const uniq = (key) => Array.from(new Set(reports.map(r => r[key]).filter(Boolean))).sort();
-  const teachers = uniq('teacher'), subjects = uniq('subject'), years = uniq('year'), classes = uniq('className');
+  const view = RPT_ADMIN_VIEWS.find(v => v.id === filters.view) || RPT_ADMIN_VIEWS[0];
+  const q = filters.search.trim().toLowerCase();
+  const list = reports.filter(r => view.test(r) &&
+      (filters.teacher === 'all' || r.teacher === filters.teacher) &&
+      (filters.subject === 'all' || r.subject === filters.subject) &&
+      (filters.year === 'all' || r.year === filters.year) &&
+      (filters.klass === 'all' || r.className === filters.klass) &&
+      (!q || [r.title, r.studentName, r.subject, r.teacher, r.className].join(' ').toLowerCase().includes(q)))
+    // Newest first until a column header is clicked.
+    .sort((a, b) => rptUpdated(b).localeCompare(rptUpdated(a)));
+  const narrowed = ['teacher', 'subject', 'year', 'klass'].filter(k => filters[k] !== 'all').length + (q ? 1 : 0);
+  const clear = () => set({ search: '', teacher: 'all', subject: 'all', year: 'all', klass: 'all' });
+  // A narrower list starts back on page one.
+  const [page, setPage] = React.useState(0);
+  const filterKey = JSON.stringify(filters);
+  React.useEffect(() => { setPage(0); }, [filterKey]);
 
-  let list = reports.filter(r =>
-    (teacher === 'all' || r.teacher === teacher) &&
-    (subject === 'all' || r.subject === subject) &&
-    (year === 'all' || r.year === year) &&
-    (klass === 'all' || r.className === klass) &&
-    (status === 'all' || r.status === status));
-  if (search.trim()) {
-    const q = search.toLowerCase();
-    list = list.filter(r => (r.title + r.studentName + r.subject + r.teacher + r.className).toLowerCase().includes(q));
-  }
-  list = list.slice().sort((a, b) => {
-    if (sort === 'student') return a.studentName.localeCompare(b.studentName);
-    if (sort === 'teacher') return a.teacher.localeCompare(b.teacher);
-    const da = a.datePublished || a.dateModified || a.dateCreated, db = b.datePublished || b.dateModified || b.dateCreated;
-    return sort === 'oldest' ? da.localeCompare(db) : db.localeCompare(da);
-  });
-
-  const branding = reportBrandingResolved(store.store.config.branding);   // centre identity from centreProfile (§1)
-  const resetFilters = () => { setTeacher('all'); setSubject('all'); setYear('all'); setKlass('all'); setStatus('all'); setSearch(''); };
-  const activeFilters = [teacher, subject, year, klass, status].filter(v => v !== 'all').length + (search.trim() ? 1 : 0);
-  usePageTrail(reading
-    ? [{ label: (store.reportsArr.find(x => x.id === reading) || reading).studentName || 'Report' }]
-    : []);
-
-  if (reading) {
-    const r = store.reportsArr.find(x => x.id === reading) || reading;
-    return (
-      <div>
-        <BackLink onClick={() => setReading(null)} label="All reports" />
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18 }}>
-          <div style={{ flex: 1 }} />
-          <Badge variant={RPT_STATUS_META[r.status].variant}>{RPT_STATUS_META[r.status].label}</Badge>
-          <Btn variant="secondary" icon="print" small onClick={() => printReportPDF(r, branding)}>Export PDF</Btn>
-        </div>
-        <ReportReadingView report={r} tags={store.store.tags} />
-      </div>
-    );
-  }
-
-  const Filter = ({ value, onChange, all, opts }) => (
-    <Select value={value} onChange={e => onChange(e.target.value)} style={{ minWidth: 120 }}>
+  const filter = (k, all, opts) => (
+    <Select value={filters[k]} onChange={e => set({ [k]: e.target.value })} style={{ minWidth: 120 }}>
       <option value="all">{all}</option>
       {opts.map(o => <option key={o} value={o}>{o}</option>)}
     </Select>
   );
 
   return (
-    <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
-        <SearchInput value={search} onChange={e => setSearch(e.target.value)} placeholder="Search student, teacher, subject, class…" style={{ minWidth: 260, maxWidth: 360 }} />
-        <Filter value={teacher} onChange={setTeacher} all="All teachers" opts={teachers} />
-        <Filter value={subject} onChange={setSubject} all="All subjects" opts={subjects} />
-        <Filter value={year} onChange={setYear} all="All years" opts={years} />
-        <Filter value={klass} onChange={setKlass} all="All classes" opts={classes} />
-        <Select value={status} onChange={e => setStatus(e.target.value)} style={{ minWidth: 120 }}>
-          <option value="all">All statuses</option>
-          {Object.keys(RPT_STATUS_META).map(s => <option key={s} value={s}>{RPT_STATUS_META[s].label}</option>)}
-        </Select>
-        <Select value={sort} onChange={e => setSort(e.target.value)} style={{ minWidth: 130 }}>
-          <option value="newest">Newest first</option><option value="oldest">Oldest first</option>
-          <option value="student">By student</option><option value="teacher">By teacher</option>
-        </Select>
-        {activeFilters > 0 && <Btn variant="ghost" small icon="x" onClick={resetFilters}>Clear ({activeFilters})</Btn>}
+    <div style={{ minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+        <SearchInput value={filters.search} onChange={e => set({ search: e.target.value })} placeholder="Search student, teacher, subject, class…" style={{ flex: '0 1 300px', minWidth: 220 }} />
+        {filter('teacher', 'All teachers', uniq('teacher'))}
+        {filter('subject', 'All subjects', uniq('subject'))}
+        {filter('year', 'All years', uniq('year'))}
+        {filter('klass', 'All classes', uniq('className'))}
+        {narrowed > 0 && <Btn variant="ghost" small icon="x" onClick={clear}>Clear ({narrowed})</Btn>}
+        <span style={{ marginLeft: 'auto', fontSize: 12.5, color: DS.faint, fontVariantNumeric: 'tabular-nums' }}>
+          {list.length} {list.length === 1 ? 'report' : 'reports'}
+        </span>
       </div>
 
-      <Card title={`All reports`} actions={[<Badge key="n" variant="accent">{list.length} of {reports.length}</Badge>]}>
+      <Card>
         {list.length === 0 ? (
-          <EmptyState icon="file" title="No reports match" message="Try clearing some filters." action={<Btn variant="secondary" small onClick={resetFilters}>Clear filters</Btn>} />
+          <EmptyState icon="file" title="No reports match"
+            message={narrowed ? 'Try clearing some filters.' : `Nothing under “${view.label}” yet.`}
+            action={narrowed ? <Btn variant="secondary" small onClick={clear}>Clear filters</Btn> : null} />
         ) : (
-          <div>
-            <div style={{ display: 'flex', padding: '10px 20px', borderBottom: `1px solid ${DS.border}`, background: DS.surface }}>
-              {[['Student', 2], ['Subject', 1.4], ['Class', 1.8], ['Teacher', 1.6], ['Period', 1.4], ['Status', 1], ['', 0.5]].map(([c, fl], i) => (
-                <span key={i} style={{ flex: fl, fontSize: 11, fontWeight: 700, color: DS.muted, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{c}</span>
-              ))}
-            </div>
-            {list.map(r => (
-              <div key={r.id} onClick={() => setReading(r.id)} style={{ display: 'flex', alignItems: 'center', padding: '11px 20px', borderBottom: `1px solid ${DS.border}`, cursor: 'pointer' }}
-                onMouseEnter={e => e.currentTarget.style.background = DS.surface} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                <span style={{ flex: 2, display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <Avatar name={r.studentName} size={28} />
-                  <span style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>{r.studentName}</span>
-                </span>
-                <span style={{ flex: 1.4, display: 'flex', alignItems: 'center', gap: 7 }}>
-                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: r.subjectColor || DS.accent }} />
-                  <span style={{ fontSize: 12.5, color: DS.sub }}>{r.subject}</span>
-                </span>
-                <span style={{ flex: 1.8, fontSize: 12.5, color: DS.muted }}>{r.className}</span>
-                <span style={{ flex: 1.6, fontSize: 12.5, color: DS.sub }}>{r.teacher}</span>
-                <span style={{ flex: 1.4, fontSize: 12.5, color: DS.muted }}>{r.period}</span>
-                <span style={{ flex: 1 }}><Badge variant={RPT_STATUS_META[r.status].variant}>{RPT_STATUS_META[r.status].label}</Badge></span>
-                <span style={{ flex: 0.5, textAlign: 'right', color: DS.faint }}><Icon name="chevron_r" size={15} /></span>
-              </div>
-            ))}
-          </div>
+          <Table page={page} onPageChange={setPage}
+            cols={['Student', 'Subject', 'Class', 'Teacher', 'Period', 'Updated', 'Status']}
+            rows={list.map(r => ({
+              onClick: () => onOpen(r.id),
+              cells: [
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 600, color: DS.text }}>{r.studentName}</div>
+                  {r.year && <div style={{ fontSize: 11.5, color: DS.faint }}>{r.year}</div>}
+                </div>,
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5, color: DS.sub, whiteSpace: 'nowrap' }}>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: r.subjectColor || DS.accent, flexShrink: 0 }} />
+                  {r.subject}
+                </span>,
+                <span style={{ fontSize: 12.5, color: DS.muted }}>{r.className}</span>,
+                <span style={{ fontSize: 12.5, color: DS.sub, whiteSpace: 'nowrap' }}>{r.teacher}</span>,
+                <span style={{ fontSize: 12.5, color: DS.muted, whiteSpace: 'nowrap' }}>{r.period}</span>,
+                <RptDateCell value={rptUpdated(r)} />,
+                <StatusPill status={r.status} tone={RPT_STATUS_META[r.status].variant}>{RPT_STATUS_META[r.status].label}</StatusPill>,
+              ],
+            }))} />
         )}
       </Card>
     </div>
@@ -2865,7 +2896,7 @@ const AdminReportsSettings = ({ store, onEditTemplate, savedToast, tab, setTab }
 
 // ─── Admin operational reporting (overview + generate) ──────────────────────────
 // Centre-wide report types driven live from the existing admin data
-// (window.allStudents) + the reports store + REPORTS_INVOICES.
+// (window.allStudents) + the reports store + the invoice ledger.
 // Internal staff analytics — a different product from the per-student progress
 // reports teachers write. Descriptions say who each export is for.
 const ADMIN_REPORT_TYPES = [
@@ -2882,17 +2913,22 @@ function adminStudentsData() {
 function avg(arr, key) { return arr.length ? Math.round(arr.reduce((s, x) => s + (key ? x[key] : x), 0) / arr.length) : 0; }
 function money(n) { return '£' + n.toLocaleString('en-GB'); }
 
+// The Financial Overview reads the ONE invoice ledger (window.invLedgerRows, the
+// same store and status derivation the Invoices page uses) — there is no second
+// financial list, so these totals always reconcile with the ledger.
 function financialTotals() {
-  const inv = (typeof REPORTS_INVOICES !== 'undefined') ? REPORTS_INVOICES : [];
-  const sum = (f) => inv.filter(f).reduce((s, i) => s + i.amount, 0);
+  const rows = (window.invLedgerRows ? window.invLedgerRows(r => r.status !== 'void') : []);
+  const sum = (f) => rows.reduce((s, r) => s + f(r), 0);
+  const name = (r) => (r.studentIds.map(id => window.invStudentName ? window.invStudentName(id) : id).join(', ')) || (r.family ? r.family.name : '—');
   return {
-    invoices: inv,
-    billed:       sum(() => true),
-    paid:         sum(i => i.status === 'paid'),
-    outstanding:  sum(i => i.status !== 'paid'),
-    overdue:      sum(i => i.status === 'overdue'),
-    paidCount:    inv.filter(i => i.status === 'paid').length,
-    overdueCount: inv.filter(i => i.status === 'overdue').length,
+    rows,
+    invoices: rows.map(r => ({ number: r.number, student: name(r), plan: r.classes.join(', ') || '—', amount: r.totals.total, outstanding: r.totals.outstanding, status: r.status })),
+    billed:       sum(r => r.totals.total),
+    paid:         sum(r => r.totals.paid),
+    outstanding:  sum(r => r.totals.outstanding),
+    overdue:      sum(r => r.totals.overdueAmount),
+    paidCount:    rows.filter(r => r.status === 'paid').length,
+    overdueCount: rows.filter(r => r.status === 'overdue').length,
   };
 }
 
@@ -2930,7 +2966,7 @@ function buildAdminReport(type, store, f) {
         ['Students tracked', String(students.length)],
       ],
       columns: ['Student', 'Year', 'HW completion', 'Avg score'],
-      rows: students.map(s => [s.name, s.year, s.hw + '%', s.score + '%']),
+      rows: students.map(s => [s.name, s.year, s.hw + '%', window.studentAttainment(s) == null ? '—' : window.studentAttainment(s) + '%']),
     };
   }
   if (type === 'reporting') {
@@ -2976,8 +3012,8 @@ function buildAdminReport(type, store, f) {
         ['Outstanding', money(fin.outstanding)],
         ['Overdue', money(fin.overdue)],
       ],
-      columns: ['Student', 'Plan', 'Amount', 'Status'],
-      rows: fin.invoices.map(i => [i.student, i.plan, money(i.amount), i.status[0].toUpperCase() + i.status.slice(1)]),
+      columns: ['Invoice', 'Student', 'Classes', 'Amount', 'Outstanding', 'Status'],
+      rows: fin.invoices.map(i => [i.number, i.student, i.plan, money(i.amount), money(i.outstanding), i.status[0].toUpperCase() + i.status.slice(1)]),
     };
   }
   // progress (default)
@@ -2992,7 +3028,7 @@ function buildAdminReport(type, store, f) {
       ['Students', String(students.length)],
     ],
     columns: ['Student', 'Year', 'Avg score', 'Attendance', 'Status'],
-    rows: students.map(s => [s.name, s.year, s.score + '%', s.attendance + '%', window.centreMetrics.isAtRisk(s) ? 'At risk' : 'On track']),
+    rows: students.map(s => [s.name, s.year, window.studentAttainment(s) == null ? '—' : window.studentAttainment(s) + '%', s.attendance + '%', window.centreMetrics.isAtRisk(s) ? 'At risk' : 'On track']),
   };
 }
 
@@ -3038,86 +3074,6 @@ function printCentreReport(report, branding, period) {
   if (!w) { alert('Please allow pop-ups to export the report.'); return; }
   w.document.open(); w.document.write(html); w.document.close();
 }
-
-const AdminReportsOverview = ({ store, onGenerate, onBrowse, onViewDue }) => {
-  const students = adminStudentsData();
-  const reports = store.reportsArr;
-  const f = financialTotals();
-  const atRisk = students.filter(s => window.centreMetrics.isAtRisk(s));   // one definition (§6)
-  const pub = reports.filter(r => r.status === 'published');
-  const drafts = reports.filter(r => r.status === 'draft');
-
-  const yearGroups = Array.from(new Set(students.map(s => s.year))).sort();
-
-  return (
-    <div>
-      <StatBand style={{ marginBottom: 20 }} stats={[
-        { label: 'Average score', value: avg(students, 'score') + '%', sub: `${students.length} students` },
-        { label: 'Average attendance', value: avg(students, 'attendance') + '%', sub: 'this term' },
-        { label: 'At-risk students', value: atRisk.length, sub: 'need support', tone: atRisk.length ? DS.danger : DS.success },
-        { label: 'Outstanding fees', value: money(f.outstanding), sub: `${f.overdueCount} overdue`, tone: f.overdueCount ? DS.warning : undefined },
-      ]} />
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 20, alignItems: 'start' }}>
-        {/* Upcoming reports across all teachers — driven by the reporting rules */}
-        <UpcomingReports config={store.store.config} store={store} showTeacher limit={6} onView={onViewDue} />
-
-        {/* Reporting status */}
-        <Card title="Progress reports" actions={[<Btn key="b" variant="ghost" icon="grid" small onClick={onBrowse}>View all reports</Btn>]}>
-          <div style={{ padding: '16px 20px' }}>
-            {[['Published', pub.length, DS.success], ['Drafts awaiting completion', drafts.length, DS.warning], ['Acknowledged by students', pub.filter(r => r.acknowledgement && r.acknowledgement.ack).length, DS.accent]].map(([l, v, c]) => (
-              <div key={l} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderBottom: `1px solid ${DS.border}` }}>
-                <span style={{ width: 8, height: 8, borderRadius: '50%', background: c }} />
-                <span style={{ flex: 1, fontSize: 13, color: DS.sub }}>{l}</span>
-                <span style={{ fontSize: 15, fontWeight: 700, color: DS.text }}>{v}</span>
-              </div>
-            ))}
-            <Btn variant="ghost" icon="file" small onClick={() => onGenerate('reporting')}>Generate reporting activity report</Btn>
-          </div>
-        </Card>
-
-        {/* Attendance by year */}
-        <Card title="Attendance by year group">
-          <div style={{ padding: '16px 20px' }}>
-            {yearGroups.map(yr => {
-              const g = students.filter(s => s.year === yr);
-              const a = avg(g, 'attendance');
-              const col = a >= 90 ? DS.success : a >= 80 ? DS.warning : DS.danger;
-              return (
-                <div key={yr} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0' }}>
-                  <span style={{ width: 48, fontSize: 12.5, color: DS.sub, fontWeight: 600 }}>{yr}</span>
-                  <span style={{ flex: 1, height: 8, background: DS.surface, borderRadius: 4, overflow: 'hidden' }}>
-                    <span style={{ display: 'block', height: '100%', width: a + '%', background: col }} />
-                  </span>
-                  <span style={{ width: 38, fontSize: 12.5, fontWeight: 700, color: col, textAlign: 'right' }}>{a}%</span>
-                </div>
-              );
-            })}
-          </div>
-        </Card>
-      </div>
-
-      {/* Quick generate strip */}
-      <Card title="Generate a report" actions={[<Btn key="g" variant="ghost" icon="chevron_r" small onClick={() => onGenerate('progress')}>Open generator</Btn>]}>
-        <div style={{ padding: '16px 20px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
-          {ADMIN_REPORT_TYPES.map(rt => (
-            <button key={rt.id} onClick={() => onGenerate(rt.id)} style={{
-              display: 'flex', alignItems: 'flex-start', gap: 12, padding: '14px', textAlign: 'left',
-              border: `1px solid ${DS.cardBorder}`, borderRadius: 10, background: DS.bg, cursor: 'pointer' }}>
-              <div style={{ width: 34, height: 34, borderRadius: 8, background: DS.accentLight, color: DS.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                <Icon name={rt.icon} size={16} />
-              </div>
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>{rt.label}</div>
-                <div style={{ fontSize: 11.5, color: DS.muted, marginTop: 2, lineHeight: 1.45 }}>{rt.desc}</div>
-              </div>
-            </button>
-          ))}
-        </div>
-      </Card>
-    </div>
-  );
-};
 
 const AdminReportsGenerate = ({ store, initialType }) => {
   const [type, setType] = React.useState(initialType || 'progress');
@@ -3254,23 +3210,41 @@ const AdminReportsGenerate = ({ store, initialType }) => {
   );
 };
 
-// ─── Admin Reports hub (Overview / Generate / Settings) ─────────────────────────
-// The section (overview | browse | generate | settings) is driven by the sidebar
-// dropdown via the `section` prop. `goTab` keeps the sidebar's active sub-item in
-// sync when the page navigates between sections internally (e.g. a "Generate" CTA).
+// ─── Admin Reports (one page) ────────────────────────────────────────────────────
+// One nav item, no sub-sections. The page is the headline figures, then a left
+// rail (state views + "Reports due") beside every report in the centre — the same
+// shape as the teacher's Reports page. Settings is a header button onto its own
+// full page, routed as `reports:settings` so deep links still land. A report,
+// "Reports due" and the template builder are full-page takeovers that name
+// themselves in the breadcrumb. index.html aliases the retired reports:overview /
+// reports:browse ids to `reports`, and reports:generate to the Analytics page.
 const AdminReportsConfig = ({ section }) => {
   const store = useReportsStore();
-  const tab = section || 'overview';
-  const goTab = (t) => { window.__navigate ? window.__navigate('admin', 'reports:' + t) : null; };
-  const [genType, setGenType] = React.useState('progress');
+  const onSettings = section === 'settings';
+  const nav = (pg) => { if (window.__navigate) window.__navigate('admin', pg); };
   const [tplEdit, setTplEdit] = React.useState(undefined);   // undefined=closed, null=new, obj=editing
   const [savedToast, setSavedToast] = React.useState(false);
   const [settingsTab, setSettingsTab] = React.useState('rules');  // lives here so it survives the template builder
-  const [dueOpen, setDueOpen] = React.useState(false);       // full "Reports due" page
-  const goGenerate = (t) => { setGenType(t); goTab('generate'); };
+  const [reading, setReading] = React.useState(null);        // id of the report open in the read view
+  const [filters, setFilters] = React.useState(RPT_ADMIN_FILTERS);  // lives here so it survives reading a report
+  // Moving between the list and Settings closes whichever takeover was open, and so
+  // does clicking Reports (sidebar or breadcrumb) while already on it.
+  const closeTakeovers = () => { setTplEdit(undefined); setReading(null); };
+  React.useEffect(closeTakeovers, [section]);
+  React.useEffect(() => {
+    const onRenav = (e) => { if (String(e.detail || '').split(':')[0] === 'reports') closeTakeovers(); };
+    window.addEventListener('klasio:renav', onRenav);
+    return () => window.removeEventListener('klasio:renav', onRenav);
+  }, []);
 
-  // The template builder is its own full-page surface — replace the whole hub
-  // (no PageHeader) so it reads as a separate page.
+  const openReport = reading ? store.reportsArr.find(r => r.id === reading) : null;
+  const openAnalytics = (t) => { window.__analyticsType = t; nav('analytics'); };
+  // The builder names its template at layer 1; "Settings" (layer 0) is the level
+  // it returns to.
+  usePageTrail(tplEdit !== undefined || onSettings ? [{ label: 'Settings', onClick: () => setTplEdit(undefined) }]
+    : openReport ? [{ label: openReport.studentName || 'Report' }]
+    : []);
+
   if (tplEdit !== undefined) {
     return (
       <AdminTemplateBuilder template={tplEdit || null} store={store}
@@ -3279,32 +3253,111 @@ const AdminReportsConfig = ({ section }) => {
     );
   }
 
-  // "Reports due" is also its own full-page surface (all teachers, soonest first).
-  if (dueOpen) {
+  if (onSettings) {
     return (
-      <UpcomingReportsPage config={store.store.config} store={store} showTeacher
-        onBack={() => setDueOpen(false)}
-        onOpenStudent={() => { setDueOpen(false); goTab('browse'); }} />
+      <div style={pageFrame()}>
+        <BackLink onClick={() => nav('reports')} label="Reports" />
+        <PageHeader title="Report settings" subtitle="Reporting rules, templates and centre standards — and how reports look, who can change them and who is reminded" />
+        <AdminReportsSettings store={store} onEditTemplate={setTplEdit} savedToast={savedToast} tab={settingsTab} setTab={setSettingsTab} />
+      </div>
     );
   }
 
-  const titles = {
-    overview: 'Centre-wide reporting — generate, export and configure',
-    browse:   'Browse, filter and export every report across the centre',
-    generate: 'Generate progress, attendance and performance reports',
-    settings: 'Templates, reporting rules and centre standards',
-  };
+  if (openReport) {
+    const branding = reportBrandingResolved(store.store.config.branding);   // centre identity from centreProfile (§1)
+    const meta = RPT_STATUS_META[openReport.status];
+    return (
+      <div style={pageFrame()}>
+        <BackLink onClick={() => setReading(null)} label="Reports" />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18 }}>
+          <div style={{ flex: 1 }} />
+          <Badge variant={meta.variant}>{meta.label}</Badge>
+          <Btn variant="secondary" icon="print" small onClick={() => printReportPDF(openReport, branding)}>Export PDF</Btn>
+        </div>
+        <ReportReadingView report={openReport} tags={store.store.tags} />
+      </div>
+    );
+  }
+
+  const reports = store.reportsArr;
+  const pub = reports.filter(r => r.status === 'published');
+  const drafts = reports.filter(r => r.status === 'draft');
+  const unread = pub.filter(r => !(r.acknowledgement && r.acknowledgement.ack)).length;
+  const covered = new Set(reports.map(r => r.studentId || r.studentName).filter(Boolean)).size;
+  const due = rptDueBuckets(computeUpcomingReports(store.store.config, store));
+  const overdue = due.overdue.length;
+  const studentCount = adminStudentsData().length;
+  const pickView = (v) => setFilters(f => ({ ...f, view: v }));
+  const worklist = filters.view === 'due_overdue' ? due.overdue : filters.view === 'due_week' ? due.week : null;
 
   return (
     <div style={pageFrame()}>
-      <PageHeader title="Reports" subtitle={titles[tab] || titles.overview} />
+      <PageHeader title="Reports" subtitle="Student reports across the centre — what’s due, drafted, published and read" actions={[
+        <Btn key="a" variant="secondary" icon="chart" small onClick={() => openAnalytics('reporting')}>Activity export</Btn>,
+        <Btn key="s" variant="secondary" icon="settings" small onClick={() => nav('reports:settings')}>Settings</Btn>,
+      ]} />
 
-      {tab === 'overview' && <AdminReportsOverview store={store} onGenerate={goGenerate} onBrowse={() => goTab('browse')} onViewDue={() => setDueOpen(true)} />}
-      {tab === 'browse' && <AdminReportsBrowser store={store} />}
-      {tab === 'generate' && <AdminReportsGenerate store={store} initialType={genType} />}
-      {tab === 'settings' && <AdminReportsSettings store={store} onEditTemplate={setTplEdit} savedToast={savedToast} tab={settingsTab} setTab={setSettingsTab} />}
+      {/* Overdue leads: it's the one figure that asks the admin to act. Each figure
+          opens the view that explains it. */}
+      <StatBand style={{ marginBottom: 22 }} stats={[
+        { label: 'Overdue', value: overdue, sub: overdue ? 'past their due date' : 'everyone up to date',
+          tone: overdue ? DS.danger : undefined, onClick: () => pickView('due_overdue'), hint: 'Show the overdue worklist' },
+        { label: 'Drafts', value: drafts.length, sub: 'awaiting completion',
+          tone: drafts.length ? DS.warning : undefined, onClick: () => pickView('draft') },
+        { label: 'Published', value: pub.length, sub: 'reports this term', onClick: () => pickView('published') },
+        { label: 'Read by students', value: `${pub.length - unread}/${pub.length}`,
+          sub: unread ? `${unread} not yet read` : 'all acknowledged', onClick: () => pickView('unread') },
+        { label: 'Students covered', value: `${covered}/${studentCount}`, sub: 'have at least one report' },
+      ]} />
+
+      <div style={{ display: 'grid', gridTemplateColumns: '288px minmax(0, 1fr)', gap: 24, alignItems: 'start' }}>
+        <AdminReportsRail reports={reports} view={filters.view} onView={pickView} due={due}
+          config={store.store.config} store={store} onViewDue={() => pickView(due.overdue.length ? 'due_overdue' : 'due_week')} />
+        {worklist ? (
+          <div style={{ minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 12 }}>
+              <span style={{ fontSize: 15, fontWeight: 700, color: DS.text }}>{filters.view === 'due_overdue' ? 'Overdue reports' : 'Due in the next 7 days'}</span>
+              <span style={{ fontSize: 12.5, color: DS.muted }}>{filters.view === 'due_overdue' ? 'Most late first, across the centre' : 'Soonest first, across the centre'}</span>
+            </div>
+            <DueWorklist rows={worklist} mode={filters.view === 'due_overdue' ? 'overdue' : 'week'} showTeacher
+              onFind={(r) => setFilters({ ...RPT_ADMIN_FILTERS, search: r.name })} />
+          </div>
+        ) : (
+          <div style={{ minWidth: 0 }}>
+            <OverdueBanner overdue={due.overdue} onShow={() => pickView('due_overdue')} />
+            <AdminReportsList reports={reports} filters={filters} setFilters={setFilters} onOpen={setReading} />
+          </div>
+        )}
+      </div>
     </div>
   );
 };
 
-Object.assign(window, { useReportsStore, printReportPDF, printCentreReport, ReportReadingView, ReportEditor, TeacherReports, StudentReports, AdminReportsConfig, AdminReportsSettings, AdminReportingRules, resolvePolicy, resolveForStudent, ruleLabel, reportClasses, reportStudents, reportStudentLabel, reportClassById, computeUpcomingReports, UpcomingReports, UpcomingReportsPage, templateAvailableFor, rptSanitizeHTML, RPT_REQUIREMENT, RPT_REQ_META, RPT_FREQ, rptFreqLabel, rptFreqDays, RatingValue, RatingEditor, RichTextEditor, EditList, RptTag, SectionTitle, RPT_FOURTIER, RPT_RATING_LABELS, RPT_SECTION_LABELS, RPT_STATUS_META });
+// ─── Analytics (centre-wide figures + exports) ───────────────────────────────────
+// Its own nav item (Operations → Analytics), split out of Reports: these are
+// generated-on-demand exports for the centre's staff — progress, attendance,
+// homework, reporting activity and the Financial Overview — not pupil-facing
+// reports. Admin-only, the same as invoices. Every figure is derived from the
+// live stores (the Financial Overview from the one invoice ledger).
+// Production: Phase 12 — Analytics Exports (GET /v1/exports/:key).
+const AdminAnalyticsPage = () => {
+  const store = useReportsStore();
+  const [initialType] = React.useState(() => { const t = window.__analyticsType || 'progress'; window.__analyticsType = null; return t; });
+  const students = adminStudentsData();
+  const f = financialTotals();
+  const atRisk = students.filter(s => window.centreMetrics.isAtRisk(s));   // one definition (§6)
+  return (
+    <div style={pageFrame()}>
+      <PageHeader title="Analytics" subtitle="Centre-wide figures and exports — progress, attendance, homework, reporting activity and finance" />
+      <StatBand style={{ marginBottom: 20 }} stats={[
+        { label: 'Average score', value: avg(students, 'score') + '%', sub: `${students.length} students` },
+        { label: 'Average attendance', value: avg(students, 'attendance') + '%', sub: 'this term' },
+        { label: 'At-risk students', value: atRisk.length, sub: 'need support', tone: atRisk.length ? DS.danger : DS.success },
+        { label: 'Outstanding fees', value: money(f.outstanding), sub: `${f.overdueCount} overdue · from the invoice ledger`, tone: f.overdueCount ? DS.warning : undefined },
+      ]} />
+      <AdminReportsGenerate store={store} initialType={initialType} />
+    </div>
+  );
+};
+
+Object.assign(window, { AdminAnalyticsPage, useReportsStore, printReportPDF, printCentreReport, ReportReadingView, ReportEditor, TeacherReports, StudentReports, AdminReportsConfig, AdminReportsSettings, AdminReportingRules, resolvePolicy, resolveForStudent, ruleLabel, reportClasses, reportStudents, reportStudentLabel, reportClassById, computeUpcomingReports, UpcomingReports, DueWorklist, templateAvailableFor, rptSanitizeHTML, RPT_REQUIREMENT, RPT_REQ_META, RPT_FREQ, rptFreqLabel, rptFreqDays, RatingValue, RatingEditor, RichTextEditor, EditList, RptTag, SectionTitle, RPT_FOURTIER, RPT_RATING_LABELS, RPT_SECTION_LABELS, RPT_STATUS_META });

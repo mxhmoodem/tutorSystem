@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<!--
+  Klasio — page not found.
+  Standalone on purpose: no React, no Babel, no app scripts. It has to render at
+  ANY address — Vercel serves this file for every path that doesn't exist — and
+  instantly, not after the app's ~4s in-browser compile. So every URL in it is
+  absolute (/assets/…, /) and there is a text fallback if the logo can't load.
+  Colours and fonts mirror the app's DS tokens and brand accent (#43b190).
+  Brand strings use the prototype's klasio.io (renamed at the Phase 18 cutover).
+  Opened directly as /404.html it shows a preview strip; the owner console's
+  Platform Controls → Public pages links here.
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex" />
+  <title>Page not found · Klasio</title>
+  <link rel="icon" type="image/png" href="/assets/logo-icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --accent: #43b190; --accent-dark: #2f8f72; --accent-light: #eaf7f2; --accent-border: #b8e3d4;
+      --text: #111827; --sub: #374151; --muted: #6B7280; --faint: #9CA3AF;
+      --border: #E5E7EB; --surface: #F9FAFB; --canvas: #F3F4F6; --bg: #FFFFFF;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+      color: var(--text); background: linear-gradient(180deg, var(--canvas) 0%, var(--bg) 70%);
+      min-height: 100vh; display: flex; flex-direction: column;
+      -webkit-font-smoothing: antialiased;
+    }
+    .preview {
+      background: #1F2937; color: #E5E7EB; font-size: 12.5px; line-height: 1.45;
+      padding: 8px 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    }
+    .preview[hidden] { display: none; }
+    .preview .tag {
+      font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase;
+      background: rgba(255,255,255,0.14); color: #F9FAFB; padding: 2px 8px; border-radius: 5px;
+    }
+    .preview .grow { flex: 1; min-width: 220px; }
+    .preview a { color: #fff; font-weight: 600; }
+    main {
+      flex: 1; width: 100%; max-width: 520px; margin: 0 auto; padding: 40px 16px;
+      display: flex; flex-direction: column; justify-content: center;
+    }
+    .brand { display: flex; justify-content: center; margin-bottom: 22px; text-decoration: none; }
+    .brand img { height: 34px; width: auto; display: block; }
+    .wordmark { font-family: 'Plus Jakarta Sans', sans-serif; font-weight: 800; font-size: 28px; color: var(--text); letter-spacing: -0.5px; }
+    .card {
+      background: var(--bg); border: 1px solid var(--border); border-radius: 16px;
+      padding: 34px 30px 30px; text-align: center; box-shadow: 0 10px 34px rgba(17,24,39,0.07);
+    }
+    .code {
+      font-family: 'Plus Jakarta Sans', sans-serif; font-weight: 800; font-size: 76px; line-height: 1;
+      letter-spacing: -3px; color: var(--accent); margin-bottom: 14px;
+      background: linear-gradient(180deg, var(--accent) 0%, var(--accent-dark) 100%);
+      -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    h1 { margin: 0; font-family: 'Plus Jakarta Sans', sans-serif; font-size: 24px; font-weight: 800; letter-spacing: -0.4px; }
+    p.lead { margin: 10px auto 0; max-width: 400px; font-size: 15px; line-height: 1.6; color: var(--sub); }
+    .path {
+      display: inline-block; max-width: 100%; margin-top: 16px; padding: 5px 10px; border-radius: 7px;
+      background: var(--surface); border: 1px solid var(--border); color: var(--muted);
+      font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12.5px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .path[hidden] { display: none; }
+    .actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 24px; }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+      height: 38px; padding: 0 16px; border-radius: 9px; font: 600 14px 'Inter', sans-serif;
+      text-decoration: none; cursor: pointer; border: 1px solid var(--border); background: var(--bg); color: var(--sub);
+    }
+    .btn:hover { background: var(--surface); }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn.primary:hover { background: var(--accent-dark); border-color: var(--accent-dark); }
+    .btn:focus-visible { outline: 3px solid var(--accent-border); outline-offset: 2px; }
+    .btn[hidden] { display: none; }
+    .help { margin: 18px 0 0; text-align: center; font-size: 13px; line-height: 1.55; color: var(--muted); }
+    .help a { color: var(--accent-dark); }
+    @media (max-width: 420px) {
+      .card { padding: 28px 20px 24px; }
+      .code { font-size: 60px; }
+      h1 { font-size: 21px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="preview" id="preview" hidden>
+    <span class="tag">Preview</span>
+    <span class="grow">This page is shown for any address that doesn’t exist. Vercel serves it automatically, and so does <code>npx serve</code> locally.</span>
+    <a href="./">Back to the prototype</a>
+  </div>
+
+  <main>
+    <a class="brand" href="/" aria-label="Klasio home">
+      <img src="/assets/logo.png" alt="Klasio" onerror="var s=document.createElement('span');s.className='wordmark';s.textContent='klasio';this.replaceWith(s);" />
+    </a>
+
+    <div class="card">
+      <div class="code" aria-hidden="true">404</div>
+      <h1>We can’t find that page</h1>
+      <p class="lead">The link may be out of date, or the page may have moved. If you typed the address, check it for typos.</p>
+      <div class="path" id="path" hidden></div>
+      <div class="actions">
+        <a class="btn primary" href="/">Go to Klasio</a>
+        <button class="btn" id="back" type="button">Go back</button>
+      </div>
+    </div>
+
+    <p class="help">Still stuck? Email <a href="mailto:support@klasio.io">support@klasio.io</a> with the address you were trying to reach.</p>
+  </main>
+
+  <script>
+    (function () {
+      var direct = /\/404\.html$/.test(location.pathname);
+      // Opened directly: it's a preview. Reached from a broken link: show the address.
+      if (direct) document.getElementById('preview').hidden = false;
+      else {
+        var p = document.getElementById('path');
+        p.textContent = location.host + location.pathname + location.search;
+        p.title = p.textContent;
+        p.hidden = false;
+      }
+      // "Go back" only when there is somewhere to go back to.
+      var back = document.getElementById('back');
+      if (history.length <= 1) back.hidden = true;
+      back.addEventListener('click', function () { history.back(); });
+    })();
+  </script>
+</body>
+</html>

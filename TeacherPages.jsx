@@ -9,45 +9,119 @@
 
 // ─── Classes Page ───────────────────────────────────────────────────────────────
 // The class list is a launch pad into each class, not a register. A row click opens
-// the read-only class detail page (schedule + roster + stats). Attendance is taken
-// from the Timetable / Attendance pages, which are driven by the centre timetable
-// (see schedule-timetable architecture) — so there's deliberately no "take register"
-// action here.
+// the class workspace. Decision #57: the shared Table is the default (a teacher can
+// have 6–20+ classes); a remembered grid/list toggle switches to cards that answer
+// "what do I owe this class" — work to mark, a register still due, the next
+// session — not a pupil's score. Every figure is derived: to-mark from the homework
+// selector, register-due from the register lifecycle (deriveSessionState),
+// attendance from submitted registers, attainment from results (decision #50).
 const openTeacherClass = (cls) => {
   window.__adminParam = cls.id;
   if (window.__navigate) window.__navigate('teacher', 'class_detail');
 };
 
+const TC_VIEW_KEY = 'klasio.teacherClasses.view';
+const tcReadView = () => { try { return localStorage.getItem(TC_VIEW_KEY) === 'grid' ? 'grid' : 'list'; } catch (e) { return 'list'; } };
+
+const TcViewToggle = ({ value, onChange }) => (
+  <div style={{ display:'flex', gap:4, padding:4, background:DS.surface, border:`1px solid ${DS.border}`, borderRadius:8 }}>
+    {[{ id:'list', icon:'list', title:'List view' }, { id:'grid', icon:'grid', title:'Card view' }].map(o => {
+      const on = value === o.id;
+      return (
+        <button key={o.id} onClick={() => onChange(o.id)} title={o.title} aria-label={o.title} aria-pressed={on} style={{
+          width:32, height:28, borderRadius:6, cursor:'pointer', background: on ? DS.bg : 'transparent',
+          border:`1px solid ${on ? DS.border : 'transparent'}`, display:'flex', alignItems:'center', justifyContent:'center',
+        }}><Icon name={o.icon} size={15} color={on ? DS.accent : DS.muted} /></button>
+      );
+    })}
+  </div>
+);
+
+// Next-session label on the register clock: "Today 13:00" / "Tomorrow 09:00" / "Thu 16 Jul 09:00".
+const tcNextLabel = (s, now) => {
+  if (!s) return '—';
+  const a = new Date(s.starts_at); const b = new Date(now);
+  const day = new Date(a.getFullYear(), a.getMonth(), a.getDate()) - new Date(b.getFullYear(), b.getMonth(), b.getDate());
+  const hhmm = startTimeOf(s.cls.time);
+  if (day === 0) return `Today ${hhmm}`;
+  if (day === 86400000) return `Tomorrow ${hhmm}`;
+  return `${a.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })} ${hhmm}`;
+};
+
+// "What you owe" card (grid view).
+const TeacherClassCard = ({ c }) => {
+  const [hov, setHov] = React.useState(false);
+  return (
+    <button onClick={() => openTeacherClass(c)} onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)} style={{
+      textAlign:'left', cursor:'pointer', background:DS.bg, borderRadius:14, padding:0, overflow:'hidden',
+      border:`1px solid ${hov ? DS.borderDark : DS.cardBorder}`, boxShadow: hov ? '0 6px 20px -12px rgba(17,24,39,0.25)' : 'none',
+      transition:'border-color .15s, box-shadow .15s', display:'flex', flexDirection:'column',
+    }}>
+      <div style={{ height:4, background:c.color }} />
+      <div style={{ padding:'16px 18px 14px', flex:1 }}>
+        <div style={{ display:'inline-flex', fontSize:10.5, fontWeight:700, letterSpacing:'0.06em', textTransform:'uppercase', color:c.color, background:c.color + '14', padding:'3px 8px', borderRadius:999 }}>{c.name}</div>
+        <div style={{ fontSize:17, fontWeight:700, color:DS.text, marginTop:10, letterSpacing:'-0.2px' }}>{c.group}</div>
+        <div style={{ fontSize:12.5, color:DS.muted, marginTop:3 }}>{c.nextLabel} · {c.room || 'No room'}</div>
+      </div>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', borderTop:`1px solid ${DS.border}`, background:DS.surface }}>
+        <div style={{ padding:'12px 18px', borderRight:`1px solid ${DS.border}` }}>
+          <div style={{ fontSize:24, fontWeight:800, color: c.toMark ? DS.warning : DS.text, lineHeight:1, fontVariantNumeric:'tabular-nums' }}>{c.toMark}</div>
+          <div style={{ fontSize:11.5, color:DS.muted, marginTop:4 }}>to mark</div>
+        </div>
+        <div style={{ padding:'12px 18px' }}>
+          <div style={{ fontSize:24, fontWeight:800, color:DS.text, lineHeight:1, fontVariantNumeric:'tabular-nums' }}>{c.students}</div>
+          <div style={{ fontSize:11.5, color: c.registerDue ? DS.warning : DS.muted, marginTop:4, display:'flex', alignItems:'center', gap:5 }}>
+            students{c.registerDue ? <> · register due <span style={{ width:6, height:6, borderRadius:'50%', background:DS.warning }} /></> : null}
+          </div>
+        </div>
+      </div>
+    </button>
+  );
+};
+
 const TeacherClassesPage = () => {
-  // Derive the class list from the ONE metrics layer (F2) so the count here
-  // reconciles with the Dashboard and Analytics (was 5 from the teacherClasses
-  // mock vs 4 canonical). Each canonical class is enriched with the mock's
-  // display-only fields (score/attendance/hwPending/colour) by matching on group.
+  // The class list comes from the ONE metrics layer (F2) so the count reconciles
+  // with the Dashboard and Analytics.
   const TM = window.teacherMetrics;
   const metrics = TM ? TM.getMetrics() : null;
+  const admin = useAdminStore();
+  const me = TM ? TM.getPrincipal() : { id: 't1' };
+  const [view, setViewState] = React.useState(tcReadView);
+  const setView = (v) => { setViewState(v); try { localStorage.setItem(TC_VIEW_KEY, v); } catch (e) {} };
+
   const list = React.useMemo(() => {
-    if (!TM) return teacherClasses;
-    return TM.getMyClasses().map(c => {
-      const e = teacherClasses.find(t => t.group === c.group) || {};
+    if (!TM) return [];
+    const classes = TM.getMyClasses();
+    const now = window.getNow ? window.getNow() : Date.now();
+    const reg = window.attReadStore ? window.attReadStore() : null;
+    const sessions = reg && window.materialiseSessions ? window.materialiseSessions(classes, window.REGISTER_SETTINGS, now, reg, { backDays: 35, fwdDays: 14 }) : [];
+    const rosterOf = (s) => window.attRosterFor ? window.attRosterFor(s.classId, s.group, admin) : [];
+    return classes.map(c => {
+      const mine = sessions.filter(s => s.classId === c.id);
+      const next = mine.filter(s => s.starts_at > now && s.derived.state !== 'cancelled').sort((a, b) => a.starts_at - b.starts_at)[0] || null;
+      // A register is "due" once the session has started and nobody has submitted it
+      // while it can still be taken (open or in the late backfill window).
+      const registerDue = mine.filter(s => (s.derived.state === 'open_live' && now >= s.starts_at) || s.derived.state === 'awaiting').length;
+      const rate = window.attendanceRate && reg ? window.attendanceRate(mine, rosterOf, reg) : { pct: null };
+      const toMark = window.klasioHomework ? window.klasioHomework.getHomeworkCounts({ teacherId: me.id, classLabel: c.group }).toMark : 0;
       return {
-        id: c.id, name: c.name, group: c.group, room: c.room, students: c.students,
-        color: e.color || subjectColor(c.name),
-        nextSession: e.nextSession || `${c.day} ${startTimeOf(c.time)}`,
-        avgScore: e.avgScore != null ? e.avgScore : 0,
-        attendance: e.attendance != null ? e.attendance : 0,
-        hwPending: e.hwPending != null ? e.hwPending : 0,
+        id: c.id, name: c.name, group: c.group, room: c.room, students: c.students || 0,
+        color: subjectColor(c.name), nextLabel: tcNextLabel(next, now), nextAt: next ? next.starts_at : Infinity,
+        avgScore: window.klasioScores ? window.klasioScores.classAttainment(c.id).avg : null,
+        attendance: rate.pct, toMark, registerDue,
       };
-    });
-  }, [TM]);
+    }).sort((a, b) => a.nextAt - b.nextAt);
+  }, [TM, admin.students]);
   const totalEnrolments = metrics ? metrics.enrolments : list.reduce((s, c) => s + c.students, 0);
 
   const [reqMsg, setReqMsg] = React.useState('');
-  // (D6) Teachers can't self-schedule — the admin owns the timetable. "Schedule
-  // Class" becomes a REQUEST to the admin (recorded to the audit trail).
-  const requestClass = () => {
-    if (window.klasioAudit) window.klasioAudit('request_class', 'timetable', { by: 'teacher' });
-    setReqMsg('Request sent to your centre admin — they own the timetable and will set the day, time and room.');
-    setTimeout(() => setReqMsg(''), 6000);
+  const [reqOpen, setReqOpen] = React.useState(false);
+  // (D6) Teachers can't self-schedule — the admin owns the timetable. "Request a
+  // class" opens a real request (ClassRequests.jsx) that lands in the admin's
+  // Classes queue; the teacher follows it in "Your requests" below the list.
+  const onSent = () => {
+    setReqMsg('Sent to your centre admin — it’s in their Classes queue. Their reply will show under “Your requests”.');
+    setTimeout(() => setReqMsg(''), 7000);
   };
 
   return (
@@ -55,8 +129,12 @@ const TeacherClassesPage = () => {
       <PageHeader
         title="My Classes"
         subtitle={`${list.length} active class${list.length===1?'':'es'} · ${totalEnrolments} enrolments`}
-        actions={[<Btn key="a" variant="secondary" icon="send" small onClick={requestClass}>Request a class</Btn>]}
+        actions={[
+          <TcViewToggle key="v" value={view} onChange={setView} />,
+          <Btn key="a" variant="secondary" icon="send" small onClick={() => setReqOpen(true)}>Request a class</Btn>,
+        ]}
       />
+      <RequestClassModal open={reqOpen} onClose={() => setReqOpen(false)} onSent={onSent} />
 
       {reqMsg && (
         <div style={{ display:'flex', alignItems:'center', gap:9, padding:'11px 16px', marginBottom:16, background:DS.accentLight, border:`1px solid ${DS.cardBorder}`, borderRadius:10, fontSize:13, color:DS.text }}>
@@ -64,65 +142,43 @@ const TeacherClassesPage = () => {
         </div>
       )}
 
-      <Card>
-        <div style={{ overflow:'auto' }}>
-          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
-            <thead>
-              <tr style={{ borderBottom:`1px solid ${DS.border}`, background:DS.surface }}>
-                {['Class','Next Session','Students','Avg Score','Attendance','Homework',''].map((h, i) => (
-                  <th key={i} style={{
-                    padding:'10px 16px', textAlign: i >= 2 && i <= 5 ? 'center' : 'left',
-                    fontSize:11, fontWeight:600, color:DS.muted,
-                    textTransform:'uppercase', letterSpacing:'0.06em', whiteSpace:'nowrap',
-                  }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {list.map(cls => {
-                const scoreColor = cls.avgScore > 80 ? DS.success : DS.warning;
-                const attColor   = cls.attendance > 90 ? DS.success : DS.warning;
-                return (
-                  <tr
-                    key={cls.id}
-                    style={{ borderBottom:`1px solid ${DS.border}`, cursor:'pointer' }}
-                    onClick={() => openTeacherClass(cls)}
-                  >
-                    <td style={{ padding:'12px 16px' }}>
-                      <div style={{ display:'flex', alignItems:'center', gap:12 }}>
-                        <div style={{ width:4, alignSelf:'stretch', minHeight:34, borderRadius:2, background:cls.color, flexShrink:0 }} />
-                        <Icon name="chevron_r" size={14} color={DS.faint} />
-                        <div>
-                          <div style={{ fontSize:13, fontWeight:600, color:DS.text }}>{cls.name}</div>
-                          <div style={{ fontSize:12, color:DS.muted, marginTop:1 }}>{cls.group}</div>
-                        </div>
-                      </div>
-                    </td>
-                    <td style={{ padding:'12px 16px', whiteSpace:'nowrap' }}>
-                      <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-                        <Icon name="clock" size={12} color={DS.faint} />
-                        <span style={{ fontSize:13, color:DS.sub }}>{cls.nextSession}</span>
-                      </div>
-                      <div style={{ fontSize:12, color:DS.muted, marginTop:2, marginLeft:18 }}>{cls.room}</div>
-                    </td>
-                    <td style={{ padding:'12px 16px', textAlign:'center', fontSize:13, fontWeight:600, color:DS.text }}>{cls.students}</td>
-                    <td style={{ padding:'12px 16px', textAlign:'center', fontSize:13, fontWeight:600, color:scoreColor }}>{cls.avgScore}%</td>
-                    <td style={{ padding:'12px 16px', textAlign:'center', fontSize:13, fontWeight:600, color:attColor }}>{cls.attendance}%</td>
-                    <td style={{ padding:'12px 16px', textAlign:'center' }}>
-                      {cls.hwPending > 0
-                        ? <StatusPill tone="warning">{cls.hwPending} to mark</StatusPill>
-                        : <span style={{ fontSize:12, color:DS.faint }}>—</span>}
-                    </td>
-                    <td style={{ padding:'12px 16px', textAlign:'right', whiteSpace:'nowrap' }} onClick={e => e.stopPropagation()}>
-                      <Btn variant="secondary" icon="eye" small onClick={() => openTeacherClass(cls)}>View class</Btn>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+      {list.length === 0 ? (
+        <Card><div style={{ padding:'40px 20px' }}><EmptyState icon="book" title="No classes yet" message="Your centre admin assigns classes. Use “Request a class” to ask for one." /></div></Card>
+      ) : view === 'grid' ? (
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(260px, 1fr))', gap:16 }}>
+          {list.map(c => <TeacherClassCard key={c.id} c={c} />)}
         </div>
-      </Card>
+      ) : (
+        <Card>
+          <Table
+            cols={['Class', 'Next session', { label:'Students', align:'right' }, { label:'Attainment', align:'right' }, { label:'Attendance', align:'right' }, 'To mark', 'Register', { label:'', action:true }]}
+            rows={list.map(cls => ({
+              onClick: () => openTeacherClass(cls),
+              cells: [
+                <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+                  <div style={{ width:4, alignSelf:'stretch', minHeight:34, borderRadius:2, background:cls.color, flexShrink:0 }} />
+                  <div>
+                    <div style={{ fontSize:13, fontWeight:600, color:DS.text }}>{cls.name}</div>
+                    <div style={{ fontSize:12, color:DS.muted, marginTop:1 }}>{cls.group}</div>
+                  </div>
+                </div>,
+                <div>
+                  <div style={{ fontSize:13, color:DS.sub, whiteSpace:'nowrap' }}>{cls.nextLabel}</div>
+                  <div style={{ fontSize:12, color:DS.muted, marginTop:2 }}>{cls.room || 'No room'}</div>
+                </div>,
+                <span style={{ fontSize:13, fontWeight:600, color:DS.text }}>{cls.students}</span>,
+                <ScorePill score={cls.avgScore} />,
+                <span style={{ fontSize:13, fontWeight:600, color: cls.attendance == null ? DS.faint : cls.attendance >= 90 ? DS.success : DS.warning }}>{cls.attendance == null ? '—' : `${cls.attendance}%`}</span>,
+                cls.toMark > 0 ? <StatusPill tone="warning">{cls.toMark} to mark</StatusPill> : <span style={{ fontSize:12, color:DS.faint }}>—</span>,
+                cls.registerDue > 0 ? <StatusPill tone="warning">{cls.registerDue} due</StatusPill> : <span style={{ fontSize:12, color:DS.faint }}>Up to date</span>,
+                <Btn variant="secondary" icon="eye" small onClick={(e) => { if (e && e.stopPropagation) e.stopPropagation(); openTeacherClass(cls); }}>View class</Btn>,
+              ],
+            }))}
+          />
+        </Card>
+      )}
+
+      <div style={{ marginTop: 20 }}><MyClassRequests /></div>
     </div>
   );
 };
@@ -134,44 +190,14 @@ const TeacherClassesPage = () => {
 // timetable stay owned by the admin (see schedule-timetable architecture) — the
 // register is still taken from the Attendance page (via "Take register"), and the
 // Settings tab surfaces a "Request a change" to the admin rather than direct edits.
-// Announcements + banner theme persist per class in localStorage (frontend-only).
+// The banner's background is the class's cover (classCovers.jsx) — one class-wide
+// choice on the class record that the class teacher or an admin sets. The stream
+// persists per class in localStorage (frontend-only).
 
-// Deterministic per-student trend so sparklines don't jitter on re-render.
-const teacherClassTrend = (name, avg) => {
-  let h = 0;
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) & 0x7fff;
-  return Array.from({ length: 8 }, (_, i) => {
-    const wobble = ((h >> (i % 11)) % 13) - 6;
-    return Math.max(35, Math.min(99, (avg || 70) - 5 + i + wobble));
-  });
-};
-
-// Banner theme presets for the "Customise" popover. 'default' derives from the
-// class's subject colour; the rest are two-stop gradients.
-const CLASS_BANNER_THEMES = [
-  { id:'default', name:'Subject' },
-  { id:'indigo',  name:'Indigo',  from:'#4F46E5', to:'#7C3AED' },
-  { id:'teal',    name:'Teal',    from:'#0D9488', to:'#0891B2' },
-  { id:'ocean',   name:'Ocean',   from:'#0284C7', to:'#4F46E5' },
-  { id:'forest',  name:'Forest',  from:'#15803D', to:'#0D9488' },
-  { id:'sunset',  name:'Sunset',  from:'#EA580C', to:'#DB2777' },
-  { id:'plum',    name:'Plum',    from:'#7C3AED', to:'#DB2777' },
-  { id:'slate',   name:'Slate',   from:'#334155', to:'#475569' },
-];
-
-// Per-class localStorage (banner theme + announcement stream). Prototype only.
+// Per-class localStorage (announcement stream). Prototype only.
 const classLS = {
-  getBanner: (id) => { try { return localStorage.getItem(`klasio.classBanner.${id}`) || 'default'; } catch (e) { return 'default'; } },
-  setBanner: (id, v) => { try { localStorage.setItem(`klasio.classBanner.${id}`, v); } catch (e) {} },
   getStream: (id) => { try { return JSON.parse(localStorage.getItem(`klasio.classStream.${id}`) || 'null'); } catch (e) { return null; } },
   setStream: (id, arr) => { try { localStorage.setItem(`klasio.classStream.${id}`, JSON.stringify(arr)); } catch (e) {} },
-};
-
-// Resolve a {from,to} gradient for a banner theme id (falls back to class colour).
-const classBannerGradient = (themeId, color) => {
-  const t = CLASS_BANNER_THEMES.find(x => x.id === themeId);
-  if (t && t.from) return { from: t.from, to: t.to };
-  return { from: color, to: shadeColor(color, -24) };
 };
 
 // Deterministic, Google-Classroom-style short join code for a class.
@@ -187,30 +213,6 @@ const fmtStreamTime = (ts) => {
   const mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   const hh = String(d.getHours()).padStart(2, '0'), mm = String(d.getMinutes()).padStart(2, '0');
   return `${d.getDate()} ${mo[d.getMonth()]}, ${hh}:${mm}`;
-};
-
-// Deterministic class-average trend (8 assessments) around the class avg score.
-const classTrendSeries = (seed, avg) => {
-  let h = 0; for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) & 0x7fff;
-  return Array.from({ length: 8 }, (_, i) => {
-    const w = ((h >> (i % 11)) % 9) - 4;
-    return Math.max(40, Math.min(98, Math.round((avg || 70) - 6 + i * 1.3 + w)));
-  });
-};
-
-// Grade-band distribution across N students, weighted by the class average.
-const classGradeDist = (n, avg, color) => {
-  const p = avg >= 85 ? [0.4,0.35,0.2,0.05] : avg >= 75 ? [0.25,0.4,0.25,0.1] : avg >= 65 ? [0.15,0.35,0.35,0.15] : [0.08,0.27,0.4,0.25];
-  const raw = p.map(x => Math.round(x * n));
-  const sum = raw.reduce((s, v) => s + v, 0);
-  raw[1] += (n - sum);
-  if (raw[1] < 0) { raw[2] = Math.max(0, raw[2] + raw[1]); raw[1] = 0; }
-  return [
-    { g:'A* / A', n:Math.max(0, raw[0]), c:DS.success },
-    { g:'B',      n:Math.max(0, raw[1]), c:color || DS.accent },
-    { g:'C',      n:Math.max(0, raw[2]), c:DS.warning },
-    { g:'D / U',  n:Math.max(0, raw[3]), c:DS.danger },
-  ];
 };
 
 // Deterministic recent-attendance log scaled by the class attendance rate.
@@ -232,8 +234,9 @@ const CLASS_TABS = [
   { id:'homework',   label:'Homework',       icon:'clip' },
   { id:'planner',    label:'Lesson planner', icon:'book' },
   { id:'attendance', label:'Attendance',     icon:'check' },
+  // One Progress tab — analytics is a lens on the class, not a second tab that
+  // answers the same "how is this group doing" question (decision #49).
   { id:'progress',   label:'Progress',       icon:'trending_up' },
-  { id:'analytics',  label:'Analytics',      icon:'chart' },
   { id:'settings',   label:'Settings',       icon:'settings' },
 ];
 
@@ -278,62 +281,21 @@ const ClassToggle = ({ on, onChange }) => (
   </button>
 );
 
-// "Customise" popover in the banner — swatch grid of banner themes.
-const ClassBannerCustomiser = ({ value, onChange, color }) => {
-  const [open, setOpen] = React.useState(false);
-  const ref = React.useRef(null);
-  React.useEffect(() => {
-    if (!open) return;
-    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
-    document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
-  }, [open]);
-  return (
-    <div ref={ref} style={{ position:'relative' }}>
-      <button onClick={() => setOpen(o => !o)} style={{
-        display:'inline-flex', alignItems:'center', gap:7, padding:'7px 13px', borderRadius:8,
-        background:'rgba(255,255,255,0.92)', border:'none', cursor:'pointer',
-        fontSize:13, fontWeight:600, color:DS.sub, boxShadow:'0 1px 3px rgba(0,0,0,0.18)',
-      }}>
-        <Icon name="edit" size={14} color={DS.sub} /> Customise
-      </button>
-      {open && (
-        <div style={{ position:'absolute', top:'calc(100% + 8px)', right:0, zIndex:40, width:236,
-          background:DS.bg, border:`1px solid ${DS.border}`, borderRadius:12, boxShadow:DS.cardShadowHi, padding:14 }}>
-          <div style={{ fontSize:12, fontWeight:700, color:DS.text, marginBottom:10 }}>Banner theme</div>
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:8 }}>
-            {CLASS_BANNER_THEMES.map(t => {
-              const g = classBannerGradient(t.id, color);
-              const active = value === t.id;
-              return (
-                <button key={t.id} title={t.name} onClick={() => onChange(t.id)} style={{
-                  height:40, borderRadius:8, cursor:'pointer',
-                  background:`linear-gradient(120deg, ${g.from}, ${g.to})`,
-                  border: active ? `2px solid ${DS.text}` : '2px solid transparent',
-                  boxShadow: active ? '0 0 0 2px #fff inset' : 'none',
-                }} />
-              );
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
 // ── Shared class-detail shell (D1) ───────────────────────────────────────────────
-// The ONE presentational chrome for a class workspace: back link, gradient banner
+// The ONE presentational chrome for a class workspace: back link, cover banner
 // (dimension chips · name · meta line), an optional top-right slot and an optional
 // cover/notice strip, then the underline tab bar. Teacher and admin class pages both
 // render through this — they differ only in the tab SET, the banner slot and the tab
 // CONTENT they pass as children, never in layout or styling. Reused by AdminPages.jsx
 // (loaded before this file, resolves it via window at render time) and StudentDashboard.
 const ClassDetailShell = ({
-  onBack, backLabel = 'Back', color = DS.accent, bannerTheme = 'default',
+  onBack, backLabel = 'Back', color = DS.accent, cover = null,
   chips = [], title, subtitle, bannerRight = null, preBanner = null,
   tabs, activeTab, onTab, children,
 }) => {
-  const grad = classBannerGradient(bannerTheme, color);
+  // `cover` is the class's resolved background (klasioCovers.classCover — callers
+  // resolve it from the class record; this shell never reads stored fields).
+  const bg = cover || window.klasioCovers.resolveCover(null, { subjectName: title || '', seed: title || '' });
   // Every class workspace (teacher, admin, student) renders through this shell, so
   // it's also the one place that declares the class → tab nesting to the header
   // breadcrumb: "… › My Classes › Year 10 Maths › Roster".
@@ -352,24 +314,21 @@ const ClassDetailShell = ({
       {preBanner}
 
       {/* Banner — outer wrapper is NOT clipped so a top-right popover can overflow;
-          the inner card clips its gradient + decorative rings to the rounded corners. */}
+          the inner card clips the cover art to the rounded corners. */}
       <div style={{ position:'relative', marginBottom:20 }}>
-        <div style={{ position:'relative', borderRadius:16, overflow:'hidden',
-          background:`linear-gradient(120deg, ${grad.from}, ${grad.to})`, minHeight:186,
-          display:'flex', flexDirection:'column', justifyContent:'flex-end', padding:'26px 30px', boxShadow:DS.cardShadow }}>
-          <svg width="320" height="320" viewBox="0 0 320 320" style={{ position:'absolute', top:-40, right:-20, opacity:0.16, pointerEvents:'none' }}>
-            <circle cx="220" cy="90" r="120" fill="none" stroke="#fff" strokeWidth="18" />
-            <circle cx="270" cy="150" r="70" fill="none" stroke="#fff" strokeWidth="14" />
-            <circle cx="150" cy="60" r="10" fill="#fff" />
-          </svg>
-          <div style={{ position:'relative', zIndex:2 }}>
+        <div style={{ position:'relative', borderRadius:16, overflow:'hidden', isolation:'isolate', minHeight:186,
+          display:'flex', flexDirection:'column', justifyContent:'flex-end', padding:'26px 30px', boxShadow:DS.cardShadow,
+          ...coverStyleVars(bg, 'banner') }}>
+          <CoverArt cover={bg} variant="banner" />
+          {/* Text stays on the left 60%; the artwork is pinned to the right edge. */}
+          <div style={{ position:'relative', zIndex:2, maxWidth:'60%' }}>
             <div style={{ display:'flex', gap:7, marginBottom:10, flexWrap:'wrap' }}>
               {chips.filter(Boolean).map((t, i) => (
-                <span key={i} style={{ fontSize:11.5, fontWeight:600, color:'#fff', background:'rgba(255,255,255,0.22)', padding:'3px 10px', borderRadius:999 }}>{t}</span>
+                <span key={i} style={{ fontSize:11.5, fontWeight:600, color:'var(--cover-chip-ink)', background:'var(--cover-chip-bg)', padding:'3px 10px', borderRadius:999 }}>{t}</span>
               ))}
             </div>
-            <div style={{ fontSize:30, fontWeight:800, color:'#fff', letterSpacing:'-0.6px', lineHeight:1.1 }}>{title}</div>
-            {subtitle && <div style={{ fontSize:14, color:'rgba(255,255,255,0.9)', marginTop:6 }}>{subtitle}</div>}
+            <div style={{ fontSize:30, fontWeight:800, color:'var(--cover-ink)', letterSpacing:'-0.6px', lineHeight:1.1 }}>{title}</div>
+            {subtitle && <div style={{ fontSize:14, color:'var(--cover-ink-muted)', marginTop:6 }}>{subtitle}</div>}
           </div>
         </div>
         {bannerRight && (
@@ -386,10 +345,15 @@ const ClassDetailShell = ({
 // Share the class banner + tab chrome with the admin class detail (AdminPages.jsx,
 // loaded before this file — it resolves these via window at render time, same as
 // the AdminAttendancePage pattern).
-Object.assign(window, { ClassTabBar, ClassBannerCustomiser, classBannerGradient, classLS, ClassDetailShell, classJoinCode });
+Object.assign(window, { ClassTabBar, classLS, ClassDetailShell, classJoinCode });
 
 // ── Stream tab — announcement feed + class code / upcoming / about rail ──────────
-const ClassStreamTab = ({ cls, color, subject, level, stream, onPost, onDelete, classHw, principalName, code }) => {
+// The Stream is the class's conversational feed (class_posts: posts + comments).
+// Announcements are a different thing — a formal broadcast with read/ack tracking
+// from the one Communications composer — but a class-scoped announcement belongs
+// in the class's feed too, so it renders here as its own card type. Two stores,
+// one rendering; the admin's class page shows the same merged feed.
+const ClassStreamTab = ({ cls, color, subject, level, stream, announcements = [], onPost, onDelete, classHw, principalName, code }) => {
   const [copied, setCopied] = React.useState(false);
   const [composing, setComposing] = React.useState(false);
   const [draft, setDraft] = React.useState('');
@@ -454,7 +418,7 @@ const ClassStreamTab = ({ cls, color, subject, level, stream, onPost, onDelete, 
               background:'none', border:'none', cursor:'pointer', textAlign:'left',
             }}>
               <Avatar name={principalName} size={36} color={color} />
-              <span style={{ fontSize:13.5, color:DS.muted }}>Announce something to your class…</span>
+              <span style={{ fontSize:13.5, color:DS.muted }}>Share something with your class…</span>
             </button>
           ) : (
             <div style={{ padding:'16px 18px' }}>
@@ -471,6 +435,28 @@ const ClassStreamTab = ({ cls, color, subject, level, stream, onPost, onDelete, 
           )}
         </Card>
 
+        {announcements.map(a => (
+          <Card key={'ann-' + a.id}>
+            <div style={{ padding:'16px 18px', borderLeft:`3px solid ${DS.accent}`, borderRadius:'inherit' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:11 }}>
+                <div style={{ width:38, height:38, borderRadius:'50%', flexShrink:0, background:DS.accentLight, color:DS.accent, display:'flex', alignItems:'center', justifyContent:'center' }}><Icon name="megaphone" size={17} /></div>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:7, flexWrap:'wrap' }}>
+                    <span style={{ fontSize:13.5, fontWeight:600, color:DS.text }}>{a.title}</span>
+                    <Badge variant="accent">Announcement</Badge>
+                    {a.pinned && <Badge variant="default">Pinned</Badge>}
+                    {a.requiresAck && <Badge variant="warning">Ack required</Badge>}
+                  </div>
+                  <div style={{ fontSize:11.5, color:DS.faint }}>{a.authorName} · {fmtStreamTime(new Date(a.createdAt).getTime())}</div>
+                </div>
+              </div>
+              <div style={{ fontSize:13.5, color:DS.sub, marginTop:12, lineHeight:1.55, whiteSpace:'pre-wrap' }}>{a.body}</div>
+              <div style={{ display:'flex', alignItems:'center', gap:7, marginTop:14, paddingTop:12, borderTop:`1px solid ${DS.border}`, fontSize:12, color:DS.muted }}>
+                <Icon name="eye" size={13} />Read by {a.readCount} of {a.recipientCount}
+              </div>
+            </div>
+          </Card>
+        ))}
         {stream.length ? stream.map(p => (
           <Card key={p.id}>
             <div style={{ padding:'16px 18px' }}>
@@ -493,7 +479,7 @@ const ClassStreamTab = ({ cls, color, subject, level, stream, onPost, onDelete, 
             </div>
           </Card>
         )) : (
-          <Card><div style={{ padding:'40px 20px' }}><EmptyState icon="megaphone" title="No announcements yet" message="Share your first update with the class." /></div></Card>
+          !announcements.length && <Card><div style={{ padding:'40px 20px' }}><EmptyState icon="megaphone" title="Nothing posted yet" message="Share your first update with the class." /></div></Card>
         )}
       </div>
     </div>
@@ -501,8 +487,13 @@ const ClassStreamTab = ({ cls, color, subject, level, stream, onPost, onDelete, 
 };
 
 // ── Students tab ────────────────────────────────────────────────────────────────
-const ClassStudentsTab = ({ cls, color, goProfile }) => {
+const ClassStudentsTab = ({ cls, color, goProfile, students = [] }) => {
   const [q, setQ] = React.useState('');
+  // The sparkline is the pupil's real results in this class (decision #50).
+  const sparkFor = (name) => {
+    const s = students.find(st => studentName(st) === name);
+    return s && window.klasioScores ? window.klasioScores.attainmentSeries(s.id, { classId: cls.id }).map(e => e.pct) : [];
+  };
   const list = cls.studentList.filter(n => n.toLowerCase().includes(q.toLowerCase()));
   return (
     <div>
@@ -525,7 +516,9 @@ const ClassStudentsTab = ({ cls, color, goProfile }) => {
                 <div style={{ fontSize:13, fontWeight:600, color:DS.text }}>{name}</div>
                 <div style={{ fontSize:11.5, color:DS.faint }}>{cls.group}</div>
               </div>
-              <Sparkline data={teacherClassTrend(name, cls.avgScore)} color={color} width={72} height={26} />
+              {sparkFor(name).length >= 2
+                ? <Sparkline data={sparkFor(name)} color={color} width={72} height={26} />
+                : <span style={{ fontSize:11.5, color:DS.faint, width:72, textAlign:'center' }}>no results</span>}
               <Btn variant="ghost" icon="eye" small onClick={() => goProfile(name)}>Profile</Btn>
             </div>
           ))}
@@ -581,37 +574,37 @@ const ClassHomeworkTab = ({ cls, color, classHw }) => {
 };
 
 // ── Lesson planner tab ──────────────────────────────────────────────────────────
+// This class's planned lessons (deliveries keyed by class id — decision #47). The
+// lesson content is shared; notes and reflections are this class's own.
 const ClassPlannerTab = ({ cls, color }) => {
-  const plans = Object.values(window.__lessonPlans || {})
-    .filter(p => p.group === cls.group)
-    .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-  const todayISO = new Date().toISOString().slice(0, 10);
-  const openPlan = (date, mode) => window.__openLessonPlanner && window.__openLessonPlanner(cls.group, date, mode);
+  const L = window.useLessons ? window.useLessons() : window.klasioLessons;
+  const plans = L ? L.deliveriesForClass(cls.id) : [];
+  const todayISO = window.attIso && window.getNow ? window.attIso(new Date(window.getNow())) : new Date().toISOString().slice(0, 10);
+  const openPlan = (date, mode) => window.__openLessonPlanner && window.__openLessonPlanner(cls.id, date, mode);
   const fmtDate = (iso) => { const [y, m, d] = (iso || '').split('-').map(Number); const mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return d ? { day:d, mon:mo[m - 1], year:y } : { day:iso, mon:'', year:'' }; };
   return (
     <div>
       <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:16 }}>
-        <Btn variant="primary" icon="plus" small onClick={() => openPlan(todayISO, 'edit')}>New lesson plan</Btn>
+        <Btn variant="primary" icon="plus" small onClick={() => openPlan(todayISO, 'edit')}>Plan a lesson</Btn>
       </div>
       {plans.length ? (
         <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
           {plans.map(p => {
             const dt = fmtDate(p.date);
+            const l = L.getLesson(p.lessonId) || {};
+            const u = L.usageOf(p.lessonId, todayISO);
             return (
-              <Card key={p.date}>
+              <Card key={p.id}>
                 <div style={{ padding:'16px 18px', display:'flex', alignItems:'flex-start', gap:16 }}>
                   <div style={{ width:52, textAlign:'center', flexShrink:0 }}>
                     <div style={{ fontSize:11, color:DS.muted, textTransform:'uppercase', fontWeight:600 }}>{dt.mon}</div>
                     <div style={{ fontSize:22, fontWeight:800, color, lineHeight:1 }}>{dt.day}</div>
                   </div>
                   <div style={{ flex:1, minWidth:0 }}>
-                    <div style={{ fontSize:14, fontWeight:600, color:DS.text }}>{p.plan.title}</div>
-                    <div style={{ fontSize:12, color:DS.muted, marginTop:2 }}>{p.plan.topic} · {p.plan.duration} min</div>
-                    {p.plan.objectives && <div style={{ fontSize:12.5, color:DS.sub, marginTop:8, lineHeight:1.5, display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical', overflow:'hidden' }}>{p.plan.objectives.replace(/•/g, '').replace(/\n/g, ' ').trim()}</div>}
-                    <div style={{ display:'flex', alignItems:'center', gap:12, marginTop:10 }}>
-                      {p.plan.resources && p.plan.resources.length > 0 && <span style={{ display:'inline-flex', alignItems:'center', gap:5, fontSize:11.5, color:DS.muted }}><Icon name="file" size={13} color={DS.faint} />{p.plan.resources.length} resource{p.plan.resources.length === 1 ? '' : 's'}</span>}
-                      <span style={{ fontSize:11.5, color:DS.faint }}>Saved {p.savedAt}</span>
-                    </div>
+                    <div style={{ fontSize:14, fontWeight:600, color:DS.text }}>{l.title || 'Untitled lesson'}</div>
+                    <div style={{ fontSize:12, color:DS.muted, marginTop:2 }}>{[l.topic, l.duration ? `${l.duration} min` : null, u.deliveries > 1 ? `also used with ${u.deliveries - 1} other deliver${u.deliveries - 1 === 1 ? 'y' : 'ies'}` : null].filter(Boolean).join(' · ')}</div>
+                    {p.notes && <div style={{ fontSize:12.5, color:DS.sub, marginTop:8, lineHeight:1.5 }}><strong style={{ fontWeight:600 }}>Notes:</strong> {p.notes}</div>}
+                    {p.reflection && <div style={{ fontSize:12.5, color:DS.sub, marginTop:6, lineHeight:1.5, fontStyle:'italic' }}>“{p.reflection}”</div>}
                   </div>
                   <Btn variant="secondary" icon="eye" small onClick={() => openPlan(p.date, 'view')}>Open</Btn>
                 </div>
@@ -620,7 +613,7 @@ const ClassPlannerTab = ({ cls, color }) => {
           })}
         </div>
       ) : (
-        <Card><div style={{ padding:'40px 20px' }}><EmptyState icon="book" title="No lesson plans yet" message="Plan your first lesson for this class." action={<Btn variant="primary" icon="plus" onClick={() => openPlan(todayISO, 'edit')}>New lesson plan</Btn>} /></div></Card>
+        <Card><div style={{ padding:'40px 20px' }}><EmptyState icon="book" title="No lessons planned yet" message="Plan a lesson for this class — write a new one or reuse one from your library." action={<Btn variant="primary" icon="plus" onClick={() => openPlan(todayISO, 'edit')}>Plan a lesson</Btn>} /></div></Card>
       )}
     </div>
   );
@@ -630,7 +623,7 @@ const ClassPlannerTab = ({ cls, color }) => {
 const ClassAttendanceTab = ({ cls, color }) => {
   const attColor = cls.attendance >= 90 ? DS.success : cls.attendance >= 80 ? DS.warning : DS.danger;
   const sessions = classRecentSessions(cls.id + cls.group, cls.students, cls.attendance);
-  const takeRegister = () => { window.__registerGroup = cls.group; window.__navigate && window.__navigate('teacher', 'attendance'); };
+  const takeRegister = () => { window.__navigate && window.__navigate('teacher', 'attendance'); };
   return (
     <div>
       <div style={{ display:'flex', gap:14, marginBottom:20, flexWrap:'wrap' }}>
@@ -672,124 +665,430 @@ const ClassAttendanceTab = ({ cls, color }) => {
   );
 };
 
-// ── Progress tab ────────────────────────────────────────────────────────────────
-const ClassProgressTab = ({ cls, color }) => {
-  const labels = ['4 Mar','11 Mar','18 Mar','25 Mar','1 Apr','8 Apr','15 Apr','22 Apr'];
-  const trend = classTrendSeries(cls.id + cls.group, cls.avgScore);
-  const dist = classGradeDist(cls.students, cls.avgScore, color);
+// ── Progress (class tab + teacher page) ─────────────────────────────────────────
+// Decision #50. Two series, never blended: ATTAINMENT = assessment results (what the
+// centre is judged on) and HOMEWORK = the average of marked homework (effort and
+// consistency). Everything reads window.klasioScores — there is no stored score, and
+// no position-in-list arithmetic. A grade is only an INDICATIVE bucket from
+// klasioGrades on the class's own scale. Analytics is not a separate tab: it is this
+// lens on the class (decision #49).
+const PG_FMT_DATE = (iso) => { try { return new Date(iso + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }); } catch (e) { return iso; } };
+const pgMean = (arr) => arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : null;
+const pgLevelFor = (className, year) => /A-?level/i.test(className || '') ? 'A-Level' : /KS3/i.test(className || '') ? 'KS3' : (window.klasioGrades ? window.klasioGrades.levelForYear(year) : 'GCSE');
+
+// One row per pupil: attainment avg / latest / trend, homework avg, indicative grade.
+// Scoped to one class (classId) or to a set of classes (classIds — "all my classes"),
+// so a teacher never sees a pupil's results from subjects they don't teach.
+const pgRowsFor = (students, classId, level, classIds) => students.map(s => {
+  const scope = classId ? { classId } : classIds ? { classIds } : {};
+  const S = window.klasioScores ? window.klasioScores.getStudentScoreSeries(s.id, scope) : { attainment: [], homework: [], attainmentAvg: null, homeworkAvg: null, latest: null, trend: null };
+  const lvl = level || pgLevelFor('', s.year);
+  return {
+    id: s.id, name: studentName(s), year: s.year, student: s,
+    attainment: S.attainmentAvg, latest: S.latest, trend: S.trend, spark: S.attainment.map(e => e.pct),
+    homework: S.homeworkAvg, results: S.attainment.length,
+    grade: S.attainmentAvg != null && window.klasioGrades ? window.klasioGrades.pctToGrade(S.attainmentAvg, { level: lvl }) : null,
+  };
+});
+
+const PgTrendIcon = ({ trend }) => trend == null
+  ? <span style={{ fontSize: 12, color: DS.faint }}>—</span>
+  : <Icon name={trend === 'down' ? 'trending_dn' : 'trending_up'} size={15} color={trend === 'up' ? DS.success : trend === 'down' ? DS.danger : DS.faint} />;
+
+// Pupil table shared by the class tab and the Progress page.
+const ProgressStudentTable = ({ rows, color, onOpen, title = 'Students' }) => {
+  const [sort, setSort] = React.useState('attainment');
+  const sorted = rows.slice().sort((a, b) => {
+    if (sort === 'name') return a.name.localeCompare(b.name);
+    const av = a[sort], bv = b[sort];
+    if (av == null && bv == null) return 0; if (av == null) return 1; if (bv == null) return -1;
+    return av - bv;   // lowest first — the pupils who need a look lead
+  });
   return (
-    <div style={{ display:'grid', gridTemplateColumns:'1fr 320px', gap:20, alignItems:'start' }}>
-      <div style={{ display:'flex', flexDirection:'column', gap:20 }}>
-        <Card title="Class score trend" actions={<Badge variant="default">Last 8 assessments</Badge>}>
-          <div style={{ padding:'16px 20px 8px' }}>
-            <LineChart labels={labels} series={[{ label:'Class avg', data:trend, color }]} height={210} area />
+    <Card title={title} actions={[
+      <Segmented key="s" value={sort} onChange={setSort} options={[{ id: 'attainment', label: 'Attainment' }, { id: 'homework', label: 'Homework' }, { id: 'name', label: 'Name' }]} />,
+    ]}>
+      {rows.length === 0 ? (
+        <div style={{ padding: '24px 20px', fontSize: 13, color: DS.muted }}>No pupils enrolled.</div>
+      ) : (
+        <Table
+          cols={['Pupil', { label: 'Attainment', align: 'right' }, { label: 'Latest', align: 'right' }, 'Trend', { label: 'Homework', align: 'right' }, { label: 'Indicative', align: 'right' }]}
+          rows={sorted.map(r => ({
+            onClick: onOpen ? () => onOpen(r) : undefined,
+            cells: [
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>{r.name}</div>
+                  <div style={{ fontSize: 11.5, color: DS.faint }}>{r.results ? `${r.results} result${r.results === 1 ? '' : 's'}` : 'No results yet'}</div>
+                </div>
+              </div>,
+              <ScorePill score={r.attainment} />,
+              <span style={{ fontSize: 12.5, color: DS.sub, fontVariantNumeric: 'tabular-nums' }}>{r.latest == null ? '—' : `${r.latest}%`}</span>,
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                {r.spark.length >= 2 ? <Sparkline data={r.spark} color={r.trend === 'down' ? DS.danger : color || DS.accent} width={64} height={22} /> : null}
+                <PgTrendIcon trend={r.trend} />
+              </span>,
+              <span style={{ fontSize: 12.5, color: DS.muted, fontVariantNumeric: 'tabular-nums' }}>{r.homework == null ? '—' : `${r.homework}%`}</span>,
+              <span style={{ fontSize: 13, fontWeight: 700, color: DS.text }}>{r.grade || '—'}</span>,
+            ],
+          }))}
+        />
+      )}
+    </Card>
+  );
+};
+
+// Distribution of pupils' attainment across the class's own grade scale.
+const ProgressGradeDistribution = ({ rows, level }) => {
+  const G = window.klasioGrades;
+  if (!G) return null;
+  const dist = G.emptyDistribution({ level });
+  const graded = rows.filter(r => r.attainment != null);
+  graded.forEach(r => { const g = G.pctToGrade(r.attainment, { level }); if (g in dist) dist[g] += 1; });
+  const keys = Object.keys(dist);
+  const max = Math.max(1, ...keys.map(k => dist[k]));
+  return (
+    <Card title="Indicative grade spread" subtitle={`${level} scale · from attainment averages — not official grades`}>
+      <div style={{ padding: '14px 18px' }}>
+        {graded.length === 0 ? (
+          <div style={{ fontSize: 13, color: DS.muted, padding: '8px 0' }}>No results yet.</div>
+        ) : keys.map(k => (
+          <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 7 }}>
+            <span style={{ width: 70, fontSize: 12, color: DS.sub, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{k}</span>
+            <div style={{ flex: 1, height: 7, background: DS.surface, borderRadius: 4, overflow: 'hidden' }}>
+              <div style={{ width: `${(dist[k] / max) * 100}%`, height: '100%', background: G.toneForGrade ? G.toneForGrade(k, { level }) : DS.accent, borderRadius: 4 }} />
+            </div>
+            <span style={{ width: 18, textAlign: 'right', fontSize: 12, fontWeight: 600, color: DS.text }}>{dist[k]}</span>
+          </div>
+        ))}
+        {graded.length > 0 && graded.length < rows.length && (
+          <div style={{ fontSize: 11.5, color: DS.faint, marginTop: 6 }}>{rows.length - graded.length} pupil{rows.length - graded.length === 1 ? '' : 's'} with no results yet.</div>
+        )}
+      </div>
+    </Card>
+  );
+};
+
+// ── Assessments for one class — create, enter marks, publish ───────────────────
+const ClassAssessmentsPanel = ({ cls, students, color }) => {
+  const KS = window.useAssessments ? window.useAssessments() : window.klasioScores;
+  const me = window.teacherMetrics ? window.teacherMetrics.getPrincipal() : { id: 't1' };
+  const list = KS ? KS.classAssessments(cls.id).slice().reverse() : [];
+  const today = window.attIso && window.getNow ? window.attIso(new Date(window.getNow())) : new Date().toISOString().slice(0, 10);
+  const [creating, setCreating] = React.useState(false);
+  const [draft, setDraft] = React.useState({ title: '', assessedOn: today, maxMarks: '50' });
+  const [marking, setMarking] = React.useState(null);   // assessment
+  const [marks, setMarks] = React.useState({});
+
+  const openCreate = () => { setDraft({ title: '', assessedOn: today, maxMarks: '50' }); setCreating(true); };
+  const create = () => {
+    if (!draft.title.trim() || !draft.assessedOn || !(Number(draft.maxMarks) > 0)) return;
+    const row = KS.createAssessment({ classId: cls.id, subject: cls.name.replace(/^(GCSE|A-?Level)\s+/i, ''), title: draft.title, assessedOn: draft.assessedOn, maxMarks: draft.maxMarks, createdBy: me.id });
+    setCreating(false);
+    openMarks({ ...row, results: {} });
+  };
+  const openMarks = (a) => {
+    const m = {}; students.forEach(s => { const r = (a.results || {})[s.id]; m[s.id] = r && typeof r.marks === 'number' ? String(r.marks) : ''; });
+    setMarks(m); setMarking(a);
+  };
+  const saveMarks = () => {
+    const clean = {};
+    Object.entries(marks).forEach(([sid, v]) => { clean[sid] = v === '' ? '' : Math.max(0, Math.min(marking.maxMarks, Number(v))); });
+    KS.recordResults(marking.id, clean);
+    setMarking(null);
+  };
+
+  return (
+    <Card title="Assessments" subtitle="Tests and papers with a mark out of a maximum. Pupils see a result only once it’s published."
+      actions={[<Btn key="n" variant="primary" icon="plus" small onClick={openCreate}>New assessment</Btn>]}>
+      {list.length === 0 ? (
+        <div style={{ padding: '28px 20px' }}>
+          <EmptyState icon="chart" title="No assessments yet" message="Add a test or paper to record marks — or flag a tracker score column as “counts as an assessment”." />
+        </div>
+      ) : list.map((a, i) => (
+        <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 18px', borderTop: i ? `1px solid ${DS.border}` : 'none' }}>
+          <div style={{ width: 46, textAlign: 'center', flexShrink: 0 }}>
+            <div style={{ fontSize: 10.5, color: DS.muted, textTransform: 'uppercase', fontWeight: 600 }}>{PG_FMT_DATE(a.assessedOn).split(' ')[1]}</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: color || DS.accent, lineHeight: 1.1 }}>{PG_FMT_DATE(a.assessedOn).split(' ')[0]}</div>
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 13.5, fontWeight: 600, color: DS.text }}>{a.title}</span>
+              {a.source === 'tracker' && <StatusPill tone="info">From tracker</StatusPill>}
+              {a.published ? <StatusPill tone="positive">Published</StatusPill> : <StatusPill tone="neutral">Not published</StatusPill>}
+            </div>
+            <div style={{ fontSize: 12, color: DS.muted, marginTop: 2 }}>
+              Out of {a.maxMarks} · {a.resultCount}/{students.length} marked{a.classAvgPct != null ? ` · class average ${a.classAvgPct}%` : ''}
+              {a.source === 'tracker' && ` · ${a.trackerName}`}
+            </div>
+          </div>
+          {a.source === 'tracker'
+            ? <Btn variant="ghost" icon="edit" small onClick={() => window.__navigate && window.__navigate('teacher', 'tracking')}>Edit in tracker</Btn>
+            : <Btn variant="secondary" icon="edit" small onClick={() => openMarks(a)}>Enter marks</Btn>}
+          <Btn variant={a.published ? 'ghost' : 'primary'} small onClick={() => KS.setPublished(a.id, !a.published)}>{a.published ? 'Unpublish' : 'Publish'}</Btn>
+        </div>
+      ))}
+
+      <Modal open={creating} onClose={() => setCreating(false)} icon="chart" title="New assessment" subtitle={`${cls.name} · ${cls.group}`}
+        footer={<><Btn variant="secondary" onClick={() => setCreating(false)}>Cancel</Btn><Btn variant="primary" icon="check" onClick={create}>Create &amp; enter marks</Btn></>}>
+        <Field label="Title" required><Input value={draft.title} onChange={e => setDraft(d => ({ ...d, title: e.target.value }))} placeholder="e.g. Mock paper 2 (calculator)" /></Field>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 14px' }}>
+          <Field label="Date sat" required><Input type="date" value={draft.assessedOn} onChange={e => setDraft(d => ({ ...d, assessedOn: e.target.value }))} icon="calendar" /></Field>
+          <Field label="Out of (marks)" required><Input type="number" min="1" value={draft.maxMarks} onChange={e => setDraft(d => ({ ...d, maxMarks: e.target.value }))} /></Field>
+        </div>
+      </Modal>
+
+      <Modal open={!!marking} onClose={() => setMarking(null)} icon="edit" width={520}
+        title={marking ? `Marks · ${marking.title}` : ''} subtitle={marking ? `Out of ${marking.maxMarks}. Leave blank for a pupil who didn’t sit it — a blank is not a zero.` : ''}
+        footer={<><Btn variant="secondary" onClick={() => setMarking(null)}>Cancel</Btn><Btn variant="primary" icon="check" onClick={saveMarks}>Save marks</Btn></>}>
+        <div style={{ maxHeight: 360, overflowY: 'auto' }}>
+          {students.map((s, i) => {
+            const v = marks[s.id] ?? '';
+            const pct = v === '' || !marking ? null : Math.round((Number(v) / marking.maxMarks) * 100);
+            return (
+              <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 2px', borderTop: i ? `1px solid ${DS.border}` : 'none' }}>
+                <span style={{ flex: 1, fontSize: 13, color: DS.text }}>{studentName(s)}</span>
+                <Input type="number" min="0" max={marking ? marking.maxMarks : undefined} value={v}
+                  onChange={e => setMarks(m => ({ ...m, [s.id]: e.target.value }))} style={{ width: 90 }} />
+                <span style={{ width: 44, textAlign: 'right', fontSize: 12, color: DS.muted, fontVariantNumeric: 'tabular-nums' }}>{pct == null ? '' : `${pct}%`}</span>
+              </div>
+            );
+          })}
+          {!students.length && <div style={{ fontSize: 13, color: DS.muted }}>No pupils enrolled in this class.</div>}
+        </div>
+      </Modal>
+    </Card>
+  );
+};
+
+// ── Predicted & target grades (decision #28) ────────────────────────────────────
+// A teacher's professional judgement, stored per pupil per class — never
+// "attainment + 4". Pupils, the admin profile and new reports read exactly what is
+// set here; a pupil with nothing set sees "Not set yet". The indicative grade (from
+// results) is shown beside it only as a guide. "On track" is derived: the latest
+// result's indicative grade is at or above the target.
+const ClassTargetsPanel = ({ cls, students, rows, level }) => {
+  if (window.useAssessments) window.useAssessments();   // re-render on target writes
+  const T = window.klasioTargets;
+  const G = window.klasioGrades;
+  const me = window.teacherMetrics ? window.teacherMetrics.getPrincipal() : { id: 't1' };
+  const map = T ? T.forClass(cls.id) : {};
+  const grades = G ? G.gradesFor({ level }) : [];
+  const [editing, setEditing] = React.useState(false);
+  const [draft, setDraft] = React.useState({});
+  if (!T) return null;
+  const rowOf = (id) => rows.find(r => r.id === id) || {};
+  const latestGrade = (id) => { const r = rowOf(id); return r.latest != null && G ? G.pctToGrade(r.latest, { level }) : null; };
+  const onTrack = (id) => {
+    const t = map[id] && map[id].target, g = latestGrade(id);
+    return t && g && grades.includes(t) ? grades.indexOf(g) <= grades.indexOf(t) : null;
+  };
+  const openEdit = () => {
+    const d = {};
+    students.forEach(s => { const r = map[s.id] || {}; d[s.id] = { predicted: r.predicted || '', target: r.target || '' }; });
+    setDraft(d); setEditing(true);
+  };
+  const save = () => {
+    Object.entries(draft).forEach(([sid, v]) => {
+      const r = map[sid] || {};
+      if ((r.predicted || '') !== v.predicted || (r.target || '') !== v.target) T.set(sid, cls.id, v, me.id);
+    });
+    setEditing(false);
+  };
+  const setCount = students.filter(s => map[s.id] && map[s.id].predicted).length;
+  const notSet = <span style={{ fontSize: 12, color: DS.faint }}>Not set</span>;
+  const gradeSelect = (sid, field) => (
+    <Select value={(draft[sid] || {})[field] || ''} onChange={e => setDraft(d => ({ ...d, [sid]: { ...(d[sid] || {}), [field]: e.target.value } }))} style={{ width: 96 }}>
+      <option value="">—</option>
+      {grades.map(g => <option key={g} value={g}>{g}</option>)}
+    </Select>
+  );
+  return (
+    <Card title="Predicted & target grades"
+      subtitle={`Your judgement on the ${level} scale — one per pupil for this subject; pupils and reports see what you set. ${setCount}/${students.length} predicted.`}
+      actions={[<Btn key="e" variant="secondary" icon="edit" small onClick={openEdit} disabled={!students.length}>Edit grades</Btn>]}>
+      {students.length === 0 ? (
+        <div style={{ padding: '24px 20px', fontSize: 13, color: DS.muted }}>No pupils enrolled.</div>
+      ) : (
+        <Table pagination={students.length > 10}
+          cols={['Pupil', { label: 'Indicative', align: 'right' }, { label: 'Predicted', align: 'right' }, { label: 'Target', align: 'right' }, 'Status']}
+          rows={students.map(s => {
+            const r = map[s.id] || {};
+            const ot = onTrack(s.id);
+            return [
+              <span style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>{studentName(s)}</span>,
+              <span style={{ fontSize: 12.5, color: DS.muted }}>{(rowOf(s.id).grade) || '—'}</span>,
+              r.predicted ? <span style={{ fontSize: 13.5, fontWeight: 700, color: DS.text }}>{r.predicted}</span> : notSet,
+              r.target ? <span style={{ fontSize: 13, color: DS.sub }}>{r.target}</span> : notSet,
+              ot == null
+                ? <StatusPill tone="neutral">{!r.target ? 'No target' : 'No results'}</StatusPill>
+                : <StatusPill tone={ot ? 'positive' : 'warning'}>{ot ? 'On track' : 'Below target'}</StatusPill>,
+            ];
+          })}
+        />
+      )}
+      <Modal open={editing} onClose={() => setEditing(false)} icon="edit" width={600}
+        title="Predicted & target grades" subtitle={`${cls.name} · ${cls.group}. Blank means not set. The indicative grade is from results and is only a guide.`}
+        footer={<><Btn variant="secondary" onClick={() => setEditing(false)}>Cancel</Btn><Btn variant="primary" icon="check" onClick={save}>Save grades</Btn></>}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px 96px 96px', gap: '0 12px', alignItems: 'center', fontSize: 11, fontWeight: 700, color: DS.faint, letterSpacing: '0.06em', textTransform: 'uppercase', padding: '0 2px 8px' }}>
+          <span>Pupil</span><span style={{ textAlign: 'right' }}>Indicative</span><span>Predicted</span><span>Target</span>
+        </div>
+        <div style={{ maxHeight: 380, overflowY: 'auto' }}>
+          {students.map((s, i) => (
+            <div key={s.id} style={{ display: 'grid', gridTemplateColumns: '1fr 80px 96px 96px', gap: '0 12px', alignItems: 'center', padding: '7px 2px', borderTop: i ? `1px solid ${DS.border}` : 'none' }}>
+              <span style={{ fontSize: 13, color: DS.text }}>{studentName(s)}</span>
+              <span style={{ fontSize: 12.5, color: DS.muted, textAlign: 'right' }}>{rowOf(s.id).grade || '—'}</span>
+              {gradeSelect(s.id, 'predicted')}
+              {gradeSelect(s.id, 'target')}
+            </div>
+          ))}
+        </div>
+      </Modal>
+    </Card>
+  );
+};
+
+// ── Class Progress tab (was two tabs: Progress + Analytics) ─────────────────────
+const ClassProgressTab = ({ cls, color, classHw, students, goProfile }) => {
+  if (window.useAssessments) window.useAssessments();   // re-render on marks / publish
+  const level = pgLevelFor(cls.name, (students[0] || {}).year);
+  const rows = pgRowsFor(students, cls.id, level);
+  const att = window.klasioScores ? window.klasioScores.classAttainment(cls.id) : { series: [], avg: null };
+  const hwAvg = pgMean(rows.map(r => r.homework).filter(n => n != null));
+  const hwLabels = classHw.map(h => h.title.split(':')[0].slice(0, 12));
+  const hwRates = classHw.map(h => h.total ? Math.round(h.submitted / h.total * 100) : 0);
+  const flagged = rows.filter(r => r.trend === 'down').length;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <StatBand stats={[
+        { label: 'Attainment', value: att.avg == null ? '—' : `${att.avg}%`, sub: `class average · ${att.series.length} assessment${att.series.length === 1 ? '' : 's'}` },
+        { label: 'Homework', value: hwAvg == null ? '—' : `${hwAvg}%`, sub: 'average of marked work — effort, kept separate' },
+        { label: 'Slipping', value: flagged, sub: flagged ? 'attainment trending down' : 'no downward trends', tone: flagged ? DS.warning : undefined },
+        { label: 'Pupils', value: students.length, sub: `${rows.filter(r => r.attainment != null).length} with results` },
+      ]} />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 20 }}>
+        <Card title="Attainment trend" subtitle="Class average on each assessment">
+          <div style={{ padding: '16px 20px 8px' }}>
+            {att.series.length >= 2
+              ? <LineChart labels={att.series.map(p => PG_FMT_DATE(p.date))} series={[{ label: 'Class avg', data: att.series.map(p => p.pct), color }]} height={200} area />
+              : <div style={{ padding: '40px 0', textAlign: 'center', fontSize: 13, color: DS.muted }}>{att.series.length ? 'One assessment so far — a trend needs two.' : 'No results yet. Add an assessment below.'}</div>}
           </div>
         </Card>
-        <Card title="Student breakdown">
-          <div>
-            {cls.studentList.map((name, i) => {
-              const base = trend[trend.length - 1];
-              const offset = (i % 5) - 2;
-              const score = Math.max(42, Math.min(99, Math.round(base + offset * 5)));
-              const up = offset >= 0;
-              return (
-                <div key={name} style={{ display:'flex', alignItems:'center', gap:12, padding:'10px 18px', borderTop:`1px solid ${DS.border}` }}>
-                  <Avatar name={name} size={32} color={color} />
-                  <div style={{ flex:1, minWidth:0, fontSize:13, fontWeight:500, color:DS.text }}>{name}</div>
-                  <Sparkline data={teacherClassTrend(name, cls.avgScore)} color={up ? DS.success : DS.danger} width={70} height={24} />
-                  <ScorePill score={score} />
-                  <Icon name={up ? 'trending_up' : 'trending_dn'} size={14} color={up ? DS.success : DS.danger} />
-                </div>
-              );
-            })}
+        <Card title="Homework submission by task" subtitle="Share of the class that handed each one in">
+          <div style={{ padding: '16px 20px 8px' }}>
+            {hwLabels.length ? <BarChart labels={hwLabels} data={hwRates} color={color} height={200} /> : <div style={{ padding: '40px 0', textAlign: 'center', fontSize: 13, color: DS.muted }}>No homework set yet.</div>}
           </div>
         </Card>
       </div>
-      <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
-        <Card title="Summary">
-          <div style={{ padding:'14px 18px' }}>
-            {[
-              ['Students', cls.students],
-              ['Avg score', cls.avgScore + '%'],
-              ['Attendance', cls.attendance + '%'],
-              ['Next session', cls.nextSession],
-            ].map(([l, v]) => (
-              <div key={l} style={{ display:'flex', justifyContent:'space-between', padding:'8px 0', borderBottom:`1px solid ${DS.border}`, fontSize:13 }}>
-                <span style={{ color:DS.muted }}>{l}</span><span style={{ color:DS.text, fontWeight:500 }}>{v}</span>
-              </div>
-            ))}
-          </div>
-        </Card>
-        <Card title="Grade distribution">
-          <div style={{ padding:'16px 18px' }}>
-            {dist.map(d => (
-              <div key={d.g} style={{ marginBottom:12 }}>
-                <div style={{ display:'flex', justifyContent:'space-between', marginBottom:5 }}>
-                  <span style={{ fontSize:12.5, color:DS.sub }}>{d.g}</span>
-                  <span style={{ fontSize:12.5, fontWeight:600, color:d.c }}>{d.n}</span>
-                </div>
-                <div style={{ height:6, background:DS.surface, borderRadius:3, overflow:'hidden' }}>
-                  <div style={{ width:`${cls.students ? (d.n / cls.students) * 100 : 0}%`, height:'100%', background:d.c, borderRadius:3 }} />
-                </div>
-              </div>
-            ))}
-          </div>
-        </Card>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 300px', gap: 20, alignItems: 'start' }}>
+        <ProgressStudentTable rows={rows} color={color} onOpen={goProfile ? (r) => goProfile(r.name) : null} />
+        <ProgressGradeDistribution rows={rows} level={level} />
       </div>
+      <ClassTargetsPanel cls={cls} students={students} rows={rows} level={level} />
+      <ClassAssessmentsPanel cls={cls} students={students} color={color} />
     </div>
   );
 };
 
-// ── Analytics tab ───────────────────────────────────────────────────────────────
-const ClassAnalyticsTab = ({ cls, color, classHw }) => {
-  const labels = ['4 Mar','11 Mar','18 Mar','25 Mar','1 Apr','8 Apr','15 Apr','22 Apr'];
-  const trend = classTrendSeries(cls.id + cls.group, cls.avgScore);
-  const dist = classGradeDist(cls.students, cls.avgScore, color);
-  const hwLabels = classHw.map(h => h.title.split(':')[0].slice(0, 12));
-  const hwRates = classHw.map(h => h.total ? Math.round(h.submitted / h.total * 100) : 0);
-  const sub = classHw.reduce((s, h) => s + h.submitted, 0), tot = classHw.reduce((s, h) => s + h.total, 0);
+// ─── Progress (top-level teacher destination) ─────────────────────────────────
+// "How are my pupils doing across everything I teach" — the question a teacher
+// arrives with. Scoped to the teacher's own classes; per-class analysis (and
+// assessment management) lives on each class's Progress tab.
+const TeacherProgressPage = () => {
+  if (window.useAssessments) window.useAssessments();
+  const store = useAdminStore();
+  const TM = window.teacherMetrics;
+  const classes = TM ? TM.getMyClasses() : [];
+  const [classId, setClassId] = React.useState('all');
+  const cls = classes.find(c => c.id === classId) || null;
+  const myIds = classes.map(c => c.id);
+  const students = cls
+    ? store.students.filter(s => (s.classIds || []).includes(cls.id))
+    : store.students.filter(s => (s.classIds || []).some(id => myIds.includes(id)));
+  const level = cls ? pgLevelFor(cls.name, (students[0] || {}).year) : null;
+  const rows = pgRowsFor(students, cls ? cls.id : null, level, cls ? null : myIds);
+  const att = cls && window.klasioScores ? window.klasioScores.classAttainment(cls.id) : null;
+  const attAvg = pgMean(rows.map(r => r.attainment).filter(n => n != null));
+  const hwAvg = pgMean(rows.map(r => r.homework).filter(n => n != null));
+  const slipping = rows.filter(r => r.trend === 'down');
+  const low = rows.filter(r => r.attainment != null && r.attainment < 55 && r.trend !== 'down');
+  const noResults = rows.filter(r => r.attainment == null).length;
+  const openStudent = (r) => { window.__adminParam = r.id; window.__navigate && window.__navigate('teacher', 'student_profile'); };
+  const openClassTab = (c) => { window.__classTab = 'progress'; openTeacherClass(c); };
+  const color = cls ? subjectColor(cls.name) : DS.accent;
+
   return (
-    <div style={{ display:'flex', flexDirection:'column', gap:20 }}>
-      <div style={{ display:'flex', gap:14, flexWrap:'wrap' }}>
-        <Card style={{ flex:1, minWidth:150 }}><ClassStat label="Avg score" value={cls.avgScore + '%'} color={cls.avgScore >= 80 ? DS.success : DS.warning} icon="chart" /></Card>
-        <Card style={{ flex:1, minWidth:150 }}><ClassStat label="Attendance" value={cls.attendance + '%'} color={cls.attendance >= 90 ? DS.success : DS.warning} icon="check" /></Card>
-        <Card style={{ flex:1, minWidth:150 }}><ClassStat label="HW completion" value={(tot ? Math.round(sub / tot * 100) : 0) + '%'} color={color} icon="clip" /></Card>
-        <Card style={{ flex:1, minWidth:150 }}><ClassStat label="Enrolment" value={cls.students} icon="users" /></Card>
+    <div style={pageFrame()}>
+      <PageHeader title="Progress"
+        subtitle="Assessment results (attainment) and marked homework (effort), kept as separate measures. Grades shown are indicative, not official."
+        actions={cls ? [<Btn key="m" variant="secondary" icon="chart" small onClick={() => openClassTab(cls)}>Manage assessments</Btn>] : []} />
+
+      <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
+        {[{ id: 'all', group: 'All my classes' }, ...classes].map(c => {
+          const on = classId === c.id;
+          const col = c.id === 'all' ? DS.accent : subjectColor(c.name);
+          return (
+            <button key={c.id} onClick={() => setClassId(c.id)} style={{
+              padding: '7px 14px', borderRadius: 20, cursor: 'pointer', fontSize: 12.5, fontWeight: on ? 600 : 500,
+              border: `1px solid ${on ? col : DS.border}`, background: on ? col + '18' : DS.bg, color: on ? col : DS.muted,
+            }}>{c.group}{c.name ? <span style={{ opacity: 0.7 }}> · {c.name.replace(/^(GCSE|A-?Level)\s+/i, '')}</span> : null}</button>
+          );
+        })}
       </div>
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:20 }}>
-        <Card title="Attainment trend">
-          <div style={{ padding:'16px 20px 8px' }}>
-            <LineChart labels={labels} series={[{ label:'Class avg', data:trend, color }]} height={200} area />
+
+      <StatBand style={{ marginBottom: 20 }} stats={[
+        { label: 'Attainment', value: attAvg == null ? '—' : `${attAvg}%`, sub: cls ? 'this class · assessment results' : 'across your classes · assessment results' },
+        { label: 'Homework', value: hwAvg == null ? '—' : `${hwAvg}%`, sub: 'marked work — effort, kept separate' },
+        { label: 'Slipping', value: slipping.length, sub: slipping.length ? 'attainment trending down' : 'no downward trends', tone: slipping.length ? DS.warning : undefined },
+        { label: 'No results yet', value: noResults, sub: `of ${rows.length} pupil${rows.length === 1 ? '' : 's'}`, tone: noResults ? DS.muted : undefined },
+      ]} />
+
+      {cls && att && (
+        <Card title={`Attainment trend — ${cls.group}`} subtitle="Class average on each assessment" style={{ marginBottom: 20 }}>
+          <div style={{ padding: '16px 20px 8px' }}>
+            {att.series.length >= 2
+              ? <LineChart labels={att.series.map(p => PG_FMT_DATE(p.date))} series={[{ label: 'Class avg', data: att.series.map(p => p.pct), color }]} height={200} area />
+              : <EmptyState icon="chart" title={att.series.length ? 'One assessment so far' : 'No assessment results yet'}
+                  message="Add an assessment on the class’s Progress tab, or flag a tracker score column as “counts as an assessment”."
+                  action={<Btn variant="primary" icon="plus" small onClick={() => openClassTab(cls)}>Add an assessment</Btn>} />}
           </div>
         </Card>
-        <Card title="Homework submission by task">
-          <div style={{ padding:'16px 20px 8px' }}>
-            {hwLabels.length ? <BarChart labels={hwLabels} data={hwRates} color={color} height={200} /> : <div style={{ padding:'40px 0', textAlign:'center', fontSize:13, color:DS.muted }}>No homework data yet.</div>}
-          </div>
-        </Card>
-      </div>
-      <Card title="Grade distribution">
-        <div style={{ padding:'18px 20px', display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:16 }}>
-          {dist.map(d => (
-            <div key={d.g} style={{ textAlign:'center', padding:'14px', border:`1px solid ${DS.border}`, borderRadius:10 }}>
-              <div style={{ fontSize:28, fontWeight:800, color:d.c, lineHeight:1 }}>{d.n}</div>
-              <div style={{ fontSize:12, color:DS.muted, marginTop:6 }}>{d.g}</div>
+      )}
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 300px', gap: 20, alignItems: 'start' }}>
+        <ProgressStudentTable rows={rows} color={color} onOpen={openStudent} title={cls ? `Pupils · ${cls.group}` : `Your pupils · ${rows.length}`} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {cls ? <ProgressGradeDistribution rows={rows} level={level} /> : null}
+          <Card title="Worth a look" subtitle="Slipping, or averaging under 55%">
+            <div>
+              {[...slipping, ...low].slice(0, 8).map((r, i) => (
+                <HoverRow key={r.id} onClick={() => openStudent(r)} last={i === Math.min(slipping.length + low.length, 8) - 1}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>{r.name}</div>
+                    <div style={{ fontSize: 11.5, color: DS.muted }}>{r.trend === 'down' ? 'Attainment trending down' : 'Low attainment'}{r.homework != null ? ` · homework ${r.homework}%` : ''}</div>
+                  </div>
+                  <ScorePill score={r.attainment} />
+                </HoverRow>
+              ))}
+              {slipping.length + low.length === 0 && <div style={{ padding: '16px 18px', fontSize: 13, color: DS.muted }}>Nobody is slipping on the results so far.</div>}
             </div>
-          ))}
+          </Card>
         </div>
-      </Card>
+      </div>
     </div>
   );
 };
 
 // ── Settings tab ────────────────────────────────────────────────────────────────
-const ClassSettingsTab = ({ cls, color, subject, level, bannerTheme, setBannerTheme }) => {
+const ClassSettingsTab = ({ cls, color, subject, level, background, canChangeBackground, onChangeBackground }) => {
   const [notif, setNotif] = React.useState({ submissions:true, attendance:true, messages:false });
   const [posts, setPosts] = React.useState({ studentsPost:false, studentsComment:true });
   const [reqMsg, setReqMsg] = React.useState('');
-  const requestChange = () => {
-    if (window.klasioAudit) window.klasioAudit('request_class_change', 'timetable', { by:'teacher', class:cls.group });
-    setReqMsg('Request sent to your centre admin — they own class scheduling and enrolment.');
+  const [reqOpen, setReqOpen] = React.useState(false);
+  // A real request into the admin's Classes queue (ClassRequests.jsx), scoped to
+  // this class; its status and the admin's reply show in the card below.
+  const onSent = () => {
+    setReqMsg('Sent to your centre admin — their reply will appear below.');
     setTimeout(() => setReqMsg(''), 6000);
   };
   const row = (label, hint, node) => (
@@ -803,22 +1102,22 @@ const ClassSettingsTab = ({ cls, color, subject, level, bannerTheme, setBannerTh
   );
   return (
     <div style={{ maxWidth:720, display:'flex', flexDirection:'column', gap:20 }}>
-      <Card title="Appearance" subtitle="Personalise how this class looks to you">
-        <div style={{ padding:'16px 18px' }}>
-          <div style={{ fontSize:12, fontWeight:600, color:DS.sub, marginBottom:10 }}>Banner theme</div>
-          <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
-            {CLASS_BANNER_THEMES.map(t => {
-              const g = classBannerGradient(t.id, color);
-              const active = bannerTheme === t.id;
-              return (
-                <button key={t.id} onClick={() => setBannerTheme(t.id)} title={t.name} style={{
-                  width:64, height:40, borderRadius:8, cursor:'pointer',
-                  background:`linear-gradient(120deg, ${g.from}, ${g.to})`,
-                  border: active ? `2px solid ${DS.text}` : '2px solid transparent', boxShadow: active ? '0 0 0 2px #fff inset' : 'none',
-                }} />
-              );
-            })}
+      {/* One class-wide background: everyone in the class sees the same banner and
+          class cards, so it works as a wayfinding cue. */}
+      <Card title="Appearance" subtitle="How this class looks to everyone in it">
+        <div style={{ padding:'16px 18px', display:'flex', alignItems:'center', gap:16, flexWrap:'wrap' }}>
+          <div style={{ position:'relative', width:160, height:64, borderRadius:10, overflow:'hidden', flexShrink:0, boxShadow:DS.cardShadow }}>
+            <CoverArt cover={background} variant="banner" />
           </div>
+          <div style={{ flex:1, minWidth:180 }}>
+            <div style={{ fontSize:13, fontWeight:500, color:DS.text }}>Background</div>
+            <div style={{ fontSize:12, color:DS.muted, marginTop:2 }}>
+              {background.isDerived ? 'Using the subject default.' : 'Chosen for this class.'} Shown on the class banner and on pupils’ class cards.
+            </div>
+          </div>
+          {canChangeBackground
+            ? <Btn variant="secondary" icon="image" small onClick={onChangeBackground}>Change background</Btn>
+            : <span style={{ fontSize:12.5, color:DS.muted }}>Only the class teacher or a centre admin can change this.</span>}
         </div>
       </Card>
 
@@ -840,11 +1139,13 @@ const ClassSettingsTab = ({ cls, color, subject, level, bannerTheme, setBannerTh
           <div style={{ display:'flex', alignItems:'center', gap:10, marginTop:14, padding:'11px 14px', background:DS.surface, borderRadius:9 }}>
             <Icon name="lock" size={15} color={DS.muted} />
             <span style={{ flex:1, fontSize:12.5, color:DS.muted }}>Class scheduling and enrolment are managed by your centre admin.</span>
-            <Btn variant="secondary" icon="send" small onClick={requestChange}>Request a change</Btn>
+            <Btn variant="secondary" icon="send" small onClick={() => setReqOpen(true)}>Request a change</Btn>
           </div>
           {reqMsg && <div style={{ display:'flex', alignItems:'center', gap:8, marginTop:10, fontSize:12.5, color:DS.success }}><Icon name="check" size={14} color={DS.success} />{reqMsg}</div>}
         </div>
       </Card>
+      <RequestClassModal open={reqOpen} onClose={() => setReqOpen(false)} cls={cls} onSent={onSent} />
+      <MyClassRequests classId={cls.id} title="Requests about this class" />
 
       <Card title="Notifications">
         <div style={{ padding:'2px 18px 8px' }}>
@@ -869,7 +1170,7 @@ const TeacherClassDetailPage = () => {
   const id  = window.__adminParam;
   const principalName = window.teacherMetrics ? window.teacherMetrics.getPrincipal().name : 'Heebz A';
   const [activeTab, setActiveTab] = React.useState('stream');
-  const [bannerTheme, setBannerThemeState] = React.useState(() => classLS.getBanner(id));
+  const [backgroundOpen, setBackgroundOpen] = React.useState(false);
   const [stream, setStream] = React.useState(() => classLS.getStream(id) || []);
   const backToClasses = () => window.__navigate && window.__navigate('teacher', 'classes');
 
@@ -886,7 +1187,8 @@ const TeacherClassDetailPage = () => {
     students: sc.students,
     color: e.color || subjectColor(sc.name),
     nextSession: e.nextSession || `${sc.day} ${startTimeOf(sc.time)}`,
-    avgScore:   e.avgScore   != null ? e.avgScore   : 0,
+    // Attainment is this class's assessment results (decision #50), never a mock figure.
+    avgScore:   (window.klasioScores && window.klasioScores.classAttainment(sc.id).avg),
     attendance: e.attendance != null ? e.attendance : 0,
     hwPending:  e.hwPending  != null ? e.hwPending  : 0,
     studentList: (() => {
@@ -909,8 +1211,10 @@ const TeacherClassDetailPage = () => {
     } else {
       setStream(existing || []);
     }
-    setBannerThemeState(classLS.getBanner(id));
-    setActiveTab('stream');
+    setBackgroundOpen(false);
+    // A deep link (e.g. Progress → "Manage assessments") may name the tab to open.
+    const tab = window.__classTab; window.__classTab = null;
+    setActiveTab(tab && CLASS_TABS.some(t => t.id === tab) ? tab : 'stream');
   }, [id]);
 
   if (!cls) return (
@@ -929,6 +1233,8 @@ const TeacherClassDetailPage = () => {
   // Homework set for this group — read from the homework store through the shared
   // selector, so this tab, the Homework page and the bell badge cannot disagree.
   const classHw = window.klasioHomework ? window.klasioHomework.listClassHomework(cls.group) : [];
+  // Enrolled pupils as records (ids), for anything keyed by student — results, profile.
+  const rosterStudents = store.students.filter(s => Array.isArray(s.classIds) && s.classIds.includes(cls.id));
 
   // Best-effort link to the shared student profile — only if the roster name resolves
   // to a real record in the admin store.
@@ -937,260 +1243,109 @@ const TeacherClassDetailPage = () => {
     if (s) { window.__adminParam = s.id; window.__navigate && window.__navigate('teacher', 'student_profile'); }
   };
 
-  const setBannerTheme = (v) => { setBannerThemeState(v); classLS.setBanner(id, v); };
+  // The class's background through the one read path (classCovers.jsx). Only the
+  // class's own teacher may change it here (an admin can, from the admin class page).
+  const background = window.klasioCovers.classCover(sc, store.subjects);
+  const canChangeBackground = window.klasioCovers.canChangeBackground({ role: 'teacher', name: principalName }, sc);
+  const bannerSubtitle = `${cls.group} · ${cls.day} ${cls.time} · ${cls.room}`;
   const postAnnouncement = (text) => { const next = [{ id:Date.now(), author:principalName, at:Date.now(), text }, ...stream]; setStream(next); classLS.setStream(id, next); };
   const deleteAnnouncement = (pid) => { const next = stream.filter(p => p.id !== pid); setStream(next); classLS.setStream(id, next); };
 
   return (
     <ClassDetailShell
       onBack={backToClasses} backLabel="My Classes"
-      color={color} bannerTheme={bannerTheme}
+      color={color} cover={background}
       chips={[subject, level, `${cls.students} students`]}
-      title={cls.name} subtitle={`${cls.group} · ${cls.day} ${cls.time} · ${cls.room}`}
-      bannerRight={<ClassBannerCustomiser value={bannerTheme} onChange={setBannerTheme} color={color} />}
+      title={cls.name} subtitle={bannerSubtitle}
+      bannerRight={canChangeBackground ? <Btn variant="secondary" icon="image" small onClick={() => setBackgroundOpen(true)}>Change background</Btn> : null}
       tabs={CLASS_TABS} activeTab={activeTab} onTab={setActiveTab}
     >
-      {activeTab === 'stream'     && <ClassStreamTab cls={cls} color={color} subject={subject} level={level} stream={stream} onPost={postAnnouncement} onDelete={deleteAnnouncement} classHw={classHw} principalName={principalName} code={code} />}
-      {activeTab === 'students'   && <ClassStudentsTab cls={cls} color={color} goProfile={goProfile} />}
+      {activeTab === 'stream'     && <ClassStreamTab cls={cls} color={color} subject={subject} level={level} stream={stream} announcements={window.classAnnouncementsFor ? window.classAnnouncementsFor(window.__getCentre ? window.__getCentre() : 'bm', cls.id) : []} onPost={postAnnouncement} onDelete={deleteAnnouncement} classHw={classHw} principalName={principalName} code={code} />}
+      {activeTab === 'students'   && <ClassStudentsTab cls={cls} color={color} goProfile={goProfile} students={rosterStudents} />}
       {activeTab === 'homework'   && <ClassHomeworkTab cls={cls} color={color} classHw={classHw} />}
       {activeTab === 'planner'    && <ClassPlannerTab cls={cls} color={color} />}
       {activeTab === 'attendance' && <ClassAttendanceTab cls={cls} color={color} />}
-      {activeTab === 'progress'   && <ClassProgressTab cls={cls} color={color} />}
-      {activeTab === 'analytics'  && <ClassAnalyticsTab cls={cls} color={color} classHw={classHw} />}
-      {activeTab === 'settings'   && <ClassSettingsTab cls={cls} color={color} subject={subject} level={level} bannerTheme={bannerTheme} setBannerTheme={setBannerTheme} />}
+      {activeTab === 'progress'   && <ClassProgressTab cls={cls} color={color} classHw={classHw} students={rosterStudents} goProfile={goProfile} />}
+      {activeTab === 'settings'   && <ClassSettingsTab cls={cls} color={color} subject={subject} level={level} background={background} canChangeBackground={canChangeBackground} onChangeBackground={() => setBackgroundOpen(true)} />}
+      {canChangeBackground && (
+        <ClassBackgroundDialog open={backgroundOpen} onClose={() => setBackgroundOpen(false)}
+          cover={background} classId={sc.id} subjectName={window.klasioCovers.coverSubjectName(sc, store.subjects)}
+          title={cls.name} subtitle={bannerSubtitle}
+          onSave={sel => store.setClassBackground(sc.id, sel, { role: 'teacher', name: principalName })} />
+      )}
     </ClassDetailShell>
-  );
-};
-
-// ─── Progress Overview ───────────────────────────────────────────────────────
-const TeacherProgressPage = () => {
-  const [activeClass, setActiveClass] = React.useState(teacherClasses[0]);
-
-  const mockScores = {
-    1: [76,79,74,81,83,80,82,84],
-    2: [69,71,68,72,73,70,74,76],
-    3: [85,87,88,90,91,88,92,94],
-    4: [75,77,76,79,80,78,81,83],
-  };
-
-  const labels = ['4 Mar','11 Mar','18 Mar','25 Mar','1 Apr','8 Apr','15 Apr','22 Apr'];
-
-  return (
-    <div style={pageFrame()}>
-      <PageHeader title="Student Progress" subtitle="Track score trends and identify students who need support" actions={[
-        <Btn key="r" variant="secondary" icon="download" small>Export Report</Btn>
-      ]} />
-
-      {/* Class tabs */}
-      <div style={{ display:'flex', gap:10, marginBottom:24, flexWrap:'wrap' }}>
-        {teacherClasses.map(cls => (
-          <button key={cls.id} onClick={() => setActiveClass(cls)} style={{
-            padding:'8px 16px', borderRadius:20, border:`1px solid ${activeClass.id===cls.id ? cls.color : DS.border}`,
-            background: activeClass.id===cls.id ? cls.color+'18' : DS.bg,
-            color: activeClass.id===cls.id ? cls.color : DS.muted,
-            fontSize:13, fontWeight: activeClass.id===cls.id ? 600 : 400, cursor:'pointer',
-          }}>{cls.group}</button>
-        ))}
-      </div>
-
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 320px', gap:20 }}>
-        <div>
-          <Card title={`Class Trend — ${activeClass.group}`} style={{ marginBottom:20 }} actions={[
-            <Badge key="b" variant="default">Last 8 assessments</Badge>
-          ]}>
-            <div style={{ padding:'16px 20px 8px' }}>
-              <LineChart
-                labels={labels}
-                series={[{ label:'Class avg', data:mockScores[activeClass.id] || mockScores[1], color:activeClass.color }]}
-                height={200}
-              />
-            </div>
-          </Card>
-
-          <Card title="Student Breakdown">
-            <div>
-              {activeClass.studentList.map((name, i) => {
-                const base = mockScores[activeClass.id][mockScores[activeClass.id].length-1];
-                const offset = (i % 5) - 2;
-                const score = Math.max(45, Math.min(99, base + offset * 5));
-                const trend = offset >= 0 ? 'up' : 'down';
-                return (
-                  <div key={name} style={{
-                    display:'flex', alignItems:'center', gap:12, padding:'10px 16px',
-                    borderBottom: i < activeClass.studentList.length-1 ? `1px solid ${DS.border}` : 'none',
-                  }}>
-                    <Avatar name={name} size={30} />
-                    <div style={{ flex:1 }}>
-                      <div style={{ fontSize:13, fontWeight:500, color:DS.text }}>{name}</div>
-                    </div>
-                    <Sparkline
-                      data={mockScores[activeClass.id].map((v,j) => Math.max(45, v + (j % 3 - 1) * 3 + offset * 2))}
-                      color={trend==='up' ? DS.success : DS.danger}
-                      width={70} height={24}
-                    />
-                    <ScorePill score={score} />
-                    <Icon name={trend==='up' ? 'trending_up' : 'trending_dn'} size={14} color={trend==='up' ? DS.success : DS.danger} />
-                  </div>
-                );
-              })}
-            </div>
-          </Card>
-        </div>
-
-        <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
-          <Card title="Class Summary">
-            <div style={{ padding:'16px' }}>
-              {[
-                ['Students',    activeClass.students],
-                ['Avg Score',   activeClass.avgScore + '%'],
-                ['Attendance',  activeClass.attendance + '%'],
-                ['HW to mark',  activeClass.hwPending],
-                ['Next session',activeClass.nextSession],
-              ].map(([l,v]) => (
-                <div key={l} style={{ display:'flex', justifyContent:'space-between', padding:'8px 0', borderBottom:`1px solid ${DS.border}`, fontSize:13 }}>
-                  <span style={{ color:DS.muted }}>{l}</span>
-                  <span style={{ color:DS.text, fontWeight:500 }}>{v}</span>
-                </div>
-              ))}
-            </div>
-          </Card>
-          <Card title="Grade Distribution">
-            <div style={{ padding:'16px' }}>
-              {[['A* / A', 2, DS.success],['B', 3, DS.accent],['C', 2, DS.warning],['D / U', 1, DS.danger]].map(([g,n,c]) => (
-                <div key={g} style={{ marginBottom:10 }}>
-                  <div style={{ display:'flex', justifyContent:'space-between', marginBottom:4 }}>
-                    <span style={{ fontSize:13, color:DS.sub }}>{g}</span>
-                    <span style={{ fontSize:13, fontWeight:600, color:c }}>{n} students</span>
-                  </div>
-                  <div style={{ height:6, background:DS.surface, borderRadius:3, overflow:'hidden' }}>
-                    <div style={{ width:`${(n/activeClass.students)*100}%`, height:'100%', background:c, borderRadius:3 }} />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </Card>
-        </div>
-      </div>
-    </div>
   );
 };
 
 // ─── Teacher Timetable Page ─────────────────────────────────────────────────────
 
-// The teacher's own slice of the centre timetable. It is NOT editable here — the
-// admin owns class creation and assignment (store.classes). This page just reads
-// store.classes.filter(c => c.teacher === me) and presents today's sessions plus
-// the weekly grid, with a "Take register" jump into the attendance page per session.
-// Shares the date/time/colour helpers + useAdminStore defined in AdminPages.jsx.
+// The teacher's sessions on a month calendar — the same grid the pupil's Sessions
+// page uses — and nothing else. Read-only: the admin owns class creation and
+// assignment (store.classes). A session opens the session drawer (when and where,
+// the register, the planned lesson, homework, files), which links to the register.
+// Sessions are the teacher's own classes plus any they're covering, each kept only
+// on the dates they're its effective teacher — the rule Attendance and the dashboard
+// hero read — on the shared clock (window.getNow), so the three always agree.
+const ttGroupShort = (group) => String(group || '').replace(/^Year\s*/i, 'Y').replace(/\s*[–-]\s*Group\s*/i, ' ');
+
 const TeacherTimetablePage = () => {
   const store = useAdminStore();
-  const tsStore = window.useTimesheetStore ? window.useTimesheetStore() : null;
   const me = store.teachers.find(t => t.name === 'Heebz A') || store.teachers[0];
-  const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-  const todayName = new Date().toLocaleDateString('en-GB', { weekday:'long' });
-  const todayISO = window.tsTodayISO ? window.tsTodayISO() : new Date().toISOString().slice(0, 10);
-  // A class is cancelled in the Today view if its session for today is in the cancelled set.
-  const isCancelledToday = (cls) => !!(tsStore && (tsStore.cancelled || []).includes(`${cls.id}|${todayISO}`)) && (todaySessions.length > 0);
+  const now = window.getNow ? window.getNow() : Date.now();
+  const today = new Date(now);
+  const [ym, setYm] = React.useState({ y: today.getFullYear(), m: today.getMonth() });
+  const [open, setOpen] = React.useState(null);   // { classId, date } in the session drawer
+  const month = monthGridModel(ym.y, ym.m);
+  const step = (n) => setYm(p => { const d = new Date(p.y, p.m + n, 1); return { y: d.getFullYear(), m: d.getMonth() }; });
 
-  const myClasses = store.classes.filter(c => me && c.teacher === me.name && c.status !== 'paused');
-  const byTime = arr => [...arr].sort((a, b) => startTimeOf(a.time).localeCompare(startTimeOf(b.time)));
-  const todaySessions = byTime(myClasses.filter(c => c.day === todayName));
+  const myClasses = store.classes.filter(c => me && (c.teacher === me.name || (c.cover && c.cover.teacher === me.name)) && c.status !== 'paused');
+  const reg = window.attReadStore ? window.attReadStore() : null;
+  const sessions = reg && window.materialiseRange
+    ? window.materialiseRange(myClasses, window.REGISTER_SETTINGS, now, reg, `${month.key}-01`, `${month.key}-${String(month.days).padStart(2, '0')}`)
+        .filter(s => (typeof effectiveTeacher === 'function' ? effectiveTeacher(s.cls, s.dateISO) : s.cls.teacher) === me.name)
+        .sort((a, b) => a.starts_at - b.starts_at)
+    : [];
 
-  // If nothing on today, surface the teacher's next teaching day instead so the
-  // register flow is still reachable from the top of the page.
-  const fromToday = days.slice(days.indexOf(todayName) >= 0 ? days.indexOf(todayName) : 0).concat(days);
-  const nextDay = todaySessions.length ? todayName : fromToday.find(d => myClasses.some(c => c.day === d)) || null;
-  const focusDay = todaySessions.length ? todayName : nextDay;
-  const focusSessions = byTime(myClasses.filter(c => c.day === focusDay));
-
-  // Jump to the attendance page with this session's group pre-selected.
-  const takeRegister = (cls) => {
-    window.__registerGroup = cls.group;
-    if (window.__navigate) window.__navigate('teacher', 'attendance');
-  };
+  const byDay = {};
+  sessions.forEach(s => {
+    const cancelled = s.derived.state === 'cancelled';
+    (byDay[Number(s.dateISO.slice(8))] = byDay[Number(s.dateISO.slice(8))] || []).push({
+      id: s.id, subject: s.name, time: s.cls.time, status: cancelled ? 'cancelled' : null,
+      label: `${startTimeOf(s.cls.time)} ${ttGroupShort(s.group)}`,
+      tooltip: `${s.name} · ${s.group} · ${s.cls.time} · ${s.room || 'No room'}${cancelled ? ' · cancelled' : ''}`,
+    });
+  });
+  const subjects = [...new Set(myClasses.map(c => c.name))].sort();
+  const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
 
   return (
     <div style={pageFrame()}>
-      <PageHeader title="My Timetable" subtitle={`${myClasses.length} weekly sessions · assigned by your centre admin`} actions={[
-        <Btn key="att" variant="secondary" icon="check" small onClick={() => window.__navigate && window.__navigate('teacher', 'attendance')}>Attendance</Btn>,
-      ]} />
-
-      {/* How this works */}
-      <div style={{ display:'flex', gap:12, alignItems:'flex-start', padding:'14px 16px', marginBottom:24, background:DS.surface, border:`1px solid ${DS.cardBorder}`, borderRadius:10 }}>
-        <Icon name="clock" size={18} color={DS.muted} />
-        <div style={{ fontSize:13, color:DS.sub, lineHeight:1.5 }}>
-          Your centre admin creates each class and assigns you to it, which sets the day, time and room you see below — so this
-          timetable is <strong style={{ color:DS.text }}>read-only</strong>. What you do here is <strong style={{ color:DS.text }}>take the register</strong> for
-          each session and <strong style={{ color:DS.text }}>log your own attendance or absence</strong>. Need a change? Ask your admin to edit the class.
-        </div>
-      </div>
-
-      {/* Today (or next teaching day) */}
-      <Card
-        title={todaySessions.length ? `Today — ${todayName}` : focusDay ? `Next teaching day — ${focusDay}` : `Today — ${todayName}`}
-        style={{ marginBottom:24 }}
-        actions={<span style={{ fontSize:12, color:DS.muted }}>{focusSessions.length} session{focusSessions.length===1?'':'s'}</span>}
-      >
-        {focusSessions.length ? (
-          <div style={{ padding:'8px 0' }}>
-            {focusSessions.map((c, i) => {
-              const color = subjectColor(c.name);
-              const cancelled = isCancelledToday(c);
-              return (
-                <div key={c.id} style={{ display:'flex', alignItems:'center', gap:14, padding:'14px 20px', borderBottom: i < focusSessions.length-1 ? `1px solid ${DS.border}` : 'none', opacity: cancelled ? 0.55 : 1 }}>
-                  <div style={{ width:60, textAlign:'center' }}>
-                    <div style={{ fontSize:14, fontWeight:700, color:DS.text, fontVariantNumeric:'tabular-nums', textDecoration: cancelled ? 'line-through' : 'none' }}>{startTimeOf(c.time)}</div>
-                    <div style={{ fontSize:11, color:DS.faint }}>{(c.time||'').split(/[–-]/)[1]?.trim()}</div>
+      <PageHeader title="My Timetable" subtitle={`${myClasses.length} weekly session${myClasses.length === 1 ? '' : 's'} · set by your centre admin`} />
+      {myClasses.length === 0 ? (
+        <Card><EmptyState icon="calendar" title="No classes assigned yet" message="Once your centre admin assigns you to a class, your sessions will appear here." /></Card>
+      ) : (
+        <div style={{ background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:12, padding:'20px 22px' }}>
+          <MonthCalendar
+            month={month} today={month.key === todayKey ? today.getDate() : null} sessionsByDay={byDay}
+            subjColor={subjectColor} variant="full"
+            onPrev={() => step(-1)} onNext={() => step(1)} onToday={() => setYm({ y: today.getFullYear(), m: today.getMonth() })}
+            onOpenSession={(id) => { const [classId, date] = id.split('|'); setOpen({ classId, date }); }}
+            legend={
+              <div style={{ display:'flex', alignItems:'center', gap:14, marginRight:14, flexWrap:'wrap' }}>
+                {subjects.map(name => (
+                  <div key={name} style={{ display:'flex', alignItems:'center', gap:5 }}>
+                    <span style={{ width:8, height:8, borderRadius:'50%', background:subjectColor(name) }} />
+                    <span style={{ fontSize:11, color:DS.muted }}>{name}</span>
                   </div>
-                  <div style={{ width:4, alignSelf:'stretch', borderRadius:2, background: cancelled ? DS.border : color }} />
-                  <div style={{ flex:1, minWidth:0 }}>
-                    <div style={{ fontSize:14, fontWeight:600, color:DS.text, display:'flex', alignItems:'center', gap:8 }}>
-                      <span style={{ textDecoration: cancelled ? 'line-through' : 'none' }}>{c.name}</span>
-                      {cancelled && <span style={{ fontSize:10.5, fontWeight:700, letterSpacing:'0.04em', color:DS.danger, background:DS.dangerBg, padding:'1px 6px', borderRadius:5, textTransform:'uppercase' }}>Cancelled</span>}
-                    </div>
-                    <div style={{ fontSize:12, color:DS.muted }}>{c.group} · {c.room || 'No room'} · {c.students} students</div>
-                  </div>
-                  <Btn variant={cancelled ? 'secondary' : 'primary'} icon="check" small onClick={() => takeRegister(c)}>{cancelled ? 'Review' : 'Take register'}</Btn>
-                </div>
-              );
-            })}
-          </div>
-        ) : <EmptyState icon="calendar" title="No classes assigned yet" message="Once your centre admin assigns you to a class, your sessions will appear here." />}
-      </Card>
-
-      {/* Weekly grid */}
-      <Card title="This Week">
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(7,1fr)' }}>
-          {days.map((day, di) => {
-            const sessions = byTime(myClasses.filter(c => c.day === day));
-            const isToday = day === todayName;
-            return (
-              <div key={day} style={{ borderLeft: di ? `1px solid ${DS.border}` : 'none', minHeight:200 }}>
-                <div style={{ padding:'12px 14px', borderBottom:`1px solid ${DS.border}`, background: isToday ? DS.accentLight : DS.surface }}>
-                  <div style={{ fontSize:13, fontWeight:600, color: isToday ? DS.accent : DS.text }}>{day}</div>
-                  <div style={{ fontSize:11, color: isToday ? DS.accent : DS.faint }}>{sessions.length} session{sessions.length===1?'':'s'}</div>
-                </div>
-                <div style={{ padding:8, display:'flex', flexDirection:'column', gap:8 }}>
-                  {sessions.map(c => {
-                    const color = subjectColor(c.name);
-                    return (
-                      <button key={c.id} onClick={() => takeRegister(c)} title="Take register" style={{
-                        textAlign:'left', background:color+'12', border:`1px solid ${color}44`, borderRadius:8,
-                        padding:'9px 10px', cursor:'pointer',
-                      }}>
-                        <div style={{ fontSize:11.5, fontWeight:700, color, fontVariantNumeric:'tabular-nums', marginBottom:3 }}>{startTimeOf(c.time)}</div>
-                        <div style={{ fontSize:12, fontWeight:600, color:DS.text, lineHeight:1.3 }}>{c.name.replace(/^(GCSE|A-Level)\s/, '')}</div>
-                        <div style={{ fontSize:10.5, color:DS.muted, marginTop:2 }}>{c.group.replace(/\s*–.*$/, '')} · {c.room || '—'}</div>
-                      </button>
-                    );
-                  })}
-                  {!sessions.length && <div style={{ fontSize:11, color:DS.faint, textAlign:'center', padding:'12px 0' }}>—</div>}
-                </div>
+                ))}
               </div>
-            );
-          })}
+            }
+          />
         </div>
-      </Card>
+      )}
+      {open && window.SessionDrawer && (
+        <window.SessionDrawer classId={open.classId} date={open.date} role="teacher" onClose={() => setOpen(null)} />
+      )}
     </div>
   );
 };
@@ -1624,17 +1779,35 @@ const TeacherAttendancePage = () => {
   const now = window.getNow();
   const me = store.teachers.find(t => t.name === 'Heebz A') || store.teachers[0];
   const activeTeachers = store.teachers.filter(t => t.status === 'active');
-  const myClasses = store.classes.filter(c => me && c.teacher === me.name && c.status !== 'paused');
+  // Own classes plus any this teacher is covering; each session is then kept only
+  // if they are its EFFECTIVE teacher on that date (a colleague covering one of
+  // theirs takes that register) — the same rule the dashboard hero reads.
+  const myClasses = store.classes.filter(c => me && (c.teacher === me.name || (c.cover && c.cover.teacher === me.name)) && c.status !== 'paused');
 
   // Materialise this teacher's dated sessions across the window, overlaying persisted
   // submissions + cancellations. Every derived state comes from here.
-  const sessions = window.materialiseSessions(myClasses, settings, now, att);
+  const sessions = window.materialiseSessions(myClasses, settings, now, att)
+    .filter(s => (typeof effectiveTeacher === 'function' ? effectiveTeacher(s.cls, s.dateISO) : s.cls.teacher) === me.name);
   const rosterOf = React.useCallback((s) => window.attRosterFor(s.classId, s.group, store), [store]);
 
   const [selectedDate, setSelectedDate] = React.useState(() => window.attIso(new Date(now)));
   const [viewRole, setViewRole] = React.useState('teacher');   // teacher | admin (D6 stub)
   const [focusClassId, setFocusClassId] = React.useState(() => (myClasses[0] && myClasses[0].id) || null);
   const [panelSession, setPanelSession] = React.useState(null);
+
+  // Deep link (dashboard hero "Take register now", the timetable's session drawer):
+  // open that one session's register instead of landing on the generic day. A
+  // session older than this page's window is materialised on its own.
+  React.useEffect(() => {
+    const target = window.__registerSession;
+    if (!target) return;
+    window.__registerSession = null;
+    const [classId, dateISO] = target.split('|');
+    const cls = myClasses.find(c => c.id === classId);
+    const s = sessions.find(x => x.id === target)
+      || (cls && dateISO ? window.materialiseRange([cls], settings, now, att, dateISO, dateISO)[0] : null);
+    if (s) { setSelectedDate(s.dateISO); setPanelSession(s); }
+  }, []);
 
   const todayIso = window.attIso(new Date(now));
   const daySessions = sessions.filter(s => s.dateISO === selectedDate).sort((a, b) => a.starts_at - b.starts_at);
@@ -1792,771 +1965,413 @@ const TeacherAttendancePage = () => {
   );
 };
 
-// ─── Lesson Planner ─────────────────────────────────────────────────────────────
-// Global store so plans persist across page navigation and are readable from the dashboard.
-window.__lessonPlans = window.__lessonPlans || {};
-const planKey = (group, date) => `${group}__${date}`;
+// ─── Lesson Planner (decision #47) ──────────────────────────────────────────────
+// Two things, one screen family:
+//   • LESSON — reusable content in the teacher's library (no class, no date);
+//   • PLANNED LESSON — that lesson scheduled for one class on one date, carrying
+//     only what is specific to that delivery (notes for the group, reflection).
+// Teachers still start from "what am I teaching Tuesday" (class + date), then
+// either start a lesson from scratch or reuse one from their library. Edit the
+// lesson once and every delivery gets it; a delivery that must diverge forks its
+// own copy. Store + rules: lessons.jsx (window.klasioLessons).
+const lpToday = () => (window.attIso && window.getNow ? window.attIso(new Date(window.getNow())) : new Date().toISOString().slice(0, 10));
+const lpFmtLong = (iso) => { try { return new Date(iso + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }); } catch (e) { return iso; } };
+const lpFmtShort = (iso) => { try { return new Date(iso + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }); } catch (e) { return iso; } };
+const LP_BLANK = { title: '', topic: '', duration: '60', objectives: '', agenda: '', homework: '' };
+const lpInput = { width: '100%', padding: '9px 12px', borderRadius: 7, border: `1px solid ${DS.border}`, fontSize: 13, outline: 'none', boxSizing: 'border-box', background: DS.bg, fontFamily: 'inherit', color: DS.text };
+const lpLabel = { fontSize: 11, fontWeight: 600, color: DS.muted, display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' };
+const lpClassColor = (cls) => (cls ? subjectColor(cls.name) : DS.accent);
 
-const blankPlan = () => ({
-  title: '',
-  topic: '',
-  duration: '60',
-  objectives: '',
-  agenda: '',
-  homework: '',
-  notes: '',
-  resources: [],   // [{ id, name, size, type, dataUrl }]
-});
-
-const formatBytes = (b) => {
-  if (b < 1024) return b + ' B';
-  if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
-  return (b / 1024 / 1024).toFixed(1) + ' MB';
-};
-
-const fileIconFor = (type, name) => {
-  const ext = (name.split('.').pop() || '').toLowerCase();
-  if (type.startsWith('image/'))                 return { icon:'eye',    color:'#7C3AED' };
-  if (ext === 'pdf')                             return { icon:'clip',   color:'#DC2626' };
-  if (['doc','docx'].includes(ext))              return { icon:'edit',   color:'#2563EB' };
-  if (['xls','xlsx','csv'].includes(ext))        return { icon:'chart',  color:'#16A34A' };
-  if (['ppt','pptx','key'].includes(ext))        return { icon:'book',   color:'#D97706' };
-  return { icon:'clip', color:DS.muted };
-};
-
-const formatDateLong = (iso) => {
-  if (!iso) return '';
-  try {
-    const d = new Date(iso + 'T00:00:00');
-    return d.toLocaleDateString('en-GB', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
-  } catch (e) { return iso; }
-};
-
-const formatDateShort = (iso) => {
-  if (!iso) return '';
-  try {
-    const d = new Date(iso + 'T00:00:00');
-    return d.toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' });
-  } catch (e) { return iso; }
-};
-
-// ─── Saved Plans Browser ──────────────────────────────────────────────────────
-const SavedPlansBrowser = ({ onOpen, onNew, currentKey }) => {
-  const [query, setQuery] = React.useState('');
-  const [classFilter, setClassFilter] = React.useState('all');
-  // Every teacher can read every plan; the default view is their own.
-  const [scope, setScope] = React.useState('mine');
-  const [, force] = React.useState(0);
-  const acting = window.teacherMetrics ? window.teacherMetrics.getPrincipal() : { id: 't1', name: 'Sarah Clarke' };
-  const planIsMine = (p) => !p.ownerId || p.ownerId === acting.id;
-
-  const allPlans = React.useMemo(() => {
-    const store = window.__lessonPlans || {};
-    return Object.entries(store).map(([k, v]) => ({ key:k, ...v }));
-  }, [currentKey]);
-
-  const filtered = allPlans.filter(p => {
-    if (scope === 'mine' && !planIsMine(p)) return false;
-    if (classFilter !== 'all' && p.group !== classFilter) return false;
-    if (!query.trim()) return true;
-    const q = query.toLowerCase();
-    const haystack = [
-      p.group, p.date, p.savedAt,
-      p.plan?.title, p.plan?.topic, p.plan?.objectives,
-      p.plan?.agenda, p.plan?.homework, p.plan?.notes,
-      ...(p.plan?.resources || []).map(r => r.name),
-    ].filter(Boolean).join(' ').toLowerCase();
-    return haystack.includes(q);
-  }).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-
-  const uniqueGroups = Array.from(new Set(allPlans.map(p => p.group))).filter(Boolean);
-
+// The lesson's content — read view with an Edit toggle; edits save to the ONE
+// lesson every delivery points at.
+const LessonContentForm = ({ lesson, canEdit, startEditing, sharedCount = 0, onFork }) => {
+  const L = window.klasioLessons;
+  const [editing, setEditing] = React.useState(!!startEditing);
+  const [draft, setDraft] = React.useState(() => ({ ...LP_BLANK, ...lesson }));
+  const [savedFlash, setSavedFlash] = React.useState(false);
+  React.useEffect(() => { setDraft({ ...LP_BLANK, ...lesson }); }, [lesson.id, lesson.updatedAt]);
+  const set = (k, v) => setDraft(d => ({ ...d, [k]: v }));
+  const save = () => {
+    L.saveLesson({ id: lesson.id, title: draft.title.trim(), topic: draft.topic.trim(), duration: draft.duration, objectives: draft.objectives, agenda: draft.agenda, homework: draft.homework });
+    setEditing(false); setSavedFlash(true); setTimeout(() => setSavedFlash(false), 2000);
+  };
+  const field = (key, label, rows, placeholder) => (
+    <div style={{ background: DS.bg, border: `1px solid ${DS.cardBorder}`, borderRadius: 12, padding: '18px 20px' }}>
+      <div style={{ fontSize: 14, fontWeight: 600, color: DS.text, marginBottom: 10 }}>{label}</div>
+      {editing
+        ? <textarea rows={rows} value={draft[key]} onChange={e => set(key, e.target.value)} placeholder={placeholder} style={{ ...lpInput, lineHeight: 1.6, resize: 'vertical' }} />
+        : <div style={{ fontSize: 13.5, color: draft[key] ? DS.sub : DS.faint, lineHeight: 1.7, whiteSpace: 'pre-wrap', fontStyle: draft[key] ? 'normal' : 'italic' }}>{draft[key] || 'Nothing recorded.'}</div>}
+    </div>
+  );
   return (
-    <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
-      {/* Search + filter */}
-      <div style={{
-        background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:12,
-        padding:'18px 20px',
-      }}>
-        <div style={{ marginBottom:14 }}>
-          <Segmented options={[{ id:'mine', label:'My classes' }, { id:'all', label:'All classes' }]} value={scope} onChange={setScope} />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {sharedCount > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: DS.infoBg, borderRadius: 10, fontSize: 12.5, color: DS.sub }}>
+          <Icon name="copy" size={15} color={DS.info} />
+          <span style={{ flex: 1 }}>This lesson is also planned for <strong style={{ color: DS.text }}>{sharedCount} other deliver{sharedCount === 1 ? 'y' : 'ies'}</strong> — changes here apply to all of them.</span>
+          {canEdit && onFork && <Btn variant="ghost" small onClick={onFork}>Make a separate copy for this class</Btn>}
         </div>
-        <div style={{ display:'grid', gridTemplateColumns:'1fr auto auto', gap:12, alignItems:'center' }}>
-          <div style={{ position:'relative' }}>
-            <div style={{ position:'absolute', left:12, top:'50%', transform:'translateY(-50%)', display:'flex' }}>
-              <Icon name="search" size={15} color={DS.faint} />
+      )}
+      <div style={{ background: DS.bg, border: `1px solid ${DS.cardBorder}`, borderRadius: 12, padding: '18px 20px' }}>
+        {editing ? (
+          <>
+            <input value={draft.title} onChange={e => set('title', e.target.value)} placeholder="Lesson title (e.g. Quadratic simultaneous equations)"
+              style={{ ...lpInput, fontSize: 20, fontWeight: 700, border: 'none', padding: '2px 0', marginBottom: 10 }} />
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px', gap: 12 }}>
+              <div><label style={lpLabel}>Topic / unit</label><input value={draft.topic} onChange={e => set('topic', e.target.value)} placeholder="e.g. Algebra · Simultaneous equations" style={lpInput} /></div>
+              <div><label style={lpLabel}>Minutes</label><input type="number" value={draft.duration} onChange={e => set('duration', e.target.value)} style={lpInput} /></div>
             </div>
-            <input
-              type="text"
-              value={query}
-              onChange={e => setQuery(e.target.value)}
-              placeholder="Search by title, topic, class, content, resource name…"
-              style={{
-                width:'100%', padding:'10px 12px 10px 36px', borderRadius:8,
-                border:`1px solid ${DS.border}`, fontSize:13, outline:'none',
-                boxSizing:'border-box', background:DS.surface,
-              }}
-            />
+          </>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 20, fontWeight: 700, color: DS.text, letterSpacing: '-0.3px' }}>{draft.title || 'Untitled lesson'}</div>
+              <div style={{ fontSize: 13, color: DS.muted, marginTop: 3 }}>{[draft.topic, draft.duration ? `${draft.duration} min` : null].filter(Boolean).join(' · ') || 'No topic yet'}</div>
+            </div>
+            {savedFlash && <StatusPill tone="positive">Saved</StatusPill>}
+            {canEdit && <Btn variant="secondary" icon="edit" small onClick={() => setEditing(true)}>Edit lesson</Btn>}
           </div>
-          <select
-            value={classFilter}
-            onChange={e => setClassFilter(e.target.value)}
-            style={{ padding:'10px 12px', borderRadius:8, border:`1px solid ${DS.border}`, fontSize:13, outline:'none', background:DS.bg }}
-          >
-            <option value="all">All classes</option>
-            {uniqueGroups.map(g => <option key={g} value={g}>{g}</option>)}
-          </select>
-          <Btn variant="primary" icon="plus" small onClick={onNew}>New Lesson</Btn>
-        </div>
-
-        <div style={{ display:'flex', gap:14, marginTop:12, fontSize:12, color:DS.muted }}>
-          <span>{allPlans.length} plan{allPlans.length === 1 ? '' : 's'} saved</span>
-          {query && <span>· {filtered.length} match{filtered.length === 1 ? '' : 'es'}</span>}
-        </div>
+        )}
       </div>
-
-      {/* Plan grid */}
-      {filtered.length === 0 ? (
-        <div style={{
-          background:DS.bg, border:`1px dashed ${DS.borderDark}`, borderRadius:12,
-          padding:'48px 20px', textAlign:'center',
-        }}>
-          <div style={{
-            width:48, height:48, borderRadius:12, background:DS.accentLight,
-            display:'inline-flex', alignItems:'center', justifyContent:'center',
-            marginBottom:14, color:DS.accent,
-          }}>
-            <Icon name="book" size={22} />
-          </div>
-          <div style={{ fontSize:15, fontWeight:600, color:DS.text, marginBottom:4 }}>
-            {allPlans.length === 0 ? 'No lesson plans yet' : 'No matches'}
-          </div>
-          <div style={{ fontSize:13, color:DS.muted, marginBottom:18 }}>
-            {allPlans.length === 0
-              ? 'Create your first lesson plan to start building your library.'
-              : 'Try a different search term or class filter.'}
-          </div>
-          <Btn variant="primary" icon="plus" onClick={onNew}>Plan a New Lesson</Btn>
-        </div>
-      ) : (
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(320px, 1fr))', gap:14 }}>
-          {filtered.map(p => {
-            const cls = teacherClasses.find(c => c.group === p.group);
-            const color = cls?.color || DS.accent;
-            const resCount = p.plan?.resources?.length || 0;
-            const title = p.plan?.title || p.plan?.topic || `Lesson — ${formatDateShort(p.date)}`;
-            const isCurrent = p.key === currentKey;
-            return (
-              <button
-                key={p.key}
-                onClick={() => onOpen(p.group, p.date)}
-                style={{
-                  textAlign:'left', cursor:'pointer',
-                  background:DS.bg,
-                  border:`1px solid ${isCurrent ? DS.accentBorder : DS.border}`,
-                  borderTop:`3px solid ${color}`,
-                  borderRadius:10, padding:'16px 18px',
-                  display:'flex', flexDirection:'column', gap:10,
-                  transition:'box-shadow 0.15s, transform 0.1s',
-                  boxShadow: isCurrent ? '0 0 0 3px ' + DS.accentLight : 'none',
-                }}
-                onMouseEnter={e => e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.06)'}
-                onMouseLeave={e => e.currentTarget.style.boxShadow = isCurrent ? '0 0 0 3px ' + DS.accentLight : 'none'}
-              >
-                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:10 }}>
-                  <div style={{ minWidth:0, flex:1 }}>
-                    <div style={{ fontSize:11, fontWeight:600, color, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:4 }}>
-                      {formatDateShort(p.date)}
-                    </div>
-                    <div style={{ fontSize:14, fontWeight:600, color:DS.text, lineHeight:1.35, marginBottom:3 }}>{title}</div>
-                    <div style={{ fontSize:12, color:DS.muted }}>{p.group}</div>
-                  </div>
-                  <div style={{ display:'flex', flexDirection:'column', gap:4, alignItems:'flex-end' }}>
-                    {isCurrent && <Badge variant="accent">Open</Badge>}
-                    {!planIsMine(p) && <Badge variant="default">{p.owner || 'Another teacher'}</Badge>}
-                  </div>
-                </div>
-
-                {p.plan?.objectives && (
-                  <div style={{
-                    fontSize:12, color:DS.sub, lineHeight:1.5,
-                    display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical',
-                    overflow:'hidden',
-                  }}>
-                    {p.plan.objectives}
-                  </div>
-                )}
-
-                <div style={{ display:'flex', alignItems:'center', gap:10, marginTop:'auto', fontSize:11, color:DS.faint }}>
-                  {resCount > 0 && (
-                    <span style={{ display:'flex', alignItems:'center', gap:4 }}>
-                      <Icon name="clip" size={11} /> {resCount} file{resCount === 1 ? '' : 's'}
-                    </span>
-                  )}
-                  {p.plan?.duration && (
-                    <span style={{ display:'flex', alignItems:'center', gap:4 }}>
-                      <Icon name="clock" size={11} /> {p.plan.duration} min
-                    </span>
-                  )}
-                  {p.savedAt && (
-                    <span style={{ marginLeft:'auto' }}>Saved {p.savedAt}</span>
-                  )}
-                </div>
-              </button>
-            );
-          })}
+      {field('objectives', 'Learning objectives', 3, 'What should pupils know or be able to do by the end?')}
+      {field('agenda', 'Lesson structure', 7, 'Timings, e.g.\n0–10  Starter\n10–35 Main activity\n35–55 Practice\n55–60 Plenary')}
+      {field('homework', 'Homework to set', 2, 'What will be set at the end of the lesson?')}
+      {editing && (
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Btn variant="primary" icon="check" onClick={save}>Save lesson</Btn>
+          <Btn variant="secondary" onClick={() => { setDraft({ ...LP_BLANK, ...lesson }); setEditing(false); }}>Cancel</Btn>
         </div>
       )}
     </div>
   );
 };
 
-// ─── File Upload Drop Zone ────────────────────────────────────────────────────
-const FileDropZone = ({ files, onAdd, onRemove, disabled }) => {
-  const [dragOver, setDragOver] = React.useState(false);
-  const inputRef = React.useRef(null);
+// Pick a lesson from the teacher's library (search by title / topic).
+const LessonLibraryPicker = ({ lessons, onPick, today }) => {
+  const [q, setQ] = React.useState('');
+  const L = window.klasioLessons;
+  const shown = lessons.filter(l => !q.trim() || `${l.title} ${l.topic}`.toLowerCase().includes(q.toLowerCase()));
+  return (
+    <div>
+      <SearchInput value={q} onChange={e => setQ(e.target.value)} placeholder="Search your lessons by title or topic…" />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 10, maxHeight: 320, overflowY: 'auto' }}>
+        {shown.map(l => {
+          const u = L.usageOf(l.id, today);
+          return (
+            <button key={l.id} onClick={() => onPick(l)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 9, border: `1px solid ${DS.border}`, background: DS.bg, cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit' }}>
+              <Icon name="book" size={16} color={DS.accent} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>{l.title || 'Untitled lesson'}</div>
+                <div style={{ fontSize: 11.5, color: DS.muted }}>{l.topic || 'No topic'}{u.taught ? ` · taught ${u.taught} time${u.taught === 1 ? '' : 's'}` : ' · not taught yet'}</div>
+              </div>
+              <Icon name="chevron_r" size={14} color={DS.faint} />
+            </button>
+          );
+        })}
+        {!shown.length && <div style={{ fontSize: 13, color: DS.muted, padding: '10px 2px' }}>{lessons.length ? 'No lessons match.' : 'Your library is empty — start from scratch and the lesson will be saved to it.'}</div>}
+      </div>
+    </div>
+  );
+};
 
-  const handleFiles = (fileList) => {
-    const arr = Array.from(fileList || []);
-    const reads = arr.map(file => new Promise(resolve => {
-      const reader = new FileReader();
-      reader.onload = () => resolve({
-        id: Date.now() + '-' + Math.random().toString(36).slice(2, 7),
-        name: file.name,
-        size: file.size,
-        type: file.type || '',
-        dataUrl: reader.result,
-      });
-      reader.onerror = () => resolve(null);
-      reader.readAsDataURL(file);
-    }));
-    Promise.all(reads).then(results => onAdd(results.filter(Boolean)));
-  };
+// Other deliveries of a lesson — its history across groups, reflections included.
+const LessonDeliveriesList = ({ lessonId, exceptId, classes, onOpen, today }) => {
+  const L = window.klasioLessons;
+  const ds = L.deliveriesForLesson(lessonId).filter(d => d.id !== exceptId);
+  if (!ds.length) return <div style={{ fontSize: 12.5, color: DS.faint }}>Not planned for any other class yet.</div>;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {ds.map(d => {
+        const cls = classes.find(c => c.id === d.classId);
+        return (
+          <button key={d.id} onClick={() => onOpen(d)} style={{ textAlign: 'left', padding: '9px 11px', borderRadius: 8, border: `1px solid ${DS.border}`, background: DS.bg, cursor: 'pointer', fontFamily: 'inherit' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ width: 3, height: 26, borderRadius: 2, background: lpClassColor(cls) }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: DS.text }}>{cls ? cls.group : d.classId}</div>
+                <div style={{ fontSize: 11.5, color: DS.muted }}>{lpFmtShort(d.date)}{d.date > today ? ' · upcoming' : ''}</div>
+              </div>
+            </div>
+            {d.reflection && <div style={{ fontSize: 12, color: DS.sub, marginTop: 6, lineHeight: 1.45, fontStyle: 'italic' }}>“{d.reflection}”</div>}
+          </button>
+        );
+      })}
+    </div>
+  );
+};
 
-  const onDrop = (e) => {
-    e.preventDefault();
-    setDragOver(false);
-    if (!disabled) handleFiles(e.dataTransfer.files);
+// One class's lesson on one date — plan it, or open what's planned.
+const DeliveryScreen = ({ classId, date, classes, me, onChange, onOpenLesson, onBack }) => {
+  const L = window.useLessons ? window.useLessons() : window.klasioLessons;
+  const today = lpToday();
+  const cls = classes.find(c => c.id === classId) || null;
+  const delivery = cls ? L.deliveryFor(cls.id, date) : null;
+  const lesson = delivery ? L.getLesson(delivery.lessonId) : null;
+  const [notes, setNotes] = React.useState(delivery ? delivery.notes || '' : '');
+  const [reflection, setReflection] = React.useState(delivery ? delivery.reflection || '' : '');
+  const [justCreated, setJustCreated] = React.useState(false);
+  React.useEffect(() => { setNotes(delivery ? delivery.notes || '' : ''); setReflection(delivery ? delivery.reflection || '' : ''); }, [delivery && delivery.id]);
+  usePageTrail([{ label: lesson ? (lesson.title || 'Untitled lesson') : 'Plan a lesson' }]);
+
+  const startScratch = () => {
+    const l = L.saveLesson({ ...LP_BLANK, ownerId: me.id, owner: me.name });
+    L.planDelivery({ classId: cls.id, date, lessonId: l.id, createdBy: me.id });
+    setJustCreated(true);
   };
+  const reuse = (l) => { L.planDelivery({ classId: cls.id, date, lessonId: l.id, createdBy: me.id }); setJustCreated(false); };
+  const usage = lesson ? L.usageOf(lesson.id, today) : null;
+  const canEdit = !!(lesson && lesson.ownerId === me.id);
+  const isPast = date <= today;
+  const dirtyNotes = delivery && notes !== (delivery.notes || '');
+  const dirtyRefl = delivery && reflection !== (delivery.reflection || '');
 
   return (
     <div>
-      {!disabled && (
-        <div
-          onDragOver={e => { e.preventDefault(); setDragOver(true); }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={onDrop}
-          onClick={() => inputRef.current?.click()}
-          style={{
-            border:`2px dashed ${dragOver ? DS.accent : DS.borderDark}`,
-            background: dragOver ? DS.accentLight : DS.surface,
-            borderRadius:10, padding:'20px', textAlign:'center', cursor:'pointer',
-            transition:'all 0.15s', marginBottom: files.length > 0 ? 12 : 0,
-          }}
-        >
-          <input
-            ref={inputRef}
-            type="file"
-            multiple
-            onChange={e => { handleFiles(e.target.files); e.target.value = ''; }}
-            style={{ display:'none' }}
-          />
-          <div style={{
-            width:40, height:40, borderRadius:10,
-            background:dragOver ? DS.bg : DS.accentLight,
-            display:'inline-flex', alignItems:'center', justifyContent:'center',
-            marginBottom:10, color:DS.accent,
-          }}>
-            <Icon name="upload" size={18} />
-          </div>
-          <div style={{ fontSize:13, fontWeight:600, color:DS.text, marginBottom:3 }}>
-            {dragOver ? 'Drop files to upload' : 'Drag & drop or click to upload'}
-          </div>
-          <div style={{ fontSize:12, color:DS.muted }}>
-            Worksheets, slides, PDFs, images — anything your students need
-          </div>
+      <BackLink onClick={onBack} label="Lesson planner" />
+      {/* Class + date header — changing either looks at a different delivery */}
+      <div style={{ background: `linear-gradient(135deg, ${lpClassColor(cls)}12 0%, ${DS.accentLight} 100%)`, border: `1px solid ${lpClassColor(cls)}33`, borderRadius: 14, padding: '18px 22px', marginBottom: 18, display: 'flex', alignItems: 'flex-end', gap: 16, flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: lpClassColor(cls), letterSpacing: '0.08em', textTransform: 'uppercase' }}>{lpFmtLong(date)}</div>
+          <div style={{ fontSize: 20, fontWeight: 700, color: DS.text, marginTop: 4 }}>{cls ? `${cls.name} · ${cls.group}` : 'Choose a class'}</div>
+          {cls && <div style={{ fontSize: 12.5, color: DS.muted, marginTop: 2 }}>{cls.day} {cls.time} · {cls.room || 'No room'}{cls.day && new Date(date + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'long' }) !== cls.day ? ` · this class doesn’t usually meet on a ${new Date(date + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'long' })}` : ''}</div>}
         </div>
-      )}
+        <div style={{ width: 220 }}><label style={lpLabel}>Class</label>
+          <select value={classId || ''} onChange={e => onChange(e.target.value, date)} style={lpInput}>
+            {classes.map(c => <option key={c.id} value={c.id}>{c.group} · {c.name.replace(/^(GCSE|A-?Level)\s+/i, '')}</option>)}
+          </select>
+        </div>
+        <div style={{ width: 170 }}><label style={lpLabel}>Date</label>
+          <input type="date" value={date} onChange={e => e.target.value && onChange(classId, e.target.value)} style={lpInput} />
+        </div>
+      </div>
 
-      {files.length > 0 && (
-        <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
-          {files.map(f => {
-            const fi = fileIconFor(f.type, f.name);
-            return (
-              <div key={f.id} style={{
-                display:'flex', alignItems:'center', gap:12,
-                padding:'10px 12px', background:DS.bg,
-                border:`1px solid ${DS.border}`, borderRadius:8,
-              }}>
-                <div style={{
-                  width:32, height:32, borderRadius:7,
-                  background:fi.color + '18', color:fi.color,
-                  display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0,
-                }}>
-                  <Icon name={fi.icon} size={15} />
-                </div>
-                <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{
-                    fontSize:13, fontWeight:500, color:DS.text,
-                    whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
-                  }}>{f.name}</div>
-                  <div style={{ fontSize:11, color:DS.faint }}>{formatBytes(f.size)}</div>
-                </div>
-                <a
-                  href={f.dataUrl}
-                  download={f.name}
-                  onClick={e => e.stopPropagation()}
-                  title="Download"
-                  style={{
-                    width:30, height:30, borderRadius:6, display:'flex',
-                    alignItems:'center', justifyContent:'center',
-                    color:DS.muted, textDecoration:'none',
-                    border:`1px solid ${DS.border}`, background:DS.surface,
-                  }}
-                >
-                  <Icon name="download" size={13} />
-                </a>
-                {!disabled && (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onRemove(f.id); }}
-                    title="Remove"
-                    style={{
-                      width:30, height:30, borderRadius:6,
-                      border:`1px solid ${DS.border}`, background:DS.surface,
-                      color:DS.muted, cursor:'pointer', display:'flex',
-                      alignItems:'center', justifyContent:'center',
-                    }}
-                  >
-                    <Icon name="x" size={13} />
-                  </button>
-                )}
+      {!cls ? <EmptyState icon="book" title="Choose a class" message="Pick one of your classes above." /> : !delivery ? (
+        // Nothing planned yet — start from scratch or reuse from the library.
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16 }}>
+          <Card title="Start from scratch" subtitle="A new lesson — it’s saved to your library so you can reuse it with other groups.">
+            <div style={{ padding: '16px 18px' }}>
+              <Btn variant="primary" icon="plus" onClick={startScratch}>Write a new lesson</Btn>
+            </div>
+          </Card>
+          <Card title="Reuse from my library" subtitle="Plan a lesson you’ve already written. Its materials come with it; notes stay with each class.">
+            <div style={{ padding: '14px 18px' }}>
+              <LessonLibraryPicker lessons={L.listLessons(me.id)} onPick={reuse} today={today} />
+            </div>
+          </Card>
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 330px', gap: 20, alignItems: 'start' }}>
+          <LessonContentForm lesson={lesson || { id: delivery.lessonId, ...LP_BLANK }} canEdit={canEdit} startEditing={justCreated}
+            sharedCount={usage ? Math.max(0, usage.deliveries - 1) : 0}
+            onFork={() => { L.forkLesson(delivery.id); setJustCreated(true); }} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <Card title={`Notes for ${cls.group}`} subtitle="Only this delivery — differentiation, pupils to watch, what to bring">
+              <div style={{ padding: '12px 16px' }}>
+                <textarea rows={4} value={notes} onChange={e => setNotes(e.target.value)} placeholder="e.g. Pair Sophia with a stronger partner for the scaling step." style={{ ...lpInput, resize: 'vertical', lineHeight: 1.55 }} />
+                {dirtyNotes && <div style={{ marginTop: 8 }}><Btn variant="primary" small icon="check" onClick={() => L.updateDelivery(delivery.id, { notes })}>Save notes</Btn></div>}
               </div>
-            );
-          })}
+            </Card>
+            <Card title="Share with the class" subtitle="Pupils see this in the lesson when they open it from their sessions">
+              <div style={{ padding: '12px 16px' }}>
+                <button type="button" onClick={() => L.updateDelivery(delivery.id, { shareWithClass: !delivery.shareWithClass })}
+                  aria-pressed={!!delivery.shareWithClass}
+                  style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: 0, border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left' }}>
+                  <span style={{ width: 36, height: 20, borderRadius: 10, flexShrink: 0, position: 'relative', background: delivery.shareWithClass ? DS.accent : DS.borderDark, transition: 'background .14s' }}>
+                    <span style={{ position: 'absolute', top: 2, left: delivery.shareWithClass ? 18 : 2, width: 16, height: 16, borderRadius: '50%', background: '#fff', transition: 'left .14s' }} />
+                  </span>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>{delivery.shareWithClass ? 'Title, topic and objectives shared' : 'Not shared with pupils'}</span>
+                </button>
+                <div style={{ fontSize: 11.5, color: DS.faint, marginTop: 8, lineHeight: 1.5 }}>Only the title, topic and objectives. Your notes, the lesson structure and your reflection are never shown to pupils. Files reach pupils only when you mark them visible below.</div>
+              </div>
+            </Card>
+            <Card title="After the lesson" subtitle="How it went — this builds the lesson’s history across groups">
+              <div style={{ padding: '12px 16px' }}>
+                {isPast ? (
+                  <>
+                    <textarea rows={3} value={reflection} onChange={e => setReflection(e.target.value)} placeholder="e.g. Part 2 was hard for this group — slow down next time." style={{ ...lpInput, resize: 'vertical', lineHeight: 1.55 }} />
+                    {dirtyRefl && <div style={{ marginTop: 8 }}><Btn variant="primary" small icon="check" onClick={() => L.updateDelivery(delivery.id, { reflection })}>Save reflection</Btn></div>}
+                  </>
+                ) : <div style={{ fontSize: 12.5, color: DS.faint }}>Available once the lesson has been taught.</div>}
+              </div>
+            </Card>
+            <Card>
+              <div style={{ padding: '14px 16px' }}>
+                {window.AttachResourcesPanel
+                  ? <window.AttachResourcesPanel contextType="lesson" contextId={delivery.lessonId} canEdit={canEdit} />
+                  : null}
+                <div style={{ fontSize: 11.5, color: DS.faint, marginTop: 8 }}>Materials belong to the lesson, so every class it’s planned for gets them.</div>
+              </div>
+            </Card>
+            <Card title="Also planned for" subtitle={usage ? `Taught ${usage.taught} time${usage.taught === 1 ? '' : 's'}${usage.next ? ` · next ${lpFmtShort(usage.next)}` : ''}` : ''}>
+              <div style={{ padding: '12px 16px' }}>
+                <LessonDeliveriesList lessonId={delivery.lessonId} exceptId={delivery.id} classes={classes} today={today} onOpen={(d) => onChange(d.classId, d.date)} />
+              </div>
+            </Card>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {lesson && <Btn variant="secondary" icon="book" small onClick={() => onOpenLesson(lesson.id)}>Open in library</Btn>}
+              <Btn variant="ghost" icon="x" small onClick={() => L.deleteDelivery(delivery.id)}>Unplan from this date</Btn>
+            </div>
+          </div>
         </div>
       )}
     </div>
   );
 };
 
-// ─── Lesson Plan Editor ───────────────────────────────────────────────────────
-const LessonPlanEditor = ({
-  selectedGroup, setSelectedGroup,
-  selectedDate, setSelectedDate,
-  plan, setPlan,
-  mode, setMode,
-  exists, savedAt, saved,
-  readOnly, ownerName, acting,
-  onSave, onDelete, onOpen, onBack,
-}) => {
-  // Fall back to a synthetic class descriptor for a group outside the principal's
-  // own teaching load (e.g. another teacher's plan opened read-only under All classes).
-  const cls = teacherClasses.find(c => c.group === selectedGroup) || { name: 'Lesson', group: selectedGroup, students: '', room: '', color: DS.accent };
-  const isEdit = mode === 'edit' && !readOnly;
-  const planContextId = planKey(selectedGroup, selectedDate);
-  const [dupOpen, setDupOpen] = React.useState(false);
-  const [dupGroup, setDupGroup] = React.useState('');
-
-  // D8 — Duplicate to another class: produces an INDEPENDENT plan (its own key) so
-  // post-lesson annotations on the two groups never collide.
-  const duplicateToClass = () => {
-    const target = dupGroup || teacherClasses.find(c => c.group !== selectedGroup)?.group;
-    if (!target) return;
-    const now = new Date().toLocaleString('en-GB', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' });
-    const newKey = planKey(target, selectedDate);
-    window.__lessonPlans[newKey] = {
-      plan: JSON.parse(JSON.stringify(plan)), savedAt: now, group: target, date: selectedDate,
-      owner: (acting && acting.name) || 'You', ownerId: (acting && acting.id) || 't1',
-    };
-    window.__saveLessonPlans && window.__saveLessonPlans();
-    setDupOpen(false);
-    onOpen && onOpen(target, selectedDate);
+// A library lesson: its content, where it's been / will be taught, plan it again.
+const LessonScreen = ({ lessonId, classes, me, onOpenDelivery, onBack }) => {
+  const L = window.useLessons ? window.useLessons() : window.klasioLessons;
+  const lesson = L.getLesson(lessonId);
+  const today = lpToday();
+  const [planCls, setPlanCls] = React.useState((classes[0] || {}).id || '');
+  const [planDate, setPlanDate] = React.useState(today);
+  const [msg, setMsg] = React.useState('');
+  usePageTrail([{ label: lesson ? (lesson.title || 'Untitled lesson') : 'Lesson' }]);
+  if (!lesson) return <div><BackLink onClick={onBack} label="Lesson planner" /><EmptyState icon="book" title="Lesson not found" /></div>;
+  const usage = L.usageOf(lesson.id, today);
+  const planIt = () => {
+    if (!planCls || !planDate) return;
+    const existing = L.deliveryFor(planCls, planDate);
+    if (existing && existing.lessonId !== lesson.id) { setMsg('That class already has a lesson planned on that date — open it to change it.'); return; }
+    L.planDelivery({ classId: planCls, date: planDate, lessonId: lesson.id, createdBy: me.id });
+    onOpenDelivery(planCls, planDate);
   };
-
-  const update = (field, value) => setPlan(p => ({ ...p, [field]: value }));
-  const addFiles = (files) => setPlan(p => ({ ...p, resources: [...(p.resources || []), ...files] }));
-  const removeFile = (id) => setPlan(p => ({ ...p, resources: (p.resources || []).filter(r => r.id !== id) }));
-
-  const inputStyle = {
-    width:'100%', padding:'9px 12px', borderRadius:7,
-    border:`1px solid ${DS.border}`, fontSize:13, outline:'none',
-    boxSizing:'border-box', background:DS.bg, fontFamily:'inherit',
-  };
-  const labelStyle = { fontSize:11, fontWeight:600, color:DS.muted, display:'block', marginBottom:6, textTransform:'uppercase', letterSpacing:'0.05em' };
-
-  const renderFieldValue = (val, placeholder) => (
-    <div style={{
-      fontSize:13.5, color: val ? DS.sub : DS.faint,
-      lineHeight:1.7, whiteSpace:'pre-wrap', minHeight:24,
-      fontStyle: val ? 'normal' : 'italic',
-    }}>
-      {val || placeholder}
-    </div>
-  );
-
   return (
-    <>
-      {/* Hero header */}
-      <div style={{
-        background: `linear-gradient(135deg, ${cls.color}12 0%, ${DS.accentLight} 100%)`,
-        border:`1px solid ${cls.color}33`,
-        borderRadius:14, padding:'24px 28px', marginBottom:20,
-        position:'relative', overflow:'hidden',
-      }}>
-        <div style={{ position:'absolute', top:0, left:0, right:0, height:4, background:cls.color }} />
-        <div style={{ display:'flex', alignItems:'flex-start', gap:20 }}>
-          <div style={{
-            width:56, height:56, borderRadius:12,
-            background:cls.color, color:'#fff',
-            display:'flex', alignItems:'center', justifyContent:'center',
-            flexShrink:0, boxShadow:`0 4px 12px ${cls.color}55`,
-          }}>
-            <Icon name="book" size={26} />
-          </div>
-          <div style={{ flex:1, minWidth:0 }}>
-            <div style={{ fontSize:11, fontWeight:700, color:cls.color, letterSpacing:'0.08em', textTransform:'uppercase', marginBottom:6 }}>
-              {formatDateLong(selectedDate)}
-            </div>
-            {isEdit ? (
-              <input
-                value={plan.title}
-                onChange={e => update('title', e.target.value)}
-                placeholder="Lesson title (e.g. Introduction to Quadratics)"
-                style={{
-                  width:'100%', padding:'4px 0', fontSize:24, fontWeight:700,
-                  color:DS.text, border:'none', outline:'none', background:'transparent',
-                  letterSpacing:'-0.5px', fontFamily:'inherit', marginBottom:6,
-                }}
-              />
-            ) : (
-              <div style={{ fontSize:24, fontWeight:700, color:DS.text, letterSpacing:'-0.5px', marginBottom:6, lineHeight:1.2 }}>
-                {plan.title || 'Untitled Lesson'}
-              </div>
-            )}
-            <div style={{ display:'flex', alignItems:'center', gap:14, fontSize:13, color:DS.muted, flexWrap:'wrap' }}>
-              <span style={{ fontWeight:600, color:DS.text }}>{cls.name}</span>
-              <span>·</span>
-              <span>{cls.group}</span>
-              <span>·</span>
-              <span>{cls.students} students</span>
-              <span>·</span>
-              <span>{cls.room}</span>
-              {plan.duration && (<><span>·</span><span>{plan.duration} min</span></>)}
-            </div>
-          </div>
-          <div style={{ display:'flex', flexDirection:'column', gap:8, alignItems:'flex-end', flexShrink:0 }}>
-            {saved && <Badge variant="success">✓ Plan saved</Badge>}
-            {exists && !saved && <Badge variant="success">Saved {savedAt}</Badge>}
-            {!exists && <Badge variant="default">Draft — not saved</Badge>}
-          </div>
-        </div>
-      </div>
-
-      {/* Two-column layout */}
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 320px', gap:20 }}>
-        {/* Left: main plan content */}
-        <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
-          {/* Objectives card */}
-          <div style={{ background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:12, padding:'20px 22px' }}>
-            <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:14 }}>
-              <div style={{ width:30, height:30, borderRadius:8, background:DS.accentLight, color:DS.accent, display:'flex', alignItems:'center', justifyContent:'center' }}>
-                <Icon name="star" size={15} />
-              </div>
-              <div style={{ fontSize:14, fontWeight:600, color:DS.text }}>Learning Objectives</div>
-            </div>
-            {isEdit ? (
-              <textarea
-                rows={3}
-                value={plan.objectives}
-                onChange={e => update('objectives', e.target.value)}
-                placeholder="What should students know or be able to do by the end of the lesson?"
-                style={{ ...inputStyle, lineHeight:1.6, color:DS.sub, resize:'vertical' }}
-              />
-            ) : renderFieldValue(plan.objectives, 'No objectives recorded.')}
-          </div>
-
-          {/* Agenda card */}
-          <div style={{ background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:12, padding:'20px 22px' }}>
-            <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:14 }}>
-              <div style={{ width:30, height:30, borderRadius:8, background:'#7C3AED18', color:'#7C3AED', display:'flex', alignItems:'center', justifyContent:'center' }}>
-                <Icon name="clock" size={15} />
-              </div>
-              <div style={{ fontSize:14, fontWeight:600, color:DS.text, flex:1 }}>Lesson Agenda</div>
-              {isEdit && (
-                <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-                  <span style={{ fontSize:11, color:DS.muted }}>Duration</span>
-                  <input
-                    type="number"
-                    value={plan.duration}
-                    onChange={e => update('duration', e.target.value)}
-                    style={{ width:60, padding:'4px 8px', borderRadius:6, border:`1px solid ${DS.border}`, fontSize:12, outline:'none', textAlign:'center' }}
-                  />
-                  <span style={{ fontSize:11, color:DS.muted }}>min</span>
-                </div>
-              )}
-            </div>
-            {isEdit ? (
-              <textarea
-                rows={8}
-                value={plan.agenda}
-                onChange={e => update('agenda', e.target.value)}
-                placeholder={`Outline the lesson structure with timings, e.g.:\n0–10 min  Starter: recap last lesson\n10–35 min Main activity: ...\n35–55 min Practice: ...\n55–60 min Plenary: ...`}
-                style={{ ...inputStyle, lineHeight:1.6, color:DS.sub, resize:'vertical', fontFamily:'inherit' }}
-              />
-            ) : renderFieldValue(plan.agenda, 'No agenda recorded.')}
-          </div>
-
-          {/* Homework card */}
-          <div style={{ background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:12, padding:'20px 22px' }}>
-            <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:14 }}>
-              <div style={{ width:30, height:30, borderRadius:8, background:DS.warningBg, color:DS.warning, display:'flex', alignItems:'center', justifyContent:'center' }}>
-                <Icon name="clip" size={15} />
-              </div>
-              <div style={{ fontSize:14, fontWeight:600, color:DS.text }}>Homework to Set</div>
-            </div>
-            {isEdit ? (
-              <textarea
-                rows={3}
-                value={plan.homework}
-                onChange={e => update('homework', e.target.value)}
-                placeholder="What homework will be assigned at the end of this lesson?"
-                style={{ ...inputStyle, lineHeight:1.6, color:DS.sub, resize:'vertical' }}
-              />
-            ) : renderFieldValue(plan.homework, 'No homework set.')}
-          </div>
-
-          {/* Notes card */}
-          <div style={{ background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:12, padding:'20px 22px' }}>
-            <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:14 }}>
-              <div style={{ width:30, height:30, borderRadius:8, background:DS.surface, color:DS.muted, display:'flex', alignItems:'center', justifyContent:'center' }}>
-                <Icon name="edit" size={15} />
-              </div>
-              <div style={{ fontSize:14, fontWeight:600, color:DS.text }}>Personal Notes</div>
-            </div>
-            {isEdit ? (
-              <textarea
-                rows={3}
-                value={plan.notes}
-                onChange={e => update('notes', e.target.value)}
-                placeholder="Differentiation, students to watch, things to remember…"
-                style={{ ...inputStyle, lineHeight:1.6, color:DS.sub, resize:'vertical' }}
-              />
-            ) : renderFieldValue(plan.notes, 'No notes recorded.')}
-          </div>
-        </div>
-
-        {/* Right: sidebar */}
-        <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
-          {/* Class & date selector */}
-          <div style={{ background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:12, padding:'18px 20px' }}>
-            <div style={{ fontSize:14, fontWeight:600, color:DS.text, marginBottom:14 }}>Lesson Details</div>
-            <div style={{ marginBottom:12 }}>
-              <label style={labelStyle}>Topic / Unit</label>
-              {isEdit ? (
-                <input
-                  value={plan.topic}
-                  onChange={e => update('topic', e.target.value)}
-                  placeholder="e.g. Algebra · Quadratics"
-                  style={inputStyle}
-                />
-              ) : (
-                <div style={{ fontSize:13, color: plan.topic ? DS.text : DS.faint, fontStyle: plan.topic ? 'normal' : 'italic' }}>
-                  {plan.topic || 'Not set'}
-                </div>
-              )}
-            </div>
-            <div style={{ marginBottom:12 }}>
-              <label style={labelStyle}>Class</label>
-              <select
-                value={selectedGroup}
-                onChange={e => setSelectedGroup(e.target.value)}
-                style={inputStyle}
-              >
-                {teacherClasses.map(c => <option key={c.id} value={c.group}>{c.group}</option>)}
+    <div>
+      <BackLink onClick={onBack} label="Lesson planner" />
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 330px', gap: 20, alignItems: 'start' }}>
+        <LessonContentForm lesson={lesson} canEdit={lesson.ownerId === me.id} startEditing={!lesson.title} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <Card title="Plan for a class">
+            <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <select value={planCls} onChange={e => setPlanCls(e.target.value)} style={lpInput}>
+                {classes.map(c => <option key={c.id} value={c.id}>{c.group} · {c.name.replace(/^(GCSE|A-?Level)\s+/i, '')}</option>)}
               </select>
+              <input type="date" value={planDate} onChange={e => setPlanDate(e.target.value)} style={lpInput} />
+              <Btn variant="primary" icon="calendar" small onClick={planIt}>Plan it</Btn>
+              {msg && <div style={{ fontSize: 12, color: DS.warning }}>{msg}</div>}
             </div>
-            <div>
-              <label style={labelStyle}>Date</label>
-              <input
-                type="date"
-                value={selectedDate}
-                onChange={e => setSelectedDate(e.target.value)}
-                style={inputStyle}
-              />
+          </Card>
+          <Card title="Taught to" subtitle={`${usage.taught} time${usage.taught === 1 ? '' : 's'}${usage.next ? ` · next ${lpFmtShort(usage.next)}` : ''}`}>
+            <div style={{ padding: '12px 16px' }}>
+              <LessonDeliveriesList lessonId={lesson.id} classes={classes} today={today} onOpen={(d) => onOpenDelivery(d.classId, d.date)} />
             </div>
-          </div>
-
-          {/* Attached resources — pulled from the shared library. Attaching creates
-              a pointer (nothing is copied); the file also lands in Resources. Owners
-              attach/detach; another teacher's plan is read-only. */}
-          <div style={{ background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:12, padding:'18px 20px' }}>
-            {window.AttachResourcesPanel
-              ? <window.AttachResourcesPanel contextType="lesson_plan" contextId={planContextId} canEdit={!readOnly} />
-              : null}
-          </div>
-
-          {/* Action buttons */}
-          <div style={{
-            background:DS.bg, border:`1px solid ${DS.cardBorder}`, borderRadius:12,
-            padding:'14px 16px', display:'flex', flexDirection:'column', gap:8,
-            position:'sticky', top:16,
-          }}>
-            {readOnly ? (
-              <div style={{ display:'flex', alignItems:'center', gap:8, fontSize:12.5, color:DS.muted, padding:'2px 2px 4px' }}>
-                <Icon name="eye" size={15} color={DS.muted} /> Read-only — owned by {ownerName}
-              </div>
-            ) : isEdit ? (
-              <>
-                <Btn variant="primary" icon="check" onClick={onSave}>
-                  {exists ? 'Update Plan' : 'Save Plan'}
-                </Btn>
-                {exists && <Btn variant="secondary" onClick={() => setMode('view')}>Cancel Edits</Btn>}
-              </>
-            ) : (
-              <>
-                <Btn variant="primary" icon="edit" onClick={() => setMode('edit')}>Edit Plan</Btn>
-                {exists && <Btn variant="secondary" icon="copy" onClick={() => setDupOpen(true)}>Duplicate to another class</Btn>}
-              </>
-            )}
-            {/* Going back lives in the page's back control (top-left), not in the
-                action rail — this column is for actions ON the plan. */}
-            {!readOnly && exists && <Btn variant="ghost" icon="x" onClick={onDelete}>Delete Plan</Btn>}
-          </div>
+          </Card>
+          <Card>
+            <div style={{ padding: '14px 16px' }}>
+              {window.AttachResourcesPanel ? <window.AttachResourcesPanel contextType="lesson" contextId={lesson.id} canEdit={lesson.ownerId === me.id} /> : null}
+            </div>
+          </Card>
+          {usage.deliveries === 0 && lesson.ownerId === me.id && (
+            <Btn variant="ghost" icon="x" small onClick={() => { L.deleteLesson(lesson.id); onBack(); }}>Delete lesson</Btn>
+          )}
         </div>
       </div>
-
-      {/* Duplicate-to-another-class picker (D8) */}
-      <Modal open={dupOpen} onClose={() => setDupOpen(false)} title="Duplicate to another class" icon="copy" width={440}
-        subtitle="Creates a separate copy for the chosen class on the same date. The two plans are independent — annotate each after its lesson without them colliding."
-        footer={<><Btn variant="ghost" onClick={() => setDupOpen(false)}>Cancel</Btn><Btn variant="primary" icon="copy" onClick={duplicateToClass}>Create copy</Btn></>}>
-        <Field label="Copy to class">
-          <Select value={dupGroup} onChange={e => setDupGroup(e.target.value)}>
-            <option value="">Choose a class…</option>
-            {teacherClasses.filter(c => c.group !== selectedGroup).map(c => <option key={c.id} value={c.group}>{c.group}</option>)}
-          </Select>
-        </Field>
-      </Modal>
-    </>
+    </div>
   );
 };
 
-const LessonPlannerPage = ({ initialGroup, initialDate, initialMode }) => {
-  // 'browse' shows the saved-plans list; 'editor' shows the plan editor/viewer.
-  const [screen, setScreen] = React.useState(initialGroup ? 'editor' : 'browse');
-  const [selectedGroup, setSelectedGroup] = React.useState(initialGroup || teacherClasses[0].group);
-  const [selectedDate, setSelectedDate] = React.useState(initialDate || '2026-04-25');
-  const [mode, setMode] = React.useState(initialMode || 'edit');
-  const [plan, setPlan] = React.useState(blankPlan());
-  const [saved, setSaved] = React.useState(false);
-  const [savedAt, setSavedAt] = React.useState(null);
+const LessonPlannerPage = ({ initialClassId, initialDate, initialMode }) => {
+  const L = window.useLessons ? window.useLessons() : window.klasioLessons;
+  const store = useAdminStore();
+  const TM = window.teacherMetrics;
+  const me = TM ? TM.getPrincipal() : { id: 't1', name: 'Heebz A' };
+  const classes = TM ? TM.getMyClasses() : store.classes.filter(c => c.teacher === me.name);
+  const today = lpToday();
+  const [screen, setScreen] = React.useState(() => initialClassId
+    ? { name: 'delivery', classId: initialClassId, date: initialDate || today }
+    : { name: 'browse' });
+  const [tab, setTab] = React.useState('planned');
+  const [q, setQ] = React.useState('');
+  const [classF, setClassF] = React.useState('all');
 
-  const key = planKey(selectedGroup, selectedDate);
-  const exists = !!window.__lessonPlans[key];
+  const openDelivery = (classId, date) => setScreen({ name: 'delivery', classId, date });
+  const openLesson = (id) => setScreen({ name: 'lesson', id });
+  const back = () => setScreen({ name: 'browse' });
+  const newLesson = () => { const l = L.saveLesson({ ...LP_BLANK, ownerId: me.id, owner: me.name }); openLesson(l.id); };
 
-  // Acting teacher (the principal in this prototype). Every teacher can READ every
-  // plan; only the owner edits. A plan with no stored owner is a legacy/own plan.
-  const acting = window.teacherMetrics ? window.teacherMetrics.getPrincipal() : { id: 't1', name: 'Sarah Clarke' };
-  const storedPlan = window.__lessonPlans[key];
-  const planOwnerName = (storedPlan && storedPlan.owner) ? storedPlan.owner : acting.name;
-  const readOnly = !!(storedPlan && storedPlan.ownerId && storedPlan.ownerId !== acting.id);
+  if (screen.name === 'delivery') {
+    return <div style={pageFrame()}><DeliveryScreen classId={screen.classId} date={screen.date} classes={classes} me={me}
+      onChange={openDelivery} onOpenLesson={openLesson} onBack={back} /></div>;
+  }
+  if (screen.name === 'lesson') {
+    return <div style={pageFrame()}><LessonScreen lessonId={screen.id} classes={classes} me={me} onOpenDelivery={openDelivery} onBack={back} /></div>;
+  }
 
-  React.useEffect(() => {
-    const stored = window.__lessonPlans[key];
-    if (stored) {
-      setPlan({ ...blankPlan(), ...stored.plan });
-      setSavedAt(stored.savedAt);
-      setMode('view');
-    } else {
-      setPlan(blankPlan());
-      setSavedAt(null);
-      setMode('edit');
-    }
-    setSaved(false);
-  }, [key]);
+  const ql = q.trim().toLowerCase();
+  const deliveries = L.listDeliveries(classes.map(c => c.id))
+    .filter(d => classF === 'all' || d.classId === classF)
+    .filter(d => { if (!ql) return true; const l = L.getLesson(d.lessonId) || {}; const c = classes.find(x => x.id === d.classId) || {}; return `${l.title} ${l.topic} ${c.group} ${d.notes}`.toLowerCase().includes(ql); });
+  const upcoming = deliveries.filter(d => d.date >= today).sort((a, b) => a.date.localeCompare(b.date));
+  const past = deliveries.filter(d => d.date < today);
+  const library = L.listLessons(me.id).filter(l => !ql || `${l.title} ${l.topic}`.toLowerCase().includes(ql));
 
-  const handleSave = () => {
-    const now = new Date().toLocaleString('en-GB', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' });
-    // Stamp ownership so "My classes / All classes" and read-only-for-others resolve.
-    window.__lessonPlans[key] = { plan, savedAt: now, group: selectedGroup, date: selectedDate, owner: acting.name, ownerId: acting.id };
-    window.__saveLessonPlans && window.__saveLessonPlans();   // persist to localStorage
-    setSavedAt(now);
-    setSaved(true);
-    setMode('view');
-    setTimeout(() => setSaved(false), 2500);
+  const DeliveryRow = ({ d }) => {
+    const l = L.getLesson(d.lessonId) || {};
+    const c = classes.find(x => x.id === d.classId);
+    return (
+      <HoverRow onClick={() => openDelivery(d.classId, d.date)}>
+        <div style={{ width: 46, textAlign: 'center', flexShrink: 0 }}>
+          <div style={{ fontSize: 10.5, color: DS.muted, textTransform: 'uppercase', fontWeight: 600 }}>{lpFmtShort(d.date).split(' ')[1]}</div>
+          <div style={{ fontSize: 18, fontWeight: 800, color: lpClassColor(c), lineHeight: 1.1 }}>{lpFmtShort(d.date).split(' ')[0]}</div>
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 600, color: DS.text }}>{l.title || 'Untitled lesson'}</div>
+          <div style={{ fontSize: 12, color: DS.muted, marginTop: 1 }}>{c ? `${c.group} · ${c.name}` : d.classId}{l.topic ? ` · ${l.topic}` : ''}</div>
+        </div>
+        {d.reflection && <StatusPill tone="positive">Reflected</StatusPill>}
+        {L.usageOf(d.lessonId, today).deliveries > 1 && <StatusPill tone="info">Reused</StatusPill>}
+      </HoverRow>
+    );
   };
-
-  const handleDelete = () => {
-    delete window.__lessonPlans[key];
-    window.__saveLessonPlans && window.__saveLessonPlans();   // persist the removal
-    setPlan(blankPlan());
-    setSavedAt(null);
-    setMode('edit');
-    setScreen('browse');
-  };
-
-  const openExisting = (group, date) => {
-    setSelectedGroup(group);
-    setSelectedDate(date);
-    setScreen('editor');
-  };
-
-  const startNew = () => {
-    setSelectedGroup(teacherClasses[0].group);
-    setSelectedDate(new Date().toISOString().slice(0, 10));
-    setPlan(blankPlan());
-    setMode('edit');
-    setScreen('editor');
-  };
-
-  // The editor is a page inside the planner, so it gets the standard back control
-  // (top-left, above the title) and a crumb naming the plan you're in.
-  const backToBrowse = () => setScreen('browse');
-  usePageTrail(screen === 'editor' ? [{ label: plan.title || 'Untitled lesson' }] : []);
 
   return (
     <div style={pageFrame()}>
-      {screen === 'editor' && <BackLink onClick={backToBrowse} label="All plans" />}
-      <PageHeader
-        title="Lesson Planner"
-        subtitle={screen === 'browse'
-          ? 'Search saved lessons or plan a new one'
-          : 'Plan, save and review lessons for any class on any date'}
+      <PageHeader title="Lesson Planner" subtitle="Plan what you’re teaching each class — write a lesson once and reuse it with any group"
         actions={[
-          screen === 'browse' && (
-            <Btn key="new" variant="primary" icon="plus" small onClick={startNew}>
-              Plan a New Lesson
-            </Btn>
-          ),
-        ].filter(Boolean)}
-      />
+          <Btn key="n" variant="secondary" icon="book" small onClick={newLesson}>New lesson</Btn>,
+          <Btn key="p" variant="primary" icon="plus" small onClick={() => openDelivery((classes[0] || {}).id, today)}>Plan a lesson</Btn>,
+        ]} />
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 18, flexWrap: 'wrap' }}>
+        <Segmented value={tab} onChange={setTab} options={[{ id: 'planned', label: 'Planned', count: upcoming.length + past.length }, { id: 'library', label: 'My library', count: L.listLessons(me.id).length }]} />
+        <SearchInput value={q} onChange={e => setQ(e.target.value)} placeholder={tab === 'planned' ? 'Search planned lessons, classes, notes…' : 'Search your lessons…'} style={{ maxWidth: 360 }} />
+        {tab === 'planned' && (
+          <Select value={classF} onChange={e => setClassF(e.target.value)} style={{ width: 220 }}>
+            <option value="all">All my classes</option>
+            {classes.map(c => <option key={c.id} value={c.id}>{c.group} · {c.name.replace(/^(GCSE|A-?Level)\s+/i, '')}</option>)}
+          </Select>
+        )}
+      </div>
 
-      {screen === 'browse' ? (
-        <SavedPlansBrowser
-          onOpen={openExisting}
-          onNew={startNew}
-          currentKey={null}
-        />
+      {tab === 'planned' ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+          <Card title="Coming up" subtitle={`${upcoming.length} planned`}>
+            {upcoming.length ? upcoming.map(d => <DeliveryRow key={d.id} d={d} />)
+              : <div style={{ padding: '18px 20px', fontSize: 13, color: DS.muted }}>Nothing planned ahead — use “Plan a lesson”, or open a session from your timetable.</div>}
+          </Card>
+          <Card title="Taught" subtitle={`${past.length} delivered`}>
+            {past.length ? past.slice(0, 30).map(d => <DeliveryRow key={d.id} d={d} />)
+              : <div style={{ padding: '18px 20px', fontSize: 13, color: DS.muted }}>No past lessons yet.</div>}
+          </Card>
+        </div>
       ) : (
-        <LessonPlanEditor
-          selectedGroup={selectedGroup}
-          setSelectedGroup={setSelectedGroup}
-          selectedDate={selectedDate}
-          setSelectedDate={setSelectedDate}
-          plan={plan}
-          setPlan={setPlan}
-          mode={mode}
-          setMode={setMode}
-          exists={exists}
-          savedAt={savedAt}
-          saved={saved}
-          readOnly={readOnly}
-          ownerName={planOwnerName}
-          acting={acting}
-          onSave={handleSave}
-          onDelete={handleDelete}
-          onOpen={openExisting}
-          onBack={() => setScreen('browse')}
-        />
+        <Card title="My library" subtitle="Reusable lessons — no class, no date. Plan one for any group.">
+          {library.length ? library.map(l => {
+            const u = L.usageOf(l.id, today);
+            return (
+              <HoverRow key={l.id} onClick={() => openLesson(l.id)}>
+                <Icon name="book" size={17} color={DS.accent} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 600, color: DS.text }}>{l.title || 'Untitled lesson'}</div>
+                  <div style={{ fontSize: 12, color: DS.muted, marginTop: 1 }}>{l.topic || 'No topic'}</div>
+                </div>
+                <span style={{ fontSize: 12, color: DS.muted, whiteSpace: 'nowrap' }}>
+                  {u.taught ? `Taught ${u.taught}×` : 'Not taught yet'}{u.last ? ` · last ${lpFmtShort(u.last)}` : ''}{u.next ? ` · next ${lpFmtShort(u.next)}` : ''}
+                </span>
+              </HoverRow>
+            );
+          }) : <EmptyState icon="book" title={ql ? 'No lessons match' : 'Your library is empty'} message="Write a lesson once and plan it for any of your groups." action={<Btn variant="primary" icon="plus" small onClick={newLesson}>New lesson</Btn>} />}
+        </Card>
       )}
     </div>
   );
@@ -2987,6 +2802,11 @@ const ColumnForm = ({ col, onSave, onDelete, onClose }) => {
     type: (col && (col.type === 'check' ? 'checkbox' : col.type === 'number' ? 'score' : col.type)) || 'score',
     max: (col && col.max) || 100,
     options: ((col && col.options) || []).join('\n'),
+    // A score column can COUNT AS AN ASSESSMENT (decision #50): its marks then feed
+    // the student's attainment series (Progress, profile, at-risk, reports) without
+    // being typed twice. It needs a date so it sits in the series in order.
+    countsAsAssessment: !!(col && col.countsAsAssessment),
+    assessedOn: (col && col.assessedOn) || (window.attIso && window.getNow ? window.attIso(new Date(window.getNow())) : ''),
   }));
   const [confirm, setConfirm] = React.useState(false);
   const nameRef = React.useRef(null);
@@ -2995,7 +2815,11 @@ const ColumnForm = ({ col, onSave, onDelete, onClose }) => {
   const submit = () => {
     if (!draft.name.trim()) return;
     const next = { name: draft.name.trim(), type: draft.type };
-    if (draft.type === 'score') next.max = Number(draft.max) || 100;
+    if (draft.type === 'score') {
+      next.max = Number(draft.max) || 100;
+      next.countsAsAssessment = !!draft.countsAsAssessment;
+      next.assessedOn = draft.countsAsAssessment ? (draft.assessedOn || null) : null;
+    }
     if (draft.type === 'select') next.options = draft.options.split(/[\n,]/).map(s => s.trim()).filter(Boolean);
     onSave(next);
   };
@@ -3029,6 +2853,17 @@ const ColumnForm = ({ col, onSave, onDelete, onClose }) => {
         <Field label="Out of (max)" style={{ margin: 0 }}>
           <input type="number" value={draft.max} onChange={e => setDraft(d => ({ ...d, max: e.target.value }))} style={fieldInput} />
         </Field>
+      )}
+      {draft.type === 'score' && (
+        <div style={{ padding: '10px 11px', borderRadius: 8, background: draft.countsAsAssessment ? DS.accentLight : DS.surface, border: `1px solid ${draft.countsAsAssessment ? DS.accentBorder : DS.border}` }}>
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer', fontSize: 12.5, color: DS.text }}>
+            <input type="checkbox" checked={draft.countsAsAssessment} onChange={e => setDraft(d => ({ ...d, countsAsAssessment: e.target.checked }))} style={{ marginTop: 2 }} />
+            <span><strong>Counts as an assessment</strong><br /><span style={{ color: DS.muted, fontSize: 11.5 }}>These marks feed each pupil’s attainment on Progress, their profile and reports — no need to type them twice.</span></span>
+          </label>
+          {draft.countsAsAssessment && (
+            <input type="date" value={draft.assessedOn} onChange={e => setDraft(d => ({ ...d, assessedOn: e.target.value }))} style={{ ...fieldInput, marginTop: 8 }} />
+          )}
+        </div>
       )}
       {draft.type === 'select' && (
         <Field label="Options" hint="One per line" style={{ margin: 0 }}>
@@ -3425,6 +3260,7 @@ const TrackerDetail = ({ tracker, trackers, api, onBack, onSwitch, onNew }) => {
                       style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: DS.muted, fontWeight: 600, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', display: 'inline-flex', alignItems: 'center', gap: 5, maxWidth: '100%' }}>
                       <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{col.name}</span>
                       {col.type === 'score' && col.max && !new RegExp('/\\s*' + col.max + '\\s*$').test(col.name) ? <span style={{ color: DS.faint, fontWeight: 500 }}>· /{col.max}</span> : null}
+                      {col.countsAsAssessment ? <span title="Counts as an assessment — these marks feed pupils' attainment" style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.04em', color: DS.accent, background: DS.accentLight, borderRadius: 4, padding: '1px 5px', flexShrink: 0 }}>ASSESSED</span> : null}
                       <Icon name="chevron_d" size={11} color={DS.faint} />
                     </button>
                   </th>
@@ -3742,9 +3578,9 @@ const TeacherStudentsPage = () => {
   // later). AADC data-minimisation: default columns are the non-sensitive academic
   // fields only — no guardian contact, DOB or address in the default export.
   const exportCsv = () => {
-    const cols = ['Name', 'Year', 'Attendance %', 'HW %', 'Avg Score', 'Status'];
+    const cols = ['Name', 'Year', 'Attendance %', 'HW %', 'Attainment %', 'Status'];
     const lines = [cols.join(',')].concat(filtered.map(s => [
-      studentName(s), s.year, s.attendance, s.hw, s.score, atRisk(s) ? 'At risk' : 'Active',
+      studentName(s), s.year, s.attendance, s.hw, window.studentAttainment(s) ?? '', atRisk(s) ? 'At risk' : 'Active',
     ].join(',')));
     if (window.klasioAudit) window.klasioAudit('export_csv', 'my-students', { count: filtered.length, scope: 'teacher' });
     try {
@@ -3799,7 +3635,7 @@ const TeacherStudentsPage = () => {
       <div style={{ display:'grid', gridTemplateColumns: sel ? '1fr 360px' : '1fr', gap:20 }}>
         <Card>
           <Table
-            cols={['Student','Year','My Classes','Attendance','HW %','Avg Score','Status',{ label:'', align:'right' }]}
+            cols={['Student','Year','My Classes','Attendance','HW %','Attainment','Status',{ label:'', align:'right' }]}
             rows={filtered.map(s => [
               <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
                 <span onClick={() => setSelected(sel && sel.id === s.id ? null : s)} style={{ fontSize:13, fontWeight:600, color:DS.text, cursor:'pointer' }}>{studentName(s)}</span>
@@ -3809,7 +3645,7 @@ const TeacherStudentsPage = () => {
               <div style={{ display:'flex', flexWrap:'wrap', gap:4 }}>{classesOf(s).map(classChip)}</div>,
               <span style={{ fontSize:13, fontWeight:600, color: s.attendance < 80 ? DS.danger : s.attendance < 90 ? DS.warning : DS.success }}>{s.attendance}%</span>,
               <span style={{ fontSize:13, fontWeight:600, color: s.hw < 50 ? DS.danger : s.hw < 70 ? DS.warning : DS.success }}>{s.hw}%</span>,
-              <ScorePill score={s.score} />,
+              <ScorePill score={window.studentAttainment(s)} />,
               <StatusPill status={atRisk(s) ? 'At risk' : 'Active'} />,
               <Btn variant="secondary" small onClick={() => setSelected(sel && sel.id === s.id ? null : s)}>View</Btn>,
             ])}
@@ -3836,7 +3672,7 @@ const TeacherStudentsPage = () => {
                 ['Subjects', (sel.subjects || []).join(', ') || '—'],
                 ['Attendance', `${sel.attendance}%`],
                 ['HW completion', `${sel.hw}%`],
-                ['Average score', `${sel.score}%`],
+                ['Attainment', window.studentAttainment(sel) == null ? 'No results yet' : `${window.studentAttainment(sel)}%`],
                 ['Guardian', sel.guardianName || '—'],
                 ['Last seen', sel.lastSeen || '—'],
               ].map(([l,v]) => (
@@ -3871,7 +3707,8 @@ const TeacherPages = ({ page, plannerArgs, section }) => {
   if (page === 'tracking')       return <TeacherTrackingPage />;
   if (page === 'reports')        return <TeacherReports />;
   if (page === 'lesson_planner') return <LessonPlannerPage
-    initialGroup={plannerArgs && plannerArgs.group}
+    key={plannerArgs ? plannerArgs.at : 'browse'}
+    initialClassId={plannerArgs && plannerArgs.classId}
     initialDate={plannerArgs && plannerArgs.date}
     initialMode={plannerArgs && plannerArgs.mode}
   />;

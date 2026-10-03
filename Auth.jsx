@@ -29,11 +29,22 @@ const LAST_CENTRE_KEY = 'tutoros.lastCentre';   // remembered device → skip ce
 const readLastCentre  = () => { try { return localStorage.getItem(LAST_CENTRE_KEY) || null; } catch (e) { return null; } };
 const writeLastCentre = id => { try { id ? localStorage.setItem(LAST_CENTRE_KEY, id) : localStorage.removeItem(LAST_CENTRE_KEY); } catch (e) {} };
 
-// Initials + 3-digit number, e.g. "Bright Minds Tuition" → "BMT-204".
-const genCentreCode = name => {
+// Initials + 3-digit number, e.g. "Bright Minds Tuition" → "BMT-204" — UNIQUE
+// across every code anyone might type (window.allCentreCodes: current codes, codes
+// still inside their grace window, other accounts' centres). The login resolver
+// takes the first match, so a collision would send a pupil into the wrong
+// centre. If the 3-digit space for these initials is nearly used up, widen to 4.
+// Production: `centres.code UNIQUE` + retry on a unique violation.
+const genCentreCode = (name, taken = (window.allCentreCodes ? window.allCentreCodes() : new Set())) => {
   const initials = (name || '').split(/\s+/).filter(Boolean).map(w => w[0]).join('')
     .replace(/[^a-zA-Z]/g, '').slice(0, 3).toUpperCase() || 'CTR';
-  return `${initials}-${RAND(3, '0123456789')}`;
+  for (let i = 0; i < 200; i++) {
+    const code = `${initials}-${RAND(3, '0123456789')}`;
+    if (!taken.has(code)) return code;
+  }
+  let code;
+  do { code = `${initials}-${RAND(4, '0123456789')}`; } while (taken.has(code));
+  return code;
 };
 
 // A student's effective daily sign-in method (per-student setting, age default).
@@ -226,20 +237,32 @@ const StudentLogin = ({ mode, setMode, store, onb }) => {
   const [touched, setTouched] = React.useState(false);
   const [error, setError] = React.useState('');
 
-  // Codes that resolve a centre (current centre + directory). A code only SELECTS
-  // a centre — it never creates an account.
-  const resolveCentre = c => {
+  // A code only SELECTS a centre — it never creates an account or signs anyone in.
+  // ONE resolver (window.resolveCentreCode, Centres.jsx) knows every centre's live
+  // code AND a changed code's 30-day grace window. The signup-issued code on the
+  // onboarding record is a last fallback for the demo's freshly signed-up tenant.
+  const [graceNotice, setGraceNotice] = React.useState(null);   // { newCode, until } after using an old code
+  const lookupCode = c => {
+    const r = window.resolveCentreCode ? window.resolveCentreCode(c) : null;
+    if (r) return r;
     const v = (c || '').trim().toUpperCase();
-    if (!v) return null;
-    if (v === (onb.centre.code || '').toUpperCase()) return onb.centreId;
-    const hit = Object.values(ONB_CENTRE_DIRECTORY).find(d => (d.code || '').toUpperCase() === v);
-    return hit ? hit.id : null;
+    if (v && v === (onb.centre.code || '').toUpperCase()) return { state: 'current', centreId: onb.centreId, name: onb.centre.name };
+    return null;
   };
+  const resolveCentre = c => { const r = lookupCode(c); return r && r.centreId ? r.centreId : null; };
 
   const identify = () => {
-    setTouched(true); setError('');
-    const centreId = useRemembered ? remembered : resolveCentre(code);
+    setTouched(true); setError(''); setGraceNotice(null);
+    const hit = useRemembered ? { state: 'current', centreId: remembered } : lookupCode(code);
+    if (hit && hit.state === 'retired') {
+      // The slip isn't wrong about the centre — the centre changed its code. Say so,
+      // rather than "check your slip": the slip is exactly what's now out of date.
+      setError(`${hit.name} has changed its centre code, so the one you typed no longer works. Ask your centre for the new code.`);
+      return;
+    }
+    const centreId = hit && hit.centreId;
     if (!centreId) { setError("We don't recognise that centre code. Check the code on your slip or ask your centre."); return; }
+    if (hit.state === 'grace') setGraceNotice({ newCode: hit.newCode, until: hit.until });
     if (!username.trim()) return;
     const uname = username.trim().toLowerCase();
     const found = store.students.find(s => centreId === (s.centreId || onb.centreId) && (acct(s).username || '').toLowerCase() === uname);
@@ -265,6 +288,12 @@ const StudentLogin = ({ mode, setMode, store, onb }) => {
             {dm !== 'qr' && <AuthLink onClick={() => setStage('recover')}>{dm === 'pin' ? 'Forgot PIN?' : 'Forgot password?'}</AuthLink>}
           </div>
         </div>}>
+        {/* Signed in with a centre's OLD code (inside its grace window) — teach the new one. */}
+        {graceNotice && (
+          <div style={{ marginBottom: 12, padding: '10px 12px', background: DS.warningBg, border: `1px solid ${DS.warningBorder}`, borderRadius: 9, fontSize: 12.5, color: DS.sub, lineHeight: 1.5 }}>
+            Your centre has a new code: <Mono color={DS.text}>{graceNotice.newCode}</Mono>. The old one stops working on {new Date(graceNotice.until + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'long' })}.
+          </div>
+        )}
         <div style={{ marginBottom: 16, padding: '10px 12px', background: DS.surface, border: `1px solid ${DS.border}`, borderRadius: 9, fontSize: 12.5, color: DS.muted }}>
           Username <Mono color={DS.sub}>{a.username}</Mono>
         </div>
@@ -326,7 +355,7 @@ const StudentLogin = ({ mode, setMode, store, onb }) => {
           <AuthLink onClick={() => { setForgetCentre(true); setError(''); }}>Not your centre?</AuthLink>
         </div>
       ) : (
-        <Field label="Centre code" required error={touched && !resolveCentre(code) && code ? 'Unknown code' : ''} hint="On your claim slip, the whiteboard or a parent letter">
+        <Field label="Centre code" required error={touched && !resolveCentre(code) && code ? ((lookupCode(code) || {}).state === 'retired' ? 'This code has changed' : 'Unknown code') : ''} hint="On your claim slip, the whiteboard or a parent letter">
           <Input value={code} onChange={e => setCode(e.target.value.toUpperCase())} onKeyDown={onEnter(identify)} icon="tag"
             placeholder="e.g. BMT-204" style={{ fontFamily: "'JetBrains Mono', monospace", letterSpacing: '1px' }} autoFocus />
         </Field>
@@ -365,20 +394,32 @@ const LoginPage = () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 //  SignupPage — public, admin-only: creates the centre (tenant) + first admin
 // ═══════════════════════════════════════════════════════════════════════════════
-const SIGNUP_PLANS = [
-  { id: 'Starter', label: 'Starter — up to 50 students', teacherSeats: 3,  studentSeats: 50 },
-  { id: 'Growth',  label: 'Growth — up to 250 students', teacherSeats: 15, studentSeats: 250 },
-  { id: 'Scale',   label: 'Scale — up to 600 students',  teacherSeats: 40, studentSeats: 600 },
-];
+// The plans on offer come from the live catalogue — only plans Stripe would charge
+// exactly as shown (getPublicPlans, the prototype twin of GET /v1/plans). Nothing
+// here hardcodes a price or a seat count.
+const signupPlans = () => (window.getPublicPlans ? window.getPublicPlans('centre') : []);
+// The marketing site's only link into the app is signup, carrying the plan the
+// visitor picked: /signup?plan=<code>. An unknown or unsellable code is ignored.
+const signupPlanFromUrl = () => {
+  try {
+    const want = (new URLSearchParams(window.location.search).get('plan') || '').trim().toLowerCase();
+    return want && signupPlans().some(p => p.id === want) ? want : null;
+  } catch (e) { return null; }
+};
 
 const SignupPage = () => {
   const onb = useOnboardingStore();
-  // The global free trial the platform owner set in Platform Controls (Plans.jsx).
+  // The centre free trial the platform owner set on the Pricing page (Plans.jsx).
   // Read live so the promise made here is never stale, and stamped onto the new
   // subscription at submit — Centres.jsx loads after this file, hence window.*.
-  const trial = window.getPlatformTrial ? window.getPlatformTrial() : null;
+  const trial = window.getPlatformTrial ? window.getPlatformTrial('centre') : null;
   const sub = window.useSubscriptionStore ? window.useSubscriptionStore() : null;
-  const [form, setForm] = React.useState({ centre: '', name: '', email: '', pw: '', pw2: '', plan: 'Growth' });
+  const offered = signupPlans();
+  const platform = window.readPlatformSettings ? window.readPlatformSettings() : { signupsEnabled: true };
+  const [form, setForm] = React.useState(() => ({
+    centre: '', name: '', email: '', pw: '', pw2: '',
+    plan: signupPlanFromUrl() || (offered.some(p => p.id === 'growth') ? 'growth' : ((offered[0] || {}).id || '')),
+  }));
   const [touched, setTouched] = React.useState(false);
   const [done, setDone] = React.useState(null); // { code, name, trial }
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -389,6 +430,7 @@ const SignupPage = () => {
     email: !isEmail(form.email) ? 'Enter a valid work email' : '',
     pw: form.pw.length < 8 ? 'Use at least 8 characters' : '',
     pw2: form.pw2 !== form.pw ? 'Passwords do not match' : '',
+    plan: !offered.some(p => p.id === form.plan) ? 'Choose a plan' : '',
   };
   const valid = !Object.values(errs).some(Boolean);
 
@@ -396,14 +438,27 @@ const SignupPage = () => {
     setTouched(true);
     if (!valid) return;
     const code = genCentreCode(form.centre);
-    const plan = SIGNUP_PLANS.find(p => p.id === form.plan);
-    onb.recordSignup({ name: form.centre.trim(), code, plan: { name: plan.id, teacherSeats: plan.teacherSeats, studentSeats: plan.studentSeats }, adminName: form.name.trim(), adminEmail: form.email.trim() });
-    // Start the global free trial on the new subscription (no-op when it's switched
-    // off — the centre is then billed from day one). Catalogue ids are lowercase.
-    const stamp = sub && sub.startTrial ? sub.startTrial(plan.id.toLowerCase()) : null;
+    const plan = offered.find(p => p.id === form.plan);
+    onb.recordSignup({ name: form.centre.trim(), code, plan: { name: plan.name, teacherSeats: plan.teacherSeats, studentSeats: plan.studentSeats }, adminName: form.name.trim(), adminEmail: form.email.trim() });
+    // Start the centre free trial on the new subscription (no-op when it's switched
+    // off — the centre is then billed from day one).
+    const stamp = sub && sub.startTrial ? sub.startTrial(plan.id) : null;
     setDone({ code, name: form.centre.trim(), trial: stamp });
   };
   const fmtDay = d => d ? new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+
+  // ── Signups paused by the platform owner (Platform Controls → New signups) ──
+  if (!platform.signupsEnabled && !done) {
+    return (
+      <SetupShell icon="lock" accent={DS.muted} title="Signups are paused"
+        subtitle="We’re not taking new centres right now"
+        footer={<div style={{ textAlign: 'center' }}><span style={{ fontSize: 12.5, color: DS.muted }}>Already have an account? <AuthLink onClick={() => window.__navigate('login')}>Sign in</AuthLink></span></div>}>
+        <div style={{ fontSize: 13.5, color: DS.sub, lineHeight: 1.6 }}>
+          New accounts can’t be created at the moment. If you’re setting up a centre with us, email <b>{window.BRAND ? window.BRAND.supportEmail : 'support'}</b> and we’ll get you started.
+        </div>
+      </SetupShell>
+    );
+  }
 
   // ── Success: surface the centre code + hand off to the setup checklist ──
   if (done) {
@@ -477,13 +532,13 @@ const SignupPage = () => {
           <Input type="password" value={form.pw2} onChange={e => set('pw2', e.target.value)} invalid={touched && !!errs.pw2} placeholder="Re-enter" />
         </Field>
       </div>
-      <Field label="Plan" hint={trial && trial.enabled
+      <Field label="Plan" required error={touched && errs.plan} hint={trial && trial.enabled
         ? (trial.planId
           ? `Free for your first ${trial.days} days on the trial plan — switch any time`
           : `Free for your first ${trial.days} days — you can change plan any time`)
-        : 'You can change this anytime — seats are demo caps'}>
+        : 'You can change this any time'}>
         <Select value={form.plan} onChange={e => set('plan', e.target.value)}>
-          {SIGNUP_PLANS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+          {offered.map(p => <option key={p.id} value={p.id}>{p.name} — £{p.price}/mo · up to {p.studentSeats} students</option>)}
         </Select>
       </Field>
       <div style={{ fontSize: 11, color: DS.faint, display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="alert" size={12} />Prototype — no password is stored, only your account status.</div>

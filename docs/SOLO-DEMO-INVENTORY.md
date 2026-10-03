@@ -6,7 +6,7 @@ A second demo **account** (not a role): Sarah Whitfield, private tutor, on Solo 
 
 | File | What it is |
 |---|---|
-| `soloCapabilities.jsx` | The capability module. It's the **only** file that knows the tier ids (`solo_free`, `solo_core`, `solo_pro`). Exports `getSoloCapabilities`, `getSoloTier`, `listSoloTiers`, `soloNextTier`, `compareSoloTiers`, `SOLO_DEFAULT_TIER`. |
+| `soloCapabilities.jsx` | The capability module. It's the **only** file that knows the tier ids (`solo_free`, `solo_core`, `solo_pro`). It seeds the solo rows of the platform plan catalogue (`soloPlanSeed`, audience `solo`) and reads the live catalogue back, so prices, limits, capabilities and bullets edited on the owner console's Pricing page reach the demo. Exports `getSoloCapabilities`, `getSoloTier`, `listSoloTiers`, `soloNextTier`, `compareSoloTiers`, `SOLO_DEFAULT_TIER`, `soloPlanSeed`. |
 | `mocks/solo.mock.jsx` | Solo fixtures (`window.SOLO_FIXTURES`). There is one roster, in join order. It also holds the lesson schedule, register gaps, absences and lates, invoices, tracking marks, reports, escalation contacts and the seasonal trend. |
 | `soloData.jsx` | Demo state for this session only (tier, page, registers taken, reopen reasons, payments, concerns). `soloModel()` works out everything else: the book, sessions with register state, attendance, invoices with status, balances, earnings and "worth a look" signals. Mutations go through `soloActions`. |
 | `Solo.jsx` | Registers `NAV_CONFIG.solo` (items are a getter driven by capabilities). Holds `SoloShell`, `SoloTopBar` (breadcrumb, **Demo plan** control, tutor), the ten pages plus the Solo+ feature pages, and the register / reopen / concern / payment flows. |
@@ -48,7 +48,7 @@ A second demo **account** (not a role): Sarah Whitfield, private tutor, on Solo 
 | `maxInvoicesPerMonth` | 3 / ∞ / ∞ | Invoices subtitle, cap banner, "New invoice"; Billing meter; plan cards |
 | `storageBytes` | 250 MB / 2 GB / 10 GB | Sidebar storage meter; Billing meter; Resources subtitle; plan cards |
 
-Tier **metadata** from the same module: `label` / `monthly` / `yearly` feed the header, plan cards and upsell copy. `monthly > 0` controls the renewal, card and summer-pause rows. `demoStudents` (3 / 18 / 42) sets how far down the roster the book reaches. `demoStorageBytes` sets storage used.
+Tier **metadata** from the same module (live from the catalogue: name, tagline, monthly and yearly price, bullets, whether it's on sale): `label` / `monthly` / `yearly` feed the header, plan cards and upsell copy. Plan & billing shows the plans on sale plus the one you're on, and works out the "N months free" label from the prices. `soloNextTier` only suggests a plan that's on sale. `monthly > 0` controls the renewal, card and summer-pause rows. `demoStudents` (3 / 18 / 42) sets how far down the roster the book reaches. `demoStorageBytes` sets storage used.
 
 ## Not implemented as written
 

@@ -25,11 +25,14 @@ const COMMS_USERS = [
   { id: 'u_marcus', name: 'Marcus Hale',  role: 'superadmin', centreId: null,   classIds: [] },
 
   // ── Bright Minds Tuition ──
-  { id: 'u_lisa',   name: 'Taqqy',        role: 'admin',   centreId: 'bm',   classIds: [] },
-  { id: 'u_sarah',  name: 'Heebz A', role: 'teacher', centreId: 'bm',   classIds: ['c1','c2','c3','c4'] },
-  { id: 'u_david',  name: 'David Park',   role: 'teacher', centreId: 'bm',   classIds: ['c7','c13','c20','c31'] },
-  { id: 'u_priya',  name: 'Priya Nair',   role: 'teacher', centreId: 'bm',   classIds: ['c5','c6'] },
-  { id: 'u_marcusw',name: 'Marcus Webb',  role: 'teacher', centreId: 'bm',   classIds: ['c8','c23'] },
+  // Staff carry their identity email so account ownership (permissions.jsx
+  // isAccountOwner, keyed by email) can be resolved — the safeguarding record
+  // routes a concern about a DSL to the account owner alone.
+  { id: 'u_lisa',   name: 'Taqqy',        role: 'admin',   centreId: 'bm',   classIds: [], email: 'lisa.chen@brightminds.co.uk' },
+  { id: 'u_sarah',  name: 'Heebz A', role: 'teacher', centreId: 'bm',   classIds: ['c1','c2','c3','c4'], email: 's.clarke@centre.co.uk' },
+  { id: 'u_david',  name: 'David Park',   role: 'teacher', centreId: 'bm',   classIds: ['c7','c13','c20','c31'], email: 'd.park@centre.co.uk' },
+  { id: 'u_priya',  name: 'Priya Nair',   role: 'teacher', centreId: 'bm',   classIds: ['c5','c6'], email: 'p.nair@centre.co.uk' },
+  { id: 'u_marcusw',name: 'Marcus Webb',  role: 'teacher', centreId: 'bm',   classIds: ['c8','c23'], email: 'm.webb@centre.co.uk' },
   { id: 'u_oliver', name: 'Oliver Chen',  role: 'student', centreId: 'bm',   classIds: ['c3'] },
   { id: 'u_emma',   name: 'Emma Thompson',role: 'student', centreId: 'bm',   classIds: ['c1','c2'] },
   { id: 'u_sophia', name: 'Sophia Patel', role: 'student', centreId: 'bm',   classIds: ['c1','c2'] },
@@ -63,9 +66,9 @@ const COMMS_ANNOUNCEMENTS = [
     id: 'an_platform_maint',
     scope: 'platform', centreId: null, classId: null,
     authorId: 'u_marcus', authorName: 'Marcus Hale', authorRole: 'superadmin',
-    audience: { centreIds: 'all', roles: 'all', classIds: [] },
+    audience: { centreIds: 'all', roles: ['admin'], classIds: [] },
     title: 'Scheduled maintenance — Sunday 02:00–04:00 BST',
-    body: 'Klasio will be briefly unavailable during a platform upgrade this Sunday. No action needed — homework and reports already submitted are safe.',
+    body: 'Klasio will be briefly unavailable during a platform upgrade this Sunday. Please let your teachers know. Homework and reports already submitted are safe.',
     priority: 'important', pinned: true, requiresAck: false,
     createdAt: _ago(2 * DAY), expiresAt: null,
     reads: { u_lisa: _ago(2 * DAY - 30), u_daniel: _ago(2 * DAY - 90) }, acks: {},
@@ -481,11 +484,38 @@ const COMMS_FLAGS = {
 };
 
 // ─── Concerns log (low-level, recorded by the DSL) ─────────────────────────────────
+// The concern record (safeguarding_incidents): keyed to a PUPIL (roster id, s*) or
+// a MEMBER OF STAFF (staff identity, u_*), with a source, a status and an
+// append-only chronology of notes. Most start nowhere near a message.
 const COMMS_CONCERNS = [
-  { id: 'cn_sophia', centreId: 'bm', aboutUserId: 'u_sophia', threadId: 'th_sophia_sarah',
-    reason: 'Wellbeing — exam stress', level: 'low', by: 'u_lisa', at: _ago(2 * DAY),
-    note: 'Disclosed exam stress and asked to move off-platform (Instagram). Redirected; wellbeing support arranged. Monitoring.' },
-  { id: 'cn_aiden', centreId: 'bm', aboutUserId: 'u_aiden', threadId: 'th_aiden_david',
-    reason: 'Attempted off-platform contact', level: 'low', by: 'u_david', at: _ago(1 * DAY),
-    note: 'Shared personal mobile with tutor. Tutor declined and reinforced policy. Logged for awareness.' },
+  { id: 'cn_sophia', centreId: 'bm', subjectType: 'student', studentId: 's3', subjectName: 'Sophia Patel',
+    category: 'Wellbeing or emotional', severity: 'low', source: 'flag_escalation', threadId: 'th_sophia_sarah',
+    raisedBy: 'u_sarah', at: _ago(2 * DAY), status: 'monitoring', restricted: false,
+    summary: 'Disclosed exam stress in a message and asked to move the conversation to Instagram. I declined and kept it on Klasio.',
+    notes: [
+      { id: 'cnn_s1', by: 'u_lisa', at: _ago(2 * DAY - 90), status: null, text: 'Spoke to Sophia after her 4pm lesson. Stress about mocks; no other concerns raised. Mum called and aware.' },
+      { id: 'cnn_s2', by: 'u_lisa', at: _ago(1 * DAY), status: 'monitoring', text: 'Wellbeing check-ins weekly with Heebz A until mocks finish. Review 30 June.' },
+    ] },
+  { id: 'cn_aiden', centreId: 'bm', subjectType: 'student', studentId: null, subjectName: 'Aiden Foster',
+    category: 'Online safety', severity: 'low', source: 'flag_escalation', threadId: 'th_aiden_david',
+    raisedBy: 'u_david', at: _ago(1 * DAY), status: 'open', restricted: false,
+    summary: 'Aiden sent me his personal mobile number and asked me to text him instead. I declined and reminded him we only message on Klasio.',
+    notes: [] },
+  { id: 'cn_emma', centreId: 'bm', subjectType: 'student', studentId: 's1', subjectName: 'Emma Thompson',
+    category: 'Change in behaviour', severity: 'medium', source: 'staff_concern', threadId: null,
+    raisedBy: 'u_sarah', at: _ago(4 * HOUR), status: 'open', restricted: false,
+    summary: 'Emma has been very withdrawn for the last three sessions and was tearful at the end of Thursday’s lesson. When I asked, she said things were "a lot at home right now" and didn’t want to talk. Not in any message — noticed in class.',
+    notes: [] },
 ];
+
+// Where to escalate, per centre (safeguarding_escalation_contacts) — shown beside
+// the concern log. Local-authority numbers are the centre's to fill in; the
+// national lines are real.
+const COMMS_ESCALATION = {
+  bm: [
+    { label: 'Local Authority Designated Officer (LADO)', name: 'Allegations about staff — add your local authority’s number', phone: null, email: null },
+    { label: 'Children’s social care — duty team', name: 'Add your local authority’s number', phone: null, email: null },
+    { label: 'Police', name: null, phone: '999 if a child is in immediate danger · 101 otherwise', email: null },
+    { label: 'NSPCC helpline (adults worried about a child)', name: null, phone: '0808 800 5000', email: 'help@NSPCC.org.uk' },
+  ],
+};

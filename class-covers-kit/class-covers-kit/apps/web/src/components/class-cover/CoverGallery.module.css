@@ -1,0 +1,85 @@
+.gallery {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  padding: 24px;
+  font-family: var(--font-ui, "Plus Jakarta Sans", system-ui, sans-serif);
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  font-size: 14px;
+}
+
+.control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.count {
+  color: var(--color-text-secondary, #475569);
+}
+
+.rowTitle {
+  margin: 0 0 10px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+}
+
+.card {
+  aspect-ratio: 3 / 2;
+}
+
+.banner {
+  height: 72px;
+}
+
+.cardText,
+.bannerText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 60%;
+  padding: 14px 16px;
+  box-sizing: border-box;
+}
+
+.bannerText {
+  justify-content: center;
+  height: 100%;
+  padding: 0 16px;
+}
+
+.title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--cover-ink);
+}
+
+.subtitle {
+  font-size: 12px;
+  color: var(--cover-ink-muted);
+}
+
+.caption {
+  font-family: var(--font-mono, "JetBrains Mono", ui-monospace, monospace);
+  font-size: 12px;
+  color: var(--color-text-secondary, #475569);
+}

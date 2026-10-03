@@ -104,19 +104,11 @@ const getSubjectsTaught = (centreId, teacherId, termId) => {
 const AT_RISK = { attendance: 85, completion: 60 };
 const num = (v, d) => (typeof v === 'number' ? v : d);
 
-// Best-effort declining-trend signal from the dashboard score series (by name),
-// since the roster record itself stores only point-in-time figures.
+// Declining = the pupil's ATTAINMENT series (assessment results, decision #50)
+// is trending down. Read through the one score selector, keyed by id — never a
+// name-matched mock series.
 const isDeclining = (s) => {
-  try {
-    const series = (window.studentProgress || []).find(p => p.name === `${s.firstName} ${s.lastName}` || p.name === s.name);
-    if (series) {
-      if (series.trend === 'down') return true;
-      if (Array.isArray(series.scores) && series.scores.length >= 2) {
-        return series.scores[series.scores.length - 1] < series.scores[0] - 2;
-      }
-    }
-  } catch (e) {}
-  return false;
+  try { return !!(window.klasioScores && s && s.id && window.klasioScores.isDeclining(s.id)); } catch (e) { return false; }
 };
 
 const atRiskReason = (s) => {
@@ -157,7 +149,8 @@ const getMetrics = (centreId, teacherId, termId) => {
     // derived rates (never stored)
     hwCompletion:  avg(withNum('hw')),
     avgAttendance: avg(withNum('attendance')),
-    avgScore:      avg(withNum('score')),
+    // Attainment from results (null where a pupil has none — not a zero).
+    avgScore:      avg(students.map(s => window.studentAttainment ? window.studentAttainment(s) : null).filter(n => typeof n === 'number')),
     atRisk:        students.filter(isAtRisk).length,
     toMark:        getToMark(t),
     subjects:      getSubjectsTaught(c, t, term),

@@ -167,4 +167,6 @@ const STORAGE_R2_SEED = {
 Object.assign(window, {
   STORAGE_GB, STORAGE_ADDON_BLOCK_GB, STORAGE_ADDON_BLOCK_PRICE, STORAGE_UNIT_COST_USD_GB,
   STORAGE_SELF_ACCOUNT_ID, STORAGE_ACCOUNTS_SEED, STORAGE_FILES_SEED, STORAGE_R2_SEED,
+  // The seed's "today" — growth windows (e.g. added in the last 30 days) count back from it.
+  STORAGE_REF_DATE: _STG_TODAY.toISOString().slice(0, 10),
 });

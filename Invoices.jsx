@@ -102,6 +102,44 @@ const INV_STATUS_META = {
   void:      { label:'Void',      variant:'default', color:DS.muted   },
 };
 
+// Stale-ledger signal. This is a ledger over payments made ELSEWHERE, so its
+// outstanding and overdue figures are only as current as the last payment someone
+// recorded here. If nobody reconciles for a fortnight, the dashboard would alarm
+// about money already in the bank — so the page says how fresh it is. Derived
+// from the audit trail (latest marked_paid / import_reconciled), never stored.
+// Production: max(invoice_payments.recorded_at) for the centre.
+const INV_STALE_DAYS = 14;
+const invLastRecorded = (audit) => {
+  const at = (audit || []).filter(a => a.action === 'marked_paid' || a.action === 'import_reconciled')
+    .map(a => a.at).sort().pop() || null;
+  if (!at) return { at: null, days: null, stale: true };
+  const days = Math.max(0, Math.floor((Date.now() - new Date(at).getTime()) / 86400000));
+  return { at, days, stale: days > INV_STALE_DAYS };
+};
+
+// ONE financial source for every other surface (Analytics → Financial Overview,
+// the student profile's Fees tab, the dashboard). Reads the same persisted store
+// the Invoices page writes and derives status/totals the same way, so no screen
+// can show a second set of numbers. Production: v_invoice_report.
+const invReadLedger = () => {
+  try {
+    const raw = localStorage.getItem(INVOICES_KEY);
+    if (raw) { const p = JSON.parse(raw); return { invoices: p.invoices || SEED_INVOICES, families: p.families || SEED_FAMILIES, audit: p.audit || SEED_INVOICE_AUDIT }; }
+  } catch (e) { /* ignore */ }
+  return { invoices: SEED_INVOICES, families: SEED_FAMILIES, audit: SEED_INVOICE_AUDIT };
+};
+const invLedgerRows = (filter) => {
+  const today = invTodayISO();
+  const { invoices, families } = invReadLedger();
+  return invoices
+    .map(inv => ({
+      inv, number: inv.number, status: invComputeStatus(inv, today), totals: invTotals(inv, today),
+      studentIds: inv.studentIds || [], classes: inv.classes || [],
+      family: (families || []).find(f => f.id === inv.familyId) || null,
+    }))
+    .filter(filter || (() => true));
+};
+
 // Centre-wide rollups (cards + analytics) — all live off the schedule.
 // Voided invoices are cancelled records: they keep their number but carry no money.
 const invAggregate = (invoices, today = invTodayISO()) => {
@@ -1245,6 +1283,23 @@ const AdminInvoicesPage = () => {
         <Btn key="new" variant="primary" icon="plus" small onClick={() => setShowNew(true)}>New invoice</Btn>,
       ]} />
 
+      {/* How current the ledger is — every figure below depends on it. */}
+      {(() => {
+        const lr = invLastRecorded(store.audit);
+        const when = lr.days == null ? 'never' : lr.days === 0 ? 'today' : lr.days === 1 ? 'yesterday' : `${lr.days} days ago`;
+        return (
+          <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:16, padding:'10px 14px', borderRadius:10, fontSize:12.5,
+            background: lr.stale ? DS.warningBg : DS.surface, border:`1px solid ${lr.stale ? DS.warningBorder : DS.border}`, color: lr.stale ? DS.warning : DS.muted }}>
+            <Icon name="clock" size={14} />
+            <span style={{ flex:1 }}>
+              Payments last recorded <b style={{ color: lr.stale ? DS.warning : DS.text }}>{when}</b>.
+              {lr.stale ? ' Outstanding and overdue may include money that has already arrived — reconcile to bring them up to date.' : ' Outstanding and overdue are as current as that.'}
+            </span>
+            {lr.stale && <Btn variant="secondary" small icon="upload" onClick={() => setShowImport(true)}>Reconcile</Btn>}
+          </div>
+        );
+      })()}
+
       {/* Headline figures — all live off the schedule, never stored flags. Colour
           appears only on overdue, the one number that means something is wrong. */}
       <StatBand style={{ marginBottom: 24 }} stats={[
@@ -1330,4 +1385,4 @@ const AdminInvoicesPage = () => {
 // Export the ledger's own rollup + money formatter so the centre-metrics layer
 // (centreMetrics.getInvoiceRollup) and the Dashboard can REFERENCE the derived
 // outstanding/overdue figures instead of re-deriving (forking) invoice maths.
-Object.assign(window, { AdminInvoicesPage, invAggregate, invMoney });
+Object.assign(window, { AdminInvoicesPage, invAggregate, invMoney, invLastRecorded, INV_STALE_DAYS, invReadLedger, invLedgerRows, invStudentName, INV_STATUS_META });

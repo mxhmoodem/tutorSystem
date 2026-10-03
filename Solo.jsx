@@ -1101,13 +1101,19 @@ const SoloBilling = () => {
   const caps = m.caps;
   const [cycle, setCycle] = React.useState('monthly');
   const paid = m.tier.monthly > 0;
+  // Plans come from the platform catalogue: only those on sale, plus the one you're on.
+  const tiers = window.listSoloTiers().filter(t => t.onSale || t.id === m.tier.id);
+  // "2 months free" is worked out from the prices, so the label can't outlive them.
+  const freeMonths = tiers.filter(t => t.monthly > 0 && t.yearly > 0).map(t => Math.round(12 - t.yearly / t.monthly));
+  const yearlyLabel = freeMonths.length && freeMonths[0] > 0 && freeMonths.every(n => n === freeMonths[0])
+    ? `Yearly · ${freeMonths[0]} month${freeMonths[0] === 1 ? '' : 's'} free` : 'Yearly';
   const studentPct = 100 * m.students.length / caps.maxStudents;
   const storagePct = 100 * m.storageUsed / caps.storageBytes;
   const capped = Number.isFinite(caps.maxInvoicesPerMonth);
   return (
     <div style={pageFrame()}>
       <PageHeader title="Plan & billing" subtitle={`You're on ${m.tier.label}${paid ? `, billed ${cycle}` : ''}`}
-        actions={<Segmented value={cycle} onChange={setCycle} options={[{ id: 'monthly', label: 'Monthly' }, { id: 'yearly', label: 'Yearly · 2 months free' }]} />} />
+        actions={<Segmented value={cycle} onChange={setCycle} options={[{ id: 'monthly', label: 'Monthly' }, { id: 'yearly', label: yearlyLabel }]} />} />
 
       <Card title="What you're using">
         <Pad>
@@ -1133,7 +1139,7 @@ const SoloBilling = () => {
       </Card>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16, marginTop: 18 }}>
-        {window.listSoloTiers().map(t => {
+        {tiers.map(t => {
           const rel = window.compareSoloTiers(t.id, m.tier.id);
           const price = cycle === 'monthly' ? t.monthly : t.yearly;
           return (
@@ -1151,7 +1157,7 @@ const SoloBilling = () => {
               </div>
               <div style={{ fontSize: 12, color: DS.muted, marginTop: 3 }}>{t.monthly === 0 ? 'Free for as long as you like' : cycle === 'monthly' ? `£${t.yearly} a year` : `£${t.monthly} a month`}</div>
               <ul style={{ listStyle: 'none', margin: '16px 0 18px', padding: 0, fontSize: 13.5, color: DS.sub }}>
-                {planFeatures(t.caps).map(f => (
+                {(t.bullets && t.bullets.length ? t.bullets : planFeatures(t.caps)).map(f => (
                   <li key={f} style={{ display: 'flex', gap: 8, padding: '4px 0' }}><Icon name="check" size={15} color={DS.accent} />{f}</li>
                 ))}
               </ul>

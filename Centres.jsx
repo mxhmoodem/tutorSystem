@@ -74,7 +74,7 @@ const useSubscriptionStore = () => {
   // Derived effective price (base price modified by an active override code).
   const override = window.planOverrideStatus ? window.planOverrideStatus(state.redeemedCode, plan.price) : { active: false, effectivePrice: plan.price, until: null, label: '' };
 
-  // Global free trial (Platform Controls → Plans.jsx). `state.trial` is the stamp
+  // Centre free trial (owner console → Pricing, Plans.jsx). `state.trial` is the stamp
   // taken at signup — the offer as it stood THEN, so later platform edits never move
   // a live centre's end date. A running trial is £0, ahead of any override code.
   const trialStatus = window.planTrialStatus ? window.planTrialStatus(state.trial) : { active: false, expired: false, daysLeft: 0, endsAt: null, label: '' };
@@ -91,7 +91,7 @@ const useSubscriptionStore = () => {
   const addCentre = (fields = {}) => {
     if (state.centres.length >= plan.maxCentres) return null;   // plan cap
     const nm = (fields.name || '').trim();
-    const code = window.genCentreCode ? window.genCentreCode(nm) : ('CEN-' + RAND(3));
+    const code = window.genCentreCode ? window.genCentreCode(nm) : ('CEN-' + RAND(3));   // unique across every known code
     const slug = (nm.toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 16)) || ('c' + RAND(4).toLowerCase());
     const id = slug + '-' + RAND(3).toLowerCase();
     const centre = {
@@ -99,13 +99,12 @@ const useSubscriptionStore = () => {
       city: (fields.city || '').trim(), region: (fields.region || '').trim(), address: (fields.address || '').trim(),
       email: (fields.email || '').trim(), phone: (fields.phone || '').trim(),
       accent: null, status: 'active', isPrimary: false, createdOn: onbTodayIso(),
-      setup: { invite: false, students: false, classes: false },
+      setup: { invite: false, students: false, classes: false, dismissed: false },
     };
     writeSub({ ...state, centres: [...state.centres, centre] });
     return centre;
   };
   const updateCentre = (id, patch) => writeSub({ ...state, centres: state.centres.map(c => c.id === id ? { ...c, ...patch } : c) });
-  const completeStep = (id, stepId) => writeSub({ ...state, centres: state.centres.map(c => c.id === id ? { ...c, setup: { ...(c.setup || {}), [stepId]: true } } : c) });
   const setPrimary   = id => writeSub({ ...state, centres: state.centres.map(c => ({ ...c, isPrimary: c.id === id })) });
   // Transfer account ownership by repointing ownerUserId (email = identity key).
   // Ownership lives here on the account, never as a flag on a person — see
@@ -116,9 +115,22 @@ const useSubscriptionStore = () => {
   const removeCentre = id => writeSub({ ...state, centres: state.centres.filter(c => !(c.id === id && !c.isPrimary)) });
 
   // `trial` (spread from state) is the raw stamp; `trialStatus` is it resolved against today.
-  return { ...state, plan, setPlan, addCentre, updateCentre, completeStep, setPrimary, removeCentre, setOwner,
-    setBilling, applyCode, removeCode, override, effectivePrice, trialStatus, startTrial, endTrial };
+  return { ...state, plan, setPlan, addCentre, updateCentre, setPrimary, removeCentre, setOwner,
+    setBilling, applyCode, removeCode, override, effectivePrice, trialStatus, startTrial, endTrial,
+    regenerateCode: regenerateCentreCode, setSetupDismissed };
 };
+
+// ─── Module-level writers ──────────────────────────────────────────────────────
+// Read-modify-write against the STORED blob rather than a hook's captured state,
+// so callers outside this page (onboarding flows, the dashboard banner, Settings)
+// can't clobber a newer write with a stale closure.
+const patchCentre = (id, fn) => {
+  const s = readSub();
+  if (!(s.centres || []).some(c => c.id === id)) return false;
+  writeSub({ ...s, centres: s.centres.map(c => c.id === id ? fn(c) : c) });
+  return true;
+};
+const cenActiveId = () => (window.__getCentre && window.__getCentre()) || (ONB_CENTRE && ONB_CENTRE.id) || 'bm';
 
 // ─── Setup model + helpers ───────────────────────────────────────────────────────
 const SETUP_STEPS = [
@@ -126,8 +138,121 @@ const SETUP_STEPS = [
   { id: 'students', icon: 'users', accent: DS.accent, title: 'Add your students',      desc: 'Bulk-import your class list or add students one at a time.',   cta: 'Add students',    route: 'students_import' },
   { id: 'classes',  icon: 'book',  accent: '#7C3AED', title: 'Create classes & enrol', desc: 'Set up class groups, then enrol your signed-up students.',     cta: 'Create a class',  route: 'classes_add' },
 ];
-const setupDone   = c => SETUP_STEPS.filter(s => (c.setup || {})[s.id]).length;
+// Completion is DERIVED from the centre's own data wherever a roster exists
+// (reference: `centre_settings.setup` — "completion is derived where possible,
+// this stores dismissals"). Clicking a step's button never marks it done; only
+// the data does. In this prototype only the primary centre carries a live
+// roster, so other centres fall back to the flags a flow records when it
+// actually FINISHES there (markCentreSetup) — the stand-in for a real query.
+const setupStepDone = (c, stepId) => {
+  const cm = window.centreMetrics;
+  if (c && cm && cm.hasRoster && cm.hasRoster(c.id)) {
+    if (stepId === 'invite')   return cm.getTeachersForCentre(c.id).length > 0;
+    if (stepId === 'students') return cm.getStudentsForCentre(c.id).length > 0;
+    if (stepId === 'classes')  return cm.getClassesForCentre(c.id).some(x => x.status !== 'archived');
+  }
+  return !!((c && c.setup) || {})[stepId];
+};
+const setupDone     = c => SETUP_STEPS.filter(s => setupStepDone(c, s.id)).length;
 const isCentreSetUp = c => setupDone(c) === SETUP_STEPS.length;
+const setupDismissed = c => !!((c && c.setup) || {}).dismissed;
+
+// Recorded by a flow when it finishes at the active centre (import done, invites
+// sent, class created) — never by the checklist's own buttons.
+const markCentreSetup = (stepId, centreId) =>
+  patchCentre(centreId || cenActiveId(), c => ({ ...c, setup: { ...(c.setup || {}), [stepId]: true } }));
+// A per-centre dismissal of the dashboard banner. Any centre admin can undo it
+// from Settings → Centre, so dismissing never strands a non-owner admin (who
+// can't open the account-tier Centres page) without a route back to setup.
+const setSetupDismissed = (id, dismissed) =>
+  patchCentre(id || cenActiveId(), c => ({ ...c, setup: { ...(c.setup || {}), dismissed: !!dismissed } }));
+
+// One status object for every surface that shows setup (dashboard banner,
+// Centres drawer, Settings → Centre), so they cannot disagree.
+const centreSetupStatus = (centreId) => {
+  const id = centreId || cenActiveId();
+  const c = (readSub().centres || []).find(x => x.id === id) || null;
+  const steps = SETUP_STEPS.map(s => ({ ...s, done: setupStepDone(c, s.id) }));
+  const done = steps.filter(s => s.done).length;
+  return { centre: c, steps, done, total: steps.length, complete: done === steps.length, dismissed: setupDismissed(c) };
+};
+
+// ─── Centre code — a routing key, not a credential ─────────────────────────────
+// The code only SELECTS a centre at student login; username + PIN/password
+// authenticate. So an old code can keep resolving for a grace period after a
+// change at no security cost — and every slip already printed keeps working.
+const CODE_GRACE_DAYS = 30;
+const isoPlusDays = (iso, n) => { const d = new Date(iso + 'T12:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+
+// Every code anyone might type — current codes, codes still in their grace
+// window, and other accounts' centres. Generation must avoid all of them: the
+// resolver returns the first match, so a collision would route a pupil into
+// the wrong tenant. (Production: `centres.code UNIQUE` + retry on violation.)
+const allCentreCodes = () => {
+  const codes = new Set();
+  (readSub().centres || []).forEach(c => {
+    if (c.code) codes.add(c.code.toUpperCase());
+    if (c.previousCode) codes.add(c.previousCode.toUpperCase());
+  });
+  Object.values(window.ONB_CENTRE_DIRECTORY || {}).forEach(d => { if (d.code) codes.add(d.code.toUpperCase()); });
+  return codes;
+};
+
+// The live code for a centre — what claim slips and the setup screens print.
+const centreCodeFor = (centreId) => {
+  const id = centreId || cenActiveId();
+  const c = (readSub().centres || []).find(x => x.id === id);
+  if (c && c.code) return c.code;
+  const d = (window.ONB_CENTRE_DIRECTORY || {})[id];
+  return (d && d.code) || '';
+};
+
+// The ONE resolver for a typed centre code (student login):
+//   current → the centre            grace → the centre, plus the new code to learn
+//   retired → no centre, but say the code CHANGED (not "check your slip" — the
+//             slip is exactly what is now out of date)          null → unknown
+const resolveCentreCode = (raw) => {
+  const v = (raw || '').trim().toUpperCase();
+  if (!v) return null;
+  const today = onbTodayIso();
+  const centres = (readSub().centres || []).filter(c => c.status !== 'archived');
+  const cur = centres.find(c => (c.code || '').toUpperCase() === v);
+  if (cur) return { state: 'current', centreId: cur.id, name: cur.name };
+  const prev = centres.find(c => (c.previousCode || '').toUpperCase() === v);
+  if (prev) {
+    return prev.previousCodeUntil && prev.previousCodeUntil >= today
+      ? { state: 'grace', centreId: prev.id, name: prev.name, newCode: prev.code, until: prev.previousCodeUntil }
+      : { state: 'retired', centreId: null, name: prev.name, changedOn: prev.codeChangedOn || null };
+  }
+  // Centres on OTHER accounts (the directory). Skip ids this account owns — their
+  // live code is above, and a stale directory copy must not resurrect an old one.
+  const own = new Set((readSub().centres || []).map(c => c.id));
+  const hit = Object.values(window.ONB_CENTRE_DIRECTORY || {}).find(d => !own.has(d.id) && (d.code || '').toUpperCase() === v);
+  return hit ? { state: 'current', centreId: hit.id, name: hit.name } : null;
+};
+
+// Students provisioned at a centre who haven't claimed yet — each is holding a
+// printed slip that carries the centre code.
+const unclaimedSlipCount = (centreId) => {
+  const cm = window.centreMetrics;
+  if (!cm) return 0;
+  return cm.getStudentsForCentre(centreId).filter(s => s.account && (s.account.status === 'pending' || s.account.status === 'invited')).length;
+};
+
+// Regenerate = apply now (a destructive change never waits in a draft behind
+// "Save"), keep the old code resolving for CODE_GRACE_DAYS. A code already in
+// its grace window is dropped immediately — only one previous code is honoured.
+const regenerateCentreCode = (id) => {
+  const today = onbTodayIso();
+  let out = null;
+  patchCentre(id, c => {
+    const code = window.genCentreCode ? window.genCentreCode(c.name || 'Centre') : ('CEN-' + RAND(3, '0123456789'));
+    out = { code, previousCode: c.code, until: isoPlusDays(today, CODE_GRACE_DAYS), droppedCode: c.previousCode || null };
+    return { ...c, code, previousCode: c.code, previousCodeUntil: out.until, codeChangedOn: today };
+  });
+  if (out && window.klasioAudit) window.klasioAudit('centre_code_regenerated', id, { from: out.previousCode, to: out.code });
+  return out;
+};
 
 const CENTRE_ACCENTS = ['#4F46E5', '#0891B2', '#43b190', '#7C3AED', '#DB2777', '#EA580C', '#0EA5E9', '#16A34A'];
 
@@ -181,6 +306,7 @@ const DrawerSection = ({ label, children, style }) => (
 const SetupChecklist = ({ centre, disabled, onStep }) => {
   const done = setupDone(centre);
   const pct = Math.round((done / SETUP_STEPS.length) * 100);
+  const hidden = done < SETUP_STEPS.length && setupDismissed(centre);
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14 }}>
@@ -196,10 +322,11 @@ const SetupChecklist = ({ centre, disabled, onStep }) => {
           <div style={{ fontSize: 14, fontWeight: 700, color: DS.text }}>{done} of {SETUP_STEPS.length} steps complete</div>
           <div style={{ fontSize: 12.5, color: DS.muted, marginTop: 1 }}>{done === SETUP_STEPS.length ? 'This centre is ready — students can claim their accounts.' : 'Finish setup to onboard everyone.'}</div>
         </div>
+        {hidden && <Btn small variant="ghost" icon="eye" onClick={() => setSetupDismissed(centre.id, false)}>Show on dashboard</Btn>}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, opacity: disabled ? 0.55 : 1, pointerEvents: disabled ? 'none' : 'auto' }}>
         {SETUP_STEPS.map((s, i) => {
-          const isDone = !!(centre.setup || {})[s.id];
+          const isDone = setupStepDone(centre, s.id);
           return (
             <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', border: `1px solid ${isDone ? DS.successBorder : DS.border}`, borderRadius: 10, background: isDone ? DS.successBg : DS.bg }}>
               <div style={{ width: 32, height: 32, borderRadius: 9, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: isDone ? DS.success + '1A' : s.accent + '14', color: isDone ? DS.success : s.accent, border: `1px solid ${isDone ? DS.successBorder : s.accent + '33'}` }}>
@@ -218,22 +345,92 @@ const SetupChecklist = ({ centre, disabled, onStep }) => {
   );
 };
 
+// ─── Change centre code (confirm → done) ───────────────────────────────────────────
+// Changing the code is a destructive action for everyone holding it on paper, so
+// it says exactly what breaks — with the real unclaimed-slip count — before it
+// happens, and the old code keeps resolving for CODE_GRACE_DAYS afterwards.
+const CentreCodeDialog = ({ open, centre, onClose }) => {
+  const [result, setResult] = React.useState(null);
+  React.useEffect(() => { if (open) setResult(null); }, [open]);
+  if (!open || !centre) return null;
+  const unclaimed = unclaimedSlipCount(centre.id);
+  const fmt = iso => new Date(iso + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+  const graceEnds = fmt(isoPlusDays(onbTodayIso(), CODE_GRACE_DAYS));
+  const pendingOld = centre.previousCode && centre.previousCodeUntil && centre.previousCodeUntil >= onbTodayIso() ? centre.previousCode : null;
+  const confirm = () => setResult(regenerateCentreCode(centre.id));
+  const reprint = () => { onClose(); if (window.__setCentre) window.__setCentre(centre.id); window.__adminParam = 'unclaimed'; window.__navigate && window.__navigate('admin', 'claim_slips'); };
+  const Line = ({ icon, tone, children }) => (
+    <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', fontSize: 13, color: DS.sub, lineHeight: 1.5 }}>
+      <span style={{ display: 'flex', marginTop: 2, color: tone || DS.muted }}><Icon name={icon} size={15} /></span>
+      <span>{children}</span>
+    </div>
+  );
+  if (result) {
+    return (
+      <Modal open onClose={onClose} title="Centre code changed" icon="check" iconColor={DS.success}
+        footer={<React.Fragment>
+          {unclaimed > 0 && <Btn variant="secondary" icon="print" onClick={reprint}>Reprint {unclaimed} slip{unclaimed === 1 ? '' : 's'}</Btn>}
+          <Btn variant="primary" onClick={onClose}>Done</Btn>
+        </React.Fragment>}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+          <Mono size={15}>{result.previousCode}</Mono>
+          <Icon name="chevron_r" size={16} color={DS.faint} />
+          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 20, fontWeight: 700, letterSpacing: '1px', color: DS.text }}>{result.code}</span>
+          <CopyChip value={result.code} title="Copy new code" />
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <Line icon="clock">The old code keeps working until <b>{fmt(result.until)}</b>. Students who use it are shown the new one.</Line>
+          {result.droppedCode && <Line icon="alert" tone={DS.warning}>The code you replaced before, <Mono size={12}>{result.droppedCode}</Mono>, has stopped working.</Line>}
+        </div>
+      </Modal>
+    );
+  }
+  return (
+    <Modal open onClose={onClose} title="Change the centre code?" subtitle={`${centre.name} · currently ${centre.code}`} icon="tag" iconColor={DS.warning} width={540}
+      footer={<React.Fragment>
+        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+        <Btn variant="primary" icon="tag" onClick={confirm}>Change code</Btn>
+      </React.Fragment>}>
+      <div style={{ fontSize: 13, color: DS.sub, lineHeight: 1.55, marginBottom: 14 }}>
+        Only do this if the code has ended up somewhere it shouldn't, or the centre has been renamed. Anyone holding the old code will need the new one:
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
+        <Line icon="users" tone={unclaimed ? DS.warning : DS.muted}>
+          {unclaimed
+            ? <><b>{unclaimed} student{unclaimed === 1 ? ' hasn’t' : 's haven’t'} claimed their account yet.</b> Their printed slips show the old code.</>
+            : <>No students are waiting to claim an account, so no outstanding slips are affected.</>}
+        </Line>
+        <Line icon="file">Parent letters, the whiteboard and anything else that prints the code.</Line>
+        <Line icon="lock">Students on a device that has signed in before aren’t affected — it remembers the centre.</Line>
+        {pendingOld && <Line icon="alert" tone={DS.warning}>The code you changed last time, <Mono size={12}>{pendingOld}</Mono>, stops working immediately.</Line>}
+      </div>
+      <div style={{ padding: '11px 14px', borderRadius: 9, background: DS.surface, border: `1px solid ${DS.border}`, fontSize: 12.5, color: DS.sub, display: 'flex', gap: 9, alignItems: 'center' }}>
+        <Icon name="clock" size={15} color={DS.accent} />
+        <span><b>{centre.code}</b> keeps working for {CODE_GRACE_DAYS} days, until {graceEnds}, so nobody is locked out while you reprint.</span>
+      </div>
+    </Modal>
+  );
+};
+
 // ─── Centre drawer (add · setup · configure, all in one) ───────────────────────────
 const CentreDrawer = ({ open, mode, centre, store, activeId, onClose, onStep, onCreated, onSwitch }) => {
   const isNew = mode === 'new';
-  const blank = { name: '', city: '', region: '', address: '', email: '', phone: '', code: '', accent: null, status: 'active' };
+  const blank = { name: '', city: '', region: '', address: '', email: '', phone: '', accent: null, status: 'active' };
   const [draft, setDraft] = React.useState(blank);
+  const [codeDialog, setCodeDialog] = React.useState(false);
   React.useEffect(() => {
     if (!open) return;
     setDraft(isNew ? { ...blank } : { ...centre });
+    setCodeDialog(false);
   }, [open, isNew, centre && centre.id]);
   if (!open) return null;
 
   const isActive = !isNew && centre && centre.id === activeId;
   const accent = isNew ? DS.accent : (centre.accent || DS.accent);
   const validName = (draft.name || '').trim().length > 1;
-
-  const regen = () => setDraft(d => ({ ...d, code: window.genCentreCode ? window.genCentreCode(d.name || (centre && centre.name) || 'Centre') : ('CEN-' + RAND(3)) }));
+  // The code is read LIVE off the centre, never from the draft: regenerating is
+  // applied on confirm (see CentreCodeDialog), and Save must not write it back.
+  const inGrace = !isNew && centre.previousCode && centre.previousCodeUntil && centre.previousCodeUntil >= onbTodayIso();
 
   const create = () => {
     if (!validName) return;
@@ -244,7 +441,7 @@ const CentreDrawer = ({ open, mode, centre, store, activeId, onClose, onStep, on
     store.updateCentre(centre.id, {
       name: (draft.name || '').trim() || centre.name, city: (draft.city || '').trim(), region: (draft.region || '').trim(),
       address: (draft.address || '').trim(), email: (draft.email || '').trim(), phone: (draft.phone || '').trim(),
-      code: draft.code || centre.code, accent: draft.accent, status: draft.status,
+      accent: draft.accent, status: draft.status,
     });
     if (isActive && window.__setAccent) window.__setAccent(draft.accent || null);
     onClose();
@@ -308,14 +505,21 @@ const CentreDrawer = ({ open, mode, centre, store, activeId, onClose, onStep, on
           <Field label="Contact phone" style={{ marginBottom: 12 }}><Input value={draft.phone || ''} onChange={setF('phone')} placeholder="Phone" icon="phone" /></Field>
         </div>
         {!isNew && (
-          <Field label="Centre code" hint="Students enter this once on a new device to resolve your centre. Safe to share." style={{ marginBottom: 4 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 17, fontWeight: 700, letterSpacing: '1px', color: DS.text }}>{draft.code}</span>
-              <CopyChip value={draft.code} title="Copy centre code" />
-              <Btn small variant="secondary" icon="tag" onClick={regen}>Regenerate</Btn>
+          <Field label="Centre code" hint="Students enter this once on a new device to find your centre — it's printed on every claim slip. Safe to share: it picks the centre, it doesn't sign anyone in." style={{ marginBottom: 4 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 17, fontWeight: 700, letterSpacing: '1px', color: DS.text }}>{centre.code}</span>
+              <CopyChip value={centre.code} title="Copy centre code" />
+              <Btn small variant="secondary" icon="tag" onClick={() => setCodeDialog(true)}>Change code…</Btn>
             </div>
+            {inGrace && (
+              <div style={{ marginTop: 8, fontSize: 12, color: DS.muted, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Icon name="clock" size={13} />
+                Old code <Mono size={12}>{centre.previousCode}</Mono> still works until {new Date(centre.previousCodeUntil + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}.
+              </div>
+            )}
           </Field>
         )}
+        {!isNew && <CentreCodeDialog open={codeDialog} centre={centre} onClose={() => setCodeDialog(false)} />}
       </DrawerSection>
 
       {/* Branding */}
@@ -445,9 +649,9 @@ const CentresPage = () => {
     }
   }, []);   // eslint-disable-line
 
-  // A setup step: mark it complete for that centre, switch to it, open the flow.
+  // A setup step: switch to that centre and open the flow. Opening a flow does NOT
+  // mark the step done — the step completes when the data exists (setupStepDone).
   const onStep = (centre, step) => {
-    store.completeStep(centre.id, step.id);
     switchTo(centre.id);
     if (window.__navigate) window.__navigate('admin', step.route);
   };
@@ -557,4 +761,11 @@ const CentresPage = () => {
 };
 
 // ─── Export ────────────────────────────────────────────────────────────────────────
-Object.assign(window, { useSubscriptionStore, CentresPage });
+Object.assign(window, {
+  useSubscriptionStore, CentresPage,
+  readSubscription: readSub,   // non-hook read (e.g. account-owner checks in Communications)
+  // setup checklist (one status object for banner / drawer / Settings)
+  SETUP_STEPS, centreSetupStatus, markCentreSetup, setSetupDismissed,
+  // centre code (one resolver, unique generation, live lookup)
+  allCentreCodes, centreCodeFor, resolveCentreCode, CODE_GRACE_DAYS,
+});

@@ -9,6 +9,8 @@
 //  tier's size), lessons, sessions with their register state, attendance rates,
 //  invoices with status, balances and earnings. Pages never recompute these.
 //  Capabilities come from soloCapabilities.jsx — this file never names a tier.
+//  Those read the platform plan catalogue, so the model is rebuilt whenever the
+//  platform owner edits a plan on the Pricing page.
 // ══════════════════════════════════════════════════════════════════════════════
 (() => {
 
@@ -58,6 +60,8 @@ const update = (patch) => {
   state.version += 1;
   subs.forEach(fn => fn());
 };
+// A catalogue edit (price, limits, capabilities) changes what the book looks like.
+window.addEventListener('klasio-plans-changed', () => update({}));
 const useSoloDemo = () => {
   const [, force] = React.useReducer(x => x + 1, 0);
   React.useEffect(() => { subs.add(force); return () => { subs.delete(force); }; }, []);

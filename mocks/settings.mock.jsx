@@ -28,7 +28,7 @@ const SETTINGS_SEED = {
     notifications: { ...SET_NOTIF_DEFAULTS, channel: 'both' },
     appearance:    { ...SET_APPEARANCE_DEFAULTS },
     // NOTE: no trialDays here — the free trial is one global setting owned by
-    // Platform Controls (PLAN_TRIAL_SEED / tutoros.trial.v1), read via getPlatformTrial().
+    // Pricing page (PLAN_TRIAL_SEED / tutoros.trial.v1), read via getPlatformTrial('centre').
     platform: {
       defaultPlan: 'growth', defaultSeats: 10, currency: 'GBP',
       billingEmail: 'billing@tutoros.io', autoSuspend: true, retention: '90d',
@@ -63,7 +63,18 @@ const SETTINGS_SEED = {
       ],
       currency: 'GBP',
       invoiceDueDays: 14, taxRate: 0, autoSendInvoices: true, lateReminders: true,
+      // Centre teaching policy (decisions #53/#54). New assignments start from
+      // teachingDefaults (read by Homework); pupilGradeDisplay decides whether pupils
+      // see a percentage, an indicative grade or both on their own screens.
+      teachingDefaults: {
+        attemptsAllowed: 1, dueDays: 7, allowLate: true, autoGradeMcq: true,
+        allowReview: true, hideMarksUntilReleased: false,
+      },
+      pupilGradeDisplay: 'both',
     },
+    // Pupil privacy (decisions #29 / #59) — both comparisons default OFF (AADC).
+    // Production: centre_privacy_settings (typed, audited).
+    privacy: { showRankToStudents: false, rankMinAge: 13, showClassAverageToStudents: false },
   },
 
   teacher: {
@@ -73,31 +84,18 @@ const SETTINGS_SEED = {
     },
     notifications: { ...SET_NOTIF_DEFAULTS },
     appearance:    { ...SET_APPEARANCE_DEFAULTS },
+    // Only the teacher's own alerts live here now: homework defaults are centre
+    // policy (admin.centre.teachingDefaults), the dead grading-scale setting is
+    // gone, and working hours became teaching availability on the admin store.
     teaching: {
-      attempts: 1, dueDays: 7, allowLate: true, autoGradeMcq: true, allowReview: true,
-      gradingScale: 'percent', releaseAfterApproval: true,
-      hoursFrom: '09:00', hoursTo: '17:00', notifyOnSubmission: true,
+      notifyOnSubmission: true,
     },
   },
 
-  // §1: the account identity here is the SAME canonical principal as the header,
-  // greeting and Homework/Reports (Oliver Chen) — no divergent "Aisha Khan".
-  student: {
-    account: {
-      name: 'Oliver Chen', displayName: 'Oliver', email: 'oliver.chen@student.brightpath.edu',
-      phone: '', twoFactor: false,
-    },
-    notifications: { ...SET_NOTIF_DEFAULTS, digest: false },
-    appearance:    { ...SET_APPEARANCE_DEFAULTS },
-    // Guardian = the linked Parent account (read-only to the student). Share-reports
-    // is centre-policy, not a free student toggle. streakNudges defaults OFF (AADC —
-    // de-gamified, no loss-aversion nudging).
-    learning: {
-      guardianName: 'David Chen', guardianEmail: 'david.chen@gmail.com',
-      shareWithGuardian: true, reminderLead: '1d', streakNudges: false,
-      textSize: 'normal', highContrast: false, dyslexiaFont: false,
-    },
-  },
+  // A pupil's settings are NOT a role blob: identity comes from the admin store
+  // (read-only, centre-provisioned), notification topics are per pupil
+  // (klasio.studentNotifPrefs.v1) and there is no appearance / accessibility /
+  // study-reminder state until those features exist (decision #61).
 };
 
 Object.assign(window, { SETTINGS_SEED, SET_NOTIF_DEFAULTS, SET_APPEARANCE_DEFAULTS });

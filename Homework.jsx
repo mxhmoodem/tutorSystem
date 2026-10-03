@@ -2128,6 +2128,30 @@ const classKey = (label) => {
   return year && group ? `${year}|${group.toUpperCase()}` : null;
 };
 
+// One pupil's MARKED homework as a dated percentage series — the effort /
+// consistency series that sits BESIDE attainment on Progress (decision #50),
+// never blended into it. Only marked work counts; ungraded work is not a zero.
+const studentHomeworkSeries = (studentId, opts) => {
+  const o = opts || {};
+  const key = o.classLabel ? classKey(o.classLabel) : null;
+  const s = loadStore();
+  return Object.values(s.assignments || {})
+    .filter(a => a.status !== 'draft' && (a.studentIds || []).includes(studentId))
+    .filter(a => !key || classKey(a.classLabel) === key)
+    .map(a => {
+      const sub = (a.submissions || {})[studentId];
+      const pts = totalPoints(a);
+      if (!isGraded(sub) || !pts) return null;
+      return {
+        id: a.id, title: a.title, classLabel: a.classLabel, subject: a.subject,
+        date: String(sub.markedAt || a.dueAt || a.createdAt || '').slice(0, 10),
+        pct: Math.round((submissionScore(a, sub) / pts) * 100),
+      };
+    })
+    .filter(Boolean)
+    .sort((x, y) => x.date.localeCompare(y.date));
+};
+
 const listClassHomework = (classLabel) => {
   const key = classKey(classLabel);
   if (!key) return [];
@@ -2147,6 +2171,7 @@ const listClassHomework = (classLabel) => {
         subject: a.subject,
         set: fmtDate(a.createdAt),
         due: fmtDate(a.dueAt),
+        dueAt: a.dueAt || null,   // ISO, so the teacher hero can match "due today"
         submitted: subs.filter(Boolean).length,
         total: (a.studentIds || []).length,
         marked: graded.length,
@@ -2936,8 +2961,17 @@ const TeacherList = ({
   onNew, onOpen, onCreateFolder, onRenameFolder, onDeleteFolder,
 }) => {
   const toast = useToast();
-  // assignments | analytics — driven by the sidebar dropdown (`section` prop).
-  const view = section === 'analytics' ? 'analytics' : 'assignments';
+  // assignments | analytics — a LENS toggle in the page header (decision #49), not
+  // a sidebar destination. `homework:analytics` still deep-links here as an alias,
+  // so old links and notification targets open straight onto the Analytics lens.
+  const [view, setLens] = React.useState(section === 'analytics' ? 'analytics' : 'assignments');
+  React.useEffect(() => { setLens(section === 'analytics' ? 'analytics' : 'assignments'); }, [section]);
+  const lensToggle = (
+    <Segmented value={view} onChange={setLens} options={[
+      { id: 'assignments', label: 'Assignments' },
+      { id: 'analytics', label: 'Analytics' },
+    ]} />
+  );
   const [tab, setTab] = React.useState('all');
   const [folderId, setFolderId] = React.useState('all'); // 'all' | 'unfiled' | <folder id>
   const [creatingFolder, setCreatingFolder] = React.useState(false);
@@ -3012,6 +3046,7 @@ const TeacherList = ({
             <h1 style={{ fontFamily: F.head, ...TS.title, margin: 0 }}>Homework</h1>
             <p style={{ ...TS.meta, color: C.muted, margin: '4px 0 0' }}>Performance and submission insights</p>
           </div>
+          {lensToggle}
         </div>
         <HomeworkAnalytics assignments={assignments} countsFor={countsFor} users={users} classes={classes} />
       </div>
@@ -3028,6 +3063,7 @@ const TeacherList = ({
           <h1 style={{ fontFamily: F.head, ...TS.title, margin: 0 }}>Homework</h1>
         </div>
         <div style={{ display:'flex', gap: 12, alignItems:'center' }}>
+          {lensToggle}
           <Btn variant="brand" icon={<Ico name="plus" size={14} color="#fff" />}
             onClick={() => onNew(folderId !== 'all' && folderId !== 'unfiled' ? folderId : null)}>
             New homework
@@ -3879,23 +3915,43 @@ const HomeworkAnalytics = ({ assignments, countsFor, users = {}, classes = [] })
 };
 
 // ─── Teacher builder ───────────────────────────────────────────
-const blankAssignment = (teacherId, folderId = null) => ({
-  id: 'a_' + Math.random().toString(36).slice(2, 9),
-  title: '',
-  subject: 'Math',
-  classLabel: null,
-  folderId,
-  teacherId,
-  studentIds: [],
-  dueAt: '',
-  timeLimitMins: null,
-  status: 'draft',
-  createdAt: new Date().toISOString().slice(0, 10),
-  instructions: '',
-  questions: [],
-  submissions: {},
-  settings: { ...DEFAULT_SETTINGS },
-});
+// A new assignment starts from the CENTRE's teaching defaults (admin Settings →
+// Centre → Teaching defaults; production: centre_settings.teaching_defaults).
+// There is no per-teacher layer — two teachers in one centre start from the same
+// attempts / lateness / review / release rules. The teacher edits per assignment.
+const centreTeachingDefaults = () => {
+  const d = (window.klasioCentreSettings && window.klasioCentreSettings().teachingDefaults) || {};
+  const out = {};
+  if (d.attemptsAllowed != null) out.attemptsAllowed = Math.max(1, Number(d.attemptsAllowed) || 1);
+  if (d.allowLate != null) out.allowLate = !!d.allowLate;
+  if (d.autoGradeMcq != null) out.autoGradeMcq = !!d.autoGradeMcq;
+  if (d.allowReview != null) out.allowReview = !!d.allowReview;
+  if (d.hideMarksUntilReleased != null) out.hideMarksUntilReleased = !!d.hideMarksUntilReleased;
+  return { settings: out, dueDays: d.dueDays != null ? Number(d.dueDays) : null };
+};
+const blankAssignment = (teacherId, folderId = null) => {
+  const td = centreTeachingDefaults();
+  const due = td.dueDays != null && td.dueDays > 0
+    ? withDefaultDueTime(new Date(Date.now() + td.dueDays * 86400000).toISOString().slice(0, 10))
+    : '';
+  return {
+    id: 'a_' + Math.random().toString(36).slice(2, 9),
+    title: '',
+    subject: 'Math',
+    classLabel: null,
+    folderId,
+    teacherId,
+    studentIds: [],
+    dueAt: due,
+    timeLimitMins: null,
+    status: 'draft',
+    createdAt: new Date().toISOString().slice(0, 10),
+    instructions: '',
+    questions: [],
+    submissions: {},
+    settings: { ...DEFAULT_SETTINGS, ...td.settings },
+  };
+};
 
 const blankQuestion = (type) => {
   const base = { id: 'q_' + Math.random().toString(36).slice(2, 8), type, prompt: '', points: 2 };
@@ -5682,29 +5738,49 @@ const StudentHomework = ({ section, onNav }) => {
 // ════════════════════════════════════════════════════════════════
 // Student — home (Assignments · Submitted · Results)
 // ════════════════════════════════════════════════════════════════
+// Decision #58. The list screens speak the app's type scale (PageHeader, 600-weight
+// row titles) so Homework reads as the same product as the dashboard it's reached
+// from; the ATTEMPT screen keeps this module's calm four-size scale on purpose.
+// Assignments are grouped by deadline — pupils think in "what's due when", not in
+// statuses — so there is no All/Pending/Completed/Overdue tab row: handed-in work
+// lives on Submitted, marked work on Results.
+const HW_DUE_GROUPS = [
+  { id: 'overdue', label: 'Overdue' },
+  { id: 'today',   label: 'Due today' },
+  { id: 'week',    label: 'This week' },
+  { id: 'later',   label: 'Later' },
+  { id: 'notopen', label: 'Not open yet' },
+];
+const hwDueGroup = (x) => {
+  if (x.state === 'overdue') return 'overdue';
+  if (x.state === 'scheduled') return 'notopen';
+  if (!x.a.dueAt) return 'later';
+  const d = daysUntil(x.a.dueAt);
+  if (d <= 0) return 'today';
+  return d <= 7 ? 'week' : 'later';
+};
+const HW_SECTION_COPY = {
+  assignments: { title: 'Homework',  subtitle: 'What’s set for you, grouped by when it’s due' },
+  submitted:   { title: 'Submitted', subtitle: 'Handed in and waiting for your teacher' },
+  results:     { title: 'Results',   subtitle: 'Marked work your teacher has released' },
+};
+
 const HwHome = ({ store, me, section, setSection, assignments, onOpen, onOpenSubmitted, onOpenResult }) => {
-  const [tab, setTab] = React.useState('all');
   const [query, setQuery] = React.useState('');
   const [subject, setSubject] = React.useState('All');
 
   const withState = assignments.map(a => ({ a, state: hwState(a, me, store.drafts) }));
-  const open = withState.filter(x => x.state !== 'marked');
+  const todo = withState.filter(x => x.state !== 'marked' && x.state !== 'submitted');
   const submitted = withState.filter(x => x.state === 'submitted');
   const marked = withState.filter(x => x.state === 'marked');
 
   // §9: the subject filter populates from the student's ENROLLED subjects only
-  // (intersected with subjects that actually have open assignments), never an
-  // arbitrary set invented from the assignment rows.
+  // (intersected with subjects that actually have work to do), never an arbitrary
+  // set invented from the assignment rows.
   const enrolled = window.klasioStudent ? window.klasioStudent.getSubjects() : null;
   const subjects = enrolled
-    ? enrolled.filter(s => open.some(x => x.a.subject === s))
-    : Array.from(new Set(open.map(x => x.a.subject)));
-
-  const inTab = (x) =>
-    tab === 'all' ? true :
-    tab === 'pending' ? (x.state === 'pending' || x.state === 'inprogress') :
-    tab === 'completed' ? x.state === 'submitted' :
-    x.state === 'overdue';
+    ? enrolled.filter(s => todo.some(x => x.a.subject === s))
+    : Array.from(new Set(todo.map(x => x.a.subject)));
 
   const q = query.trim().toLowerCase();
   const matches = (x) => {
@@ -5712,55 +5788,48 @@ const HwHome = ({ store, me, section, setSection, assignments, onOpen, onOpenSub
     if (!q) return true;
     return `${x.a.title} ${x.a.subject} ${teacherNameFor(x.a, store)}`.toLowerCase().includes(q);
   };
-
-  const visible = open.filter(inTab).filter(matches);
-
+  const visible = todo.filter(matches);
+  const byDue = (x, y) => new Date(x.a.dueAt || 8.64e15) - new Date(y.a.dueAt || 8.64e15);
+  const groups = HW_DUE_GROUPS
+    .map(g => ({ ...g, rows: visible.filter(x => hwDueGroup(x) === g.id).sort(byDue) }))
+    .filter(g => g.rows.length);
+  const copy = HW_SECTION_COPY[section] || HW_SECTION_COPY.assignments;
 
   return (
-    <div style={{ ...pageFrame(), fontFamily: F.body, color: C.text }}>
-      {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
-        {/* The subtitle counted the rows immediately below it. */}
-        <h1 style={{ fontFamily: F.head, ...TS.title, margin: 0 }}>
-          {section === 'submitted' ? 'Submitted' : section === 'results' ? 'Results' : 'Homework'}
-        </h1>
-      </div>
+    <div style={{ ...pageFrame(), color: DS.text }}>
+      <PageHeader title={copy.title} subtitle={copy.subtitle} />
 
       {section === 'assignments' && (
         <>
-          <div style={{ marginBottom: 14 }}>
-            <SegTabs
-              tabs={[
-                { id: 'all',       label: 'All' },
-                { id: 'pending',   label: 'Pending' },
-                { id: 'completed', label: 'Completed' },
-                { id: 'overdue',   label: 'Overdue' },
-              ]}
-              active={tab} onChange={setTab}
-            />
-          </div>
-
-          <div style={{ display: 'flex', gap: 12, marginBottom: 18 }}>
+          <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
             <HwSearch value={query} onChange={setQuery} />
             <select value={subject} onChange={e => setSubject(e.target.value)} style={hwSelectStyle}>
-              <option value="All">All Subjects</option>
+              <option value="All">All subjects</option>
               {subjects.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {visible.length === 0 && (
-              <HwEmpty text={open.length === 0 ? "You're all caught up — no homework assigned." : 'No homework matches your filters.'} />
-            )}
-            {visible.map(x => (
-              <HwListRow key={x.a.id} a={x.a} state={x.state} store={store} onOpen={() => onOpen(x.a)} />
-            ))}
-          </div>
+          {groups.length === 0 && (
+            <HwEmpty text={todo.length === 0 ? "You're all caught up — nothing to do right now." : 'No homework matches your filters.'} />
+          )}
+          {groups.map(g => (
+            <div key={g.id} style={{ marginBottom: 22 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                <h2 style={{ fontSize: 15, fontWeight: 700, color: g.id === 'overdue' ? DS.danger : DS.text, margin: 0, letterSpacing: '-0.2px' }}>{g.label}</h2>
+                <span style={{ fontSize: 12, fontWeight: 600, color: DS.muted, background: DS.surface, border: `1px solid ${DS.border}`, borderRadius: 999, padding: '1px 8px' }}>{g.rows.length}</span>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {g.rows.map(x => (
+                  <HwListRow key={x.a.id} a={x.a} state={x.state} store={store} onOpen={() => onOpen(x.a)} />
+                ))}
+              </div>
+            </div>
+          ))}
         </>
       )}
 
       {section === 'submitted' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {submitted.length === 0 && (
             <HwEmpty text="Nothing awaiting marking. Homework you submit will appear here until your teacher marks it." />
           )}
@@ -5797,11 +5866,11 @@ const HwListRow = ({ a, state, store, onOpen }) => {
       }}>
       {/* The 42px tinted book tile is gone: it was the same glyph on every row,
           and it turned "overdue" into a red block the row already says in words. */}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ ...TS.body, fontWeight: W.medium, color: C.text, marginBottom: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+      <div style={{ flex: 1, minWidth: 0, padding: '10px 0' }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: DS.text, marginBottom: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {a.title}
         </div>
-        <MetaLine items={[
+        <MetaLine style={{ fontSize: 12.5 }} items={[
           a.subject,
           teacherNameFor(a, store),
           `${a.questions.length} question${a.questions.length === 1 ? '' : 's'}`,
@@ -5837,7 +5906,7 @@ const HwSubmittedRow = ({ a, sub, store, onOpen }) => {
       }}>
       <div style={{ flex: 1, minWidth: 0, padding: '10px 0' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-          <span style={{ ...TS.body, fontWeight: W.medium, color: C.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          <span style={{ fontSize: 14, fontWeight: 600, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {a.title}
           </span>
           {late && <StatusBadge status="late" />}
@@ -5914,11 +5983,11 @@ const HwResultRow = ({ a, sub, pct, onOpen }) => {
       {/* The donut ring is gone. It rendered the same percentage that sits at
           the end of the row, so each result stated its score three times
           (ring label, right-hand figure, grade letter) in 90px of row. */}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ ...TS.body, fontWeight: W.medium, color: C.text, marginBottom: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+      <div style={{ flex: 1, minWidth: 0, padding: '10px 0' }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: DS.text, marginBottom: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {a.title}
         </div>
-        <MetaLine items={[
+        <MetaLine style={{ fontSize: 12.5 }} items={[
           a.subject,
           a.classLabel,
           `Marked ${fmtLong(sub.markedAt || sub.submittedAt)}`,
@@ -6463,7 +6532,12 @@ const HwResultReview = ({ a, me, store, onBack, backLabel = 'Results' }) => {
   // contradicts the marks-based score (§4). The question outcome counts below feed
   // the breakdown header + the Questions meta tile as plain counts instead.
 
-  const vsAvg = sub.classAvg != null ? pct - sub.classAvg : null;
+  // Class average and rank reach a pupil only when the centre allows it (decisions
+  // #29 / #59, both default off; rank also needs the pupil to be old enough).
+  const KS = window.klasioStudent;
+  const showAvg = !!(KS && KS.showClassAverage && KS.showClassAverage());
+  const showRk = !!(KS && KS.showRank && KS.showRank());
+  const vsAvg = showAvg && sub.classAvg != null ? pct - sub.classAvg : null;
   const heroMsg = (pct >= 80 ? 'Excellent work!' : pct >= 65 ? 'Good effort!' : 'Keep practising!')
     + (vsAvg == null ? ''
       : vsAvg >= 5 ? ' Well above class average.'
@@ -6516,10 +6590,10 @@ const HwResultReview = ({ a, me, store, onBack, backLabel = 'Results' }) => {
             <div style={{ fontFamily: F.head, fontSize: 22, fontWeight: 800, letterSpacing: '-0.3px' }}>{score} / {total} marks</div>
             <div style={{ fontSize: 13, color: C.muted, margin: '5px 0 16px' }}>{heroMsg}</div>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              {sub.classAvg != null && heroStat('Class Avg', `${sub.classAvg}%`, C.amber)}
-              {/* §8/AADC: class rank is banded ("Top 15%"), never a precise n/28 —
-                  precise rank only behind a future opt-in. */}
-              {sub.rank != null && sub.classSize
+              {showAvg && sub.classAvg != null && heroStat('Class Avg', `${sub.classAvg}%`, C.amber)}
+              {/* §8/AADC: class rank is banded ("Top 15%"), never a precise n/28,
+                  and only when the centre shows rank to pupils of this age. */}
+              {showRk && sub.rank != null && sub.classSize
                 && heroStat('Class Rank', `Top ${Math.max(1, Math.min(99, Math.round((sub.rank / sub.classSize) * 100)))}%`, C.brand)}
               {sub.timeSpentMins != null && heroStat('Time Spent', `${sub.timeSpentMins}m`, C.text)}
             </div>
@@ -6666,6 +6740,7 @@ Object.assign(window, {
     getHomeworkCounts: (scope) => getHomeworkCounts(loadStore(), scope),
     listAssignments: (scope) => scopeAssignments(loadStore(), scope),
     listClassHomework,
+    studentHomeworkSeries,
     isMine,
     outcomeFor,
     // THE release predicate. Any surface showing a student their own marks asks

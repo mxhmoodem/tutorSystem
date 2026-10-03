@@ -4,7 +4,8 @@
 // ══════════════════════════════════════════════════════════════
 //
 //  Data (SA_ACCOUNTS, SA_ROLE_COUNTS, SA_USER_GROWTH, SA_MRR_MOVEMENT,
-//  SA_ACTIVITY, SA_FEATURE_USAGE, SA_DEVICE, SA_TICKETS, SA_FAILED_PAYMENTS,
+//  SA_ACTIVITY, SA_FEATURE_USAGE, SA_DEVICE, SA_SUPPORT_SESSIONS, SA_SERVICES,
+//  SA_QUEUES, SA_CRON, SA_INCIDENTS, SA_EMAIL_DELIVERY, SA_FAILED_PAYMENTS,
 //  SA_TXNS, SA_AUDIT, SA_DSAR, SA_SUSPICIOUS, SA_FLAGS, BRAND, saPalette) lives
 //  in mocks/superAdmin.mock.jsx, loaded before this file. The canonical PLAN
 //  CATALOG + getPlan/planApplyCode/planFindCode come from Plans.jsx.
@@ -70,6 +71,27 @@ const SAMetrics = {
     for (let i = net.length - 2; i >= 0; i--) out[i] = out[i + 1] - net[i + 1];
     return { labels: mov.labels, mrr: out };
   },
+  // The last `months` of that movement — what the Overview range selector and the
+  // board pack read. MRR at the start of the window is MRR now minus the window's
+  // net movement, so start + movement = end exactly. The chart keeps one point
+  // before the window (when there is one) so a single month still draws a line.
+  period:      (months) => {
+    const mov = SA_MRR_MOVEMENT;
+    const { labels, mrr } = SAMetrics.mrrTrend();
+    const n = Math.max(1, Math.min(months, labels.length));
+    const from = labels.length - n;
+    const sum = (arr) => arr.slice(from).reduce((a, b) => a + b, 0);
+    const newMRR = sum(mov.newMRR);
+    const churnedMRR = sum(mov.churnedMRR);
+    const endMRR = mrr[mrr.length - 1];
+    const startMRR = endMRR - (newMRR - churnedMRR);
+    return {
+      months: n, labels: labels.slice(Math.max(0, from - 1)), mrr: mrr.slice(Math.max(0, from - 1)),
+      startMRR, endMRR, newMRR, churnedMRR, net: newMRR - churnedMRR,
+      growthPct: startMRR ? +(((endMRR - startMRR) / startMRR) * 100).toFixed(1) : 0,
+      churnRate: startMRR ? +((churnedMRR / startMRR) * 100).toFixed(1) : 0,
+    };
+  },
 
   userCounts:  () => SA_ROLE_COUNTS,
   totalUsers:  () => Object.values(SA_ROLE_COUNTS).reduce((a, b) => a + b, 0),
@@ -100,7 +122,9 @@ const SAMetrics = {
   },
 
   // Plan distribution over non-archived plans that have ≥1 account.
-  planDistribution: () => getPlans().filter(p => !p.archived).map(p => {
+  // The seeded accounts are all centre accounts, so a solo plan only appears
+  // once an account is actually on it.
+  planDistribution: () => getPlans().filter(p => !p.archived && (p.audience === 'centre' || SA_ACCOUNTS.some(a => a.planId === p.id))).map(p => {
     const accts = SA_ACCOUNTS.filter(a => a.planId === p.id);
     const paying = accts.filter(SAMetrics.isBilling);
     return { id: p.id, name: p.name, price: p.price, accounts: accts.length,
@@ -349,26 +373,247 @@ const useSAAudit = () => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  IMPERSONATION ("Switch View")  —  prototype preview, hardened
+//  SUPPORT SESSIONS  —  the only way the owner sees inside a tenant
 // ═══════════════════════════════════════════════════════════════════════════
-//  PRODUCTION: impersonation must be time-boxed (auto-expire), scoped to a
-//  support ticket, and VISIBLE to the tenant (their own banner + an audit row
-//  they can read). This prototype previews the view, shows a persistent owner
-//  banner, and records the owner-side audit on enter AND exit.
+//  Support happens by EMAIL (decision #30); there is no ticket queue. When the
+//  owner needs to look inside an account they open a SUPPORT SESSION: it must
+//  name the support-email reference the tenant will recognise and a reason, it
+//  expires on its own (≤ 60 min), and the tenant's admins see it (banner + a row
+//  in their own audit log). Mirrors `support_sessions` / start_support_session.
+//  The live session sits in tutoros.impersonation.v1 (the banner + auto-expiry
+//  read it); every finished session is appended to tutoros.supportsessions.v1.
 const SA_IMP_KEY = 'tutoros.impersonation.v1';
-const readImpersonation = () => { try { return JSON.parse(localStorage.getItem(SA_IMP_KEY)) || null; } catch (e) { return null; } };
-const saImpersonateEnter = (account, asRole = 'Admin') => {
-  saAudit({ action: `Entered ${asRole} view of ${account.name}`, type: 'impersonation', target: account.name });
-  try { localStorage.setItem(SA_IMP_KEY, JSON.stringify({ accountId: account.id, accountName: account.name, role: asRole, at: Date.now() })); } catch (e) {}
-  window.dispatchEvent(new Event('sa-impersonation'));
+const SA_SESSIONS_KEY = 'tutoros.supportsessions.v1';
+const SA_SESSION_MAX_MIN = 60;
+const saSessionListeners = new Set();
+const readSessionLog = () => { try { const a = JSON.parse(localStorage.getItem(SA_SESSIONS_KEY)); return Array.isArray(a) ? a : []; } catch (e) { return []; } };
+const saNotifySessions = () => { window.dispatchEvent(new Event('sa-impersonation')); saSessionListeners.forEach(fn => fn()); };
+// Close the live session (manual exit or expiry): stamp endedAt, move it to the log.
+// `onlyId` guards the deferred expiry close: it must never end a newer session
+// that was opened in the meantime.
+const saCloseSession = (why, onlyId) => {
+  let imp = null;
+  try { imp = JSON.parse(localStorage.getItem(SA_IMP_KEY)); } catch (e) {}
+  if (!imp || (onlyId && imp.id !== onlyId)) return null;
+  const endedAt = why === 'expired' ? imp.expiresAt : new Date().toISOString();
+  const rec = { ...imp, endedAt };
+  try {
+    localStorage.setItem(SA_SESSIONS_KEY, JSON.stringify([rec, ...readSessionLog()]));
+    localStorage.removeItem(SA_IMP_KEY);
+  } catch (e) {}
+  saAudit({ action: `${why === 'expired' ? 'Support session expired' : 'Ended support session'} on ${imp.accountName} (${imp.supportRef})`, type: 'impersonation', target: imp.accountName });
+  saNotifySessions();
+  return rec;
+};
+// The live session, or null. An expired session reads as null at once, so
+// nothing downstream can keep acting inside a tenant past its time box; closing
+// it (log + audit + events) is deferred because this runs during render.
+const readImpersonation = () => {
+  let imp = null;
+  try { imp = JSON.parse(localStorage.getItem(SA_IMP_KEY)); } catch (e) { return null; }
+  if (!imp) return null;
+  if (!imp.expiresAt || new Date(imp.expiresAt) <= new Date()) { setTimeout(() => saCloseSession('expired', imp.id), 0); return null; }
+  return imp;
+};
+// Open a session. Refuses without a support reference and a reason — the tenant
+// has to be able to match the session to an email thread they started.
+const saStartSupportSession = ({ account, supportRef, reason, minutes }) => {
+  const ref = String(supportRef || '').trim();
+  const why = String(reason || '').trim();
+  if (!account || !ref || !why) return { ok: false, reason: 'A support reference and a reason are required.' };
+  if (readImpersonation()) saCloseSession('replaced');
+  const mins = Math.max(5, Math.min(SA_SESSION_MAX_MIN, +minutes || 30));
+  const start = new Date();
+  const rec = {
+    id: 'ss_' + start.getTime(), accountId: account.id, accountName: account.name,
+    supportRef: ref, reason: why, role: 'Admin', by: 'Marcus Hale',
+    startedAt: start.toISOString(), expiresAt: new Date(start.getTime() + mins * 60000).toISOString(), endedAt: null,
+  };
+  try { localStorage.setItem(SA_IMP_KEY, JSON.stringify(rec)); } catch (e) {}
+  saAudit({ action: `Opened a ${mins}-min support session on ${account.name} (${ref}): ${why}`, type: 'impersonation', target: account.name });
+  saNotifySessions();
   if (window.__navigate) window.__navigate('admin', 'dashboard');
+  return { ok: true, session: rec };
 };
 const saImpersonateExit = () => {
-  const imp = readImpersonation();
-  if (imp) saAudit({ action: `Exited ${imp.role} view of ${imp.accountName}`, type: 'impersonation', target: imp.accountName });
-  try { localStorage.removeItem(SA_IMP_KEY); } catch (e) {}
-  window.dispatchEvent(new Event('sa-impersonation'));
-  if (window.__navigate) window.__navigate('superadmin', 'centres');
+  saCloseSession('ended');
+  if (window.__navigate) window.__navigate('superadmin', 'support');
+};
+// Live + finished sessions, newest first (runtime log over the immutable seed).
+const useSupportSessions = () => {
+  const [, bump] = React.useState(0);
+  React.useEffect(() => {
+    const fn = () => bump(n => n + 1);
+    saSessionListeners.add(fn);
+    window.addEventListener('sa-impersonation', fn);
+    const t = setInterval(fn, 15000);   // re-derive "time left" and catch expiry
+    return () => { saSessionListeners.delete(fn); window.removeEventListener('sa-impersonation', fn); clearInterval(t); };
+  }, []);
+  const live = readImpersonation();
+  return { live, history: [...readSessionLog(), ...(window.SA_SUPPORT_SESSIONS || [])] };
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  PLATFORM SWITCHES  —  one row, like `platform_settings` (decision #32)
+// ═══════════════════════════════════════════════════════════════════════════
+//  Maintenance and read-only are DIFFERENT things:
+//   • maintenance — the app is unavailable. Every tenant session gets the
+//     maintenance screen instead of the app (the owner is exempt). Minutes,
+//     for work that can't run online.
+//   • read-only   — the app works but is frozen: everyone can read, every change
+//     is refused behind a banner. Hours — an incident, a risky deploy. Scoped
+//     platform-wide (readOnlyAccountIds: null) or to listed accounts; a
+//     suspended account is read-only by definition.
+//  The status page stays PRIVATE until an SLA or a customer's procurement asks
+//  for it — incidents reach affected admins as a platform announcement instead.
+const SA_PLATFORM_KEY = 'tutoros.platform.v1';
+const SA_PLATFORM_DEFAULTS = {
+  maintenanceMode: false, maintenanceNotice: '',
+  maintenanceUntil: null,   // expected end, shown on the maintenance screen — a promise, not a timer
+  readOnlyMode: false, readOnlyNotice: '', readOnlyAccountIds: null,
+  signupsEnabled: true, statusPagePublic: false, updatedAt: null,
+};
+const saPlatformListeners = new Set();
+const readPlatformSettings = () => {
+  let stored = {};
+  try { stored = JSON.parse(localStorage.getItem(SA_PLATFORM_KEY)) || {}; } catch (e) {}
+  // One-time fold of the old stand-alone maintenance key into the single row.
+  try {
+    if (localStorage.getItem('tutoros.maintenance') === '1') {
+      stored = { ...stored, maintenanceMode: true };
+      localStorage.setItem(SA_PLATFORM_KEY, JSON.stringify({ ...SA_PLATFORM_DEFAULTS, ...stored }));
+    }
+    localStorage.removeItem('tutoros.maintenance');
+  } catch (e) {}
+  return { ...SA_PLATFORM_DEFAULTS, ...stored };
+};
+const updatePlatformSettings = (patch) => {
+  const next = { ...readPlatformSettings(), ...patch, updatedAt: new Date().toISOString() };
+  try { localStorage.setItem(SA_PLATFORM_KEY, JSON.stringify(next)); } catch (e) {}
+  saPlatformListeners.forEach(fn => fn(next));
+  window.dispatchEvent(new Event('sa-platform'));
+  return next;
+};
+// Re-read the row and tell every subscriber — what the maintenance screen's
+// "Check now" and 30-second poll call (the production twin reads v_platform_status).
+const refreshPlatformSettings = () => {
+  const next = readPlatformSettings();
+  saPlatformListeners.forEach(fn => fn(next));
+  return next;
+};
+const usePlatformSettings = () => {
+  const [s, setS] = React.useState(readPlatformSettings);
+  React.useEffect(() => {
+    const fn = n => setS(n);
+    // Another tab (e.g. the owner console) changed a switch.
+    const onStorage = (e) => { if (e.key === SA_PLATFORM_KEY) setS(readPlatformSettings()); };
+    saPlatformListeners.add(fn);
+    window.addEventListener('storage', onStorage);
+    return () => { saPlatformListeners.delete(fn); window.removeEventListener('storage', onStorage); };
+  }, []);
+  return [s, updatePlatformSettings];
+};
+// Can this account write right now? The prototype twin of `writes_allowed()`.
+const saWritesAllowed = (accountId, s = readPlatformSettings()) => {
+  if (s.maintenanceMode) return false;
+  if (s.readOnlyMode && (s.readOnlyAccountIds == null || s.readOnlyAccountIds.includes(accountId))) return false;
+  const a = SA_ACCOUNTS.find(x => x.id === accountId);
+  return !(a && a.status === 'suspended');
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  FEATURE FLAGS  —  rollout only: a master switch + an optional allowlist
+// ═══════════════════════════════════════════════════════════════════════════
+//  `accountIds: null` = every account; an array = only those. The prototype
+//  twin of `feature_flags` + flag_enabled(): no percentages, no cohorts, no plan
+//  gate (plans gate surfaces through capabilities, decision #25).
+const SA_FLAGS_KEY = 'tutoros.flags.v1';
+const saFlagListeners = new Set();
+const readFlags = () => { try { const a = JSON.parse(localStorage.getItem(SA_FLAGS_KEY)); if (Array.isArray(a)) return a; } catch (e) {} return JSON.parse(JSON.stringify(SA_FLAGS)); };
+const writeFlags = (next) => { try { localStorage.setItem(SA_FLAGS_KEY, JSON.stringify(next)); } catch (e) {} saFlagListeners.forEach(fn => fn(next)); };
+const useFeatureFlags = () => {
+  const [flags, setFlags] = React.useState(readFlags);
+  React.useEffect(() => { const fn = n => setFlags(n); saFlagListeners.add(fn); return () => { saFlagListeners.delete(fn); }; }, []);
+  const patch = (id, p) => writeFlags(readFlags().map(f => f.id === id ? { ...f, ...p } : f));
+  const add = (id, desc) => {
+    const key = String(id || '').trim().toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!key || readFlags().some(f => f.id === key)) return null;
+    const rec = { id: key, desc: String(desc || '').trim(), on: false, accountIds: null };
+    writeFlags([...readFlags(), rec]);
+    return rec;
+  };
+  return { flags, patch, add };
+};
+const saFlagEnabled = (flagId, accountId) => {
+  const f = readFlags().find(x => x.id === flagId);
+  return !!f && f.on && (f.accountIds == null || f.accountIds.includes(accountId));
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  OWNER ALERTS  —  what reaches the platform owner's bell
+// ═══════════════════════════════════════════════════════════════════════════
+//  Not a notification system of its own: each alert is DERIVED from rows that
+//  already exist (failed payments, data requests, trials, seat + storage fill),
+//  so the bell, the email and the page it links to read one source. Anything a
+//  centre admin should handle never lands here. "Wake me up" alerts (service
+//  down, error spike) come from the external monitor and Sentry, not this bell.
+// Pupil-filed subject access requests (decision #62, window.klasioDataRequests)
+// join the static DSAR mock so the statutory clock shows on the owner console.
+const saLiveDsar = () => {
+  const D = window.klasioDataRequests;
+  if (!D) return [];
+  const fmt = (iso) => new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  return D.list().map(r => ({
+    id: r.id, live: true, kind: 'export', requester: `pupil · ${r.centreName || 'Bright Minds'}`, accountId: 'acc_brightminds',
+    subject: `1 student (self) · ${r.subjectName}`, received: fmt(r.receivedAt), deadline: fmt(r.dueAt),
+    status: r.status === 'completed' ? 'fulfilled' : r.status === 'open' ? 'awaiting' : 'in_progress',
+  }));
+};
+const saDsarRows = () => [...saLiveDsar(), ...SA_DSAR];
+
+const saOwnerAlerts = () => {
+  const out = [];
+  SAMetrics.failedPayments().forEach(f => out.push({
+    id: 'pay_' + f.accountId, sig: `pay:${f.accountId}:${f.attempts}:${f.state}`, icon: 'invoice', tone: 'danger', page: 'revenue',
+    title: `Payment failed — ${f.name}`, sub: `£${f.amount} · attempt ${f.attempts} · ${f.state.replace('_', ' ')}`,
+  }));
+  saDsarRows().filter(d => d.status !== 'fulfilled').forEach(d => out.push({
+    id: 'dsar_' + d.id, sig: `dsar:${d.id}`, icon: 'shield', tone: 'warning', page: 'security',
+    title: `${d.kind === 'delete' ? 'Erasure' : 'Access'} request — ${d.requester}`, sub: `Statutory deadline ${d.deadline} · ${d.subject}`,
+  }));
+  SA_ACCOUNTS.filter(a => a.status === 'suspended').forEach(a => out.push({
+    id: 'susp_' + a.id, sig: `susp:${a.id}`, icon: 'alert', tone: 'danger', page: 'centres',
+    title: `${a.name} is suspended`, sub: 'Read-only until reactivated · review or schedule deletion',
+  }));
+  // Trials with real usage are the best sales signal on the platform.
+  SA_ACCOUNTS.filter(a => a.status === 'trial').forEach(a => {
+    const usage = Math.max(...a.centres.map(c => c.usage));
+    if (usage >= 30) out.push({
+      id: 'trial_' + a.id, sig: `trial:${a.id}:${a.trialEndsAt}`, icon: 'calendar', tone: 'info', page: 'centres',
+      title: `Trial ending — ${a.name}`, sub: `Ends ${a.trialEndsAt} · ${usage}% active usage — worth a call`,
+    });
+  });
+  // Upsell triggers (weekly digest tier): accounts at ≥ 90% of seats or storage.
+  SA_ACCOUNTS.forEach(a => {
+    const s = SAMetrics.seatUsage(a).students;
+    const pct = s.licensed ? Math.round((s.used / s.licensed) * 100) : 0;
+    if (pct >= 90) out.push({
+      id: 'seats_' + a.id, sig: `seats:${a.id}:${pct}`, icon: 'users', tone: 'success', page: 'centres',
+      title: `${a.name} is at ${pct}% of student seats`, sub: `${s.used} of ${s.licensed} · upgrade candidate`,
+    });
+  });
+  if (typeof window.stgAccounts === 'function') {
+    window.stgAccounts().forEach(a => {
+      const used = window.stgUsageByAccount(a.accountId);
+      const quota = window.stgQuotaForAccount({ accountId: a.accountId, planId: a.planId });
+      const pct = quota ? Math.round((used / quota) * 100) : 0;
+      if (pct >= 90) out.push({
+        id: 'stg_' + a.accountId, sig: `stg:${a.accountId}:${pct}`, icon: 'cloud', tone: 'warning', page: 'storage',
+        title: `${a.name} is at ${pct}% of storage`, sub: `${window.stgFmtBytes(used)} of ${window.stgFmtBytes(quota)} · add-on or upgrade`,
+      });
+    });
+  }
+  return out;
 };
 
 // ─── Shared SuperAdmin Components ────────────────────────────────────────────
@@ -712,94 +957,134 @@ const SAFlash = ({ msg, onDone }) => {
 //  OVERVIEW DASHBOARD  —  triage surface (KPI quad stays as-is)
 // ═══════════════════════════════════════════════════════════════════════════
 
+// Overview range → how many months of the monthly MRR movement it covers.
+const SA_RANGES = [
+  { id: '1m',  label: 'This month',     months: 1 },
+  { id: '3m',  label: 'Last 3 months',  months: 3 },
+  { id: '6m',  label: 'Last 6 months',  months: 6 },
+  { id: 'all', label: 'All (8 months)', months: 8 },
+];
+
 const SuperAdminDashboard = () => {
-  // Maintenance mode is ONE flag (Platform Controls owns it). This button is a
-  // shortcut that mutates the same localStorage flag the toggle reads.
-  const [maint, setMaint] = React.useState(() => { try { return localStorage.getItem('tutoros.maintenance') === '1'; } catch (e) { return false; } });
-  const setMaintenance = (v) => { try { v ? localStorage.setItem('tutoros.maintenance', '1') : localStorage.removeItem('tutoros.maintenance'); } catch (e) {} setMaint(v); window.dispatchEvent(new Event('sa-maintenance')); };
-  const [range, setRange] = React.useState('30d');
+  // Maintenance is switched ON only in Platform Controls, behind a confirm. The
+  // Overview only ever offers the way OUT — the fastest possible off-switch.
+  const [platform, setPlatform] = usePlatformSettings();
+  const [range, setRange] = React.useState('1m');
   const [flash, setFlash] = React.useState('');
 
+  const rangeMeta = SA_RANGES.find(r => r.id === range) || SA_RANGES[0];
+  const p = SAMetrics.period(rangeMeta.months);
   const mrr = SAMetrics.platformMRR();
-  const trend = SAMetrics.mrrTrend();
   const dist = SAMetrics.planDistribution();
   const distTotal = dist.reduce((s, d) => s + d.accounts, 0) || 1;
   const topAccounts = SAMetrics.accountsByMRR().slice(0, 6);
+  const periodPhrase = rangeMeta.months === 1 ? 'this month' : rangeMeta.id === 'all' ? 'over all 8 months' : `over the ${rangeMeta.label.toLowerCase()}`;
+  const signed = (n, unit = '') => `${n >= 0 ? '+' : '−'}${unit}${Math.abs(n).toLocaleString()}`;
+
+  const exitMaintenance = () => {
+    setPlatform({ maintenanceMode: false, maintenanceUntil: null });
+    saAudit({ action: 'Turned maintenance mode off (from Overview)', type: 'system', target: 'Platform' });
+    setFlash('Maintenance mode off — centres are back');
+  };
 
   // ONE stat surface: MRR is the headline of this console, the rest support it.
+  // The range drives the trend, movement and churn figures; point-in-time counts
+  // (accounts, users) say "today" so nothing all-time poses as the period.
   const goto = (page) => () => window.__navigate && window.__navigate('superadmin', page);
   const leadStat = {
     label: 'Monthly Recurring Revenue',
     value: `£${mrr.toLocaleString()}`,
-    trend: '+7.3%', trendDir: 'up', sub: 'vs last month',
+    trend: `${p.growthPct >= 0 ? '+' : '−'}${Math.abs(p.growthPct)}%`, trendDir: p.growthPct >= 0 ? 'up' : 'down', sub: periodPhrase,
   };
   const supportStats = [
-    { label: 'ARR',            value: `£${SAMetrics.arr().toLocaleString()}`,          sub: 'annualised run rate',   onClick: goto('revenue') },
-    { label: 'Accounts',       value: SAMetrics.accounts().length.toString(),           sub: `${SAMetrics.payingAccounts().length} billing`, onClick: goto('centres') },
-    { label: 'Active Centres', value: SAMetrics.activeCentres().toString(),             trend: '+2', trendDir: 'up', sub: 'this month', onClick: goto('centres') },
-    { label: 'Total Users',    value: SAMetrics.totalUsers().toLocaleString(),          trend: '+167', trendDir: 'up', sub: 'this month', onClick: goto('users') },
-    { label: 'ARPU',           value: `£${SAMetrics.arpu().toLocaleString()}`,          sub: 'per paying account',    onClick: goto('revenue') },
-    { label: 'Churn Rate',     value: `${SAMetrics.churnRate()}%`,                      trend: '−0.4pp', trendDir: 'up', sub: 'vs last month', onClick: goto('revenue') },
+    { label: 'ARR',           value: `£${SAMetrics.arr().toLocaleString()}`, sub: 'annualised run rate', onClick: goto('revenue') },
+    { label: 'Accounts',      value: SAMetrics.accounts().length.toString(),  sub: `${SAMetrics.payingAccounts().length} billing · today`, onClick: goto('centres') },
+    { label: 'Net new MRR',   value: signed(p.net, '£'),                      sub: `£${p.newMRR.toLocaleString()} new · £${p.churnedMRR.toLocaleString()} churned`, onClick: goto('revenue') },
+    { label: 'Total Users',   value: SAMetrics.totalUsers().toLocaleString(), sub: 'today', onClick: goto('users') },
+    { label: 'ARPU',          value: `£${SAMetrics.arpu().toLocaleString()}`, sub: 'per paying account', onClick: goto('revenue') },
+    { label: 'Revenue churn', value: `${p.churnRate}%`,                       sub: `of MRR ${periodPhrase}`, onClick: goto('revenue') },
   ];
 
-  // Board pack (period-scoped) → CSV download, audited.
+  // Board pack → CSV, audited. Every row is either scoped to the selected
+  // period or labelled "as at export".
   const exportBoardPack = () => {
+    const openIncidents = SA_INCIDENTS.filter(i => i.status !== 'resolved').length;
     const rows = [
-      ['Metric', 'Value', 'Period'],
-      ['MRR', `£${mrr}`, range],
-      ['ARR', `£${SAMetrics.arr()}`, range],
-      ['Active centres', SAMetrics.activeCentres(), range],
-      ['Total users', SAMetrics.totalUsers(), range],
-      ['Churn rate', `${SAMetrics.churnRate()}%`, range],
-      ['New MRR', `£${SAMetrics.newMRR()}`, range],
-      ['Churned MRR', `£${SAMetrics.churnedMRR()}`, range],
-      ['Open incidents', 0, range],
+      ['Metric', 'Value', 'Basis'],
+      ['Period', `${rangeMeta.label} (${p.labels[1] || p.labels[0]} – ${p.labels[p.labels.length - 1]})`, 'period'],
+      ['MRR at start of period', `£${p.startMRR}`, 'period'],
+      ['MRR at end of period', `£${p.endMRR}`, 'period'],
+      ['MRR growth', `${p.growthPct}%`, 'period'],
+      ['New MRR', `£${p.newMRR}`, 'period'],
+      ['Churned MRR', `£${p.churnedMRR}`, 'period'],
+      ['Net new MRR', `£${p.net}`, 'period'],
+      ['Revenue churn', `${p.churnRate}%`, 'period'],
+      ['ARR (run rate)', `£${SAMetrics.arr()}`, 'as at export'],
+      ['Billing accounts', SAMetrics.payingAccounts().length, 'as at export'],
+      ['Active centres', SAMetrics.activeCentres(), 'as at export'],
+      ['Total users', SAMetrics.totalUsers(), 'as at export'],
+      ['Open incidents', openIncidents, 'as at export'],
     ];
-    saDownloadCSV('klasio-board-pack.csv', rows);
-    saAudit({ action: `Exported board pack (${range})`, type: 'export', target: 'Platform overview' });
+    saDownloadCSV(`klasio-board-pack-${range}.csv`, rows);
+    saAudit({ action: `Exported board pack (${rangeMeta.label})`, type: 'export', target: 'Platform overview' });
     setFlash('Board pack exported (CSV)');
   };
+
+  const roIds = platform.readOnlyAccountIds;
+  const roScope = roIds == null ? 'every account' : `${roIds.length} account${roIds.length === 1 ? '' : 's'}`;
 
   return (
     <div style={{ ...pageFrame(), overflow: 'auto' }}>
       <PageHeader
         title="Platform Overview"
-        subtitle={`Thursday, 2 July 2026 · ${BRAND.name} Platform`}
+        subtitle={`${new Date(SA_NOW).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })} · ${BRAND.name} Platform`}
         actions={[
-          <select key="range" value={range} onChange={e => setRange(e.target.value)} style={{
+          <select key="range" value={range} onChange={e => setRange(e.target.value)} title="Scopes the trend, movement and churn figures and the board pack" style={{
             padding: '7px 10px', borderRadius: 7, border: `1px solid ${DS.border}`, background: DS.bg,
             color: DS.sub, fontSize: 13, cursor: 'pointer',
           }}>
-            <option value="7d">Last 7 days</option>
-            <option value="30d">Last 30 days</option>
-            <option value="qtd">Quarter to date</option>
+            {SA_RANGES.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
           </select>,
-          <Btn key="exp" variant="secondary" icon="download" small onClick={exportBoardPack}>Export Report</Btn>,
-          <Btn key="alert" variant={maint ? 'danger' : 'secondary'} icon="zap" small onClick={() => setMaintenance(!maint)}>
-            {maint ? 'Exit Maintenance' : 'Maintenance Mode'}
-          </Btn>,
+          <Btn key="exp" variant="secondary" icon="download" small onClick={exportBoardPack}>Export board pack</Btn>,
+          ...(platform.maintenanceMode
+            ? [<Btn key="maint" variant="danger" icon="zap" small onClick={exitMaintenance}>Exit maintenance</Btn>]
+            : []),
         ]}
       />
 
-      {maint && (
+      {platform.maintenanceMode && (
         <div style={{
-          marginBottom: 20, padding: '12px 16px', borderRadius: 8,
-          background: DS.warningBg, border: `1px solid ${DS.warningBorder}`,
+          marginBottom: 12, padding: '12px 16px', borderRadius: 8,
+          background: DS.dangerBg, border: `1px solid ${DS.danger}33`,
           display: 'flex', alignItems: 'center', gap: 10,
         }}>
-          <Icon name="alert" size={16} color={DS.warning} />
-          <div style={{ flex: 1, fontSize: 13, color: DS.warning, fontWeight: 600 }}>
-            Maintenance mode is active — all centre admin dashboards show a banner. Managed in Platform Controls.
+          <Icon name="alert" size={16} color={DS.danger} />
+          <div style={{ flex: 1, fontSize: 13, color: DS.danger, fontWeight: 600 }}>
+            Maintenance mode is on — every centre sees the maintenance screen instead of the app.
           </div>
         </div>
       )}
+      {platform.readOnlyMode && (
+        <div style={{
+          marginBottom: 12, padding: '12px 16px', borderRadius: 8,
+          background: DS.warningBg, border: `1px solid ${DS.warningBorder}`,
+          display: 'flex', alignItems: 'center', gap: 10,
+        }}>
+          <Icon name="lock" size={16} color={DS.warning} />
+          <div style={{ flex: 1, fontSize: 13, color: DS.warning, fontWeight: 600 }}>
+            Read-only mode is on for {roScope} — users can read everything, but changes are refused.
+          </div>
+          <Btn variant="ghost" small onClick={goto('controls')}>Platform Controls</Btn>
+        </div>
+      )}
+      {(platform.maintenanceMode || platform.readOnlyMode) && <div style={{ height: 8 }} />}
 
       {/* Headline stat surface — hero MRR + supporting grid, one card */}
       <SALeadStat lead={leadStat} items={supportStats} columns={3} style={{ marginBottom: 20 }} />
 
       {/* Charts row — trend + KPI both driven by getPlatformMRR() */}
       <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 20, marginBottom: 20 }}>
-        <Card title="Revenue & Growth Trend" actions={[<Badge key="b" variant="accent">Last 8 months</Badge>]}>
+        <Card title="Revenue & Growth Trend" actions={[<Badge key="b" variant="accent">{rangeMeta.label}</Badge>]}>
           <div style={{ padding: '20px' }}>
             <div style={{ display: 'flex', gap: 16, marginBottom: 12 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -807,7 +1092,7 @@ const SuperAdminDashboard = () => {
                 <span style={{ fontSize: 12, color: DS.muted }}>Platform MRR (£)</span>
               </div>
             </div>
-            <LineChart labels={trend.labels} series={[{ label: 'MRR (£)', data: trend.mrr, color: DS.accent }]} height={200} />
+            <LineChart labels={p.labels} series={[{ label: 'MRR (£)', data: p.mrr, color: DS.accent }]} height={200} />
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', borderTop: `1px solid ${DS.border}`, background: DS.surface }}>
             {[
@@ -889,10 +1174,10 @@ const SuperAdminDashboard = () => {
         size="sm"
         style={{ marginBottom: 20 }}
         items={[
-          { label: 'API Response', value: '142ms', sub: 'p95 last 1h',     dot: DS.success, onClick: goto('system') },
-          { label: 'Uptime',       value: '99.98%', sub: '30-day rolling', dot: DS.success, onClick: goto('system') },
-          { label: 'Error Rate',   value: `${SA_SYS.errorRate}%`, sub: '5xx responses', dot: DS.success, onClick: goto('system') },
-          { label: 'Job Queue',    value: SA_SYS.jobsPending.toString(), sub: 'pending tasks', dot: DS.warning, tone: 'warn', onClick: goto('system') },
+          { label: 'API p95',    value: SA_SYS.p95, sub: 'last hour',      dot: DS.success, tip: SA_SYS_SOURCE.sentry,  onClick: goto('system') },
+          { label: 'Uptime',     value: SA_SYS.uptime30, sub: '30-day rolling', dot: DS.success, tip: SA_SYS_SOURCE.monitor, onClick: goto('system') },
+          { label: 'Error Rate', value: `${SA_SYS.errorRate}%`, sub: '5xx responses', dot: DS.success, tip: SA_SYS_SOURCE.sentry, onClick: goto('system') },
+          (() => { const q = saQueueTotals(); return { label: 'Queues', value: q.pending.toString(), sub: q.failed ? `${q.failed} failed` : 'pending, none failed', dot: q.failed ? DS.warning : DS.success, tone: q.failed ? 'warn' : undefined, tip: SA_SYS_SOURCE.queues, onClick: goto('system') }; })(),
         ]}
       />
       <SAFlash msg={flash} onDone={() => setFlash('')} />
@@ -900,8 +1185,35 @@ const SuperAdminDashboard = () => {
   );
 };
 
-// Shared System-Health constants so Overview + System page read ONE value each.
-const SA_SYS = { errorRate: 0.04, jobsPending: 14, uptime30: '99.97%' };
+// Shared System-Health values so Overview + System page read ONE value each.
+// All mock. SA_SYS_SOURCE names where each would really come from.
+const SA_SYS = { errorRate: 0.04, uptime30: '99.97%', p50: '42ms', p95: '142ms', p99: '480ms' };
+const SA_SYS_SOURCE = {
+  monitor: 'Production: an external uptime monitor polling GET /v1/health — never a check that runs inside the thing it watches.',
+  sentry:  'Production: Sentry performance data for the Fastify API.',
+  queues:  'Production: counts from jobs, email_outbox and processed_events via GET /v1/admin/system-health.',
+};
+const saQueueTotals = () => (SA_QUEUES || []).reduce((t, q) => ({ pending: t.pending + q.pending, failed: t.failed + q.failed }), { pending: 0, failed: 0 });
+
+// Service status, worst first wins. One roll-up feeds System Health (internal
+// services) and the public status page (customer-facing components), so the two
+// can never tell different stories.
+const SA_STATUS_ORDER = ['operational', 'degraded', 'partial_outage', 'major_outage'];
+const SA_STATUS_META = {
+  operational:    { label: 'Operational',          headline: 'All systems operational',             tone: 'success' },
+  degraded:       { label: 'Degraded performance', headline: 'Some systems are running slowly',     tone: 'warning' },
+  partial_outage: { label: 'Partial outage',       headline: 'Some systems are partly unavailable', tone: 'warning' },
+  major_outage:   { label: 'Major outage',         headline: 'Klasio is having a major outage',     tone: 'danger' },
+};
+const saWorstStatus = (list) => list.reduce((w, st) => (SA_STATUS_ORDER.indexOf(st) > SA_STATUS_ORDER.indexOf(w) ? st : w), 'operational');
+const SAHealth = {
+  overall: () => saWorstStatus(SA_SERVICES.map(x => x.status)),
+  components: () => SA_PUBLIC_COMPONENTS.map(c => {
+    const services = SA_SERVICES.filter(x => x.component === c.id);
+    return { ...c, services, status: saWorstStatus(services.map(x => x.status)) };
+  }),
+  meta: (status) => SA_STATUS_META[status] || SA_STATUS_META.operational,
+};
 
 // CSV helper (client-side blob download; no network).
 const saCsvCell = (v) => {
@@ -938,6 +1250,7 @@ const SACentresPage = () => {
   const [wizard, setWizard] = React.useState(false);
   const [planEdit, setPlanEdit] = React.useState(null);   // account being re-planned
   const [confirm, setConfirm] = React.useState(null);     // { title, body, danger, onOk }
+  const [sessionFor, setSessionFor] = React.useState(null); // account a support session is being opened on
   const [flash, setFlash] = React.useState('');
 
   React.useEffect(() => {
@@ -990,14 +1303,14 @@ const SACentresPage = () => {
   // popover — the table has no per-row kebab, the whole row opens the popover.
   const accountActions = (a) => {
     const items = [
-      { label: 'Impersonate admin', icon: 'user', primary: true, onClick: () => saImpersonateEnter(a, 'Admin') },
+      { label: 'Open support session', icon: 'eye', primary: true, hint: 'ref + reason · ≤ 60 min', onClick: () => setSessionFor(a) },
       { label: 'Change plan', icon: 'invoice', hint: SAMetrics.planName(a.planId), onClick: () => setPlanEdit(a) },
       { label: 'View invoices', icon: 'invoice', onClick: () => { setFlash('Opening invoices…'); saAudit({ action: `Viewed invoices for ${a.name}`, type: 'account', target: a.name }); } },
     ];
     if (a.status === 'trial') items.push({ label: 'Extend trial', icon: 'calendar', hint: a.trialEndsAt || '', onClick: () => patch(a.id, { trialEndsAt: '31 Aug 2026' }, { action: `Extended trial for ${a.name}`, type: 'account', target: a.name }) });
     items.push({ label: 'View audit trail', icon: 'list', onClick: () => window.__navigate && window.__navigate('superadmin', 'security') });
     if (a.status === 'suspended') items.push({ label: 'Reactivate account', icon: 'check', onClick: () => patch(a.id, { status: 'active' }, { action: `Reactivated ${a.name}`, type: 'account', target: a.name }) });
-    else items.push({ label: 'Suspend account', icon: 'alert', danger: true, onClick: () => setConfirm({ title: `Suspend ${a.name}?`, body: 'All centre dashboards for this account go read-only until reactivated.', danger: true, ok: 'Suspend', onOk: () => patch(a.id, { status: 'suspended' }, { action: `Suspended ${a.name}`, type: 'account', target: a.name }) }) });
+    else items.push({ label: 'Suspend account', icon: 'alert', danger: true, onClick: () => setConfirm({ title: `Suspend ${a.name}?`, body: 'The account goes read-only: its users can still sign in and see everything, but every change is refused until you reactivate it. Nothing is deleted.', danger: true, ok: 'Suspend', onOk: () => patch(a.id, { status: 'suspended' }, { action: `Suspended ${a.name}`, type: 'account', target: a.name }) }) });
     items.push({ label: 'Delete account', icon: 'trash', danger: true, onClick: () => setConfirm({ title: `Delete ${a.name}?`, body: 'Enters a 30-day retention countdown before permanent erasure (GDPR). Recoverable until then.', danger: true, ok: 'Delete', onOk: () => { setAccounts(list => list.filter(x => x.id !== a.id)); setSelected(null); saAudit({ action: `Scheduled deletion of ${a.name} (30-day retention)`, type: 'account', target: a.name }); setFlash('Account scheduled for deletion'); } }) });
     return items;
   };
@@ -1017,7 +1330,9 @@ const SACentresPage = () => {
             saAudit({ action: `Exported accounts CSV (${accounts.length} accounts)`, type: 'export', target: 'Accounts' });
             setFlash('Accounts exported (CSV)');
           }}>Export CSV</Btn>,
-          <Btn key="add" variant="primary" icon="plus" small onClick={() => setWizard(true)}>Onboard Centre</Btn>,
+          // Secondary on purpose: self-serve signup is how accounts normally arrive.
+          // This is the by-hand path — an enterprise deal, a migration, a pilot.
+          <Btn key="add" variant="secondary" icon="plus" small onClick={() => setWizard(true)}>New account</Btn>,
         ]}
       />
 
@@ -1175,9 +1490,11 @@ const SACentresPage = () => {
         )}
       </SlideOver>
 
-      {/* Onboard-centre wizard — defaults from Settings → Platform Defaults */}
-      <OnboardAccountWizard open={wizard} plans={plansStore.plans.filter(p => !p.archived)} onClose={() => setWizard(false)}
-        onCreate={(acc) => { setAccounts(list => [acc, ...list]); saAudit({ action: `Onboarded account ${acc.name} (${SAMetrics.planName(acc.planId)})`, type: 'account', target: acc.name }); setFlash(`${acc.name} onboarded`); }} />
+      {/* New-account wizard — defaults from Settings → Platform Defaults */}
+      <OnboardAccountWizard open={wizard} plans={plansStore.plans.filter(p => !p.archived && p.audience === 'centre')} onClose={() => setWizard(false)}
+        onCreate={(acc) => { setAccounts(list => [acc, ...list]); saAudit({ action: `Created account ${acc.name} by hand (${SAMetrics.planName(acc.planId)})`, type: 'account', target: acc.name }); setFlash(`${acc.name} created`); }} />
+
+      <SASupportSessionModal open={!!sessionFor} account={sessionFor} accounts={accounts} onClose={() => setSessionFor(null)} />
 
       {/* Change-plan modal */}
       <Modal open={!!planEdit} onClose={() => setPlanEdit(null)} title={planEdit ? `Change plan — ${planEdit.name}` : ''} icon="invoice" iconColor={DS.accent} width={440}
@@ -1185,7 +1502,7 @@ const SACentresPage = () => {
         {planEdit && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div style={{ fontSize: 12, color: DS.muted, marginBottom: 4 }}>Idempotency: a change-plan is keyed by account + target plan so a retried click can't double-charge (production billing provider).</div>
-            {plansStore.plans.filter(p => !p.archived).map(p => (
+            {plansStore.plans.filter(p => !p.archived && p.audience === 'centre').map(p => (
               <button key={p.id} onClick={() => { patch(planEdit.id, { planId: p.id }, { action: `Changed ${planEdit.name} to ${p.name} plan`, type: 'account', target: planEdit.name }); setPlanEdit(null); }} style={{
                 display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderRadius: 8,
                 border: `1px solid ${planEdit.planId === p.id ? DS.accentBorder : DS.border}`, background: planEdit.planId === p.id ? DS.accentLight : DS.bg, cursor: 'pointer',
@@ -1215,9 +1532,9 @@ const SAConfirm = ({ confirm, onClose }) => (
   </Modal>
 );
 
-// Onboard-account wizard (plan · trial · seats · currency), defaults from
+// New-account wizard (plan · trial · seats · currency), defaults from
 // Settings → Platform Defaults (SETTINGS_STORE) so it matches the tenant path.
-// Trial length/on-off default to the GLOBAL free trial (Platform Controls) — hand-
+// Trial length/on-off default to the CENTRE free trial (Pricing page) — hand-
 // onboarded accounts get the same offer as a self-serve signup unless overridden here.
 const OnboardAccountWizard = ({ open, plans, onClose, onCreate }) => {
   const defaults = (typeof window.saPlatformDefaults === 'function') ? window.saPlatformDefaults() : { planId: 'starter', trialDays: 14, trialEnabled: true, currency: 'GBP' };
@@ -1240,7 +1557,7 @@ const OnboardAccountWizard = ({ open, plans, onClose, onCreate }) => {
   };
 
   return (
-    <Modal open={open} onClose={onClose} title="Onboard a new account" subtitle="Creates a billing tenant with its first centre." icon="plus" iconColor={DS.accent} width={560}
+    <Modal open={open} onClose={onClose} title="New account" subtitle="Creates a billing account and its first centre by hand — for deals closed off-platform, migrations and pilots. Self-serve signup is the normal path." icon="plus" iconColor={DS.accent} width={560}
       footer={<>
         <Btn variant="ghost" small onClick={onClose}>Cancel</Btn>
         {step > 0 && <Btn variant="secondary" small onClick={() => setStep(step - 1)}>Back</Btn>}
@@ -1264,8 +1581,8 @@ const OnboardAccountWizard = ({ open, plans, onClose, onCreate }) => {
             <Select value={d.planId} onChange={e => upd('planId', e.target.value)}>{plans.map(p => <option key={p.id} value={p.id}>{p.name} — £{p.price}/mo · {p.studentSeats} students · {p.maxCentres} centre{p.maxCentres !== 1 ? 's' : ''}</option>)}</Select>
           </Field>
           <Field label="Start as trial" hint={defaults.trialEnabled === false
-            ? 'The global free trial is off — this account would be billed immediately.'
-            : `Defaults to the global ${defaults.trialDays}-day free trial (Platform Controls).`}>
+            ? 'The centre free trial is off — this account would be billed immediately.'
+            : `Defaults to the ${defaults.trialDays}-day centre free trial (Pricing page).`}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <button onClick={() => upd('trial', !d.trial)} style={{ width: 40, height: 22, borderRadius: 11, border: 'none', background: d.trial ? DS.accent : DS.borderDark, position: 'relative', cursor: 'pointer' }}>
                 <span style={{ position: 'absolute', top: 2, left: d.trial ? 20 : 2, width: 18, height: 18, borderRadius: '50%', background: '#fff', transition: 'left .15s' }} />
@@ -1308,7 +1625,6 @@ const SAUsersPage = () => {
   const [accountFilter, setAccountFilter] = React.useState('all');
   const [activity, setActivity] = React.useState('all');
   const [selected, setSelected] = React.useState(null);
-  const [bulk, setBulk] = React.useState(false);
   const [flash, setFlash] = React.useState('');
 
   const directory = SAMetrics.directory();
@@ -1480,7 +1796,6 @@ const SAUsersPage = () => {
             saAudit({ action: `Exported users CSV (${filtered.length} rows)`, type: 'export', target: 'Users' });
             setFlash('Users exported');
           }}>Export</Btn>,
-          <Btn key="msg" variant="primary" icon="bell" small onClick={() => setBulk(true)}>Bulk Message</Btn>,
         ]}
       />
 
@@ -1619,40 +1934,8 @@ const SAUsersPage = () => {
         )}
       </SlideOver>
 
-      <BulkMessageModal open={bulk} onClose={() => setBulk(false)} onSend={(n) => { saAudit({ action: `Sent bulk message to ${n} recipients (safeguarding-routed)`, type: 'comms', target: 'Users' }); setFlash(`Bulk message queued to ${n} recipients`); }} />
       <SAFlash msg={flash} onDone={() => setFlash('')} />
     </div>
-  );
-};
-
-// Bulk message — audience preview + confirm + rate-limit note + audit; routes
-// through the safeguarding-aware comms path (never a raw send).
-const BulkMessageModal = ({ open, onClose, onSend }) => {
-  const [audience, setAudience] = React.useState('all_admins');
-  const [body, setBody] = React.useState('');
-  const AUD = {
-    all_admins: { label: 'All account admins', count: SA_ACCOUNTS.length },
-    active_admins: { label: 'Admins of active accounts', count: SA_ACCOUNTS.filter(a => a.status === 'active').length },
-    trial_admins: { label: 'Admins of trial accounts', count: SA_ACCOUNTS.filter(a => a.status === 'trial').length },
-    all_teachers: { label: 'All teachers (platform-wide)', count: SA_ROLE_COUNTS.teacher },
-  };
-  const recip = AUD[audience].count;
-  React.useEffect(() => { if (open) { setAudience('all_admins'); setBody(''); } }, [open]);
-  return (
-    <Modal open={open} onClose={onClose} title="Bulk message" subtitle="One-way, safeguarding-routed. Recipients can raise a monitored request back through their centre." icon="bell" iconColor={DS.accent} width={560}
-      footer={<>
-        <Btn variant="ghost" small onClick={onClose}>Cancel</Btn>
-        <Btn variant="primary" small icon="bell" disabled={!body.trim()} onClick={() => { onSend(recip); onClose(); }}>Send to {recip}</Btn>
-      </>}>
-      <Field label="Audience">
-        <Select value={audience} onChange={e => setAudience(e.target.value)}>{Object.entries(AUD).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</Select>
-      </Field>
-      <div style={{ padding: '10px 14px', borderRadius: 8, background: DS.accentLight, border: `1px solid ${DS.accentBorder}`, fontSize: 13, color: DS.text, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Icon name="users" size={14} color={DS.accent} /> Audience preview: <b>{recip.toLocaleString()}</b> recipients.
-      </div>
-      <Field label="Message"><textarea rows={4} value={body} onChange={e => setBody(e.target.value)} placeholder="Keep it clear and centre-appropriate…" style={{ width: '100%', padding: '8px 12px', borderRadius: 7, border: `1px solid ${DS.border}`, fontSize: 14, color: DS.text, outline: 'none', resize: 'vertical', boxSizing: 'border-box' }} /></Field>
-      <div style={{ fontSize: 11, color: DS.muted }}>Rate-limited to 1 platform broadcast / 10 min. Every send is audited.</div>
-    </Modal>
   );
 };
 
@@ -1962,75 +2245,65 @@ const SAEngagementPage = () => {
 
 const SASystemPage = () => {
   const [flash, setFlash] = React.useState('');
-  const [jobs, setJobs] = React.useState([
-    { queue: 'Reports', pending: 14, failed: 0, color: DS.warning },
-    { queue: 'Email delivery', pending: 3, failed: 1, color: DS.success },
-    { queue: 'PDF generation', pending: 0, failed: 0, color: DS.success },
-    { queue: 'CSV imports', pending: 2, failed: 0, color: DS.success },
-    { queue: 'Webhooks', pending: 1, failed: 0, color: DS.success },
-  ]);
-  const [statusPageOn, setStatusPageOn] = React.useState(true);
+  // Mock values; each card names where the real figure comes from (SA_SYS_SOURCE).
+  // No storage figure here on purpose — Storage derives the one platform total
+  // from file records, and a second number for the same fact would drift.
+  const [queues, setQueues] = React.useState(() => SA_QUEUES.map(q => ({ ...q })));
+  const degraded = SA_SERVICES.filter(s => s.status !== 'operational').length;
+  const openIncidents = SA_INCIDENTS.filter(i => i.status !== 'resolved').length;
+  const totals = queues.reduce((t, q) => ({ pending: t.pending + q.pending, failed: t.failed + q.failed }), { pending: 0, failed: 0 });
 
-  // Rename to match reality: Settings configures Cloudflare R2, so the health
-  // check is "File Storage (R2)", not S3.
-  const services = [
-    { name: 'API Gateway', status: 'operational', uptime: '99.99%', latency: '142ms' },
-    { name: 'Auth Service', status: 'operational', uptime: '99.98%', latency: '88ms' },
-    { name: 'Database (primary)', status: 'operational', uptime: '99.99%', latency: '12ms' },
-    { name: 'Database (replica)', status: 'operational', uptime: '99.97%', latency: '14ms' },
-    { name: 'Redis Cache', status: 'operational', uptime: '99.99%', latency: '2ms' },
-    { name: 'Reports Worker', status: 'degraded', uptime: '98.42%', latency: '4.2s' },
-    { name: 'Email Service', status: 'operational', uptime: '99.94%', latency: '210ms' },
-    { name: 'File Storage (R2)', status: 'operational', uptime: '99.99%', latency: '180ms' },
-  ];
-
-  const incidents = [
-    { date: '2026-06-26', title: 'Reports Worker latency spike', duration: '34m', severity: 'minor', status: 'resolved' },
-    { date: '2026-06-18', title: 'EU region — slow database replicas', duration: '12m', severity: 'minor', status: 'resolved' },
-    { date: '2026-06-02', title: 'Payment webhook delivery delays', duration: '1h 8m', severity: 'major', status: 'resolved' },
-  ];
-
-  const retryJob = (q) => { setJobs(list => list.map(j => j.queue === q ? { ...j, failed: 0, pending: j.pending + 0 } : j)); saAudit({ action: `Retried failed jobs in "${q}" queue`, type: 'system', target: q }); setFlash(`${q} — failed jobs retried`); };
+  const retry = (q) => {
+    setQueues(list => list.map(j => j.id === q.id ? { ...j, failed: 0, pending: j.pending + j.failed } : j));
+    saAudit({ action: `Re-queued ${q.failed} failed item${q.failed === 1 ? '' : 's'} in "${q.queue}"`, type: 'system', target: q.queue });
+    setFlash(`${q.queue} — failed items re-queued`);
+  };
+  const SourceNote = ({ children }) => (
+    <div style={{ padding: '10px 20px', fontSize: 11.5, color: DS.muted, borderTop: `1px solid ${DS.border}`, display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+      <Icon name="alert" size={12} color={DS.faint} /><span>{children}</span>
+    </div>
+  );
 
   return (
     <div style={pageFrame()}>
-      <PageHeader
-        title="System Health"
-        subtitle="Real-time platform status"
-        actions={[<Btn key="status" variant="secondary" icon="zap" small onClick={() => { setStatusPageOn(v => !v); setFlash(`Public status page ${statusPageOn ? 'hidden' : 'published'} · ${BRAND.statusDomain}`); }}>{statusPageOn ? 'Status Page: On' : 'Status Page: Off'}</Btn>]}
-      />
+      <PageHeader title="System Health" subtitle="Service status, queues and scheduled jobs — internal only (the public status page stays off until an SLA needs it)"
+        actions={[<Btn key="status" variant="secondary" icon="eye" small onClick={() => window.open(new URL('?view=status', window.location.href).href, '_blank', 'noopener')}>Preview status page</Btn>]} />
 
-      <div style={{ marginBottom: 24, padding: '16px 20px', borderRadius: 10, background: DS.successBg, border: `1px solid ${DS.successBorder}`, display: 'flex', alignItems: 'center', gap: 14 }}>
-        <div style={{ width: 36, height: 36, borderRadius: '50%', background: DS.success, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="check" size={18} color="#fff" /></div>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: DS.success }}>All Systems Operational</div>
-          <div style={{ fontSize: 12, color: DS.success }}>1 service degraded · No active incidents · {BRAND.statusDomain}</div>
-        </div>
-        <Badge variant="success">{SA_SYS.uptime30} 30-day uptime</Badge>
-      </div>
+      {(() => {
+        const overall = SAHealth.overall();
+        const meta = SAHealth.meta(overall);
+        const c = { success: [DS.success, DS.successBg, DS.successBorder, 'check'], warning: [DS.warning, DS.warningBg, DS.warningBorder, 'alert'], danger: [DS.danger, DS.dangerBg, DS.dangerBorder, 'alert'] }[meta.tone];
+        return (
+          <div style={{ marginBottom: 24, padding: '16px 20px', borderRadius: 10, background: c[1], border: `1px solid ${c[2]}`, display: 'flex', alignItems: 'center', gap: 14 }}>
+            <div style={{ width: 36, height: 36, borderRadius: '50%', background: c[0], display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={c[3]} size={18} color="#fff" /></div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: c[0] }}>{meta.headline}</div>
+              <div style={{ fontSize: 12, color: c[0] }}>{degraded ? `${degraded} service${degraded === 1 ? '' : 's'} not fully operational` : 'Every service operational'} · {openIncidents ? `${openIncidents} open incident${openIncidents === 1 ? '' : 's'}` : 'No active incidents'} · tell affected admins with a platform announcement</div>
+            </div>
+            <Badge variant={meta.tone}>{SA_SYS.uptime30} 30-day uptime</Badge>
+          </div>
+        );
+      })()}
 
-      {/* Two stat families (capacity vs latency) → ONE card with two views.
-          Error rate is a single derived value shown in both. */}
       <div style={{ marginBottom: 24 }}>
         <SAStatTabs
           tabs={[
             {
-              id: 'health', label: 'Capacity', icon: 'zap', size: 'sm', columns: 5,
+              id: 'health', label: 'Capacity', icon: 'zap', size: 'sm', columns: 4,
               items: [
-                { label: 'Uptime (30d)',  value: SA_SYS.uptime30, sub: '9m downtime', tone: 'pos', dot: DS.success },
-                { label: 'API Response',  value: '124ms', trend: '−3ms', trendDir: 'up', sub: 'vs avg' },
-                { label: 'Error Rate',    value: `${SA_SYS.errorRate}%`, sub: '5xx responses', tone: 'pos', dot: DS.success },
-                { label: 'Jobs in Queue', value: jobs.reduce((s, j) => s + j.pending, 0).toString(), sub: '3 pending email', tone: 'info' },
-                { label: 'Storage Used',  value: '64%', sub: '2.4 TB / 3.8 TB', bar: 64, barColor: SA_CHART_PALETTE[4] },
+                { label: 'Uptime (30d)', value: SA_SYS.uptime30, sub: '9m downtime', tone: 'pos', dot: DS.success, tip: SA_SYS_SOURCE.monitor },
+                { label: 'API p95',      value: SA_SYS.p95, sub: 'last hour', tip: SA_SYS_SOURCE.sentry },
+                { label: 'Error Rate',   value: `${SA_SYS.errorRate}%`, sub: '5xx responses', tone: 'pos', dot: DS.success, tip: SA_SYS_SOURCE.sentry },
+                { label: 'Queued',       value: totals.pending.toString(), sub: totals.failed ? `${totals.failed} failed` : 'none failed', tone: totals.failed ? 'warn' : 'info', tip: SA_SYS_SOURCE.queues },
               ],
             },
             {
               id: 'latency', label: 'Latency', icon: 'trending_up', size: 'sm', columns: 4,
               items: [
-                { label: 'API p50',    value: '42ms',  sub: 'median request',  bar: 28, barColor: DS.success },
-                { label: 'API p95',    value: '142ms', sub: 'slow tail',       bar: 42, barColor: DS.success },
-                { label: 'API p99',    value: '480ms', sub: 'worst 1%',        bar: 68, barColor: DS.warning, tone: 'warn' },
-                { label: 'Error Rate', value: `${SA_SYS.errorRate}%`, sub: '5xx responses', bar: 8, barColor: DS.success },
+                { label: 'API p50',    value: SA_SYS.p50, sub: 'median request', bar: 28, barColor: DS.success, tip: SA_SYS_SOURCE.sentry },
+                { label: 'API p95',    value: SA_SYS.p95, sub: 'slow tail',      bar: 42, barColor: DS.success, tip: SA_SYS_SOURCE.sentry },
+                { label: 'API p99',    value: SA_SYS.p99, sub: 'worst 1%',       bar: 68, barColor: DS.warning, tone: 'warn', tip: SA_SYS_SOURCE.sentry },
+                { label: 'Error Rate', value: `${SA_SYS.errorRate}%`, sub: '5xx responses', bar: 8, barColor: DS.success, tip: SA_SYS_SOURCE.sentry },
               ],
             },
           ]}
@@ -2039,22 +2312,48 @@ const SASystemPage = () => {
 
       <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 20, marginBottom: 20 }}>
         <Card title="Service Status">
-          <Table pagination={false} cols={['Service', 'Status', 'Uptime', 'Latency']} rows={services.map(s => [
+          <Table pagination={false} cols={['Service', 'Status', 'Uptime', 'Latency']} rows={SA_SERVICES.map(s => [
             <span style={{ fontSize: 13, fontWeight: 500, color: DS.text }}>{s.name}</span>,
             <StatusPill status={s.status} dot />,
             <span style={{ fontSize: 13, color: DS.sub, fontFamily: 'JetBrains Mono, monospace' }}>{s.uptime}</span>,
             <span style={{ fontSize: 13, color: DS.sub, fontFamily: 'JetBrains Mono, monospace' }}>{s.latency}</span>,
           ])} />
+          <SourceNote>Production: an external uptime monitor (free tier at launch) polls each service's health endpoint and alerts by phone. Service down pages you; it never waits for this screen.</SourceNote>
         </Card>
 
-        <Card title="Background Jobs">
-          <div style={{ padding: '20px' }}>
-            {jobs.map((q, i) => (
-              <div key={q.queue} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 0', borderBottom: i < jobs.length - 1 ? `1px solid ${DS.border}` : 'none' }}>
-                <div style={{ width: 8, height: 8, borderRadius: '50%', background: q.color }} />
-                <div style={{ flex: 1, fontSize: 13, color: DS.text, fontWeight: 500 }}>{q.queue}</div>
+        <Card title="Queues">
+          <div style={{ padding: '8px 20px' }}>
+            {queues.map((q, i) => (
+              <div key={q.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 0', borderBottom: i < queues.length - 1 ? `1px solid ${DS.border}` : 'none' }}>
+                <div style={{ width: 8, height: 8, borderRadius: '50%', background: q.failed ? DS.warning : DS.success }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, color: DS.text, fontWeight: 500 }}>{q.queue}</div>
+                  <div style={{ fontSize: 11, color: DS.faint, fontFamily: 'JetBrains Mono, monospace' }}>{q.source}</div>
+                </div>
                 <div style={{ fontSize: 12, color: DS.muted }}>{q.pending} pending</div>
-                {q.failed > 0 && <button onClick={() => retryJob(q.queue)} style={{ border: 'none', background: DS.dangerBg, color: DS.danger, borderRadius: 6, padding: '3px 8px', fontSize: 11, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name="zap" size={11} />{q.failed} failed · retry</button>}
+                {q.failed > 0 && <button onClick={() => retry(q)} style={{ border: 'none', background: DS.dangerBg, color: DS.danger, borderRadius: 6, padding: '3px 8px', fontSize: 11, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name="zap" size={11} />{q.failed} failed · retry</button>}
+              </div>
+            ))}
+          </div>
+          <SourceNote>Production: counted from our own tables — jobs, email_outbox, processed_events — through GET /v1/admin/system-health. Postgres owns queuing (decision #14).</SourceNote>
+        </Card>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 20, marginBottom: 20 }}>
+        <Card title="Email Deliverability" subtitle="Last 7 days, by template">
+          <Table pagination={false} cols={['Template', 'Sent', 'Delivered', 'Bounced']} rows={SA_EMAIL_DELIVERY.map(row => row.map((cell, i) => (
+            <span style={{ fontSize: 13, color: i === 0 ? DS.text : DS.sub, fontWeight: i === 0 ? 500 : 400 }}>{cell}</span>
+          )))} />
+          <SourceNote>Production: Resend delivery and bounce webhooks update email_outbox; bounces feed email_suppressions. Transactional mail only — no opens or clicks are tracked.</SourceNote>
+        </Card>
+
+        <Card title="Scheduled jobs" subtitle="Last run of each job">
+          <div style={{ padding: '8px 20px' }}>
+            {SA_CRON.map((c, i) => (
+              <div key={c.job} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 0', borderBottom: i < SA_CRON.length - 1 ? `1px solid ${DS.border}` : 'none' }}>
+                <Icon name={c.ok ? 'check' : 'alert'} size={14} color={c.ok ? DS.success : DS.danger} />
+                <div style={{ flex: 1, fontSize: 13, color: DS.text }}>{c.job}</div>
+                <div style={{ fontSize: 12, color: DS.muted }}>{c.lastRun}</div>
               </div>
             ))}
           </div>
@@ -2062,7 +2361,7 @@ const SASystemPage = () => {
       </div>
 
       <Card title="Recent Incidents">
-        <Table pagination={false} cols={['Date', 'Incident', 'Severity', 'Duration', 'Status']} rows={incidents.map(inc => [
+        <Table pagination={false} cols={['Date', 'Incident', 'Severity', 'Duration', 'Status']} rows={SA_INCIDENTS.map(inc => [
           <span style={{ fontSize: 13, color: DS.sub, fontFamily: 'JetBrains Mono, monospace' }}>{inc.date}</span>,
           <span style={{ fontSize: 13, fontWeight: 500, color: DS.text }}>{inc.title}</span>,
           <StatusPill tone={inc.severity === 'major' ? 'negative' : 'warning'}>{inc.severity}</StatusPill>,
@@ -2076,87 +2375,117 @@ const SASystemPage = () => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  COMMUNICATIONS → SUPPORT  (embedded as the "Support" section)
+//  SUPPORT SESSIONS  —  support is by email; this is the record of every time
+//  the owner looked inside a tenant (decision #30)
 // ═══════════════════════════════════════════════════════════════════════════
-//  Email deliverability lives here for now (relabelled). FUTURE: this belongs
-//  under System Health / Ops — deferred this pass to minimise churn.
-const SACommsPage = ({ embedded }) => {
-  const [tickets, setTickets] = React.useState(SA_TICKETS);
-  const [flash, setFlash] = React.useState('');
-  const openCount = tickets.filter(t => t.status === 'open').length;
-  const pendingCount = tickets.filter(t => t.status === 'pending').length;
+const saClock = (iso) => new Date(iso).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+const saMinsBetween = (a, b) => Math.max(0, Math.round((new Date(b) - new Date(a)) / 60000));
 
-  const setStatus = (id, status, verb) => { setTickets(list => list.map(t => t.id === id ? { ...t, status } : t)); saAudit({ action: `${verb} support ticket ${id}`, type: 'support', target: id }); setFlash(`${id} ${verb.toLowerCase()}`); };
+// Open-a-session form. Used from the Support page and from an account's detail
+// popover on Centres (prefilled). Refuses without a reference and a reason.
+const SASupportSessionModal = ({ open, account, accounts, onClose }) => {
+  const list = accounts || SA_ACCOUNTS;
+  const [accId, setAccId] = React.useState('');
+  const [ref, setRef] = React.useState('');
+  const [reason, setReason] = React.useState('');
+  const [mins, setMins] = React.useState(30);
+  const [touched, setTouched] = React.useState(false);
+  React.useEffect(() => {
+    if (open) { setAccId(account ? account.id : (list[0] || {}).id || ''); setRef(''); setReason(''); setMins(30); setTouched(false); }
+  }, [open, account && account.id]);
+  const acc = list.find(a => a.id === accId) || null;
+  const ok = !!acc && ref.trim() && reason.trim();
+  const start = () => {
+    setTouched(true);
+    if (!ok) return;
+    const res = saStartSupportSession({ account: acc, supportRef: ref, reason, minutes: mins });
+    if (res.ok) onClose();
+  };
+  return (
+    <Modal open={open} onClose={onClose} title="Open a support session" icon="eye" iconColor={DS.accent} width={540}
+      subtitle="Look inside one account, time-boxed. Its admins see a banner for the whole session and a row in their own audit log."
+      footer={<>
+        <Btn variant="ghost" small onClick={onClose}>Cancel</Btn>
+        <Btn variant="primary" small icon="eye" onClick={start}>Open session</Btn>
+      </>}>
+      <Field label="Account">
+        <Select value={accId} onChange={e => setAccId(e.target.value)} disabled={!!account}>
+          {list.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+        </Select>
+      </Field>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 150px', gap: '0 14px' }}>
+        <Field label="Support email reference" required error={touched && !ref.trim() ? 'Quote the email thread the tenant started' : ''}
+          hint="The subject or ticket ref from the support inbox — something the tenant will recognise.">
+          <Input value={ref} onChange={e => setRef(e.target.value)} placeholder="e.g. SUP-2291" />
+        </Field>
+        <Field label="Time box">
+          <Select value={mins} onChange={e => setMins(+e.target.value)}>
+            {[15, 30, 45, 60].map(m => <option key={m} value={m}>{m} minutes</option>)}
+          </Select>
+        </Field>
+      </div>
+      <Field label="Reason" required error={touched && !reason.trim() ? 'Say what you need to look at' : ''}>
+        <Textarea value={reason} onChange={e => setReason(e.target.value)} style={{ minHeight: 70 }}
+          placeholder="What you need to see, and why — this is shown to the account's admins." />
+      </Field>
+      <div style={{ fontSize: 11.5, color: DS.muted, lineHeight: 1.5 }}>
+        Safeguarding records, health records, messages and consents stay closed inside a session. The session ends itself after {mins} minutes.
+      </div>
+    </Modal>
+  );
+};
+
+const SASupportPage = () => {
+  const { live, history } = useSupportSessions();
+  const [open, setOpen] = React.useState(false);
+  const avg = history.length ? Math.round(history.reduce((n, h) => n + saMinsBetween(h.startedAt, h.endedAt || h.expiresAt), 0) / history.length) : 0;
+  const minsLeft = live ? saMinsBetween(new Date().toISOString(), live.expiresAt) : 0;
 
   return (
-    <div style={embedded ? undefined : pageFrame()}>
-      {!embedded && (
-        <PageHeader title="Support" subtitle="Support tickets and email activity across all accounts" />
+    <div style={pageFrame()}>
+      <PageHeader title="Support sessions" subtitle={`Support happens by email at ${BRAND.supportEmail} — this is the record of every time you looked inside an account.`}
+        actions={[
+          <Btn key="mail" variant="secondary" icon="mail" small onClick={() => window.open(BRAND.supportInboxUrl, '_blank', 'noopener')}>Support inbox</Btn>,
+          <Btn key="new" variant="primary" icon="eye" small onClick={() => setOpen(true)}>Open session</Btn>,
+        ]} />
+
+      <SAStatBand style={{ marginBottom: 20 }} items={[
+        { label: 'Live session', value: live ? '1' : '0', sub: live ? `${live.accountName} · ${minsLeft} min left` : 'none open', tone: live ? 'warn' : 'pos', dot: live ? DS.warning : DS.success },
+        { label: 'Sessions', value: history.length.toString(), sub: 'on record' },
+        { label: 'Average length', value: `${avg} min`, sub: `capped at ${SA_SESSION_MAX_MIN} min` },
+        { label: 'Accounts', value: new Set(history.map(h => h.accountId)).size.toString(), sub: 'looked into' },
+      ]} />
+
+      {live && (
+        <div style={{ marginBottom: 20, padding: '14px 18px', borderRadius: 10, background: DS.warningBg, border: `1px solid ${DS.warningBorder}`, display: 'flex', alignItems: 'center', gap: 14 }}>
+          <Icon name="eye" size={18} color={DS.warning} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 700, color: DS.text }}>Live: {live.accountName} · {live.supportRef}</div>
+            <div style={{ fontSize: 12.5, color: DS.sub, marginTop: 2 }}>{live.reason} — ends at {new Date(live.expiresAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })} ({minsLeft} min left)</div>
+          </div>
+          <Btn variant="secondary" small onClick={() => window.__navigate && window.__navigate('admin', 'dashboard')}>Return to it</Btn>
+          <Btn variant="danger" small onClick={() => saCloseSession('ended')}>End now</Btn>
+        </div>
       )}
 
-      <SAStatBand
-        style={{ marginBottom: 24 }}
-        items={[
-          { label: 'Open Tickets',     value: openCount.toString(), sub: `${pendingCount} pending`, tone: openCount ? 'warn' : 'pos', dot: openCount ? DS.warning : DS.success },
-          { label: 'Emails Sent (7d)', value: '14,820', sub: '99.4% delivered' },
-          { label: 'Avg Resolution',   value: '3h 42m', trend: '−18m', trendDir: 'up', sub: 'vs prior' },
-          { label: 'Bounce Rate',      value: '0.8%',   sub: 'within target', tone: 'pos' },
-        ]}
-      />
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 20, marginBottom: 20 }}>
-        <Card title="Support Tickets" actions={[<Badge key="o" variant="warning">{openCount} open</Badge>, <Badge key="p" variant="default">{pendingCount} pending</Badge>]}>
-          <Table
-            cols={['ID', 'Subject', 'Account', 'Priority', 'Status', 'Assignee', { label: 'Actions', align: 'right' }]}
-            rows={tickets.map(t => [
-              <span style={{ fontSize: 12, fontFamily: 'JetBrains Mono, monospace', color: DS.muted }}>{t.id}</span>,
-              <span style={{ fontSize: 13, fontWeight: 500, color: DS.text }}>{t.subject}</span>,
-              <span style={{ fontSize: 12, color: DS.muted }}>{t.centre}</span>,
-              <StatusPill tone={t.priority === 'urgent' ? 'negative' : t.priority === 'high' ? 'warning' : 'neutral'}>{t.priority}</StatusPill>,
-              <SAStatusPill status={t.status} />,
-              <span style={{ fontSize: 12, color: DS.sub }}>{t.assignee}</span>,
-              <RowActionsMenu items={[
-                { label: 'Reply', icon: 'mail', onClick: () => setStatus(t.id, 'open', 'Replied to') },
-                { label: 'Assign to me', icon: 'user', onClick: () => { setTickets(list => list.map(x => x.id === t.id ? { ...x, assignee: 'Marcus H.' } : x)); setFlash(`${t.id} assigned`); } },
-                { label: 'Mark resolved', icon: 'check', onClick: () => setStatus(t.id, 'resolved', 'Resolved') },
-                { label: 'Escalate', icon: 'alert', danger: true, onClick: () => setStatus(t.id, 'open', 'Escalated') },
-              ]} />,
-            ])}
-          />
-        </Card>
-
-        <Card title="Avg Resolution Time">
-          <div style={{ padding: '20px' }}>
-            <div style={{ textAlign: 'center', marginBottom: 20 }}>
-              <div style={{ fontSize: 36, fontWeight: 700, color: DS.accent }}>3h 42m</div>
-              <div style={{ fontSize: 12, color: DS.muted }}>last 30 days · −18m vs prior</div>
-            </div>
-            <Divider />
-            <div style={{ fontSize: 12, fontWeight: 600, color: DS.sub, marginBottom: 10 }}>By priority</div>
-            {[['Urgent', '38m', 100, DS.danger], ['High', '2h 4m', 76, DS.warning], ['Medium', '6h 12m', 54, DS.info], ['Low', '1d 2h', 28, DS.muted]].map(([p, t, pct, c]) => (
-              <div key={p} style={{ marginBottom: 12 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                  <span style={{ fontSize: 12, color: DS.sub }}>{p}</span>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: DS.text }}>{t}</span>
-                </div>
-                <SAHBar pct={pct} color={c} height={5} />
-              </div>
-            ))}
-          </div>
-        </Card>
-      </div>
-
-      <Card title="Email Deliverability" subtitle="Owner/ops view — belongs under System Health long-term">
-        <Table pagination={false} cols={['Email Type', 'Sent (7d)', 'Delivered', 'Opens', 'Clicks', 'Bounces']} rows={[
-          ['Welcome', '142', '99.3%', '78.2%', '54.1%', '0.7%'],
-          ['Weekly Digest', '8,420', '99.5%', '38.4%', '12.8%', '0.5%'],
-          ['Homework Reminder', '4,210', '99.2%', '52.1%', '24.6%', '0.8%'],
-          ['Invoice', '892', '99.8%', '88.4%', '62.4%', '0.2%'],
-          ['Password Reset', '128', '99.6%', '94.1%', '88.2%', '0.4%'],
-          ['Marketing', '1,028', '98.9%', '24.6%', '6.2%', '1.1%'],
-        ].map(row => row.map((cell, i) => <span style={{ fontSize: 13, color: i === 0 ? DS.text : DS.sub, fontWeight: i === 0 ? 500 : 400 }}>{cell}</span>))} />
+      <Card title="Session log" subtitle="Append-only. Each row is also in the tenant's own audit log.">
+        <Table
+          cols={['Account', 'Reference', 'Reason', 'Started', 'Length', 'By']}
+          rows={[...(live ? [live] : []), ...history].map(h => [
+            <span style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>{h.accountName}</span>,
+            <span style={{ fontSize: 12, fontFamily: 'JetBrains Mono, monospace', color: DS.muted }}>{h.supportRef}</span>,
+            <span style={{ fontSize: 12.5, color: DS.sub }}>{h.reason}</span>,
+            <span style={{ fontSize: 12, color: DS.muted }}>{saClock(h.startedAt)}</span>,
+            h.endedAt
+              ? <span style={{ fontSize: 12.5, color: DS.sub }}>{saMinsBetween(h.startedAt, h.endedAt)} min</span>
+              : <StatusPill tone="warning">live</StatusPill>,
+            <span style={{ fontSize: 12, color: DS.muted }}>{h.by}</span>,
+          ])}
+          empty="No support sessions yet"
+        />
       </Card>
-      <SAFlash msg={flash} onDone={() => setFlash('')} />
+
+      <SASupportSessionModal open={open} onClose={() => setOpen(false)} />
     </div>
   );
 };
@@ -2168,7 +2497,7 @@ const SACommsPage = ({ embedded }) => {
 const SASecurityPage = () => {
   const auditAll = useSAAudit();
   const [suspicious, setSuspicious] = React.useState(SA_SUSPICIOUS);
-  const [dsar, setDsar] = React.useState(SA_DSAR);
+  const [dsar, setDsar] = React.useState(saDsarRows);
   const [flash, setFlash] = React.useState('');
   // Audit search/filter — a flat recent list won't scale (Section 4.5 / 7).
   const [q, setQ] = React.useState('');
@@ -2181,7 +2510,7 @@ const SASecurityPage = () => {
   });
 
   const susAction = (id, status, verb) => { setSuspicious(list => list.map(s => s.id === id ? { ...s, status } : s)); saAudit({ action: `${verb}`, type: 'security', target: id }); setFlash(verb); };
-  const fulfilDsar = (id) => { setDsar(list => list.map(d => d.id === id ? { ...d, status: 'fulfilled' } : d)); const rec = dsar.find(d => d.id === id); saAudit({ action: `Fulfilled DSAR (${rec ? rec.kind : ''}) ${id}`, type: 'export', target: rec ? rec.requester : id }); setFlash(`${id} fulfilled`); };
+  const fulfilDsar = (id) => { setDsar(list => list.map(d => d.id === id ? { ...d, status: 'fulfilled' } : d)); const rec = dsar.find(d => d.id === id); if (rec && rec.live && window.klasioDataRequests) window.klasioDataRequests.setStatus(id, 'completed'); saAudit({ action: `Fulfilled DSAR (${rec ? rec.kind : ''}) ${id}`, type: 'export', target: rec ? rec.requester : id }); setFlash(`${id} fulfilled`); };
 
   const openDeadlines = dsar.filter(d => d.status !== 'fulfilled').length;
 
@@ -2298,34 +2627,371 @@ const saTimeAgo = (ts) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  PLATFORM CONTROLS
+//  PRICING  —  what each plan is, what it costs, and the offers on top of it
 // ═══════════════════════════════════════════════════════════════════════════
+//  One catalogue (Plans.jsx), two audiences: centre accounts and solo tutors.
+//  Plans, the free trial for each audience and the override codes live here; the
+//  operational switches stay in Platform Controls. Stripe charges — a plan is only
+//  sold while its Stripe prices match the catalogue (decision #37).
+const saFmtGb = (gb) => (+gb < 1 ? `${Math.round(+gb * 1024)} MB` : `${+(+gb).toFixed(1)} GB`);
+const saSoloTints = () => ['#9CA3AF', SA_CHART_PALETTE[4], SA_CHART_PALETTE[5], SA_CHART_PALETTE[3], SA_CHART_PALETTE[2]];
+const saPlanTint = (plan, i) => (plan.audience === 'solo' ? saSoloTints()[i % saSoloTints().length] : saPlanColor(plan.id));
 
-const SAControlsPage = () => {
-  const [flags, setFlags] = React.useState(SA_FLAGS);
-  const [maintenance, setMaintenance] = React.useState(() => { try { return localStorage.getItem('tutoros.maintenance') === '1'; } catch (e) { return false; } });
-  const [readOnly, setReadOnly] = React.useState(false);
-  const [flagTarget, setFlagTarget] = React.useState(null);   // flag whose targeting is open
-  const [flash, setFlash] = React.useState('');
-
-  React.useEffect(() => {
-    const sync = () => { try { setMaintenance(localStorage.getItem('tutoros.maintenance') === '1'); } catch (e) {} };
-    window.addEventListener('sa-maintenance', sync);
-    return () => window.removeEventListener('sa-maintenance', sync);
-  }, []);
-  const setMaint = (v) => { try { v ? localStorage.setItem('tutoros.maintenance', '1') : localStorage.removeItem('tutoros.maintenance'); } catch (e) {} setMaintenance(v); window.dispatchEvent(new Event('sa-maintenance')); };
-
+const SAPricingPage = () => {
   const plansStore = usePlansStore();
   const codesStore = usePlanCodesStore();
   const trialStore = usePlatformTrialStore();
+  const [audience, setAudience] = React.useState('centre');
   const [planModal, setPlanModal] = React.useState({ open: false, plan: null });
   const [deletePlanTarget, setDeletePlanTarget] = React.useState(null);
   const [codeModal, setCodeModal] = React.useState({ open: false, code: null });
   const [trialModal, setTrialModal] = React.useState(false);
   const [copied, setCopied] = React.useState('');
+  const [flash, setFlash] = React.useState('');
   const copyCode = c => { try { navigator.clipboard.writeText(c); } catch (e) {} setCopied(c); setTimeout(() => setCopied(''), 1400); };
 
-  const toggleFlag = (id) => setFlags(flags.map(f => f.id === id ? { ...f, on: !f.on } : f));
+  const aud = planAudience(audience);
+  const isSolo = audience === 'solo';
+  const plansFor = (a) => plansStore.plans.filter(p => p.audience === a);
+  const onSaleFor = (a) => plansFor(a).filter(planIsSellable);
+  const plans = plansFor(audience);
+  const drift = plansStore.plans.filter(p => !p.archived && ['not_in_stripe', 'price_changed'].includes(planStripeState(p).id));
+  const trials = trialStore.trials;
+  const trial = trials[audience];
+  const activeCodes = codesStore.codes.filter(c => c.status === 'active');
+  const accountsOn = (id) => SA_ACCOUNTS.filter(a => a.planId === id).length;
+  const fromPrice = (a) => { const ps = onSaleFor(a).map(p => +p.price || 0); return ps.length ? `from £${Math.min(...ps)}/mo` : 'none on sale'; };
+  const trialShort = (t) => (t.enabled ? `${t.days}d` : 'off');
+
+  const Switch = ({ on, onChange }) => (
+    <button onClick={onChange} style={{ width: 36, height: 20, borderRadius: 10, background: on ? DS.accent : DS.borderDark, border: 'none', cursor: 'pointer', position: 'relative', transition: 'background 0.15s', padding: 0, flexShrink: 0 }}>
+      <span style={{ position: 'absolute', top: 2, left: on ? 18 : 2, width: 16, height: 16, borderRadius: '50%', background: '#fff', transition: 'left 0.15s', boxShadow: '0 1px 2px rgba(0,0,0,0.15)' }} />
+    </button>
+  );
+  const Eyebrow = ({ children, style }) => (
+    <div style={{ fontSize: 10.5, fontWeight: 700, color: DS.faint, textTransform: 'uppercase', letterSpacing: '0.06em', ...style }}>{children}</div>
+  );
+
+  const createPrices = (plan) => {
+    const res = plansStore.createStripePrice(plan.id) || {};
+    const parts = [res.stripePrice ? `£${res.stripePrice}/mo` : null, res.stripePriceYearly ? `£${res.stripePriceYearly}/yr` : null].filter(Boolean).join(' and ');
+    saAudit({ action: `Created Stripe price${res.stripePrice && res.stripePriceYearly ? 's' : ''} for ${plan.name} (${parts}) — new customers only`, type: 'plan', target: 'Pricing' });
+    setFlash(`${plan.name} is live in Stripe at ${parts} — existing subscribers keep their price`);
+  };
+  const driftNote = (plan, st) => {
+    if (st.id === 'not_in_stripe') return 'Not offered at signup or checkout until every paid cycle has a Stripe price.';
+    const was = st.cycles.map(c => `£${c.charged} ${c.id === 'monthly' ? 'a month' : 'a year'}`).join(' and ');
+    return `Stripe still charges ${was}. Not offered until you create the new price. Existing subscribers keep theirs unless given 30 days’ notice.`;
+  };
+  const limitsLine = (plan) => (plan.audience === 'solo'
+    ? `${plan.studentSeats} students · ${plan.maxInvoicesPerMonth == null ? 'unlimited invoices' : `${plan.maxInvoicesPerMonth} invoices a month`} · ${saFmtGb(plan.storageGb || 0)} storage · 1 tutor`
+    : `Up to ${plan.studentSeats} students · ${plan.teacherSeats} teachers per centre · ${saFmtGb(plan.storageGb || 0)} storage`);
+
+  return (
+    <div style={pageFrame()}>
+      <PageHeader title="Pricing" subtitle="Plans, free trials and codes for centres and solo tutors. What a plan is lives here; Stripe charges it." />
+
+      {/* One stat card: what's on sale, what's out of step with Stripe, the offers. */}
+      <SAStatBand style={{ marginBottom: 20 }} items={[
+        { label: 'Centre plans', value: `${onSaleFor('centre').length} on sale`, sub: fromPrice('centre'), onClick: () => setAudience('centre') },
+        { label: 'Solo tutor plans', value: `${onSaleFor('solo').length} on sale`, sub: fromPrice('solo'), onClick: () => setAudience('solo') },
+        { label: 'Out of step with Stripe', value: drift.length.toString(), sub: drift.length ? drift.map(p => p.name).join(', ') + ' — not being sold' : 'every live plan is sellable', tone: drift.length ? 'warn' : 'pos', dot: drift.length ? DS.warning : DS.success },
+        { label: 'Free trials', value: `${trialShort(trials.centre)} · ${trialShort(trials.solo)}`, sub: 'centres · solo tutors' },
+        { label: 'Active codes', value: activeCodes.length.toString(), sub: (() => { const n = codesStore.codes.reduce((k, c) => k + (c.redemptions || []).length, 0); return `${n} redemption${n === 1 ? '' : 's'} so far`; })() },
+      ]} />
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 16, flexWrap: 'wrap' }}>
+        <Segmented value={audience} onChange={setAudience} options={PLAN_AUDIENCES.map(a => ({ id: a.id, label: a.label }))} />
+        <span style={{ fontSize: 12.5, color: DS.muted }}>
+          {isSolo
+            ? 'Sold to private tutors — the solo Plan & billing page shows these plans on sale.'
+            : 'Sold to centre accounts — signup, the admin Plans & Billing page and the marketing site show these plans on sale.'}
+        </span>
+      </div>
+
+      {/* Plans — the catalogue says what a plan IS (prices, limits, capabilities,
+          bullets); Stripe says what a customer PAYS. The badge shows whether the
+          two agree — a plan is only sold while they do. */}
+      <Card title={isSolo ? 'Solo tutor plans' : 'Centre plans'}
+        subtitle={isSolo ? 'One tutor, one implicit centre. Limits count students, invoices and storage.' : 'Limits count centres, per-centre seats and pooled storage.'}
+        actions={[<Btn key="add" variant="ghost" icon="plus" small onClick={() => setPlanModal({ open: true, plan: null })}>New plan</Btn>]} style={{ marginBottom: 20 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(270px, 1fr))', gap: 16, padding: '20px' }}>
+          {plans.map((plan, i) => {
+            const color = saPlanTint(plan, i);
+            const st = planStripeState(plan);
+            const caps = PLAN_CAPABILITIES.filter(c => (plan.capabilities || {})[c.key]);
+            const n = accountsOn(plan.id);
+            return (
+              <div key={plan.id} style={{ border: `2px solid ${color}33`, borderRadius: 10, padding: 18, background: color + '08', opacity: plan.archived ? 0.62 : 1, display: 'flex', flexDirection: 'column' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 14, fontWeight: 700, color }}>{plan.name}</span>
+                  {plan.archived ? <Badge variant="default">Archived</Badge>
+                    : <Badge variant="default">{isSolo ? '1 tutor' : `${plan.maxCentres} centre${plan.maxCentres !== 1 ? 's' : ''}`}</Badge>}
+                </div>
+                {plan.tagline && <div style={{ fontSize: 12, color: DS.muted, marginTop: 2 }}>{plan.tagline}</div>}
+                <div style={{ margin: '10px 0 2px' }}>
+                  <span style={{ fontSize: 28, fontWeight: 700, color: DS.text }}>£{plan.price}</span>
+                  <span style={{ fontSize: 13, color: DS.muted }}> /mo</span>
+                  {plan.archived && <span style={{ fontSize: 11, color: DS.muted, marginLeft: 8 }}>last config</span>}
+                </div>
+                <div style={{ fontSize: 12, color: DS.muted, marginBottom: 10 }}>
+                  {+plan.price === 0 && !+plan.priceYearly ? 'Free for as long as they like' : +plan.priceYearly > 0 ? `£${(+plan.priceYearly).toLocaleString()} a year` : 'No yearly option'}
+                </div>
+                {!plan.archived && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+                    <Badge variant={st.tone}>{st.label}</Badge>
+                    {(st.id === 'not_in_stripe' || st.id === 'price_changed') && (
+                      <Btn variant="secondary" small onClick={() => createPrices(plan)}>{(+plan.price > 0 && +plan.priceYearly > 0) ? 'Create Stripe prices' : 'Create Stripe price'}</Btn>
+                    )}
+                  </div>
+                )}
+                {!plan.archived && (st.id === 'not_in_stripe' || st.id === 'price_changed') && (
+                  <div style={{ fontSize: 11, color: DS.warning, marginBottom: 10, lineHeight: 1.45 }}>{driftNote(plan, st)}</div>
+                )}
+                <div style={{ fontSize: 11, color: DS.muted, marginBottom: isSolo ? 10 : 4 }}>{limitsLine(plan)}</div>
+                {!isSolo && <div style={{ fontSize: 11, color: DS.muted, marginBottom: 10 }}>{n} account{n === 1 ? '' : 's'} on this plan</div>}
+                <Eyebrow style={{ marginBottom: 6 }}>Unlocks · {caps.length} of {PLAN_CAPABILITIES.length}</Eyebrow>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
+                  {caps.length ? caps.map(c => <span key={c.key} style={{ fontSize: 10.5, padding: '2px 6px', borderRadius: 4, background: DS.bg, color: DS.sub, border: `1px solid ${DS.border}` }}>{c.label}</span>)
+                    : <span style={{ fontSize: 11.5, color: DS.faint }}>Core only</span>}
+                </div>
+                <Divider margin="10px 0" />
+                <Eyebrow style={{ marginBottom: 4 }}>Pricing page</Eyebrow>
+                {(plan.bullets || []).map(f => (
+                  <div key={f} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: DS.sub, padding: '3px 0' }}><Icon name="check" size={12} color={color} />{f}</div>
+                ))}
+                <div style={{ marginTop: 'auto', paddingTop: 14, display: 'flex', gap: 6 }}>
+                  <Btn variant="secondary" small onClick={() => setPlanModal({ open: true, plan })}>Edit</Btn>
+                  {plan.archived
+                    ? <Btn variant="ghost" small onClick={() => { plansStore.restorePlan(plan.id); saAudit({ action: `Restored plan "${plan.name}"`, type: 'plan', target: 'Pricing' }); }}>Restore</Btn>
+                    : <Btn variant="ghost" small onClick={() => { plansStore.archivePlan(plan.id); saAudit({ action: `Archived plan "${plan.name}"`, type: 'plan', target: 'Pricing' }); }}>Archive</Btn>}
+                  <Btn variant="ghost" icon="trash" small onClick={() => setDeletePlanTarget(plan)} style={{ marginLeft: 'auto' }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {plans.length === 0 && <div style={{ padding: '0 20px 24px', fontSize: 13, color: DS.muted }}>No {aud.noun} plans yet.</div>}
+      </Card>
+
+      {/* The free trial for this audience. Distinct from the override codes below
+          (those are handed to ONE account by hand). */}
+      {(() => {
+        const t = trial;
+        const pinned = t.planId ? getPlan(t.planId) : null;
+        const endAction = planTrialEndAction(t.onEnd);
+        const facts = [
+          { label: 'Trial length', value: t.enabled ? `${t.days} day${t.days === 1 ? '' : 's'}` : '—' },
+          { label: 'Runs on', value: pinned ? pinned.name : 'Plan they choose' },
+          { label: 'Card up front', value: t.requireCard ? 'Required' : 'Not required' },
+          { label: 'When it ends', value: endAction.label },
+        ];
+        return (
+          <Card title={`Free trial for ${aud.nouns}`} subtitle={`Applied automatically to every new ${aud.noun} at signup — no code needed`}
+            actions={[<Btn key="edit" variant="ghost" icon="edit" small onClick={() => setTrialModal(true)}>Edit trial</Btn>]}
+            style={{ marginBottom: 20 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 20, padding: '18px 20px', background: t.enabled ? DS.accent + '08' : 'transparent', borderBottom: `1px solid ${DS.border}` }}>
+              <div style={{ minWidth: 132 }}>
+                <div style={{ fontSize: 30, fontWeight: 800, color: t.enabled ? DS.text : DS.faint, letterSpacing: '-0.6px', lineHeight: 1.1 }}>
+                  {t.enabled ? t.days : 'Off'}
+                  {t.enabled && <span style={{ fontSize: 14, fontWeight: 600, color: DS.muted }}> day{t.days === 1 ? '' : 's'}</span>}
+                </div>
+                <div style={{ fontSize: 12, color: DS.muted, marginTop: 3 }}>{t.enabled ? 'free, then the end rule' : 'billed from day one'}</div>
+              </div>
+              <div style={{ flex: 1, fontSize: 13, color: DS.sub, lineHeight: 1.6 }}>
+                {t.enabled
+                  ? <>New {aud.nouns} see “<b>{planTrialPitch(t)}</b>” at signup
+                    {pinned ? <>, trialling the <b>{pinned.name}</b> plan</> : <>, on whichever plan they pick{isSolo ? ' (Solo Free needs no trial)' : ''}</>}.
+                    Day {t.days + 1}: {endAction.desc}</>
+                  : <>No trial is offered. Signup asks for payment straight away — issue an override code below to give one account free time.</>}
+                {isSolo && <div style={{ fontSize: 11, color: DS.faint, marginTop: 4 }}>Prototype: there is no solo signup yet, so nothing shows this offer until there is.</div>}
+                {t.updatedAt && <div style={{ fontSize: 11, color: DS.faint, marginTop: 4 }}>Last changed {new Date(t.updatedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</div>}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+                <Badge variant={t.enabled ? 'success' : 'default'}>{t.enabled ? 'Live' : 'Disabled'}</Badge>
+                <Switch on={!!t.enabled} onChange={() => {
+                  const next = trialStore.updateTrial(audience, { enabled: !t.enabled });
+                  saAudit({ action: next.enabled ? `Enabled the ${next.days}-day free trial for ${aud.nouns}` : `Disabled the free trial for ${aud.nouns}`, type: 'billing', target: 'Pricing' });
+                  setFlash(next.enabled ? `Free trial for ${aud.nouns} on — ${next.days} days` : `Free trial for ${aud.nouns} off`);
+                }} />
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 0 }}>
+              {facts.map((f, i) => (
+                <div key={f.label} style={{ padding: '14px 20px', borderLeft: i ? `1px solid ${DS.border}` : 'none', opacity: t.enabled ? 1 : 0.6 }}>
+                  <Eyebrow>{f.label}</Eyebrow>
+                  <div style={{ fontSize: 13, color: DS.text, marginTop: 4 }}>{f.value}</div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        );
+      })()}
+
+      {/* Override codes — shared by both audiences; restrict one to a plan to keep it there. */}
+      <Card title="Promo & override codes" subtitle="Give one account a free trial or a discounted price for a fixed window. Works for either audience; every redemption is audited."
+        actions={[<Btn key="add" variant="ghost" icon="plus" small onClick={() => setCodeModal({ open: true, code: null })}>New code</Btn>]}>
+        <Table pagination={false} cols={['Code', 'Offer', 'Restrict to', 'Redemptions', 'Status', { label: 'Actions', align: 'right' }]} rows={codesStore.codes.map(c => {
+          const used = (c.redemptions || []).length;
+          const plan = c.planId ? getPlan(c.planId) : null;
+          return [
+            <button onClick={() => copyCode(c.code)} title="Copy code" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', background: DS.surface, border: `1px solid ${DS.border}`, borderRadius: 6, padding: '3px 8px', fontSize: 12, fontFamily: 'JetBrains Mono, monospace', color: DS.accent, fontWeight: 600 }}>
+              {c.code}<Icon name={copied === c.code ? 'check' : 'copy'} size={12} color={copied === c.code ? DS.success : DS.faint} />
+            </button>,
+            <div><div style={{ fontSize: 13, color: DS.text }}>{planCodeSummary(c)}</div>{c.note && <div style={{ fontSize: 11, color: DS.muted }}>{c.note}</div>}</div>,
+            <span style={{ fontSize: 12, color: DS.muted }}>{plan ? `${plan.name} · ${planAudience(plan.audience).label}` : 'Any plan'}</span>,
+            <span style={{ fontSize: 13, color: DS.sub }}>{used}{c.maxRedemptions != null ? ` / ${c.maxRedemptions}` : ''}</span>,
+            <StatusPill status={c.status === 'active' ? 'Active' : 'Disabled'} />,
+            <RowActionsMenu items={[
+              { label: 'Edit code', icon: 'edit', onClick: () => setCodeModal({ open: true, code: c }) },
+              { label: c.status === 'active' ? 'Disable' : 'Enable', icon: c.status === 'active' ? 'x' : 'check', onClick: () => { codesStore.setStatus(c.code, c.status === 'active' ? 'disabled' : 'active'); saAudit({ action: `${c.status === 'active' ? 'Disabled' : 'Enabled'} code ${c.code}`, type: 'billing', target: 'Pricing' }); } },
+              { label: 'Delete code', icon: 'trash', danger: true, onClick: () => { codesStore.deleteCode(c.code); saAudit({ action: `Deleted code ${c.code}`, type: 'billing', target: 'Pricing' }); } },
+            ]} />,
+          ];
+        })} />
+        {codesStore.codes.length === 0 && <div style={{ padding: '28px 20px', textAlign: 'center', fontSize: 13, color: DS.muted }}>No override codes yet. Create one to give an account a free trial or discount.</div>}
+        <div style={{ padding: '10px 20px 16px', fontSize: 11, color: DS.muted, borderTop: `1px solid ${DS.border}` }}>Guardrails: every code needs an expiry and a max redemption cap; discounts are bounded; each redemption writes an audit entry.</div>
+      </Card>
+
+      <PlanEditorModal open={planModal.open} plan={planModal.plan} audience={audience} onClose={() => setPlanModal({ open: false, plan: null })}
+        onSave={draft => {
+          const before = planModal.plan;
+          if (before) plansStore.updatePlan(before.id, draft); else plansStore.addPlan({ ...draft, audience });
+          saAudit({ action: `${before ? 'Edited' : 'Created'} ${planAudience(draft.audience || audience).noun} plan "${draft.name}"`, type: 'plan', target: 'Pricing' });
+          const after = before ? { ...before, ...draft } : { ...draft, stripePriceId: null, stripePriceIdYearly: null };
+          if (['not_in_stripe', 'price_changed'].includes(planStripeState(after).id)) setFlash(`${draft.name}: the new prices aren’t live in Stripe yet — create them to sell the plan`);
+        }} />
+      <Modal open={!!deletePlanTarget} onClose={() => setDeletePlanTarget(null)} title="Delete plan?" icon="trash" iconColor={DS.danger} width={440}
+        footer={<><Btn variant="ghost" small onClick={() => setDeletePlanTarget(null)}>Cancel</Btn>
+          <Btn variant="danger" small icon="trash" onClick={() => { plansStore.deletePlan(deletePlanTarget.id); saAudit({ action: `Deleted plan "${deletePlanTarget.name}"`, type: 'plan', target: 'Pricing' }); setDeletePlanTarget(null); }}>Delete plan</Btn></>}>
+        <p style={{ fontSize: 13.5, color: DS.sub, lineHeight: 1.6, margin: 0 }}>
+          This permanently removes the <b>{deletePlanTarget ? deletePlanTarget.name : ''}</b> plan from the catalogue. Accounts already on it keep their current price, but nobody can choose it again. This can’t be undone — to hide it instead, use <b>Archive</b>.
+        </p>
+      </Modal>
+
+      <PlanTrialModal open={trialModal} trial={trial} audience={audience} plans={plans.filter(p => !p.archived)}
+        onClose={() => setTrialModal(false)}
+        onSave={draft => {
+          const next = trialStore.updateTrial(audience, draft);
+          saAudit({ action: next.enabled ? `Set the free trial for ${aud.nouns} to ${next.days} days` : `Disabled the free trial for ${aud.nouns}`, type: 'billing', target: 'Pricing' });
+          setFlash(next.enabled ? `Free trial for ${aud.nouns} saved — ${next.days} days` : `Free trial for ${aud.nouns} off`);
+        }} />
+
+      <PlanCodeModal open={codeModal.open} code={codeModal.code} plans={plansStore.plans} onClose={() => setCodeModal({ open: false, code: null })}
+        onSave={draft => {
+          if (codeModal.code) codesStore.updateCode(codeModal.code.code, { kind: draft.kind, value: +draft.value || 0, durationMonths: Math.max(1, +draft.durationMonths || 1), planId: draft.planId || null, maxRedemptions: (draft.maxRedemptions === '' || draft.maxRedemptions == null) ? null : +draft.maxRedemptions, note: draft.note || '' });
+          else codesStore.createCode(draft);
+          saAudit({ action: `${codeModal.code ? 'Edited' : 'Created'} override code`, type: 'billing', target: 'Pricing' });
+        }} />
+
+      <SAFlash msg={flash} onDone={() => setFlash('')} />
+    </div>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  PLATFORM CONTROLS
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Turning maintenance or read-only ON — the notice users will see, and (for
+// read-only) whether it covers every account or a list. Turning either OFF never
+// comes through here: the way out is always one click.
+const SA_MODE_COPY = {
+  maintenance: {
+    title: 'Turn on maintenance mode?', ok: 'Turn on maintenance', icon: 'zap',
+    body: 'Every centre loses the app: admins, teachers and students get the maintenance screen until you turn it off. You keep full access. Use it for minutes, for work that cannot run online.',
+    notice: 'Klasio is down for planned maintenance and will be back shortly.',
+  },
+  readonly: {
+    title: 'Turn on read-only mode?', ok: 'Turn on read-only', icon: 'lock',
+    body: 'The app keeps working, but frozen: people can open and read everything and every change is refused behind a banner. Raising a safeguarding concern is never blocked.',
+    notice: 'Klasio is read-only while we look into an issue. You can see everything; saving changes will be back soon.',
+  },
+};
+const SAModeModal = ({ mode, onClose, onConfirm }) => {
+  const copy = SA_MODE_COPY[mode] || SA_MODE_COPY.maintenance;
+  const [notice, setNotice] = React.useState('');
+  const [scope, setScope] = React.useState('all');
+  const [ids, setIds] = React.useState([]);
+  const [until, setUntil] = React.useState('');   // datetime-local, maintenance only
+  React.useEffect(() => { if (mode) { setNotice(copy.notice); setScope('all'); setIds([]); setUntil(''); } }, [mode]);
+  const untilIso = until ? new Date(until).toISOString() : null;
+  const untilPast = untilIso && new Date(untilIso) <= new Date();
+  const toggle = (id) => setIds(xs => xs.includes(id) ? xs.filter(x => x !== id) : [...xs, id]);
+  const valid = notice.trim() && (mode !== 'readonly' || scope === 'all' || ids.length) && !untilPast;
+  return (
+    <Modal open={!!mode} onClose={onClose} title={copy.title} icon={copy.icon} iconColor={DS.danger} width={540}
+      footer={<>
+        <Btn variant="ghost" small onClick={onClose}>Cancel</Btn>
+        <Btn variant="danger" small disabled={!valid} onClick={() => valid && onConfirm({ notice: notice.trim(), accountIds: mode === 'readonly' && scope === 'some' ? ids : null, until: mode === 'maintenance' ? untilIso : null })}>{copy.ok}</Btn>
+      </>}>
+      <p style={{ fontSize: 13.5, color: DS.sub, lineHeight: 1.6, margin: '0 0 14px' }}>{copy.body}</p>
+      {mode === 'readonly' && (
+        <Field label="Applies to">
+          <Segmented value={scope} onChange={setScope} options={[{ id: 'all', label: 'Every account' }, { id: 'some', label: 'Chosen accounts' }]} />
+          {scope === 'some' && (
+            <div style={{ marginTop: 10, maxHeight: 180, overflow: 'auto', border: `1px solid ${DS.border}`, borderRadius: 8, padding: '4px 12px' }}>
+              {SA_ACCOUNTS.map(a => (
+                <label key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', fontSize: 13, color: DS.sub, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={ids.includes(a.id)} onChange={() => toggle(a.id)} /> {a.name}
+                </label>
+              ))}
+            </div>
+          )}
+        </Field>
+      )}
+      <Field label="Notice shown to users" required>
+        <Textarea value={notice} onChange={e => setNotice(e.target.value)} style={{ minHeight: 64 }} />
+      </Field>
+      {mode === 'maintenance' && (
+        <Field label="Expected back by" hint={untilPast ? 'That time has already passed.' : 'Optional. Shown on the maintenance screen — it never ends maintenance by itself.'} error={untilPast ? 'Pick a time in the future' : ''}>
+          <Input type="datetime-local" value={until} onChange={e => setUntil(e.target.value)} />
+        </Field>
+      )}
+      {mode === 'maintenance' && (
+        <div style={{ fontSize: 12, color: DS.muted }}>
+          <button onClick={() => window.open(new URL('?view=maintenance', window.location.href).href, '_blank', 'noopener')} style={{ background: 'none', border: 'none', padding: 0, color: DS.accent, cursor: 'pointer', fontSize: 12, textDecoration: 'underline' }}>Preview the maintenance screen</button> before you turn it on.
+        </div>
+      )}
+    </Modal>
+  );
+};
+
+// Choose which accounts a flag is on for: everyone, or an explicit list.
+const SAFlagAccountsModal = ({ flag, onClose, onSave }) => {
+  const [mode, setMode] = React.useState('all');
+  const [ids, setIds] = React.useState([]);
+  React.useEffect(() => { if (flag) { setMode(flag.accountIds == null ? 'all' : 'some'); setIds(flag.accountIds || []); } }, [flag && flag.id]);
+  const toggle = (id) => setIds(xs => xs.includes(id) ? xs.filter(x => x !== id) : [...xs, id]);
+  return (
+    <Modal open={!!flag} onClose={onClose} title={flag ? `Accounts — ${flag.id}` : ''} icon="settings" iconColor={DS.accent} width={520}
+      footer={<>
+        <Btn variant="ghost" small onClick={onClose}>Cancel</Btn>
+        <Btn variant="primary" small icon="check" disabled={mode === 'some' && !ids.length} onClick={() => onSave(mode === 'all' ? null : ids)}>Save</Btn>
+      </>}>
+      <div style={{ fontSize: 13, color: DS.muted, marginBottom: 12 }}>When the flag is on, who gets it.</div>
+      <Segmented value={mode} onChange={setMode} options={[{ id: 'all', label: 'Every account' }, { id: 'some', label: 'Only these accounts' }]} />
+      {mode === 'some' && (
+        <div style={{ marginTop: 12, maxHeight: 280, overflow: 'auto' }}>
+          {SA_ACCOUNTS.map(a => (
+            <label key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: `1px solid ${DS.border}`, fontSize: 13, color: DS.sub, cursor: 'pointer' }}>
+              <input type="checkbox" checked={ids.includes(a.id)} onChange={() => toggle(a.id)} /> <span style={{ flex: 1 }}>{a.name}</span>
+              <SAPlanPill planId={a.planId} />
+            </label>
+          ))}
+        </div>
+      )}
+    </Modal>
+  );
+};
+
+const SAControlsPage = () => {
+  const [platform, setPlatform] = usePlatformSettings();
+  const flagsStore = useFeatureFlags();
+  const [modeModal, setModeModal] = React.useState(null);     // 'maintenance' | 'readonly'
+  const [flagTarget, setFlagTarget] = React.useState(null);   // flag whose account list is open
+  const [newFlag, setNewFlag] = React.useState(null);         // { key, desc } while creating
+  const [flash, setFlash] = React.useState('');
 
   const Switch = ({ on, onChange }) => (
     <button onClick={onChange} style={{ width: 36, height: 20, borderRadius: 10, background: on ? DS.accent : DS.borderDark, border: 'none', cursor: 'pointer', position: 'relative', transition: 'background 0.15s', padding: 0, flexShrink: 0 }}>
@@ -2333,21 +2999,46 @@ const SAControlsPage = () => {
     </button>
   );
 
+  const note = (action, msg) => { saAudit({ action, type: 'system', target: 'Platform' }); setFlash(msg || action); };
+  const roIds = platform.readOnlyAccountIds;
+  const toggles = [
+    { id: 'maintenance', label: 'Maintenance mode', danger: true, on: platform.maintenanceMode,
+      desc: 'App unavailable — every centre gets the maintenance screen instead of the app; you stay in. Minutes, for work that can’t run online.',
+      set: (v) => v ? setModeModal('maintenance') : (setPlatform({ maintenanceMode: false, maintenanceUntil: null }), note('Turned maintenance mode off')) },
+    { id: 'readonly', label: 'Read-only mode', danger: true, on: platform.readOnlyMode,
+      desc: platform.readOnlyMode
+        ? `Frozen for ${roIds == null ? 'every account' : roIds.map(id => (SAMetrics.account(id) || { name: id }).name).join(', ')} — reads work, changes are refused. Suspended accounts are always read-only.`
+        : 'App works but frozen — everyone can read, every change is refused behind a banner. Hours: an incident or a risky deploy. Platform-wide or chosen accounts.',
+      set: (v) => v ? setModeModal('readonly') : (setPlatform({ readOnlyMode: false, readOnlyAccountIds: null }), note('Turned read-only mode off')) },
+    { id: 'signups', label: 'New signups', on: platform.signupsEnabled,
+      desc: 'Allow new accounts to register through self-serve signup. Off shows “signups are paused” instead of the form.',
+      set: (v) => { setPlatform({ signupsEnabled: v }); note(v ? 'Opened self-serve signups' : 'Paused self-serve signups'); } },
+    { id: 'status', label: 'Public status page', on: platform.statusPagePublic,
+      desc: `Off until an SLA or a customer’s procurement asks for one — then it publishes at ${BRAND.statusDomain}. Until then, tell affected admins with a platform announcement.`,
+      set: (v) => { setPlatform({ statusPagePublic: v }); note(v ? `Published the status page (${BRAND.statusDomain})` : 'Took the status page private'); } },
+  ];
+
+  const confirmMode = ({ notice, accountIds, until }) => {
+    if (modeModal === 'maintenance') {
+      setPlatform({ maintenanceMode: true, maintenanceNotice: notice, maintenanceUntil: until || null });
+      note('Turned maintenance mode on', 'Maintenance mode on — centres see the maintenance screen');
+    } else {
+      setPlatform({ readOnlyMode: true, readOnlyNotice: notice, readOnlyAccountIds: accountIds });
+      note(`Turned read-only mode on (${accountIds ? accountIds.length + ' account' + (accountIds.length === 1 ? '' : 's') : 'every account'})`, 'Read-only mode on');
+    }
+    setModeModal(null);
+  };
+
   return (
     <div style={pageFrame()}>
-      <PageHeader title="Platform Controls" subtitle="Feature flags, plans, roles, and global settings"
-        actions={[<Btn key="save" variant="primary" icon="check" small onClick={() => { saAudit({ action: 'Saved platform control changes', type: 'system', target: 'Platform Controls' }); setFlash('Changes saved'); }}>Save Changes</Btn>]} />
+      <PageHeader title="Platform Controls" subtitle="Platform switches, feature flags and roles. Every change saves at once and is audited. Plans, free trials and codes are on the Pricing page."
+        actions={[<Btn key="pricing" variant="secondary" icon="tag" small onClick={() => window.__navigate && window.__navigate('superadmin', 'pricing')}>Pricing</Btn>]} />
 
-      {/* Global toggles — Maintenance is the ONE shared flag (Overview shortcut writes it too). */}
-      <Card title="Global Toggles" style={{ marginBottom: 20 }}>
+      {/* Platform switches — the one `platform_settings` row. */}
+      <Card title="Platform switches" subtitle="Turning maintenance or read-only on asks for confirmation; turning either off is one click." style={{ marginBottom: 20 }}>
         <div style={{ padding: '8px 0' }}>
-          {[
-            { label: 'Maintenance Mode', desc: 'Show maintenance banner; block writes', on: maintenance, set: setMaint, danger: true },
-            { label: 'Read-only Mode', desc: 'All centres see read-only state', on: readOnly, set: setReadOnly, danger: true },
-            { label: 'New Signups', desc: 'Allow new accounts to register', on: true, set: () => {}, danger: false },
-            { label: 'Public Status Page', desc: `Status page visible at ${BRAND.statusDomain}`, on: true, set: () => {}, danger: false },
-          ].map((t, i, arr) => (
-            <div key={t.label} style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 20px', borderBottom: i < arr.length - 1 ? `1px solid ${DS.border}` : 'none', background: t.on && t.danger ? DS.warningBg : 'transparent' }}>
+          {toggles.map((t, i, arr) => (
+            <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 20px', borderBottom: i < arr.length - 1 ? `1px solid ${DS.border}` : 'none', background: t.on && t.danger ? DS.warningBg : 'transparent' }}>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 14, fontWeight: 500, color: DS.text, display: 'flex', alignItems: 'center', gap: 8 }}>
                   {t.label}
@@ -2361,138 +3052,23 @@ const SAControlsPage = () => {
         </div>
       </Card>
 
-      {/* Feature flags — with per-cohort/per-tenant targeting */}
-      <Card title="Feature Flags" actions={[<Btn key="add" variant="ghost" icon="plus" small onClick={() => setFlash('New flag editor (prototype)')}>New Flag</Btn>]} style={{ marginBottom: 20 }}>
-        <Table pagination={false} cols={['Flag', 'Description', 'Scope', 'Coverage', 'Targeting', 'Status']} rows={flags.map(f => [
+      {/* Every page people see outside the app (or instead of it), in one list. */}
+      {window.PublicPagesCard && <window.PublicPagesCard style={{ marginBottom: 20 }} />}
+
+      {/* Feature flags — rollout only: a master switch + an optional account list. */}
+      <Card title="Feature flags" subtitle="Product rollout only — on or off, for every account or a chosen few. Plans gate features through capabilities, never flags."
+        actions={[<Btn key="add" variant="ghost" icon="plus" small onClick={() => setNewFlag({ key: '', desc: '' })}>New flag</Btn>]} style={{ marginBottom: 20 }}>
+        <Table pagination={false} cols={['Flag', 'Description', 'Accounts', 'On']} rows={flagsStore.flags.map(f => [
           <code style={{ fontSize: 12, fontFamily: 'JetBrains Mono, monospace', background: DS.surface, padding: '2px 6px', borderRadius: 4, color: DS.accent }}>{f.id}</code>,
           <span style={{ fontSize: 13, color: DS.sub }}>
             {f.desc}
             {f.id === 'monitored_messaging' && <span style={{ display: 'block', fontSize: 11, color: DS.muted, marginTop: 2 }}>Routes through the safeguarding layer — never an unmonitored staff↔student channel.</span>}
           </span>,
-          <span style={{ fontSize: 12, color: DS.muted }}>{f.scope}</span>,
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 100 }}>
-            <SAHBar pct={parseInt(f.coverage)} color={DS.accent} />
-            <span style={{ fontSize: 11, color: DS.muted, minWidth: 36 }}>{f.coverage}</span>
-          </div>,
-          f.scope === 'global'
-            ? <span style={{ fontSize: 12, color: DS.faint }}>All accounts</span>
-            : <button onClick={() => setFlagTarget(f)} style={{ fontSize: 12, color: DS.accent, background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}>Manage…</button>,
-          <Switch on={f.on} onChange={() => toggleFlag(f.id)} />,
+          <button onClick={() => setFlagTarget(f)} style={{ fontSize: 12, color: DS.accent, background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}>
+            {f.accountIds == null ? 'Every account' : `${f.accountIds.length} account${f.accountIds.length === 1 ? '' : 's'}`}
+          </button>,
+          <Switch on={f.on} onChange={() => { flagsStore.patch(f.id, { on: !f.on }); saAudit({ action: `${f.on ? 'Turned off' : 'Turned on'} feature flag "${f.id}"`, type: 'flag', target: f.accountIds == null ? 'Every account' : `${f.accountIds.length} accounts` }); }} />,
         ])} />
-      </Card>
-
-      {/* Plans — canonical catalogue (Section 1). Archived plans keep last config. */}
-      <Card title="Plans & Pricing" subtitle="The single source of truth — every screen reads plan name & price from here" actions={[<Btn key="add" variant="ghost" icon="plus" small onClick={() => setPlanModal({ open: true, plan: null })}>New Plan</Btn>]} style={{ marginBottom: 20 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, padding: '20px' }}>
-          {plansStore.plans.map(plan => {
-            const color = saPlanColor(plan.id);
-            return (
-              <div key={plan.id} style={{ border: `2px solid ${color}33`, borderRadius: 10, padding: 18, background: color + '08', opacity: plan.archived ? 0.62 : 1 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                  <span style={{ fontSize: 14, fontWeight: 700, color }}>{plan.name}</span>
-                  {plan.archived ? <Badge variant="default">Archived</Badge> : <Badge variant="default">{plan.maxCentres} centre{plan.maxCentres !== 1 ? 's' : ''}</Badge>}
-                </div>
-                <div style={{ marginBottom: 14 }}>
-                  <span style={{ fontSize: 28, fontWeight: 700, color: DS.text }}>£{plan.price}</span>
-                  <span style={{ fontSize: 13, color: DS.muted }}> /mo</span>
-                  {plan.archived && <span style={{ fontSize: 11, color: DS.muted, marginLeft: 8 }}>last config</span>}
-                </div>
-                <div style={{ fontSize: 11, color: DS.muted, marginBottom: 10 }}>Up to {plan.studentSeats} students · {plan.teacherSeats} teachers per centre · {plan.storageGb || 0}GB storage</div>
-                <Divider margin="10px 0" />
-                {(plan.features || []).map(f => (
-                  <div key={f} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: DS.sub, padding: '3px 0' }}><Icon name="check" size={12} color={color} />{f}</div>
-                ))}
-                <div style={{ marginTop: 14, display: 'flex', gap: 6 }}>
-                  <Btn variant="secondary" small onClick={() => setPlanModal({ open: true, plan })}>Edit</Btn>
-                  {plan.archived
-                    ? <Btn variant="ghost" small onClick={() => plansStore.restorePlan(plan.id)}>Restore</Btn>
-                    : <Btn variant="ghost" small onClick={() => plansStore.archivePlan(plan.id)}>Archive</Btn>}
-                  <Btn variant="ghost" icon="trash" small onClick={() => setDeletePlanTarget(plan)} style={{ marginLeft: 'auto' }} />
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </Card>
-
-      {/* Global free trial — the platform-wide offer every new centre gets. Distinct
-          from the override codes below (those are handed to ONE centre by hand). */}
-      {(() => {
-        const t = trialStore.trial;
-        const pinned = t.planId ? getPlan(t.planId) : null;
-        const endAction = planTrialEndAction(t.onEnd);
-        const facts = [
-          { label: 'Trial length', value: t.enabled ? `${t.days} day${t.days === 1 ? '' : 's'}` : '—' },
-          { label: 'Runs on', value: pinned ? pinned.name : 'Plan they choose' },
-          { label: 'Card up front', value: t.requireCard ? 'Required' : 'Not required' },
-          { label: 'When it ends', value: endAction.label },
-        ];
-        return (
-          <Card title="Global free trial" subtitle="Applied automatically to every new centre at signup — no code needed"
-            actions={[<Btn key="edit" variant="ghost" icon="edit" small onClick={() => setTrialModal(true)}>Edit trial</Btn>]}
-            style={{ marginBottom: 20 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 20, padding: '18px 20px', background: t.enabled ? DS.accent + '08' : 'transparent', borderBottom: `1px solid ${DS.border}` }}>
-              <div style={{ minWidth: 132 }}>
-                <div style={{ fontSize: 30, fontWeight: 800, color: t.enabled ? DS.text : DS.faint, letterSpacing: '-0.6px', lineHeight: 1.1 }}>
-                  {t.enabled ? t.days : 'Off'}
-                  {t.enabled && <span style={{ fontSize: 14, fontWeight: 600, color: DS.muted }}> day{t.days === 1 ? '' : 's'}</span>}
-                </div>
-                <div style={{ fontSize: 12, color: DS.muted, marginTop: 3 }}>
-                  {t.enabled ? 'free, then billed' : 'billed from day one'}
-                </div>
-              </div>
-              <div style={{ flex: 1, fontSize: 13, color: DS.sub, lineHeight: 1.6 }}>
-                {t.enabled
-                  ? <>New centres see “<b>{planTrialPitch(t)}</b>” at signup
-                    {pinned ? <>, trialling the <b>{pinned.name}</b> plan</> : <>, on whichever plan they pick</>}.
-                    Day {t.days + 1}: {endAction.desc}</>
-                  : <>No trial is offered. Signup asks for payment straight away — issue an override code below to give an individual centre free time.</>}
-                {t.updatedAt && <div style={{ fontSize: 11, color: DS.faint, marginTop: 4 }}>Last changed {new Date(t.updatedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</div>}
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-                <Badge variant={t.enabled ? 'success' : 'default'}>{t.enabled ? 'Live' : 'Disabled'}</Badge>
-                <Switch on={!!t.enabled} onChange={() => {
-                  const next = trialStore.updateTrial({ enabled: !t.enabled });
-                  saAudit({ action: next.enabled ? `Enabled the global ${next.days}-day free trial` : 'Disabled the global free trial', type: 'billing', target: 'Global trial' });
-                  setFlash(next.enabled ? `Global free trial on — ${next.days} days` : 'Global free trial off');
-                }} />
-              </div>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 0 }}>
-              {facts.map((f, i) => (
-                <div key={f.label} style={{ padding: '14px 20px', borderLeft: i ? `1px solid ${DS.border}` : 'none', opacity: t.enabled ? 1 : 0.6 }}>
-                  <div style={{ fontSize: 10.5, fontWeight: 700, color: DS.faint, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{f.label}</div>
-                  <div style={{ fontSize: 13, color: DS.text, marginTop: 4 }}>{f.value}</div>
-                </div>
-              ))}
-            </div>
-          </Card>
-        );
-      })()}
-
-      {/* Promo & override codes — with guardrails */}
-      <Card title="Promo & override codes" subtitle="Give a centre a free trial or discounted price. Every redemption is audited."
-        actions={[<Btn key="add" variant="ghost" icon="plus" small onClick={() => setCodeModal({ open: true, code: null })}>New code</Btn>]} style={{ marginBottom: 20 }}>
-        <Table pagination={false} cols={['Code', 'Offer', 'Restrict to', 'Redemptions', 'Status', { label: 'Actions', align: 'right' }]} rows={codesStore.codes.map(c => {
-          const used = (c.redemptions || []).length;
-          const plan = c.planId ? getPlan(c.planId) : null;
-          return [
-            <button onClick={() => copyCode(c.code)} title="Copy code" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', background: DS.surface, border: `1px solid ${DS.border}`, borderRadius: 6, padding: '3px 8px', fontSize: 12, fontFamily: 'JetBrains Mono, monospace', color: DS.accent, fontWeight: 600 }}>
-              {c.code}<Icon name={copied === c.code ? 'check' : 'copy'} size={12} color={copied === c.code ? DS.success : DS.faint} />
-            </button>,
-            <div><div style={{ fontSize: 13, color: DS.text }}>{planCodeSummary(c)}</div>{c.note && <div style={{ fontSize: 11, color: DS.muted }}>{c.note}</div>}</div>,
-            <span style={{ fontSize: 12, color: DS.muted }}>{plan ? plan.name : 'Any plan'}</span>,
-            <span style={{ fontSize: 13, color: DS.sub }}>{used}{c.maxRedemptions != null ? ` / ${c.maxRedemptions}` : ''}</span>,
-            <StatusPill status={c.status === 'active' ? 'Active' : 'Disabled'} />,
-            <RowActionsMenu items={[
-              { label: 'Edit code', icon: 'edit', onClick: () => setCodeModal({ open: true, code: c }) },
-              { label: c.status === 'active' ? 'Disable' : 'Enable', icon: c.status === 'active' ? 'x' : 'check', onClick: () => codesStore.setStatus(c.code, c.status === 'active' ? 'disabled' : 'active') },
-              { label: 'Delete code', icon: 'trash', danger: true, onClick: () => codesStore.deleteCode(c.code) },
-            ]} />,
-          ];
-        })} />
-        {codesStore.codes.length === 0 && <div style={{ padding: '28px 20px', textAlign: 'center', fontSize: 13, color: DS.muted }}>No override codes yet. Create one to give a centre a free trial or discount.</div>}
-        <div style={{ padding: '10px 20px 16px', fontSize: 11, color: DS.muted, borderTop: `1px solid ${DS.border}` }}>Guardrails: every code needs an expiry and a max redemption cap; discounts are bounded; each redemption writes an audit entry.</div>
       </Card>
 
       {/* Roles — counts are the trusted getUserCounts() source */}
@@ -2511,45 +3087,29 @@ const SAControlsPage = () => {
         ])} />
       </Card>
 
-      <PlanEditorModal open={planModal.open} plan={planModal.plan} onClose={() => setPlanModal({ open: false, plan: null })}
-        onSave={draft => { if (planModal.plan) plansStore.updatePlan(planModal.plan.id, draft); else plansStore.addPlan(draft); saAudit({ action: `${planModal.plan ? 'Edited' : 'Created'} plan "${draft.name}"`, type: 'plan', target: 'Plans' }); }} />
-      <Modal open={!!deletePlanTarget} onClose={() => setDeletePlanTarget(null)} title="Delete plan?" icon="trash" iconColor={DS.danger} width={440}
-        footer={<><Btn variant="ghost" small onClick={() => setDeletePlanTarget(null)}>Cancel</Btn>
-          <Btn variant="danger" small icon="trash" onClick={() => { plansStore.deletePlan(deletePlanTarget.id); setDeletePlanTarget(null); }}>Delete plan</Btn></>}>
-        <p style={{ fontSize: 13.5, color: DS.sub, lineHeight: 1.6, margin: 0 }}>
-          This permanently removes the <b>{deletePlanTarget ? deletePlanTarget.name : ''}</b> plan from the catalogue platform-wide. Accounts already on this plan keep their current price, but it can no longer be selected. This can’t be undone — to hide it instead, use <b>Archive</b>.
-        </p>
-      </Modal>
+      <SAModeModal mode={modeModal} onClose={() => setModeModal(null)} onConfirm={confirmMode} />
 
-      <PlanTrialModal open={trialModal} trial={trialStore.trial} plans={plansStore.plans.filter(p => !p.archived)}
-        onClose={() => setTrialModal(false)}
-        onSave={draft => {
-          const next = trialStore.updateTrial(draft);
-          saAudit({ action: next.enabled ? `Set the global free trial to ${next.days} days` : 'Disabled the global free trial', type: 'billing', target: 'Global trial' });
-          setFlash(next.enabled ? `Global free trial saved — ${next.days} days` : 'Global free trial off');
+      <SAFlagAccountsModal flag={flagTarget} onClose={() => setFlagTarget(null)}
+        onSave={(ids) => {
+          flagsStore.patch(flagTarget.id, { accountIds: ids });
+          saAudit({ action: `Set feature flag "${flagTarget.id}" to ${ids == null ? 'every account' : ids.length + ' account' + (ids.length === 1 ? '' : 's')}`, type: 'flag', target: flagTarget.id });
+          setFlagTarget(null);
         }} />
 
-      <PlanCodeModal open={codeModal.open} code={codeModal.code} plans={plansStore.plans} onClose={() => setCodeModal({ open: false, code: null })}
-        onSave={draft => {
-          if (codeModal.code) codesStore.updateCode(codeModal.code.code, { kind: draft.kind, value: +draft.value || 0, durationMonths: Math.max(1, +draft.durationMonths || 1), planId: draft.planId || null, maxRedemptions: (draft.maxRedemptions === '' || draft.maxRedemptions == null) ? null : +draft.maxRedemptions, note: draft.note || '' });
-          else codesStore.createCode(draft);
-          saAudit({ action: `${codeModal.code ? 'Edited' : 'Created'} override code`, type: 'billing', target: 'Promo codes' });
-        }} />
-
-      {/* Per-cohort / per-tenant targeting (an "opt-in 34%" flag now shows WHO). */}
-      <Modal open={!!flagTarget} onClose={() => setFlagTarget(null)} title={flagTarget ? `Targeting — ${flagTarget.id}` : ''} icon="settings" iconColor={DS.accent} width={520}
-        footer={<Btn variant="ghost" small onClick={() => setFlagTarget(null)}>Close</Btn>}>
-        {flagTarget && (
-          <div>
-            <div style={{ fontSize: 13, color: DS.muted, marginBottom: 12 }}>Scope: <b>{flagTarget.scope}</b> · coverage {flagTarget.coverage}. Choose which accounts see this flag.</div>
-            {SA_ACCOUNTS.slice(0, 8).map((a, i) => (
-              <label key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: `1px solid ${DS.border}`, fontSize: 13, color: DS.sub, cursor: 'pointer' }}>
-                <input type="checkbox" defaultChecked={i % 3 === 0} /> {a.name}
-                <SAPlanPill planId={a.planId} />
-              </label>
-            ))}
-          </div>
-        )}
+      <Modal open={!!newFlag} onClose={() => setNewFlag(null)} title="New feature flag" icon="settings" iconColor={DS.accent} width={480}
+        footer={<>
+          <Btn variant="ghost" small onClick={() => setNewFlag(null)}>Cancel</Btn>
+          <Btn variant="primary" small icon="check" disabled={!newFlag || !newFlag.key.trim()} onClick={() => {
+            const rec = flagsStore.add(newFlag.key, newFlag.desc);
+            if (!rec) { setFlash('That flag key is empty or already exists'); return; }
+            saAudit({ action: `Created feature flag "${rec.id}" (off)`, type: 'flag', target: rec.id });
+            setNewFlag(null); setFlash(`Flag ${rec.id} created — off until you turn it on`);
+          }}>Create flag</Btn>
+        </>}>
+        {newFlag && <>
+          <Field label="Key" hint="snake_case — what the code checks, e.g. reports_v2."><Input value={newFlag.key} onChange={e => setNewFlag(f => ({ ...f, key: e.target.value }))} placeholder="e.g. tracking_v2" /></Field>
+          <Field label="Description"><Input value={newFlag.desc} onChange={e => setNewFlag(f => ({ ...f, desc: e.target.value }))} placeholder="What turning it on changes" /></Field>
+        </>}
       </Modal>
 
       <SAFlash msg={flash} onDone={() => setFlash('')} />
@@ -2558,7 +3118,7 @@ const SAControlsPage = () => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  IMPERSONATION BANNER (persistent while previewing a tenant view)
+//  SUPPORT-SESSION BANNER (persistent while the owner is inside a tenant)
 // ═══════════════════════════════════════════════════════════════════════════
 const SAImpersonationBanner = () => {
   const [imp, setImp] = React.useState(readImpersonation);
@@ -2566,20 +3126,58 @@ const SAImpersonationBanner = () => {
     const sync = () => setImp(readImpersonation());
     window.addEventListener('sa-impersonation', sync);
     window.addEventListener('storage', sync);
-    return () => { window.removeEventListener('sa-impersonation', sync); window.removeEventListener('storage', sync); };
+    const t = setInterval(sync, 15000);   // count down + end the session at its time box
+    return () => { window.removeEventListener('sa-impersonation', sync); window.removeEventListener('storage', sync); clearInterval(t); };
   }, []);
   if (!imp) return null;
+  const left = saMinsBetween(new Date().toISOString(), imp.expiresAt);
   return (
     <div style={{
       position: 'sticky', top: 0, zIndex: 1500, background: DS.warning, color: '#fff',
       padding: '8px 18px', display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, fontWeight: 600,
     }}>
       <Icon name="eye" size={15} color="#fff" />
-      <span style={{ flex: 1 }}>Viewing as {imp.role} — {imp.accountName}. Actions are audited on the account.</span>
-      <button onClick={saImpersonateExit} style={{ background: 'rgba(255,255,255,0.25)', border: 'none', color: '#fff', borderRadius: 6, padding: '4px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>Exit</button>
+      <span style={{ flex: 1 }}>
+        Support session on {imp.accountName} · {imp.supportRef} · {left} min left. This account's admins can see this session and everything done in it.
+      </span>
+      <button onClick={saImpersonateExit} style={{ background: 'rgba(255,255,255,0.25)', border: 'none', color: '#fff', borderRadius: 6, padding: '4px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>End session</button>
     </div>
   );
 };
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  TENANT-SIDE PLATFORM STATE  —  what a centre sees when a switch is on
+// ═══════════════════════════════════════════════════════════════════════════
+// Maintenance: the app is replaced by MaintenanceScreen (PublicPages.jsx) for
+// every tenant session.
+
+// Read-only: the app works, frozen, behind this banner — platform-wide, for a
+// listed account, or because the account is suspended.
+const SAReadOnlyBanner = ({ accountId }) => {
+  const [s] = usePlatformSettings();
+  if (s.maintenanceMode || saWritesAllowed(accountId, s)) return null;
+  const acct = SA_ACCOUNTS.find(a => a.id === accountId);
+  const suspended = acct && acct.status === 'suspended';
+  const msg = suspended
+    ? `This account is suspended — you can see everything, but changes are turned off. Contact ${BRAND.billingEmail}.`
+    : (s.readOnlyNotice || `${BRAND.name} is read-only for now — you can see everything, but changes can’t be saved.`);
+  return (
+    <div style={{ background: DS.warningBg, borderBottom: `1px solid ${DS.warningBorder}`, color: DS.warning, padding: '8px 18px', display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, fontWeight: 600 }}>
+      <Icon name="lock" size={14} color={DS.warning} />
+      <span style={{ flex: 1 }}>{msg} Raising a safeguarding concern still works.</span>
+      <span style={{ fontSize: 11, fontWeight: 400, color: DS.muted }} title="In production the database refuses the write; the prototype only shows the state.">prototype: saves aren’t blocked here</span>
+    </div>
+  );
+};
+
+// Platform storage as its own owner page (it was a Settings tab): storage is a
+// direct cost line and the main abuse vector, so it sits beside System Health.
+const SAStoragePage = () => (
+  <div style={pageFrame()}>
+    <PageHeader title="Storage" subtitle="Platform-wide usage, storage cost against each account’s revenue, and the nightly check against the R2 bucket" />
+    {window.StorageOwnerPanel ? <window.StorageOwnerPanel /> : <div style={{ padding: 20, fontSize: 13, color: DS.muted }}>Storage is still loading…</div>}
+  </div>
+);
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  ROUTER
@@ -2590,12 +3188,11 @@ const SuperAdminPages = ({ page }) => {
     case 'centres':    return <SACentresPage />;
     case 'users':      return <SAUsersPage />;
     case 'revenue':    return <SARevenuePage />;
+    case 'pricing':    return <SAPricingPage />;
     case 'engagement': return <SAEngagementPage />;
     case 'system':     return <SASystemPage />;
-    // Communications is normally intercepted in index.html and routed to the
-    // shared CommunicationsPage (platform-scoped), which embeds SACommsPage as
-    // its "Support" section. This case is a safety net.
-    case 'comms':      return <SACommsPage />;
+    case 'storage':    return <SAStoragePage />;
+    case 'support':    return <SASupportPage />;
     case 'security':   return <SASecurityPage />;
     case 'controls':   return <SAControlsPage />;
     default:           return <SuperAdminDashboard />;
@@ -2603,6 +3200,8 @@ const SuperAdminPages = ({ page }) => {
 };
 
 Object.assign(window, {
-  SuperAdminDashboard, SuperAdminPages, SACommsPage, SAImpersonationBanner,
-  saAudit, useSAAudit, saImpersonateEnter, saImpersonateExit, readImpersonation, SAMetrics,
+  SuperAdminDashboard, SuperAdminPages, SAImpersonationBanner, SAReadOnlyBanner,
+  saAudit, useSAAudit, saStartSupportSession, saImpersonateExit, readImpersonation, SAMetrics,
+  usePlatformSettings, readPlatformSettings, refreshPlatformSettings, saWritesAllowed, useFeatureFlags, saFlagEnabled, saOwnerAlerts,
+  SAHealth, SA_STATUS_ORDER,
 });

@@ -14,7 +14,8 @@
 - `config.toml` — local stack configuration: ports, auth settings, the mail catcher
 - `migrations/` — one timestamped migration per slice, holding that slice's tables,
   indexes, constraints and RLS policies together. Where a slice contains a foreign-key
-  cycle (`students → families → student_guardians → students`), the tables are created
+  cycle (`students → families → student_guardians → students`,
+  `accounts → profiles → files → accounts`), the tables are created
   first and the closing constraint is added by a follow-up `ALTER` in the same file.
   Forward-only: a mistake is corrected by the next migration, never by editing one
   that has shipped
@@ -26,7 +27,7 @@ RPCs, triggers and views ship **inside migrations**. The `functions/` directory 
 to Supabase Edge Functions, which Klasio does not use: privileged HTTP endpoints are
 Fastify routes on Railway (decision #4).
 
-## Domains (≈117 tables across twelve domains)
+## Domains (≈125 tables across twelve domains)
 
 Tenancy & identity · Academic · Grades & assessment · Staff & pay · Homework ·
 **Student Reports & Teacher Feedback** · **Tracking & lesson planning** ·
@@ -37,7 +38,7 @@ Centre and solo-tutor accounts share every table — a solo account owns one imp
 
 The prototype's localStorage stores are the behavioural spec, not the schema: a single key
 such as `admin_store_v4`, `homework_store_v9`, `reports_store_v2`, `tutoros.attendance.v2`
-or `tutoros.comms.v2` fans out into several tables here. Where the prototype's shape
+or `tutoros.comms.v3` fans out into several tables here. Where the prototype's shape
 deliberately differs, the difference is a row under *Known prototype divergences* in the
 development plan; the keys themselves are renamed `tutoros.*` → `klasio.*` in one Phase 18
 cutover, never piecemeal.
@@ -65,6 +66,10 @@ supabase test db               # pgTAP, including the RLS isolation harness
 npm run db:types               # regenerate types into packages/db
 ```
 
+`supabase status` also prints the mail catcher (http://127.0.0.1:54324), where every local email
+lands, and the local `DATABASE_URL` is `postgresql://postgres:postgres@127.0.0.1:54322/postgres`.
+Extensions such as `pg_cron` are enabled by migrations, never by hand in the dashboard.
+
 Nothing local touches staging or production. Migrations reach staging when a pull request
 merges to `main`, and production through the manual release workflow. CI runs the same
 Docker stack on GitHub-hosted runners.
@@ -82,7 +87,8 @@ Docker stack on GitHub-hosted runners.
   which record `auth_attempts` and enforce `account_lockouts` — Supabase's own verification
   hooks need the Team plan. Students never sign in to Supabase directly: `/v1/auth/student/login`
   checks centre code + username + PIN or password, then mints a session through the Auth admin
-  API against the student's synthetic email. The platform-admin claim that `is_superadmin()`
+  API against the student's synthetic email under `students.klasio.com` (the prototype's
+  `students.tutoros.app` is renamed in the Phase 18 cutover). The platform-admin claim that `is_superadmin()`
   reads lives in the user's `app_metadata`, set from an allowlist — never self-service.
 - **Storage:** files live in Cloudflare R2 (EU jurisdiction), signed by Railway. Supabase
   Storage is not used. `files` rows are written only by the service role.
@@ -91,11 +97,16 @@ Docker stack on GitHub-hosted runners.
 - **Environments:** `klasio-staging` and `klasio-prod`, both in West EU (London), in one
   organisation. Secrets live in Railway, Vercel and GitHub environments as set out in the
   setup runbook — never in this repo.
-- **Environment variables:** the API reads `SUPABASE_URL`, `SUPABASE_SECRET_KEY` and
-  `DATABASE_URL`; the web app reads `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`. Alongside
-  them sit `R2_ACCOUNT_ID` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` / `R2_BUCKET`,
-  `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET`, `RESEND_API_KEY`, `TURNSTILE_SECRET_KEY`,
-  `SENTRY_DSN` and `POSTHOG_KEY`. The checked-in `.env.example` listing them belongs to the
+- **Environment variables** (the full tables are in the setup runbook, D4): the API reads
+  `APP_ENV`, `WEB_ORIGIN`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY` (staff sign-in),
+  `SUPABASE_SECRET_KEY`, `SUPABASE_JWKS_URL` and `DATABASE_URL`, plus `R2_ACCOUNT_ID` /
+  `R2_ENDPOINT` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` / `R2_BUCKET`, `TURNSTILE_SECRET_KEY`,
+  `RESEND_API_KEY` / `RESEND_WEBHOOK_SECRET`, `SENTRY_DSN`, `MARKETING_ORIGIN` (production only — the
+  extra CORS origin on `GET /v1/plans`) and, from Phase 13, `STRIPE_SECRET_KEY` /
+  `STRIPE_WEBHOOK_SECRET`. The web app reads only browser-safe `VITE_` values: `VITE_APP_ENV`,
+  `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, `VITE_API_BASE_URL`, `VITE_TURNSTILE_SITE_KEY`
+  and `VITE_SENTRY_DSN` (`SENTRY_AUTH_TOKEN` is build-only and never prefixed). PostHog is deferred
+  to Phase 8 and has no variable yet. The checked-in `.env.example` listing them belongs to the
   `klasio` monorepo (Phase 0) — this repo is the prototype and holds no production secrets.
 
 ## No AI (locked decision #12)

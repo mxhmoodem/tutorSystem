@@ -52,7 +52,7 @@ Some of these change the development plan and the data-layer reference — see [
   | `send.klasio.com` | Resend sending domain | C2 |
   | `students.klasio.com` | Synthetic student login emails; never receives mail | B1 |
   | `klasio.com`, `www.klasio.com` | Marketing site (separate repo) | Phase 17 |
-  | `status.klasio.com` | Public status page | Phase 14 |
+  | `status.klasio.com` | Public status page — **reserved, not published** until an SLA or a customer's procurement asks for one (plan #36) | When needed |
 
 - **Emits:** the domain every later stage verifies against.
 
@@ -185,11 +185,11 @@ Some of these change the development plan and the data-layer reference — see [
 - Create a Stripe account with `ops@klasio.com`, turn on 2FA, and stay in **test mode**. Add the legal entity and bank details once they exist (plan #10).
 - Install the Stripe CLI; it forwards webhooks to your machine from Phase 13.
 - Nothing else happens until Phase 13. Then:
-  - **Products and prices (GBP):** centre plans `starter`, `growth`, `scale` and solo plans `solo_core`, `solo_pro`, each with a monthly and a yearly price. `solo_free` is free and needs no price. Also a storage add-on: one 100 GB block at £5/month.
-  - **Customer portal:** configure it for plan changes, cancellation and invoice history (`POST /v1/billing/portal`).
+  - **Products and prices (GBP):** centre plans `starter`, `growth`, `scale` and solo plans `solo_core`, `solo_pro`, each with a monthly and a yearly price. `solo_free` is free and needs no price. Create plan prices **from the owner console's Pricing page** (both audiences), not the Stripe dashboard: `POST /v1/admin/plans/:id/stripe-prices` creates them and records their ids and amounts on `plans`, which is how the catalogue knows it agrees with Stripe (plan #37). Prices are immutable, so a price change is a new price, never an edit. The storage add-on — one 100 GB block at £5/month — is created once by hand.
+  - **Customer portal:** configure it for plan changes, cancellation, invoice history **and updating the payment method** (`POST /v1/billing/portal`). It is the only place a card is ever entered or changed — Klasio stores a display-only mirror (plan #44).
   - **Webhook endpoints:** `https://api-staging.klasio.com/v1/webhooks/stripe` in test mode and `https://api.klasio.com/v1/webhooks/stripe` in live mode. Each endpoint has its own signing secret, and `stripe listen` prints a third for local use.
-  - **Events:** `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `customer.subscription.paused`, `customer.subscription.resumed`, `invoice.paid`, `invoice.payment_failed`, `charge.refunded`.
-  - **Price ids:** decide where they're stored; the reference's `plans` table has no Stripe columns yet.
+  - **Events:** `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `customer.subscription.paused`, `customer.subscription.resumed`, `invoice.paid`, `invoice.payment_failed`, `charge.refunded`, plus `customer.updated`, `payment_method.attached`, `payment_method.updated` and `payment_method.automatically_updated` — these keep `subscriptions.card_brand` / `card_last4` / `card_exp_*` current when the owner changes card or the bank reissues one (the expiry warning reads them).
+  - **Price ids:** stored on `plans.stripe_price_id_monthly` / `stripe_price_id_yearly` with the amounts they charge in `stripe_amount_*` (reference §11).
 - **Emits now:** the account. **Phase 13:** `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` per environment, and the price ids.
 
 ### C2. Resend (transactional email)
@@ -210,6 +210,13 @@ Some of these change the development plan and the data-layer reference — see [
 - Keep the default data scrubbing on and don't send default PII. Leave Session Replay off, because screens show children's data.
 - Create an organisation auth token for source-map uploads.
 - **Emits:** `VITE_SENTRY_DSN`, `SENTRY_DSN`, `SENTRY_AUTH_TOKEN`.
+
+### C6. External uptime monitor (by launch — Phase 18)
+- Sign up for a free-tier external uptime monitor (Better Stack or UptimeRobot) with `ops@klasio.com`.
+- Monitor `https://api.klasio.com/v1/health` and `https://app.klasio.com` every few minutes, and alert by email and phone. Service down must page you; it never waits for someone to open System Health.
+- It has to run **outside** Railway, Supabase and Vercel. A check that runs inside the thing it watches reports "fine" while the box is down.
+- Leave its public status page off (plan #36). When it is turned on, set it up like the owner console's status-page preview: five customer-facing components — Klasio app, Sign-in, Email notifications, File uploads & downloads, Billing & payments — each fed by the monitors behind it, and incident posts written for a centre admin. Never infrastructure names (Railway, Supabase, Resend) on the public page.
+- **Emits:** nothing the code reads — alert routing only.
 
 ### C4. Supabase Auth wiring (after B1, B2 and C2)
 On both `klasio-staging` and `klasio-prod`:
@@ -291,6 +298,7 @@ Pull-request previews share the staging database and API, so a preview whose mig
 |---|---|
 | `APP_ENV` | `staging` / `production` |
 | `WEB_ORIGIN` | `https://staging.klasio.com` / `https://app.klasio.com` (the API's CORS allow-list) |
+| `MARKETING_ORIGIN` | unset / `https://klasio.com` — the one extra CORS origin, allowed on `GET /v1/plans` only (plan #37) |
 | `SUPABASE_URL` | Project URL |
 | `SUPABASE_PUBLISHABLE_KEY` | Used when the API calls Supabase Auth for staff sign-in |
 | `SUPABASE_SECRET_KEY` | Bypasses RLS — every use needs an explicit tenant check |
@@ -352,6 +360,7 @@ Checked September 2026. Prices exclude VAT; dollar amounts are converted roughly
 | Railway | Hobby | $5 (includes $5 usage) | $5 + usage (worker from Phase 2) |
 | Resend | Free → paid | $0 | Paid plan once email exceeds 100/day |
 | Sentry | Developer | $0 | $0 until a second user |
+| Uptime monitor | Free tier (C6) | — | $0 |
 | Stripe | — | No fixed fee | Per-transaction fees |
 | **Total** | | **≈ £35/month** | **≈ £65/month** (≈ £140 with point-in-time recovery) |
 
@@ -396,4 +405,4 @@ When every box is ticked, run the walking-skeleton prompt: the repo scaffold, th
 - **Plan Phase 13 and the reference `plans` table:** Stripe price ids live on `plans`, added when Phase 13 extends the table.
 - **`supabase/README.md`:** rewritten — local-development section, folder layout, access model and configuration.
 
-Since these were applied, a full audit of all three documents ran and closed roughly 150 further findings; the reference is **v5** at 117 tables. Nothing in that audit changed a Phase 0 decision, so this runbook stands as written.
+Since these were applied, a full audit of all three documents ran and closed roughly 150 further findings, the owner-console rulings (plan #34–#37) added `storage_reconciliations`, and per-audience trials added `trial_offers`; the reference is **v5** at 119 tables, and 125 after the teacher-surface rulings (plan #45–#55). None of these changed a Phase 0 decision. The rulings touched this runbook in four places only: `status.klasio.com` is reserved rather than planned, C6 adds an external uptime monitor, D4 adds `MARKETING_ORIGIN`, and C1 creates plan prices from the owner console.

@@ -22,7 +22,11 @@
 
 // v2 — the seed library grew from a dozen rows to ~120 files across every subject
 // (plus seeded usage history). Bumped so an existing v1 store doesn't mask it.
-const RES_STORE_KEY = 'klasio.resources.v2';
+// v3 — seeds centre-owned documents (owner_kind = 'centre').
+// v4 — lesson attachments point at reusable LESSONS (context_type 'lesson', decision
+//      #47) instead of group__date plan keys; adds file versions and personal folders
+//      (decision #48).
+const RES_STORE_KEY = 'klasio.resources.v4';
 
 // ── Tone + type/visibility resolution (DS tokens only — no raw hex) ──────────────
 const resType = (id) => (window.RES_TYPES || []).find(t => t.id === id) || { id, label: id, icon: 'file', tone: 'muted', studentDefault: true };
@@ -33,7 +37,9 @@ const resVis  = (id) => (window.RES_VISIBILITY || []).find(v => v.id === id) || 
 // form always agree. Seeds predate the field, so they resolve via the year group.
 const RES_LEVELS = ['GCSE', 'A-Level'];
 const resDeriveLevel = (year) => (year === 'Year 12' || year === 'Year 13') ? 'A-Level' : 'GCSE';
-const resLevel = (res) => (res && res.level) ? res.level : resDeriveLevel(res && res.year_group);
+// A centre document with no year group has no level (it spans the centre).
+const resLevel = (res) => (res && res.level) ? res.level
+  : (res && !res.year_group && res.owner_kind === 'centre') ? '' : resDeriveLevel(res && res.year_group);
 
 // Human date — '18 Apr 2026' from an ISO yyyy-mm-dd.
 const resFmtDate = (iso) => {
@@ -64,6 +70,10 @@ const resSeed = () => ({
   // Stage 5 — append-only attach history (survives detach). Seeded so the
   // "Recently used" sort has signal before anyone attaches anything.
   usage_events: JSON.parse(JSON.stringify(window.RES_USAGE_SEED || [])),
+  // Decision #48 — history of replaced files, and each person's own folders.
+  versions:     JSON.parse(JSON.stringify(window.RES_VERSIONS_SEED || [])),
+  folders:      JSON.parse(JSON.stringify(window.RES_FOLDERS_SEED || [])),
+  folder_items: JSON.parse(JSON.stringify(window.RES_FOLDER_ITEMS_SEED || [])),
   actingTeacherId: 't1',    // demo: which teacher the teacher-lens is acting as
 });
 const resRead = () => {
@@ -80,6 +90,9 @@ const resRead = () => {
         staff:     p.staff     || seed.staff,
         accessLog: p.accessLog || [],
         usage_events: p.usage_events || seed.usage_events,
+        versions:     p.versions     || seed.versions,
+        folders:      p.folders      || seed.folders,
+        folder_items: p.folder_items || seed.folder_items,
         actingTeacherId: p.actingTeacherId || 't1',
       };
     }
@@ -98,6 +111,34 @@ const resStaffName = (st, id) => { const s = resStaffById(st, id); return s ? s.
 const resIsActive  = (st, id) => { const s = resStaffById(st, id); return !!(s && s.active); };
 const resById      = (st, id) => (st.resources || []).find(r => r.id === id) || null;
 
+// ── Centre-owned documents ───────────────────────────────────────────────────────
+// A safeguarding policy, staff handbook or scheme of work belongs to the CENTRE,
+// not to whoever uploaded it: `owner_kind = 'centre'`. `created_by` still records
+// the uploader (audit), but the centre is shown as the author, the file is always
+// centre-wide, any centre admin manages it, and it never appears in a leaver's
+// offboarding — nobody's departure touches it. Only admins can publish one.
+const resIsCentreOwned = (res) => !!(res && res.owner_kind === 'centre');
+const resCentreName = () => (window.centreMetrics ? window.centreMetrics.getActiveCentre().name : 'The centre');
+const resOwnerName = (st, res) => resIsCentreOwned(res) ? resCentreName() : resStaffName(st, res && res.created_by);
+const resOwnerKey  = (res) => resIsCentreOwned(res) ? '__centre' : res.created_by;
+const resOwnerKeyName = (st, key) => key === '__centre' ? resCentreName() : resStaffName(st, key);
+// Mine = I personally own it (a centre document is nobody's "mine").
+const resIsMine    = (res, viewerId) => !!res && !resIsCentreOwned(res) && res.created_by === viewerId;
+// Who manages it (visibility, shares, requests, delete): its owner — or, for a
+// centre document, any centre admin.
+const resCanManage = (res, viewerId, isAdmin) => resIsCentreOwned(res) ? !!isAdmin : resIsMine(res, viewerId);
+// Subject label — a centre document usually spans every subject.
+const resSubj = (res) => (res && res.subject) || 'Whole centre';
+
+// ── Centre scope ─────────────────────────────────────────────────────────────────
+// The library is per centre (reference: resources.centre_id). Seeds predate the
+// field and belong to the primary centre; new files are stamped with the active
+// centre. Every list goes through resInCentre, so a teacher at one centre never
+// browses another centre's library.
+const RES_PRIMARY_CENTRE = (window.ONB_CENTRE && window.ONB_CENTRE.id) || 'bm';
+const resCentreOf = (res) => (res && res.centre_id) || RES_PRIMARY_CENTRE;
+const resInCentre = (res, centreId) => resCentreOf(res) === (centreId || resActiveCentre() || RES_PRIMARY_CENTRE);
+
 // Request routing (D5 / §5.4) — derived, never stored: the creator approves while
 // active, otherwise it falls to the admin.
 const resApproverFor = (st, res) => (res && resIsActive(st, res.created_by)) ? res.created_by : 'admin';
@@ -105,19 +146,15 @@ const resApproverFor = (st, res) => (res && resIsActive(st, res.created_by)) ? r
 const resSharedTo = (st, resourceId, viewerId) =>
   (st.shares || []).some(s => s.resource_id === resourceId && s.staff_id === viewerId);
 
-// Can the viewer OPEN the contents (not just see the row exists)?
-const resCanOpen = (st, res, viewerId, isAdmin) => {
+// Can the viewer OPEN the contents (not just see the row exists)? ONE rule for
+// every role: their own file, a centre-wide file, or one shared with them. There
+// is deliberately no admin branch — being an admin opens nothing extra here. An
+// admin's routes into someone else's restricted file are separate, audited
+// actions at the call site: Override on an on_request file once a request exists,
+// and the logged open of a private file (D4/D5).
+const resCanOpen = (st, res, viewerId) => {
   if (!res) return false;
-  if (res.created_by === viewerId) return true;
-  if (res.visibility === 'centre') return true;
-  if (resSharedTo(st, res.id, viewerId)) return true;
-  if (isAdmin) {
-    // Admin content access is deliberately gated (D4/D5): centre is open; on_request
-    // opens via Override only once a request exists; private opens via a logged action.
-    if (res.visibility === 'centre') return true;
-    return false;
-  }
-  return false;
+  return res.created_by === viewerId || res.visibility === 'centre' || resSharedTo(st, res.id, viewerId);
 };
 
 // Does the viewer's own pending request sit on this resource?
@@ -130,18 +167,42 @@ const resUsedCount = (st, resourceId) => (st.links || []).filter(l => l.resource
 const resLinksForResource = (st, resourceId) => (st.links || []).filter(l => l.resource_id === resourceId);
 const resLinksForContext = (st, type, id) => (st.links || []).filter(l => l.context_type === type && l.context_id === id);
 
-// Active centre (multi-tenant stamp for usage events — the store itself is still
-// single-tenant, so this is captured for later, defensively). Returns null if unset.
+// ── Versions (decision #48) ──────────────────────────────────────────────────────
+// Every replace keeps the old file as a version. A file never replaced has one
+// implicit version (its upload). Attachments are pointers, so they always resolve
+// to the CURRENT version; a link attached before the latest version shows
+// "updated since attached" so whoever uses it can check the change.
+const resVersionsOf = (st, res) => {
+  if (!res) return [];
+  const rows = (st.versions || []).filter(v => v.resource_id === res.id).sort((a, b) => a.version - b.version);
+  return rows.length ? rows : [{ id: `${res.id}_v1`, resource_id: res.id, version: 1, file_name: res.title, size: res.size, note: 'First upload', created_by: res.created_by, created_at: res.created_at, implicit: true }];
+};
+const resCurrentVersion = (st, res) => { const vs = resVersionsOf(st, res); return vs[vs.length - 1]; };
+const resLinkStale = (st, link) => {
+  const res = resById(st, link.resource_id);
+  const cur = res && resCurrentVersion(st, res);
+  return !!(cur && cur.version > 1 && link.attached_at && String(cur.created_at) > String(link.attached_at));
+};
+
+// ── Personal folders (decision #48) ──────────────────────────────────────────────
+// A filing layer that belongs to ONE person. Filing a file never changes who can
+// see or open it — folders are not a sharing mechanism.
+const resFoldersOf = (st, ownerId) => (st.folders || []).filter(f => f.owner_id === ownerId).sort((a, b) => a.name.localeCompare(b.name));
+const resFolderHas = (st, folderId, resourceId) => (st.folder_items || []).some(x => x.folder_id === folderId && x.resource_id === resourceId);
+const resFolderIds = (st, folderId) => new Set((st.folder_items || []).filter(x => x.folder_id === folderId).map(x => x.resource_id));
+
+// Active centre — stamps new files and usage events; every list is scoped to it
+// through resInCentre. Returns null if unset.
 const resActiveCentre = () => { try { return localStorage.getItem('tutoros.activeCentre') || null; } catch (e) { return null; } };
 
 // Topic at attach time (Stage 5) — read from wherever the context already knows
-// what it's about. Lesson plans carry an explicit `topic`; homework may too. This
-// is where the lesson knows its subject, so retrofitting is avoided. Best-effort.
+// what it's about. Lessons carry an explicit `topic`; homework may too. This is
+// where the lesson knows its subject, so retrofitting is avoided. Best-effort.
 const resTopicForContext = (contextType, contextId) => {
   try {
-    if (contextType === 'lesson_plan') {
-      const p = (window.__lessonPlans || {})[contextId];
-      return (p && p.plan && p.plan.topic) ? p.plan.topic : '';
+    if (contextType === 'lesson') {
+      const l = window.klasioLessons && window.klasioLessons.getLesson(contextId);
+      return (l && l.topic) || '';
     }
     if (contextType === 'homework') {
       const raw = localStorage.getItem('homework_store_v9');
@@ -158,7 +219,9 @@ const resTopicForContext = (contextType, contextId) => {
 //   • admin  → every resource (private ones listed as metadata, D4)
 //   • teacher→ own + centre + shared-to-me + others' on_request (locked). Others'
 //     private never appears.
+//   • both   → only the active centre's library (resInCentre)
 const resBrowseVisible = (st, viewerId, isAdmin) => (st.resources || []).filter(res => {
+  if (!resInCentre(res)) return false;
   if (isAdmin) return true;
   if (res.created_by === viewerId) return true;
   if (res.visibility === 'centre') return true;
@@ -206,7 +269,10 @@ const useResourcesStore = () => {
       level: fields.level || resDeriveLevel(fields.year_group),
       exam_board: fields.exam_board || 'None',
       created_by: fields.created_by,
-      visibility: fields.visibility || 'centre',
+      owner_kind: fields.owner_kind === 'centre' ? 'centre' : 'staff',
+      // A centre document is always centre-wide — it exists to be read by everyone.
+      visibility: fields.owner_kind === 'centre' ? 'centre' : (fields.visibility || 'centre'),
+      centre_id: resActiveCentre() || RES_PRIMARY_CENTRE,
       size: fields.size || 0,
       created_at: resTodayISO(), updated_at: resTodayISO(),
     };
@@ -222,6 +288,8 @@ const useResourcesStore = () => {
     links: s.links.filter(l => l.resource_id !== id),
     shares: s.shares.filter(sh => sh.resource_id !== id),
     requests: s.requests.filter(rq => rq.resource_id !== id),
+    versions: (s.versions || []).filter(v => v.resource_id !== id),
+    folder_items: (s.folder_items || []).filter(x => x.resource_id !== id),
   }));
 
   const shareWith = (resourceId, staffIds, grantedBy) => mutate(s => {
@@ -276,6 +344,42 @@ const useResourcesStore = () => {
   const detach = (linkId) => mutate(s => ({ ...s, links: s.links.filter(l => l.id !== linkId) }));
   const updateLink = (linkId, patch) => mutate(s => ({ ...s, links: s.links.map(l => l.id === linkId ? { ...l, ...patch } : l) }));
 
+  // Replace the file — the current one stays in history (decision #48). The resource
+  // row keeps its id, so every attachment picks up the new version.
+  const replaceFile = (resourceId, file, by) => mutate(s => {
+    const res = s.resources.find(r => r.id === resourceId);
+    if (!res) return s;
+    const existing = (s.versions || []).filter(v => v.resource_id === resourceId);
+    const base = existing.length ? existing : resVersionsOf(s, res).map(v => ({ ...v, implicit: undefined }));
+    const next = Math.max(...base.map(v => v.version)) + 1;
+    const row = { id: resNewId('ver'), resource_id: resourceId, version: next, file_name: file.file_name || res.title,
+      size: file.size || res.size, note: (file.note || '').trim() || `Version ${next}`, created_by: by, created_at: resTodayISO() };
+    return {
+      ...s,
+      versions: [...(s.versions || []).filter(v => v.resource_id !== resourceId), ...base, row],
+      resources: s.resources.map(r => r.id === resourceId ? { ...r, size: row.size, updated_at: resTodayISO() } : r),
+    };
+  });
+  // Restore = a NEW version carrying the old file. History is never rewritten.
+  const restoreVersion = (resourceId, version, by) => {
+    const cur = resRead();
+    const v = resVersionsOf(cur, resById(cur, resourceId)).find(x => x.version === version);
+    if (v) replaceFile(resourceId, { file_name: v.file_name, size: v.size, note: `Restored version ${version}` }, by);
+  };
+
+  const createFolder = (ownerId, name) => {
+    const id = resNewId('fld');
+    mutate(s => ({ ...s, folders: [...(s.folders || []), { id, owner_id: ownerId, name: String(name || '').trim() || 'New folder', created_at: resTodayISO() }] }));
+    return id;
+  };
+  const renameFolder = (id, name) => mutate(s => ({ ...s, folders: (s.folders || []).map(f => f.id === id ? { ...f, name: String(name || '').trim() || f.name } : f) }));
+  const deleteFolder = (id) => mutate(s => ({ ...s, folders: (s.folders || []).filter(f => f.id !== id), folder_items: (s.folder_items || []).filter(x => x.folder_id !== id) }));
+  const toggleFolderItem = (folderId, resourceId) => mutate(s => {
+    const items = s.folder_items || [];
+    const has = items.some(x => x.folder_id === folderId && x.resource_id === resourceId);
+    return { ...s, folder_items: has ? items.filter(x => !(x.folder_id === folderId && x.resource_id === resourceId)) : [...items, { folder_id: folderId, resource_id: resourceId }] };
+  });
+
   const logAccess = (resourceId, by) => mutate(s => ({
     ...s, accessLog: [{ id: resNewId('log'), resource_id: resourceId, by, at: new Date().toISOString() }, ...(s.accessLog || [])].slice(0, 200),
   }));
@@ -286,7 +390,7 @@ const useResourcesStore = () => {
   const deactivateStaff = (staffId) => mutate(s => ({ ...s, staff: s.staff.map(x => x.id === staffId ? { ...x, active: false } : x) }));
   const reactivateStaff = (staffId) => mutate(s => ({ ...s, staff: s.staff.map(x => x.id === staffId ? { ...x, active: true } : x) }));
   const releaseRestrictedToCentre = (staffId) => mutate(s => ({
-    ...s, resources: s.resources.map(r => (r.created_by === staffId && r.visibility === 'on_request') ? { ...r, visibility: 'centre', updated_at: resTodayISO() } : r),
+    ...s, resources: s.resources.map(r => (resInCentre(r) && resIsMine(r, staffId) && r.visibility === 'on_request') ? { ...r, visibility: 'centre', updated_at: resTodayISO() } : r),
   }));
 
   return {
@@ -294,6 +398,7 @@ const useResourcesStore = () => {
     setActing, addResource, updateResource, deleteResource,
     shareWith, unshare, requestAccess, decideRequest,
     attach, detach, updateLink, logAccess,
+    replaceFile, restoreVersion, createFolder, renameFolder, deleteFolder, toggleFolderItem,
     deactivateStaff, reactivateStaff, releaseRestrictedToCentre,
   };
 };
@@ -337,7 +442,7 @@ const ResVisTag = ({ visibility }) => {
 // plain-English line under the footer; Level is captured explicitly (and defaults
 // off the chosen Year). The attach toggle is a signpost — attaching itself always
 // happens from a lesson or homework via AttachResourcesPanel (nothing is copied).
-const ResAddModal = ({ open, onClose, store, createdBy, prefill, onCreated }) => {
+const ResAddModal = ({ open, onClose, store, createdBy, prefill, onCreated, isAdmin }) => {
   const [title, setTitle] = React.useState('');
   const [description, setDescription] = React.useState('');
   const [type, setType] = React.useState('worksheet');
@@ -349,8 +454,10 @@ const ResAddModal = ({ open, onClose, store, createdBy, prefill, onCreated }) =>
   const [size, setSize] = React.useState(0);
   const [fileName, setFileName] = React.useState('');
   const [alsoAttach, setAlsoAttach] = React.useState(false);
+  const [asCentre, setAsCentre] = React.useState(false);   // admin only — publish as the centre
   React.useEffect(() => {
     if (!open) return;
+    setAsCentre(false);
     setTitle((prefill && prefill.title) || '');
     setDescription(''); setType((prefill && prefill.type) || 'worksheet');
     setSubject((prefill && prefill.subject) || ''); setYear((prefill && prefill.year_group) || '');
@@ -370,17 +477,17 @@ const ResAddModal = ({ open, onClose, store, createdBy, prefill, onCreated }) =>
   };
   const save = () => {
     if (!title.trim()) return;
-    const res = store.addResource({ title, description, type, subject, year_group: year, level, exam_board: board, visibility, size, created_by: createdBy });
+    const res = store.addResource({ title, description, type, subject, year_group: year, level, exam_board: board, visibility, size, created_by: createdBy, owner_kind: asCentre ? 'centre' : 'staff' });
     onCreated && onCreated(res);
     onClose();
   };
-  const ownerName = resStaffName(store, createdBy);
+  const ownerName = asCentre ? resCentreName() : resStaffName(store, createdBy);
   const twoCol = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 };
   return (
     <Modal open={open} onClose={onClose} title="Add to Resources" icon="cloud" width={560}
       footer={
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: 12 }}>
-          <span style={{ fontSize: 12, color: DS.muted }}>{resVis(visibility).desc}</span>
+          <span style={{ fontSize: 12, color: DS.muted }}>{asCentre ? 'Everyone at the centre can open it.' : resVis(visibility).desc}</span>
           <div style={{ display: 'flex', gap: 8 }}>
             <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
             <Btn variant="primary" icon="cloud" onClick={save} disabled={!title.trim()}>Add to library</Btn>
@@ -407,7 +514,7 @@ const ResAddModal = ({ open, onClose, store, createdBy, prefill, onCreated }) =>
 
       <div style={twoCol}>
         <Field label="Type"><Select value={type} onChange={e => setType(e.target.value)}>{(window.RES_TYPES || []).map(t => <option key={t.id} value={t.id}>{t.label}</option>)}</Select></Field>
-        <Field label="Visibility"><Select value={visibility} onChange={e => setVisibility(e.target.value)}>{(window.RES_VISIBILITY || []).map(v => <option key={v.id} value={v.id}>{v.label}</option>)}</Select></Field>
+        <Field label="Visibility"><Select value={asCentre ? 'centre' : visibility} disabled={asCentre} onChange={e => setVisibility(e.target.value)}>{(window.RES_VISIBILITY || []).map(v => <option key={v.id} value={v.id}>{v.label}</option>)}</Select></Field>
       </div>
       <div style={twoCol}>
         <Field label="Subject">
@@ -422,6 +529,20 @@ const ResAddModal = ({ open, onClose, store, createdBy, prefill, onCreated }) =>
         <Field label="Level"><Select value={level} onChange={e => setLevel(e.target.value)}>{RES_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}</Select></Field>
         <Field label="Year"><Select value={year} onChange={e => setYear(e.target.value)}><option value="">—</option>{(window.RES_YEAR_GROUPS || []).map(y => <option key={y} value={y}>{y}</option>)}</Select></Field>
       </div>
+
+      {/* Publish as the centre (admins) — a policy or handbook belongs to the centre,
+          not to the admin who happened to upload it. */}
+      {isAdmin && (
+        <button type="button" onClick={() => setAsCentre(a => !a)}
+          style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', textAlign: 'left', padding: '11px 13px', borderRadius: 10, border: `1px solid ${asCentre ? DS.accentBorder : DS.border}`, background: asCentre ? DS.accentLight : DS.surface, cursor: 'pointer', marginBottom: 10 }}>
+          <Icon name="home" size={16} color={DS.accent} />
+          <span style={{ flex: 1, minWidth: 0 }}>
+            <span style={{ display: 'block', fontSize: 13, color: DS.text, fontWeight: 600 }}>Publish as {resCentreName()}</span>
+            <span style={{ display: 'block', fontSize: 12, color: DS.muted, marginTop: 1 }}>For policies, handbooks and schemes of work. Shown as the centre's, always centre-wide, and managed by any admin.</span>
+          </span>
+          <Toggle on={asCentre} />
+        </button>
+      )}
 
       {/* Attach signpost — the actual pointer is created from a lesson/homework */}
       <button type="button" onClick={() => setAlsoAttach(a => !a)}
@@ -439,7 +560,7 @@ const ResAddModal = ({ open, onClose, store, createdBy, prefill, onCreated }) =>
       {/* Added-by chip */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '9px 12px', borderRadius: 10, background: DS.accentLight }}>
         <Avatar name={ownerName} size={26} />
-        <span style={{ fontSize: 12.5, color: DS.sub }}>Added by <b style={{ color: DS.text }}>{ownerName}</b> on {resTodayISO()}</span>
+        <span style={{ fontSize: 12.5, color: DS.sub }}>{asCentre ? 'Published by' : 'Added by'} <b style={{ color: DS.text }}>{ownerName}</b> on {resTodayISO()}</span>
       </div>
     </Modal>
   );
@@ -496,7 +617,7 @@ const ResRequestModal = ({ open, onClose, store, resource, actingId }) => {
         <ResTypeGlyph type={resource.type} />
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 13.5, fontWeight: 600, color: DS.text }}>{resource.title}</div>
-          <div style={{ fontSize: 12, color: DS.muted }}>{resource.subject} · {resStaffName(store, resource.created_by)}</div>
+          <div style={{ fontSize: 12, color: DS.muted }}>{resSubj(resource)} · {resOwnerName(store, resource)}</div>
         </div>
       </div>
       <Field label="Add a note (optional)"><Textarea value={note} onChange={e => setNote(e.target.value)} placeholder="Why you need it — e.g. covering a colleague's class next week." /></Field>
@@ -509,6 +630,11 @@ const ResWhereUsedDrawer = ({ open, onClose, store, resource }) => {
   if (!resource) return null;
   const links = resLinksForResource(store, resource.id);
   const label = (l) => {
+    if (l.context_type === 'lesson') {
+      const le = window.klasioLessons && window.klasioLessons.getLesson(l.context_id);
+      const n = window.klasioLessons ? window.klasioLessons.deliveriesForLesson(l.context_id).length : 0;
+      return { kind: 'Lesson', icon: 'book', primary: (le && le.title) || 'Lesson', secondary: n ? `planned for ${n} class${n === 1 ? '' : 'es'}` : '' };
+    }
     if (l.context_type === 'lesson_plan') {
       const parts = String(l.context_id).split('__');
       return { kind: 'Lesson plan', icon: 'edit', primary: parts[0] || l.context_id, secondary: parts[1] ? resFmtDate(parts[1]) : '' };
@@ -593,13 +719,18 @@ const ResWhoRow = ({ name, sub, icon }) => (
 const ResourceDetail = ({ open, onClose, store, resource, viewerId, isAdmin, onShare, onDelete }) => {
   const [opened, setOpened] = React.useState(false);   // simulated / logged open confirmation
   const [note, setNote] = React.useState('');
-  React.useEffect(() => { setOpened(false); setNote(''); }, [resource && resource.id]);
+  const [replacing, setReplacing] = React.useState(null); // { file_name, size, note } while replacing
+  const fileRef = React.useRef(null);
+  React.useEffect(() => { setOpened(false); setNote(''); setReplacing(null); }, [resource && resource.id]);
   if (!open || !resource) return null;
   const res = resById(store, resource.id) || resource;
   const t = resType(res.type);
-  const owner = resStaffName(store, res.created_by);
-  const ownerSubject = (resStaffById(store, res.created_by) || {}).subject || 'Staff';
-  const isOwner = res.created_by === viewerId;
+  const centreDoc = resIsCentreOwned(res);
+  const owner = resOwnerName(store, res);
+  const ownerSubject = centreDoc ? `Published by the centre · uploaded by ${resStaffName(store, res.created_by)}` : ((resStaffById(store, res.created_by) || {}).subject || 'Staff');
+  // "isOwner" gates management (visibility, shares, requests, delete): the owner,
+  // or any admin for a centre document.
+  const isOwner = resCanManage(res, viewerId, isAdmin);
   const sharedToMe = !isOwner && resSharedTo(store, res.id, viewerId);
   const openableFreely = isOwner || res.visibility === 'centre' || sharedToMe;
   const adminLogged = !openableFreely && isAdmin;             // admin logged-open on restricted
@@ -612,6 +743,7 @@ const ResourceDetail = ({ open, onClose, store, resource, viewerId, isAdmin, onS
   const activeTeachers = (store.staff || []).filter(s => s.role === 'teacher' && s.active).length;
 
   const usedLabel = (l) => {
+    if (l.context_type === 'lesson') { const le = window.klasioLessons && window.klasioLessons.getLesson(l.context_id); const n = window.klasioLessons ? window.klasioLessons.deliveriesForLesson(l.context_id).length : 0; return { kind: 'Lesson', primary: (le && le.title) || 'Lesson', secondary: n ? `${n} class${n === 1 ? '' : 'es'}` : '' }; }
     if (l.context_type === 'lesson_plan') { const p = String(l.context_id).split('__'); return { kind: 'Lesson', primary: p[0] || l.context_id, secondary: p[1] ? resFmtDate(p[1]) : '' }; }
     if (l.context_type === 'homework') { const a = window.klasioResources && window.klasioResources.homeworkTitle ? window.klasioResources.homeworkTitle(l.context_id) : null; return { kind: 'Homework', primary: a || 'Homework assignment', secondary: '' }; }
     return { kind: l.context_type, primary: l.context_id, secondary: '' };
@@ -705,14 +837,81 @@ const ResourceDetail = ({ open, onClose, store, resource, viewerId, isAdmin, onS
       {/* Details */}
       <ResSectionLabel>Details</ResSectionLabel>
       <div>
-        <ResDetailRow label="Subject" value={board ? `${res.subject} · ${board}` : res.subject} />
-        <ResDetailRow label="Level" value={res.year_group ? `${resLevel(res)} · ${res.year_group}` : resLevel(res)} />
+        <ResDetailRow label="Subject" value={board ? `${resSubj(res)} · ${board}` : resSubj(res)} />
+        <ResDetailRow label="Level" value={res.year_group ? `${resLevel(res)} · ${res.year_group}` : (resLevel(res) || '—')} />
         <ResDetailRow label="Type" value={t.label} />
         {isLink
           ? <ResDetailRow label="Link" value={<a href={res.url} target="_blank" rel="noopener noreferrer" style={{ color: DS.accent, fontWeight: 600, wordBreak: 'break-all' }}>{res.url}</a>} />
           : <ResDetailRow label="Size" value={resFmtBytes(res.size)} />}
         <ResDetailRow label="Added" value={resFmtDate(res.created_at)} />
       </div>
+
+      {/* Versions (decision #48) — replacing keeps history; attachments are pointers,
+          so everything using this file gets the new version and says so. */}
+      {!isLink && (() => {
+        const versions = resVersionsOf(store, res).slice().reverse();
+        const cur = versions[0];
+        const staleLinks = links.filter(l => resLinkStale(store, l)).length;
+        return (
+          <>
+            <ResSectionLabel action={isOwner && !replacing ? <button type="button" onClick={() => setReplacing({ file_name: '', size: 0, note: '' })} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: DS.accent, fontSize: 12, fontWeight: 600 }}>Replace file</button> : null}>
+              Versions <span style={{ color: DS.muted }}>({versions.length})</span>
+            </ResSectionLabel>
+            {replacing && (
+              <div style={{ padding: '12px 13px', borderRadius: 10, border: `1px solid ${DS.accentBorder}`, background: DS.accentLight, marginBottom: 10 }}>
+                <input ref={fileRef} type="file" style={{ display: 'none' }} onChange={e => { const f = e.target.files && e.target.files[0]; if (f) setReplacing(r => ({ ...r, file_name: f.name, size: f.size })); e.target.value = ''; }} />
+                <Btn variant="secondary" small icon="upload" onClick={() => fileRef.current && fileRef.current.click()}>{replacing.file_name ? replacing.file_name : 'Choose the new file'}</Btn>
+                <Textarea value={replacing.note} onChange={e => setReplacing(r => ({ ...r, note: e.target.value }))} rows={2} placeholder="What changed? e.g. Fixed the answer to Q7" style={{ marginTop: 9 }} />
+                <div style={{ fontSize: 11.5, color: DS.sub, margin: '8px 0 9px', lineHeight: 1.45 }}>
+                  {links.length ? `It’s attached in ${links.length} place${links.length === 1 ? '' : 's'} — they all get the new version and show “updated since attached”.` : 'Not attached anywhere yet.'} The current version stays in history and can be restored.
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <Btn variant="primary" small icon="check" onClick={() => { if (!replacing.file_name) return; store.replaceFile(res.id, replacing, viewerId); setReplacing(null); }}>Upload new version</Btn>
+                  <Btn variant="ghost" small onClick={() => setReplacing(null)}>Cancel</Btn>
+                </div>
+              </div>
+            )}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {versions.map(v => (
+                <div key={v.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 9, border: `1px solid ${DS.border}`, background: v === cur ? DS.surface : 'transparent' }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: v === cur ? DS.accent : DS.muted, width: 26 }}>v{v.version}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12.5, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{v.note}</div>
+                    <div style={{ fontSize: 11, color: DS.faint }}>{resFmtDate(v.created_at)} · {resStaffName(store, v.created_by)} · {resFmtBytes(v.size)}</div>
+                  </div>
+                  {v === cur ? <StatusPill tone="positive">Current</StatusPill>
+                    : isOwner ? <Btn variant="ghost" small onClick={() => store.restoreVersion(res.id, v.version, viewerId)}>Restore</Btn> : null}
+                </div>
+              ))}
+            </div>
+            {staleLinks > 0 && <div style={{ fontSize: 11.5, color: DS.warning, marginTop: 7 }}>{staleLinks} attachment{staleLinks === 1 ? ' was' : 's were'} made before the latest version.</div>}
+          </>
+        );
+      })()}
+
+      {/* My folders — a personal filing layer; never changes who can see the file */}
+      {(() => {
+        const mine = resFoldersOf(store, viewerId);
+        if (!mine.length) return null;
+        return (
+          <>
+            <ResSectionLabel>My folders</ResSectionLabel>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {mine.map(f => {
+                const on = resFolderHas(store, f.id, res.id);
+                return (
+                  <button key={f.id} type="button" onClick={() => store.toggleFolderItem(f.id, res.id)} style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 10px', borderRadius: 999, cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                    border: `1px solid ${on ? DS.accent : DS.border}`, background: on ? DS.accentLight : DS.bg, color: on ? DS.accent : DS.sub }}>
+                    <Icon name={on ? 'check' : 'folder'} size={12} /> {f.name}
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ fontSize: 11.5, color: DS.faint, marginTop: 6 }}>Only you see your folders — filing a file doesn’t share it.</div>
+          </>
+        );
+      })()}
 
       {/* Visibility — editable for the owner, read-only otherwise */}
       <ResSectionLabel>Visibility</ResSectionLabel>
@@ -721,10 +920,12 @@ const ResourceDetail = ({ open, onClose, store, resource, viewerId, isAdmin, onS
           label={v.id === 'centre' ? 'Anyone at the centre' : v.label}
           desc={v.id === 'centre' ? 'Every teacher can find and open it.' : v.id === 'on_request' ? 'Colleagues see it exists and who owns it. They must ask the owner before they can open it.' : 'Nobody else sees it. Admins can see it exists — opening it is recorded.'}
           selected={res.visibility === v.id}
-          disabled={!isOwner}
-          onSelect={() => isOwner && store.updateResource(res.id, { visibility: v.id })} />
+          disabled={!isOwner || centreDoc}
+          onSelect={() => isOwner && !centreDoc && store.updateResource(res.id, { visibility: v.id })} />
       ))}
-      {!isOwner && <div style={{ fontSize: 12, color: DS.faint }}>Only {owner} can change this.</div>}
+      {centreDoc
+        ? <div style={{ fontSize: 12, color: DS.faint }}>A centre document is always centre-wide.</div>
+        : !isOwner && <div style={{ fontSize: 12, color: DS.faint }}>Only {owner} can change this.</div>}
 
       {/* Who can open this */}
       <ResSectionLabel>Who can open this</ResSectionLabel>
@@ -769,11 +970,12 @@ const ResourceDetail = ({ open, onClose, store, resource, viewerId, isAdmin, onS
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {links.map(l => { const m = usedLabel(l); return (
             <div key={l.id} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '9px 11px', borderRadius: 9, border: `1px solid ${DS.border}` }}>
-              <div style={{ width: 28, height: 28, borderRadius: 7, background: DS.surface, color: DS.sub, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={l.context_type === 'homework' ? 'clip' : 'edit'} size={14} /></div>
+              <div style={{ width: 28, height: 28, borderRadius: 7, background: DS.surface, color: DS.sub, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={l.context_type === 'homework' ? 'clip' : 'book'} size={14} /></div>
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>{m.primary}</div>
                 <div style={{ fontSize: 11.5, color: DS.muted }}>{m.kind}{m.secondary ? ` · ${m.secondary}` : ''}</div>
               </div>
+              {resLinkStale(store, l) && <StatusPill tone="warning">Updated since attached</StatusPill>}
             </div>
           ); })}
         </div>
@@ -790,7 +992,7 @@ const ResAttachModal = ({ open, onClose, store, contextType, contextId, actingId
   React.useEffect(() => { if (open) setQ(''); }, [open]);
   const alreadyLinked = new Set(resLinksForContext(store, contextType, contextId).map(l => l.resource_id));
   // The library the acting teacher can attach = anything they can open.
-  const openable = (store.resources || []).filter(r => resCanOpen(store, r, actingId, false));
+  const openable = (store.resources || []).filter(r => resInCentre(r) && resCanOpen(store, r, actingId));
   const ql = q.trim().toLowerCase();
   const matches = openable.filter(r => !ql || [r.title, r.description, r.subject, resType(r.type).label].filter(Boolean).join(' ').toLowerCase().includes(ql));
   const doAttach = (r) => {
@@ -816,7 +1018,7 @@ const ResAttachModal = ({ open, onClose, store, contextType, contextId, actingId
                 <ResTypeGlyph type={r.type} size={30} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.title}</div>
-                  <div style={{ fontSize: 11.5, color: DS.muted }}>{resType(r.type).label} · {r.subject}{r.year_group ? ` · ${r.year_group}` : ''}</div>
+                  <div style={{ fontSize: 11.5, color: DS.muted }}>{resType(r.type).label} · {resSubj(r)}{r.year_group ? ` · ${r.year_group}` : ''}</div>
                 </div>
                 {linked
                   ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, color: DS.success }}><Icon name="check" size={14} color={DS.success} /> Attached</span>
@@ -832,11 +1034,13 @@ const ResAttachModal = ({ open, onClose, store, contextType, contextId, actingId
   );
 };
 
-// ── Reusable "Attached resources" panel (lesson plan + homework) ──────────────────
-// ONE component both surfaces render — no duplication. `contextType` is
-// 'lesson_plan' or 'homework'; `canEdit` gates the attach/remove/visibility
-// controls (owners only). Homework rows expose the per-attachment student-visibility
-// control (D9); lesson-plan rows don't (staff-only by default).
+// ── Reusable "Attached resources" panel (lesson + homework) ───────────────────────
+// ONE component both surfaces render — no duplication. `contextType` is 'lesson'
+// (a reusable lesson — every class it's planned for shares its materials) or
+// 'homework'; `canEdit` gates the attach/remove/visibility controls (owners only).
+// Homework rows expose the per-attachment student-visibility control (D9); lesson
+// rows don't (staff-only by default). A row whose file was replaced after it was
+// attached says so (decision #48).
 const AttachResourcesPanel = ({ contextType, contextId, canEdit, actingId, compact }) => {
   const store = useResourcesStore();
   const [attachOpen, setAttachOpen] = React.useState(false);
@@ -867,7 +1071,10 @@ const AttachResourcesPanel = ({ contextType, contextId, canEdit, actingId, compa
                 <ResTypeGlyph type={r.type} size={30} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.title}</div>
-                  <div style={{ fontSize: 11.5, color: DS.muted }}>{t.label} · {resFmtBytes(r.size)}</div>
+                  <div style={{ fontSize: 11.5, color: DS.muted }}>
+                    {t.label} · {resFmtBytes(r.size)}
+                    {resLinkStale(store, l) && (() => { const cv = resCurrentVersion(store, r); return <span style={{ color: DS.warning, fontWeight: 600 }}> · updated {resFmtDate(cv.created_at)} (v{cv.version}): {cv.note}</span>; })()}
+                  </div>
                   {isHw && (
                     <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                       <button type="button" disabled={!canEdit}
@@ -916,7 +1123,7 @@ const RES_CLAMP2 = { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient
 //   • admin, a file with a pending request → Override.
 // Private is never openable by anyone but its owner — there is no Open affordance.
 const ResourceActions = ({ store, res, viewerId, isAdmin, onRequest, onOverride }) => {
-  const canOpen = resCanOpen(store, res, viewerId, isAdmin);
+  const canOpen = resCanOpen(store, res, viewerId);
   const locked = !isAdmin && !canOpen;
   const requested = resPendingBy(store, res.id, viewerId);
   const hasPending = resHasPending(store, res.id);
@@ -953,9 +1160,9 @@ const ResViewToggle = ({ value, onChange }) => (
 // Card presentation of a resource (the grid / "cards" view — see the view toggle).
 const ResourceCard = ({ store, res, viewerId, isAdmin, onOpenDetail, onWhereUsed, onShare, onRequest, onOverride, onOpenPrivate }) => {
   const t = resType(res.type);
-  const owner = resStaffName(store, res.created_by);
-  const isOwner = res.created_by === viewerId;
-  const canOpen = resCanOpen(store, res, viewerId, isAdmin);
+  const owner = resOwnerName(store, res);
+  const isOwner = resCanManage(res, viewerId, isAdmin);
+  const canOpen = resCanOpen(store, res, viewerId);
   const locked = !isAdmin && !canOpen;
   const sharedToMe = !isOwner && resSharedTo(store, res.id, viewerId);
   const used = resUsedCount(store, res.id);
@@ -1021,8 +1228,8 @@ const RES_COL = { select: 34, usage: 62, owner: 168, access: 116, action: 122 };
 // title · usage · owner · access exception · action. Description, subject, board,
 // level and year live in the detail panel — the row is a lookup line, not a card.
 const ResourceRow = ({ store, res, viewerId, isAdmin, selected, onToggleSelect, onOpenDetail, onWhereUsed, onShare, onRequest, onOverride, onOpenPrivate, last }) => {
-  const owner = resStaffName(store, res.created_by);
-  const canOpen = resCanOpen(store, res, viewerId, isAdmin);
+  const owner = resOwnerName(store, res);
+  const canOpen = resCanOpen(store, res, viewerId);
   const locked = !isAdmin && !canOpen;             // teacher, others' on_request
   const used = resUsedCount(store, res.id);
   const sharedToMe = res.created_by !== viewerId && resSharedTo(store, res.id, viewerId);
@@ -1192,7 +1399,43 @@ const ResFacetGroup = ({ title, options, selected, onToggle }) => {
   );
 };
 
-const ResFilterRail = ({ isAdmin, viewItems, seg, onSeg, facetGroups, sel, onToggle, showFacets, activeFilterCount, onClear }) => (
+// "My folders" (decision #48) — each person's own filing layer, listed under the
+// views. Selecting one is just another view over the same library.
+const ResRailFolders = ({ folders, seg, onSeg, onCreate, onDelete }) => {
+  const [adding, setAdding] = React.useState(false);
+  const [name, setName] = React.useState('');
+  const commit = () => { if (name.trim()) { const id = onCreate(name.trim()); onSeg('folder:' + id); } setAdding(false); setName(''); };
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <div style={{ display: 'flex', alignItems: 'center' }}>
+        <div style={{ flex: 1 }}><ResRailLabel>My folders</ResRailLabel></div>
+        <button type="button" title="New folder" onClick={() => setAdding(a => !a)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: DS.muted, padding: 2, lineHeight: 0 }}><Icon name="plus" size={13} /></button>
+      </div>
+      {adding && (
+        <div style={{ padding: '2px 4px 6px' }}>
+          <Input autoFocus value={name} placeholder="Folder name…" onChange={e => setName(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') { setAdding(false); setName(''); } }}
+            style={{ width: '100%', fontSize: 12.5, padding: '6px 9px' }} />
+        </div>
+      )}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+        {folders.map(f => (
+          <div key={f.id} style={{ display: 'flex', alignItems: 'center' }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <ResRailViewItem item={{ id: 'folder:' + f.id, label: f.name, icon: 'folder', count: f.count }} active={seg === 'folder:' + f.id} onClick={() => onSeg('folder:' + f.id)} />
+            </div>
+            {seg === 'folder:' + f.id && (
+              <button type="button" title="Delete folder (files are untouched)" onClick={() => { onDelete(f.id); onSeg('all'); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: DS.faint, padding: 4 }}><Icon name="x" size={12} /></button>
+            )}
+          </div>
+        ))}
+        {!folders.length && !adding && <div style={{ fontSize: 12, color: DS.faint, padding: '2px 7px' }}>File things your own way — only you see these.</div>}
+      </div>
+    </div>
+  );
+};
+
+const ResFilterRail = ({ isAdmin, viewItems, seg, onSeg, facetGroups, sel, onToggle, showFacets, activeFilterCount, onClear, folders, onCreateFolder, onDeleteFolder }) => (
   <div style={{
     position: 'sticky', top: 24, alignSelf: 'start',
     maxHeight: 'calc(100vh - 48px)', overflowY: 'auto', paddingRight: 4,
@@ -1203,6 +1446,7 @@ const ResFilterRail = ({ isAdmin, viewItems, seg, onSeg, facetGroups, sel, onTog
         {viewItems.map(it => <ResRailViewItem key={it.id} item={it} active={seg === it.id} onClick={() => onSeg(it.id)} />)}
       </div>
     </div>
+    {folders && <ResRailFolders folders={folders} seg={seg} onSeg={onSeg} onCreate={onCreateFolder} onDelete={onDeleteFolder} />}
     {showFacets && facetGroups.map(g => (
       <ResFacetGroup key={g.key} title={g.title} options={g.options} selected={sel[g.key]} onToggle={(v) => onToggle(g.key, v)} />
     ))}
@@ -1314,11 +1558,15 @@ const ResourcesPage = ({ role }) => {
   // MY VIEW (segment) filter — the pool the facets, counts and results run over.
   // Runs for both lenses now (admin gets the same All / My uploads / Shared with me /
   // Requests views; for admin these key off the admin identity).
+  // A personal folder is one more view over the same list (decision #48).
+  const folderIdSet = seg.startsWith('folder:') ? resFolderIds(store, seg.slice(7)) : null;
   const segFiltered = base.filter(r => {
-    if (seg === 'mine') return r.created_by === viewerId;
+    if (seg === 'mine') return resIsMine(r, viewerId);
     if (seg === 'shared') return r.created_by !== viewerId && resSharedTo(store, r.id, viewerId);
+    if (folderIdSet) return folderIdSet.has(r.id);
     return true; // 'all' / 'requests' (requests swaps the whole panel)
   });
+  const myFolders = resFoldersOf(store, viewerId).map(f => { const ids = resFolderIds(store, f.id); return { ...f, count: base.filter(r => ids.has(r.id)).length }; });
 
   // Facet toggles — empty array on a facet means "no constraint".
   const toggleFacet = (key, val) => setSel(prev => {
@@ -1332,19 +1580,19 @@ const ResourcesPage = ({ role }) => {
   // area, so what's applied is never hidden behind a scrolled sidebar.
   const facetChipLabel = (key, val) => key === 'type' ? resType(val).label
     : key === 'vis' ? (val === 'centre' ? 'Centre' : resVis(val).label)
-    : key === 'owner' ? resStaffName(store, val) : val;
+    : key === 'owner' ? resOwnerKeyName(store, val) : val;
   const activeChips = [];
   Object.keys(sel).forEach(k => (sel[k] || []).forEach(v => activeChips.push({ key: k, value: v, label: facetChipLabel(k, v) })));
 
   const filtered = segFiltered.filter(r => {
-    if (!passFacet(sel.subject, r.subject)) return false;
+    if (!passFacet(sel.subject, resSubj(r))) return false;
     if (!passFacet(sel.type, r.type)) return false;
     if (!passFacet(sel.year, r.year_group)) return false;
     if (!passFacet(sel.level, resLevel(r))) return false;
     if (!passFacet(sel.board, r.exam_board)) return false;
     if (!passFacet(sel.vis, r.visibility)) return false;
-    if (!passFacet(sel.owner, r.created_by)) return false;
-    return resSearchMatch(q, r, resStaffName(store, r.created_by)); // fuzzy + synonyms
+    if (!passFacet(sel.owner, resOwnerKey(r))) return false;
+    return resSearchMatch(q, r, resOwnerName(store, r)); // fuzzy + synonyms
   });
 
   // Sort (Stage 3). `last_used_at` and `created_at` are different signals — used is
@@ -1383,25 +1631,25 @@ const ResourcesPage = ({ role }) => {
   const toggleAll = () => setSelectedIds(allSelected ? [] : pageRowIds);
   // Bulk visibility change applies only to files the viewer owns (ownership is the
   // model's authority on who can set access); non-owned selections are skipped.
-  const ownedSelected = selectedIds.filter(id => { const r = resById(store, id); return r && r.created_by === viewerId; });
+  const ownedSelected = selectedIds.filter(id => { const r = resById(store, id); return r && resIsMine(r, viewerId); });
   const bulkSetVisibility = (v) => { ownedSelected.forEach(id => store.updateResource(id, { visibility: v })); setSelectedIds([]); };
 
   // Facet counts reflect the CURRENT filter intersection (Stage 4). For facet K we
   // count over items that pass every OTHER facet + the search — so selecting
   // Mathematics really does drop "A-Level 3" to "A-Level 2". Static counts mislead.
   const passAllExcept = (r, exceptKey) => {
-    if (exceptKey !== 'subject' && !passFacet(sel.subject, r.subject)) return false;
+    if (exceptKey !== 'subject' && !passFacet(sel.subject, resSubj(r))) return false;
     if (exceptKey !== 'type' && !passFacet(sel.type, r.type)) return false;
     if (exceptKey !== 'year' && !passFacet(sel.year, r.year_group)) return false;
     if (exceptKey !== 'level' && !passFacet(sel.level, resLevel(r))) return false;
     if (exceptKey !== 'board' && !passFacet(sel.board, r.exam_board)) return false;
     if (exceptKey !== 'vis' && !passFacet(sel.vis, r.visibility)) return false;
-    if (exceptKey !== 'owner' && !passFacet(sel.owner, r.created_by)) return false;
-    return resSearchMatch(q, r, resStaffName(store, r.created_by));
+    if (exceptKey !== 'owner' && !passFacet(sel.owner, resOwnerKey(r))) return false;
+    return resSearchMatch(q, r, resOwnerName(store, r));
   };
   const countBy = (exceptKey, keyFn) => { const m = {}; segFiltered.forEach(r => { if (!passAllExcept(r, exceptKey)) return; const k = keyFn(r); if (k == null || k === '') return; m[k] = (m[k] || 0) + 1; }); return m; };
-  const cSubject = countBy('subject', r => r.subject), cType = countBy('type', r => r.type), cYear = countBy('year', r => r.year_group);
-  const cLevel = countBy('level', r => resLevel(r)), cBoard = countBy('board', r => r.exam_board), cVis = countBy('vis', r => r.visibility), cOwner = countBy('owner', r => r.created_by);
+  const cSubject = countBy('subject', r => resSubj(r)), cType = countBy('type', r => r.type), cYear = countBy('year', r => r.year_group);
+  const cLevel = countBy('level', r => resLevel(r)), cBoard = countBy('board', r => r.exam_board), cVis = countBy('vis', r => r.visibility), cOwner = countBy('owner', r => resOwnerKey(r));
   const opt = (value, label, count) => ({ value, label, count });
   // Options include any value with a live count OR one that's currently selected
   // (so a selection that intersects to zero is still visible to deselect).
@@ -1413,13 +1661,13 @@ const ResourcesPage = ({ role }) => {
     { key: 'year',    title: 'Year',       options: (window.RES_YEAR_GROUPS || []).filter(y => keep(y, cYear, 'year')).map(y => opt(y, y, cYear[y] || 0)) },
     { key: 'board',   title: 'Exam board', options: (window.RES_EXAM_BOARDS || []).filter(b => b !== 'None' && keep(b, cBoard, 'board')).map(b => opt(b, b, cBoard[b] || 0)) },
     { key: 'vis',     title: 'Visibility', options: (window.RES_VISIBILITY || []).filter(v => keep(v.id, cVis, 'vis')).map(v => opt(v.id, v.id === 'centre' ? 'Centre' : v.label, cVis[v.id] || 0)) },
-    { key: 'owner',   title: 'Owner',      options: Array.from(new Set([...Object.keys(cOwner), ...sel.owner])).map(id => opt(id, resStaffName(store, id), cOwner[id] || 0)).sort((a, b) => b.count - a.count) },
+    { key: 'owner',   title: 'Owner',      options: Array.from(new Set([...Object.keys(cOwner), ...sel.owner])).map(id => opt(id, resOwnerKeyName(store, id), cOwner[id] || 0)).sort((a, b) => b.count - a.count) },
   ];
 
   // MY VIEW rail items (teacher lens only). Requests carries the red pending badge.
   const viewItems = [
     { id: 'all',      label: 'All resources',  icon: 'folder', count: base.length },
-    { id: 'mine',     label: 'My uploads',     icon: 'upload', count: base.filter(r => r.created_by === viewerId).length },
+    { id: 'mine',     label: 'My uploads',     icon: 'upload', count: base.filter(r => resIsMine(r, viewerId)).length },
     { id: 'shared',   label: 'Shared with me', icon: 'users',  count: base.filter(r => r.created_by !== viewerId && resSharedTo(store, r.id, viewerId)).length },
     { id: 'requests', label: 'Requests',       icon: 'lock',   count: pendingCount, badge: true },
   ];
@@ -1487,6 +1735,9 @@ const ResourcesPage = ({ role }) => {
             facetGroups={facetGroups} sel={sel} onToggle={toggleFacet}
             showFacets={!showRequests}
             activeFilterCount={activeFilterCount} onClear={clearFilters}
+            folders={myFolders}
+            onCreateFolder={(name) => store.createFolder(viewerId, name)}
+            onDeleteFolder={(id) => store.deleteFolder(id)}
           />
 
           <div style={{ minWidth: 0 }}>
@@ -1590,7 +1841,7 @@ const ResourcesPage = ({ role }) => {
         </div>
       </div>
 
-      <ResAddModal open={addOpen} onClose={() => setAddOpen(false)} store={store} createdBy={viewerId} />
+      <ResAddModal open={addOpen} onClose={() => setAddOpen(false)} store={store} createdBy={viewerId} isAdmin={isAdmin} />
       <ResourceDetail open={!!detailRes} onClose={() => setDetailRes(null)} store={store} resource={detailRes}
         viewerId={viewerId} isAdmin={isAdmin} onShare={setShareRes} onRequest={setReqRes} onDelete={setConfirmDelete} />
       <ResWhereUsedDrawer open={!!whereRes} onClose={() => setWhereRes(null)} store={store} resource={whereRes} />
@@ -1611,123 +1862,195 @@ const ResourcesPage = ({ role }) => {
   );
 };
 
-// ── Admin session detail (a read-only view within Schedule, §4.4) ────────────────
-// Answers "what happened in Y10 Maths on <date>": who taught it, attendance, the
-// lesson plan, homework set, and the resources used. No share affordance anywhere.
-const ResourceSessionDetail = ({ classId, date, onBack }) => {
+// ── Session drawer (one dated occurrence of a class) ─────────────────────────────
+// The staff counterpart of the pupil's StudentSessionDrawer (decision #60): a right-
+// hand panel opened from the teacher Timetable, the admin Timetable and the admin
+// dashboard's schedule card — never a page of its own. When, where and who; the
+// register; the planned lesson; homework set in that lesson; the files attached to
+// it. Read-only: the register is taken on Attendance, which the teacher's footer
+// links to. No share affordance anywhere. `role` is 'teacher' | 'admin'.
+const sdDayLabel = (iso) => new Date(iso + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+const sdRelDay = (iso, now) => {
+  const d = Math.round((new Date(iso + 'T12:00:00') - new Date(window.attIso(new Date(now)) + 'T12:00:00')) / 86400000);
+  if (d === 0) return 'Today';
+  if (d === 1) return 'Tomorrow';
+  if (d === -1) return 'Yesterday';
+  return d > 0 ? `In ${d} days` : `${-d} days ago`;
+};
+const sdWhen = (ms) => `${new Date(ms).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}, ${window.attFmtClock(ms)}`;
+
+const SessionDrawer = ({ classId, date, role = 'admin', onClose }) => {
   const store = useResourcesStore();
-  const admin = window.useAdminStore ? window.useAdminStore() : null;
-  const cls = admin ? (admin.classes || []).find(c => c.id === classId) : null;
-  if (!cls) return (
-    <div style={pageFrame()}>
-      <BackLink onClick={onBack} label="Timetable" />
-      <EmptyState icon="calendar" title="Session not found" />
+  const admin = useAdminStore();
+  const cls = classId && date ? (admin.classes || []).find(c => c.id === classId) : null;
+  if (!cls) return null;
+
+  // The session itself, materialised on the register clock with its derived state —
+  // the same function and store Attendance reads, so the two can't disagree.
+  const now = window.getNow ? window.getNow() : Date.now();
+  const reg = window.attReadStore ? window.attReadStore() : null;
+  const session = reg && window.materialiseRange
+    ? window.materialiseRange([cls], window.REGISTER_SETTINGS, now, reg, date, date)[0] || null : null;
+  const d = session ? session.derived : null;
+  const state = d ? d.state : null;
+  const meta = state ? (window.SESSION_STATE_META[state] || {}) : null;
+  const past = session ? session.ends_at < now : date < window.attIso(new Date(now));
+  const live = !!(d && d.liveNow);
+
+  const teacher = typeof effectiveTeacher === 'function' ? effectiveTeacher(cls, date) : cls.teacher;
+  const roster = window.attRosterFor ? window.attRosterFor(cls.id, cls.group, admin) : [];
+  const color = typeof subjectColor === 'function' ? subjectColor(cls.name) : DS.accent;
+
+  // The register: P/A/L from the submitted marks (seeded registers are synthesised
+  // from the roster, exactly as Attendance does).
+  const recs = state === 'recorded' ? (window.attRecordsFor(session, roster, reg) || {}) : null;
+  const marks = { present: [], absent: [], late: [] };
+  if (recs) Object.keys(recs).forEach(n => { if (marks[recs[n]]) marks[recs[n]].push(n); });
+  const takenBy = session && session.register_submitted_by
+    ? ((admin.teachers || []).find(t => t.id === session.register_submitted_by) || {}).name || null : null;
+
+  // The planned lesson for this class on this date (by class id — decision #47).
+  const delivery = window.klasioLessons ? window.klasioLessons.deliveryFor(cls.id, date) : null;
+  const lesson = delivery ? window.klasioLessons.getLesson(delivery.lessonId) : null;
+  const objectives = lesson && lesson.objectives
+    ? lesson.objectives.split('\n').map(l => l.replace(/^\s*[•\-*]\s*/, '').trim()).filter(Boolean) : [];
+  const files = lesson
+    ? resLinksForContext(store, 'lesson', lesson.id).map(l => ({ link: l, r: resById(store, l.resource_id) })).filter(x => x.r && !x.r.deleted_at)
+    : [];
+
+  // Homework set IN this lesson — the same rule as the pupil's drawer: assignments for
+  // this class that became available between this session starting and the class's
+  // next (uncancelled) session. Derived; an assignment carries no session link.
+  const homework = (() => {
+    if (!session || !(past || live) || !window.klasioHomework) return [];
+    const ahead = window.materialiseRange([cls], window.REGISTER_SETTINGS, now, reg, window.attIso(new Date(session.starts_at + 86400000)), window.attIso(new Date(session.starts_at + 35 * 86400000)));
+    const next = ahead.find(s => s.status !== 'cancelled');
+    const until = next ? next.starts_at : session.starts_at + 7 * 86400000;
+    const rows = window.klasioHomework.listClassHomework(cls.group);
+    return window.klasioHomework.listAssignments({ classLabel: cls.group })
+      .filter(a => a.status !== 'draft')
+      .filter(a => { const t = new Date((a.settings && a.settings.availableFrom) || a.createdAt || 0).getTime(); return t >= session.starts_at && t < until; })
+      .map(a => rows.find(r => r.id === a.id) || { id: a.id, title: a.title, due: '', submitted: 0, total: 0 });
+  })();
+
+  const registerLine = (() => {
+    if (!session) return `${cls.name} doesn’t run on this date.`;
+    if (state === 'cancelled') return past ? 'This session was cancelled.' : 'This session has been cancelled.';
+    if (state === 'upcoming') return `The register opens ${d.opensAt ? sdWhen(d.opensAt) : 'when the session starts'}.`;
+    if (state === 'open_live') return live ? 'Happening now — the register is open.' : 'The register is open.';
+    if (state === 'awaiting') return `The register hasn’t been taken. It can still be taken late until ${sdWhen(d.backfillEnd)}, with a reason.`;
+    if (state === 'lapsed') return 'No register was taken, and it’s now locked. An admin can unlock it from Attendance.';
+    return null;
+  })();
+
+  const section = (title, children, action) => (
+    <div style={{ padding: '16px 0', borderTop: `1px solid ${DS.border}` }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 10 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: DS.faint, letterSpacing: '0.07em', textTransform: 'uppercase' }}>{title}</div>
+        {action}
+      </div>
+      {children}
     </div>
   );
+  const quiet = (t) => <div style={{ fontSize: 13, color: DS.muted, lineHeight: 1.5 }}>{t}</div>;
 
-  const planKey = `${cls.group}__${date}`;
-  const plan = (window.__lessonPlans || {})[planKey];
-  const planLinks = resLinksForContext(store, 'lesson_plan', planKey);
-
-  // Homework whose class matches, set around this date (best-effort, read-only).
-  const hwStore = window.klasioResources && window.klasioResources.homeworkForClass ? window.klasioResources.homeworkForClass(cls.group) : [];
-  const hwLinks = [];
-  hwStore.forEach(h => resLinksForContext(store, 'homework', h.id).forEach(l => hwLinks.push({ link: l, hw: h })));
-
-  const allResIds = new Set([...planLinks.map(l => l.resource_id), ...hwLinks.map(x => x.link.resource_id)]);
-  const usedResources = Array.from(allResIds).map(id => resById(store, id)).filter(Boolean);
-
-  const Section = ({ icon, title, children }) => (
-    <Card style={{ marginBottom: 16 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 18px', borderBottom: `1px solid ${DS.border}` }}>
-        <div style={{ width: 30, height: 30, borderRadius: 8, background: DS.accentLight, color: DS.accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={icon} size={15} /></div>
-        <span style={{ fontSize: 14, fontWeight: 600, color: DS.text }}>{title}</span>
-      </div>
-      <div style={{ padding: 18 }}>{children}</div>
-    </Card>
+  const isTeacher = role === 'teacher';
+  const openRegister = () => { window.__registerSession = session.id; onClose(); window.__navigate && window.__navigate('teacher', 'attendance'); };
+  const openPlanner = () => { onClose(); window.__openLessonPlanner && window.__openLessonPlanner(cls.id, date, lesson ? 'view' : 'edit'); };
+  const openClass = () => {
+    window.__adminParam = cls.id; onClose();
+    window.__navigate && window.__navigate(isTeacher ? 'teacher' : 'admin', 'class_detail');
+  };
+  // A teacher's register link: take it while it's open (or late), view it once taken.
+  // A locked (missed) register has no teacher action — an admin unlocks it.
+  const registerAction = !isTeacher || !d ? null
+    : d.actionable ? 'Take register' : state === 'recorded' ? 'View register' : null;
+  const footer = (
+    <>
+      <Btn variant="secondary" small onClick={onClose}>Close</Btn>
+      <Btn variant={registerAction ? 'secondary' : 'primary'} small icon="book" onClick={openClass}>{isTeacher ? 'Open class' : 'View class record'}</Btn>
+      {registerAction && <Btn variant="primary" small icon="check" onClick={openRegister}>{registerAction}</Btn>}
+    </>
   );
 
   return (
-    <div style={pageFrame()}>
-      <div>
-        <BackLink onClick={onBack} label="Timetable" />
-        <div style={{ margin: '0 0 6px' }}>
-          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 10px', borderRadius: 999, background: DS.surface, color: DS.muted, fontSize: 11, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
-            <Icon name="calendar" size={12} /> Session · read-only
-          </div>
+    <SlideOver open onClose={onClose} icon="calendar" iconColor={color} width={460}
+      title={`${cls.name} · ${sdDayLabel(date)}`} subtitle={`${cls.time} · ${sdRelDay(date, now)}`} footer={footer}>
+      <div style={{ paddingBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 10 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 600, color: DS.text }}>{cls.group}</div>
+          {meta && <StatusPill tone={live ? 'accent' : meta.tone}>{live ? 'Happening now' : meta.label}</StatusPill>}
         </div>
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, margin: '0 0 22px' }}>
-          <div>
-            <h1 style={{ fontSize: 22, fontWeight: 700, color: DS.text, margin: '4px 0 2px', letterSpacing: '-0.4px' }}>{cls.name} — {resFmtDate(date)}</h1>
-            <p style={{ fontSize: 14, color: DS.muted, margin: 0 }}>{cls.group} · {cls.room || 'No room'} · Taught by {cls.teacher}</p>
+        {[
+          ['clock', cls.time],
+          ['home', cls.room || 'No room'],
+          ['user', teacher && teacher !== cls.teacher ? `${teacher} (covering for ${cls.teacher})` : (teacher || 'No teacher assigned')],
+          ['users', `${roster.length} student${roster.length === 1 ? '' : 's'}`],
+        ].map(([ic, t]) => (
+          <div key={ic} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: DS.sub, padding: '3px 0' }}>
+            <Icon name={ic} size={14} color={DS.faint} />{t}
           </div>
-          {/* Sideways navigation (to the class record) is an action, not a way back —
-              it belongs with the page actions, never beside the back control. */}
-          <Btn variant="secondary" icon="book" small onClick={() => { window.__adminParam = classId; window.__navigate && window.__navigate('admin', 'class_detail'); }}>View class record</Btn>
-        </div>
-
-        <Section icon="check" title="Attendance">
-          {(() => {
-            const sid = `${classId}|${date}`;
-            let att = window.klasioResources && window.klasioResources.attendanceForSession ? window.klasioResources.attendanceForSession(classId, date) : null;
-            // Fall back to the seeded delivered-register list so a seeded occurrence
-            // still shows who was present without re-running the register flow.
-            if (!att && (window.ATT_SEED_DELIVERED || []).some(x => x.sessionId === sid)) {
-              att = { by: cls.teacher, present: cls.students || 0, absent: 0, late: 0 };
-            }
-            if (!att) return <div style={{ fontSize: 13, color: DS.muted }}>No register recorded for this occurrence.</div>;
-            return (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
-                <span style={{ fontSize: 13, color: DS.sub }}>Taken by <b>{att.by || cls.teacher}</b></span>
-                <span style={{ fontSize: 13, color: DS.success, fontWeight: 600 }}>{att.present} present</span>
-                {att.absent ? <span style={{ fontSize: 13, color: DS.danger, fontWeight: 600 }}>{att.absent} absent</span> : null}
-                {att.late ? <span style={{ fontSize: 13, color: DS.warning, fontWeight: 600 }}>{att.late} late</span> : null}
-              </div>
-            );
-          })()}
-        </Section>
-
-        <Section icon="edit" title="Lesson plan">
-          {plan ? (
-            <div>
-              <div style={{ fontSize: 15, fontWeight: 600, color: DS.text }}>{plan.plan.title || 'Untitled lesson'}</div>
-              {plan.plan.topic && <div style={{ fontSize: 12.5, color: DS.muted, marginTop: 2 }}>{plan.plan.topic}</div>}
-              {plan.plan.objectives && <div style={{ fontSize: 13, color: DS.sub, marginTop: 10, whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{plan.plan.objectives}</div>}
-            </div>
-          ) : <div style={{ fontSize: 13, color: DS.muted }}>No lesson plan recorded for this occurrence.</div>}
-        </Section>
-
-        <Section icon="notebook_pen" title="Homework set">
-          {hwStore.length === 0 ? <div style={{ fontSize: 13, color: DS.muted }}>No homework linked to this class.</div> : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {hwStore.slice(0, 6).map(h => (
-                <div key={h.id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <div style={{ width: 26, height: 26, borderRadius: 7, background: DS.warningBg, color: DS.warning, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="clip" size={13} /></div>
-                  <span style={{ fontSize: 13, color: DS.sub, flex: 1 }}>{h.title}</span>
-                  {h.due && <span style={{ fontSize: 12, color: DS.faint }}>Due {h.due}</span>}
-                </div>
-              ))}
-            </div>
-          )}
-        </Section>
-
-        <Section icon="folder" title="Resources used">
-          {usedResources.length === 0 ? <div style={{ fontSize: 13, color: DS.muted }}>No resources attached to this session’s plan or homework.</div> : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {usedResources.map(r => (
-                <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
-                  <ResTypeGlyph type={r.type} size={28} />
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>{r.title}</div>
-                    <div style={{ fontSize: 11.5, color: DS.muted }}>{resType(r.type).label} · {resStaffName(store, r.created_by)}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </Section>
+        ))}
       </div>
-    </div>
+
+      {section('Register', recs ? (
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 13, color: DS.success, fontWeight: 600 }}>{marks.present.length} present</span>
+            <span style={{ fontSize: 13, color: marks.absent.length ? DS.danger : DS.muted, fontWeight: 600 }}>{marks.absent.length} absent</span>
+            <span style={{ fontSize: 13, color: marks.late.length ? DS.warning : DS.muted, fontWeight: 600 }}>{marks.late.length} late</span>
+          </div>
+          {(marks.absent.length > 0 || marks.late.length > 0) && (
+            <div style={{ fontSize: 12.5, color: DS.sub, marginTop: 8, lineHeight: 1.6 }}>
+              {marks.absent.length > 0 && <div><span style={{ color: DS.muted }}>Absent:</span> {marks.absent.join(', ')}</div>}
+              {marks.late.length > 0 && <div><span style={{ color: DS.muted }}>Late:</span> {marks.late.join(', ')}</div>}
+            </div>
+          )}
+          <div style={{ fontSize: 12, color: DS.muted, marginTop: 8 }}>
+            Taken{takenBy ? ` by ${takenBy}` : ''}{session.register_submitted_at ? ` · ${sdWhen(session.register_submitted_at)}` : ''}{session.submission && session.submission.late ? ' · late' : ''}
+          </div>
+        </div>
+      ) : quiet(registerLine))}
+
+      {section(past ? 'What was covered' : 'What’s planned', lesson ? (
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: DS.text }}>{lesson.title || 'Untitled lesson'}</div>
+            {delivery.shareWithClass && <StatusPill tone="info">Shared with pupils</StatusPill>}
+          </div>
+          {lesson.topic && <div style={{ fontSize: 12.5, color: DS.muted, marginTop: 2 }}>{lesson.topic}</div>}
+          {objectives.length > 0 && (
+            <ul style={{ margin: '10px 0 0', paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 5 }}>
+              {objectives.map((o, i) => <li key={i} style={{ fontSize: 13, color: DS.sub, lineHeight: 1.45 }}>{o}</li>)}
+            </ul>
+          )}
+          {delivery.notes && <div style={{ fontSize: 12.5, color: DS.sub, marginTop: 10, lineHeight: 1.5 }}><strong style={{ fontWeight: 600 }}>Notes for this class:</strong> {delivery.notes}</div>}
+          {delivery.reflection && <div style={{ fontSize: 12.5, color: DS.sub, marginTop: 6, fontStyle: 'italic', lineHeight: 1.5 }}>“{delivery.reflection}”</div>}
+        </div>
+      ) : quiet('No lesson planned for this session.'),
+      isTeacher && (lesson || !past) && <Btn variant="ghost" small icon="edit" onClick={openPlanner}>{lesson ? 'Open in planner' : 'Plan this lesson'}</Btn>)}
+
+      {(past || live) && section('Homework set in this lesson', homework.length ? homework.map((h, i) => (
+        <div key={h.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderTop: i ? `1px solid ${DS.border}` : 'none' }}>
+          <Icon name="clip" size={15} color={color} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: DS.text }}>{h.title}</div>
+            <div style={{ fontSize: 12, color: DS.muted }}>{[h.due && `Due ${h.due}`, h.total ? `${h.submitted}/${h.total} handed in` : null].filter(Boolean).join(' · ')}</div>
+          </div>
+        </div>
+      )) : quiet('No homework was set in this lesson.'))}
+
+      {section('Files from this lesson', files.length ? files.map(({ link, r }, i) => (
+        <div key={link.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderTop: i ? `1px solid ${DS.border}` : 'none' }}>
+          <ResTypeGlyph type={r.type} size={30} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: DS.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.title}</div>
+            <div style={{ fontSize: 11.5, color: DS.muted }}>{resType(r.type).label} · {resOwnerName(store, r)}{link.student_visible ? ' · pupils can see' : ''}</div>
+          </div>
+          {r.url && <Btn variant="ghost" small icon="link" onClick={() => window.open(r.url, '_blank', 'noopener')}>Open</Btn>}
+        </div>
+      )) : quiet(lesson ? 'No files attached to this lesson.' : 'Files attached to the planned lesson show here.'))}
+    </SlideOver>
   );
 };
 
@@ -1737,7 +2060,7 @@ const ResourceSessionDetail = ({ classId, date, onBack }) => {
 // transfers.
 const OffboardResourcesStep = ({ staffId, staffName, onDone }) => {
   const store = useResourcesStore();
-  const mine = (store.resources || []).filter(r => r.created_by === staffId);
+  const mine = (store.resources || []).filter(r => resInCentre(r) && resIsMine(r, staffId));
   const byVis = { centre: 0, on_request: 0, private: 0 };
   mine.forEach(r => { byVis[r.visibility] = (byVis[r.visibility] || 0) + 1; });
   const isActive = resIsActive(store, staffId);
@@ -1775,13 +2098,14 @@ const OffboardResourcesStep = ({ staffId, staffName, onDone }) => {
 const ResStorageBreakdown = () => {
   const store = useResourcesStore();
   const byOwner = {};
-  (store.resources || []).forEach(r => {
-    const o = byOwner[r.created_by] || (byOwner[r.created_by] = { files: 0, size: 0, restricted: 0 });
+  (store.resources || []).filter(r => resInCentre(r)).forEach(r => {
+    const k = resOwnerKey(r);
+    const o = byOwner[k] || (byOwner[k] = { files: 0, size: 0, restricted: 0 });
     o.files++; o.size += r.size || 0;
     if (r.visibility !== 'centre') o.restricted++;
   });
   const rows = Object.keys(byOwner)
-    .map(id => ({ id, name: resStaffName(store, id), active: resIsActive(store, id), ...byOwner[id] }))
+    .map(id => ({ id, name: resOwnerKeyName(store, id), active: id === '__centre' || resIsActive(store, id), ...byOwner[id] }))
     .sort((a, b) => b.size - a.size);
   const totalFiles = rows.reduce((n, r) => n + r.files, 0);
   const totalSize = rows.reduce((n, r) => n + r.size, 0);
@@ -1814,7 +2138,7 @@ window.klasioResources = {
   isStaffActive: (staffId) => { const s = resRead(); const m = (s.staff || []).find(x => x.id === staffId); return !!(m && m.active); },
   countsByOwner: (staffId) => {
     const s = resRead(); const out = { centre: 0, on_request: 0, private: 0, total: 0 };
-    (s.resources || []).forEach(r => { if (r.created_by === staffId) { out[r.visibility] = (out[r.visibility] || 0) + 1; out.total++; } });
+    (s.resources || []).forEach(r => { if (resInCentre(r) && resIsMine(r, staffId)) { out[r.visibility] = (out[r.visibility] || 0) + 1; out.total++; } });
     return out;
   },
   deactivate: (staffId) => { const s = resRead(); resWrite({ ...s, staff: (s.staff || []).map(x => x.id === staffId ? { ...x, active: false } : x) }); },
@@ -1827,8 +2151,20 @@ window.klasioResources = {
   // relevance ranker / activity views; nothing consumes it yet by design.
   usageEvents: (resourceId) => { const s = resRead(); return (s.usage_events || []).filter(e => !resourceId || e.resource_id === resourceId); },
   lastUsedAt: (resourceId) => { const s = resRead(); const es = (s.usage_events || []).filter(e => e.resource_id === resourceId); return es.length ? es.map(e => e.at).sort().slice(-1)[0] : null; },
-  // Homework helpers — bridge into the Homework store (homework_store_v9) so the
-  // where-used drawer + session detail can label homework contexts. Kept defensive.
+  // What a PUPIL sees attached to a lesson (the student session drawer, #60): only
+  // links the teacher marked student-visible whose visible_from has arrived, and
+  // never a mark scheme / answer key, whatever the flag says. Read-only.
+  studentFilesForLesson: (lessonId, todayISO) => {
+    const s = resRead();
+    const today = todayISO || resTodayISO();
+    return resLinksForContext(s, 'lesson', lessonId)
+      .filter(l => l.student_visible && (!l.visible_from || l.visible_from <= today))
+      .map(l => ({ link: l, r: (s.resources || []).find(r => r.id === l.resource_id) }))
+      .filter(x => x.r && x.r.type !== 'mark_scheme' && !x.r.deleted_at)
+      .map(({ link, r }) => ({ id: link.id, resourceId: r.id, title: r.title, type: r.type, typeLabel: (resType(r.type) || {}).label || 'File', icon: (resType(r.type) || {}).icon || 'file', size: r.size || 0, url: r.url || null }));
+  },
+  // Homework helper — bridge into the Homework store (homework_store_v9) so the
+  // where-used drawer can label homework contexts. Kept defensive.
   homeworkTitle: (assignmentId) => {
     try {
       const raw = localStorage.getItem('homework_store_v9');
@@ -1838,41 +2174,9 @@ window.klasioResources = {
       return a ? (a.title || 'Untitled homework') : null;
     } catch (e) { return null; }
   },
-  homeworkForClass: (classLabel) => {
-    try {
-      const raw = localStorage.getItem('homework_store_v9');
-      if (!raw) return [];
-      const s = JSON.parse(raw);
-      return Object.values(s.assignments || {})
-        .filter(a => a.classLabel === classLabel && a.status !== 'draft')
-        .map(a => ({ id: a.id, title: a.title || 'Untitled homework', due: a.dueAt ? String(a.dueAt).slice(0, 10) : '' }));
-    } catch (e) { return []; }
-  },
-  // Attendance for a materialised session (classId|date). Reads the live register
-  // store — `tutoros.attendance.v2`, where a submitted register is
-  // submissions[`classId|date`] = { submittedAt, submittedBy, records }. Seeded
-  // historicals carry no `records` (their marks are synthesised from the roster at
-  // render time in attendance.jsx), so this returns null for them and the caller
-  // falls back to the seeded delivered list.
-  attendanceForSession: (classId, date) => {
-    try {
-      const raw = localStorage.getItem('tutoros.attendance.v2');
-      if (!raw) return null;
-      const s = JSON.parse(raw);
-      const rec = (s.submissions || {})[`${classId}|${date}`];
-      if (!rec || !rec.records) return null;
-      const teacher = (window.SEED_TEACHERS || []).find(t => t.id === rec.submittedBy);
-      const vals = Object.values(rec.records);
-      const count = (k) => vals.filter(v => v === k).length;
-      return {
-        by: teacher ? teacher.name : (rec.submittedBy || null),
-        present: count('present'), absent: count('absent'), late: count('late'),
-      };
-    } catch (e) { return null; }
-  },
 };
 
 Object.assign(window, {
-  useResourcesStore, ResourcesPage, AttachResourcesPanel, ResourceSessionDetail, OffboardResourcesStep,
+  useResourcesStore, ResourcesPage, AttachResourcesPanel, SessionDrawer, OffboardResourcesStep,
   ResStorageBreakdown, resFmtBytes, resType, resVis,
 });

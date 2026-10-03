@@ -13,10 +13,13 @@
 //  the student's real classIds → real classes → real subjects/teachers/rooms),
 //  grades and homework all derive from `admin_store_v4` + `homework_store_v9` for
 //  that student. Switching the active student (window.__setActiveStudent) re-points
-//  the whole surface. Per-assessment scores / class averages / attendance rows are
-//  synthesised DETERMINISTICALLY from the student's stored score/hw/attendance
-//  (stable per student, never random) so the analytics screens still have a full
-//  picture even though the prototype stores only point-in-time figures.
+//  the whole surface. Per-assessment scores and class averages are the pupil's
+//  PUBLISHED assessment results (window.klasioScores, decision #50) — never a
+//  synthesised series; a class with no published results shows an empty state.
+//  Sessions are the pupil's classes materialised on the register's own clock
+//  (window.getNow + materialiseSessions), and attendance is read back from the
+//  registers teachers submitted (decision #60) — never a stored roster figure.
+//  Predicted/target grades are the teacher's stored judgement (klasioTargets, #28).
 //
 //  ── Multi-tenant scalability contract (backend phase — do NOT implement here) ──
 //  currentStudent belongs to exactly ONE centreId; the student surface never
@@ -41,9 +44,10 @@ const readAdmin = () => {
       students: p.students || window.SEED_STUDENTS || [],
       classes:  p.classes  || window.SEED_CLASSES  || [],
       teachers: p.teachers || window.SEED_TEACHERS || [],
+      subjects: p.subjects || window.SEED_SUBJECTS || [],
     };
   } catch (e) {}
-  return { students: window.SEED_STUDENTS || [], classes: window.SEED_CLASSES || [], teachers: window.SEED_TEACHERS || [] };
+  return { students: window.SEED_STUDENTS || [], classes: window.SEED_CLASSES || [], teachers: window.SEED_TEACHERS || [], subjects: window.SEED_SUBJECTS || [] };
 };
 const readHw = () => { try { return JSON.parse(localStorage.getItem(HW_KEY) || 'null'); } catch (e) { return null; } };
 
@@ -51,12 +55,8 @@ const readHw = () => { try { return JSON.parse(localStorage.getItem(HW_KEY) || '
 const getActiveId = () => { try { return localStorage.getItem('klasio.activeStudent') || DEFAULT_ID; } catch (e) { return DEFAULT_ID; } };
 
 // ── small helpers ─────────────────────────────────────────────────────────────
-const clamp = (v) => Math.max(30, Math.min(99, Math.round(v)));
 const yearNum = (y) => { const m = String(y == null ? '' : y).match(/\d+/); return m ? parseInt(m[0], 10) : null; };
 const hashStr = (str) => { let h = 0; for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0; return h; };
-// Deterministic PRNG seeded off the student id, so each student's synthetic series
-// is stable across reloads (never Math.random).
-const seeded = (str) => { let a = hashStr(str) || 1; return () => { a += 0x6D2B79F5; let t = Math.imul(a ^ (a >>> 15), 1 | a); t ^= t + Math.imul(t ^ (t >>> 7), 61 | t); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; };
 
 const SUBJECT_COLORS = {
   'Mathematics':'#43b190', 'Further Maths':'#7C3AED', 'Physics':'#0891B2', 'Chemistry':'#D97706',
@@ -72,27 +72,38 @@ const subjectOfClass = (name) => String(name || '').replace(/^(GCSE|A-?Level|AS-
 const levelForYear = (y) => (window.klasioGrades ? window.klasioGrades.levelForYear(y) : (/1[23]/.test(String(y)) ? 'A-Level' : 'GCSE'));
 const gradeFor = (pct, level) => (window.klasioGrades ? window.klasioGrades.pctToGrade(pct, { level }) : String(pct));
 
-// A stable per-student score series that trends UP to the student's current score.
-const makeSeries = (base, rnd, n) => {
-  const out = [];
-  for (let i = 0; i < n; i++) { const t = n <= 1 ? 1 : i / (n - 1); out.push(clamp(base - 10 + t * 10 + (rnd() - 0.5) * 6)); }
-  out[n - 1] = clamp(base);
-  return out;
+// ─── §7 Active term + clock — the student surface reads the SAME clock the
+//     register uses (window.getNow, mocks/attendance.mock.jsx), so "next lesson",
+//     today on the calendar and a session's attendance agree with what the teacher
+//     sees. The term is whichever of the centre's terms covers that day.
+const nowMs = () => (window.getNow ? window.getNow() : Date.now());
+const isoOf = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+// The month grid model for the shared MonthCalendar (both live in shared.jsx).
+const monthModel = monthGridModel;
+const termNow = () => {
+  const iso = isoOf(nowMs());
+  let terms = [];
+  try { terms = window.getCentreTerms ? window.getCentreTerms(window.klasioCentreSettings ? window.klasioCentreSettings() : {}) : []; } catch (e) { terms = []; }
+  const r = window.resolveActiveTerm ? window.resolveActiveTerm(terms, iso) : { term: null, status: 'none' };
+  const t = r.term;
+  const week = t && r.status === 'active' && t.start
+    ? Math.floor((new Date(iso + 'T12:00:00') - new Date(t.start + 'T12:00:00')) / (7 * 86400000)) + 1 : null;
+  return { name: (t && t.name) || '', status: r.status, week };
 };
-
-// ─── §7 Active term — one value drives the Overview banner, the Sessions default
-//     month, and the Progress assessment cadence. Centre-level (not per-student).
 const activeTerm = {
-  name: 'Summer Term',
-  week: 2,
-  get banner() { return `${this.name} · Week ${this.week}`; },
-  calendar: { name: 'April 2026', firstDow: 2, days: 30, today: 23 },
-  assessmentLabels: ['4 Mar', '11 Mar', '18 Mar', '25 Mar', '1 Apr', '8 Apr', '15 Apr', '22 Apr'],
+  get name() { return termNow().name; },
+  get week() { return termNow().week; },
+  get banner() {
+    const t = termNow();
+    if (!t.name) return '';
+    return t.status === 'active' && t.week ? `${t.name} · Week ${t.week}` : t.name;
+  },
+  // Today's month on the register clock, plus today's date within it.
+  get calendar() { const d = new Date(nowMs()); return { ...monthModel(d.getFullYear(), d.getMonth()), today: d.getDate(), todayISO: isoOf(d.getTime()) }; },
 };
-const N_ASSESS = activeTerm.assessmentLabels.length;
 
 // Fallback identity if the admin store somehow has no students (keeps screens safe).
-const FALLBACK_STUDENT = { id: DEFAULT_ID, firstName: 'Oliver', lastName: 'Chen', year: 'Yr 12', email: '', subjects: ['Mathematics'], classIds: [], score: 90, hw: 96, attendance: 98 };
+const FALLBACK_STUDENT = { id: DEFAULT_ID, firstName: 'Oliver', lastName: 'Chen', year: 'Yr 12', email: '', subjects: ['Mathematics'], classIds: [] };
 
 // ── The per-student model — built once per (active student + roster signature) ──
 let _cache = null, _cacheKey = '';
@@ -103,7 +114,17 @@ const build = () => {
     || store.students.find(s => s.id === DEFAULT_ID)
     || store.students[0] || FALLBACK_STUDENT;
 
-  const sig = `${student.id}|${(student.classIds || []).join(',')}|${store.classes.length}`;
+  // Results, targets, registers and lesson shares live in their own stores, so a
+  // write to any of them must bust this cache too — as must the register clock.
+  let asSig = '';
+  try { asSig = ['klasio.assessments.v1', 'tutoros.tracking.v1', 'klasio.targets.v1', 'tutoros.attendance.v2', 'klasio.lessons.v1'].map(k => String((localStorage.getItem(k) || '').length)).join(':'); } catch (e) {}
+  // Other modules read this model while scripts are still loading (Reports.jsx at
+  // parse time), before attendance/lessons/targets exist — so which of them are
+  // loaded is part of the key, or an empty early build would stick.
+  const deps = [window.attReadStore, window.materialiseSessions, window.klasioTargets, window.klasioLessons, window.getNow].map(x => (x ? 1 : 0)).join('');
+  // A class's background is set by its teacher or an admin, so it's part of the key too.
+  const coverSig = store.classes.filter(c => (student.classIds || []).includes(c.id)).map(c => `${c.coverPresetId || ''}/${c.coverIconId || ''}`).join(',');
+  const sig = `${student.id}|${(student.classIds || []).join(',')}|${store.classes.length}|${coverSig}|${asSig}|${deps}|${Math.floor(nowMs() / 60000)}`;
   if (_cache && _cacheKey === sig) return _cache;
 
   const level = levelForYear(student.year);
@@ -115,24 +136,38 @@ const build = () => {
     .map(cid => store.classes.find(c => c.id === cid))
     .filter(Boolean);
 
-  const base = clamp(student.score || 70);
+  // Scores are this pupil's PUBLISHED assessment results for each class, in date
+  // order (window.klasioScores, decision #50) — never synthesised. A class with no
+  // published results has an empty series, and every screen says so.
+  const KS = window.klasioScores;
+  const fmtShort = (iso) => { try { return new Date(iso + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }); } catch (e) { return iso; } };
   const enrolments = enrolClasses.map((c) => {
     const subject = subjectOfClass(c.name);
-    const r = seeded(student.id + '::' + c.id);
-    const scores = makeSeries(base, r, N_ASSESS);
-    const classAvg = makeSeries(Math.max(45, base - 9), r, N_ASSESS);
-    const predictedPct = Math.min(99, base + 4);
-    const att = Math.max(50, Math.min(100, Math.round(student.attendance != null ? student.attendance : 92)));
-    const sessionsTotal = 50;
+    const results = KS ? KS.attainmentSeries(student.id, { classId: c.id, publishedOnly: true }) : [];
+    const classRows = KS ? KS.classAssessments(c.id) : [];
+    const scores = results.map(e => e.pct);
+    const classAvg = results.map(e => { const a = classRows.find(x => x.id === e.assessmentId); return a && a.classAvgPct != null ? a.classAvgPct : e.pct; });
+    const avgPct = scores.length ? Math.round(scores.reduce((x, y) => x + y, 0) / scores.length) : null;
+    // Predicted + target are the teacher's stored judgement (decision #28); a class
+    // with no row says "Not set yet". The indicative grade is derived from the
+    // results and is only ever shown labelled as indicative.
+    const tgt = window.klasioTargets ? window.klasioTargets.get(student.id, c.id) : null;
+    const clsLevel = window.klasioTargets ? window.klasioTargets.levelForClass(c, student) : level;
     return {
       classId: c.id, name: c.name || subject, group: c.group || '', day: c.day || '', time: c.time || '',
       subject, subjectColor: colorFor(subject),
+      // The class's background, through the one read path (classCovers.jsx).
+      coverArt: window.klasioCovers.classCover(c, store.subjects),
       teacherId: null, teacher: c.teacher || 'Centre staff', room: c.room || '—',
-      yearGroup, qualification: level,
-      predictedGrade: gradeFor(predictedPct, level),
+      yearGroup, qualification: clsLevel,
+      predictedGrade: (tgt && tgt.predicted) || null,
+      targetGrade: (tgt && tgt.target) || null,
+      indicativeGrade: avgPct != null ? gradeFor(avgPct, clsLevel) : null,
       scores, classAvg,
-      sessionsAttended: Math.round((att / 100) * sessionsTotal),
-      sessionsTotal, sessionsPerWeek: 1,
+      scoreLabels: results.map(e => fmtShort(e.date)),
+      scoreTitles: results.map(e => e.title),
+      // Filled from the registers below.
+      sessionsAttended: 0, sessionsTotal: 0,
     };
   });
 
@@ -153,18 +188,57 @@ const build = () => {
     yearGroup, qualification: level,
   };
 
-  // Sessions — dated occurrences derived from the real enrolments. Teacher + room
-  // come from the enrolment (§6); pinned into the demo term month (April 2026) so
-  // the Sessions calendar stays coherent. Read-only (no self-booking).
-  const UP_DAYS = [21, 22, 23, 24, 25], HIST = [17, 16, 14, 8];
-  const timeFor = (i) => ['09:00–10:00', '10:15–11:15', '13:00–14:00', '11:00–12:00', '15:00–16:00'][i % 5];
-  const dow = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const dateLabel = (d) => `${dow[new Date(2026, 3, d).getDay()]} ${d} Apr`;
-  const src = enrolments.length ? enrolments : [];
+  // Sessions — the pupil's classes materialised on the register clock (the same
+  // function the teacher's Attendance and dashboard use), with each past session's
+  // attendance read back from the submitted register. Read-only: no self-booking.
+  const now = nowMs();
+  const reg = window.attReadStore ? window.attReadStore() : null;
+  const myName = `${student.firstName || ''} ${student.lastName || ''}`.trim();
+  let mat = [];
+  if (reg && window.materialiseSessions && enrolClasses.length) {
+    try { mat = window.materialiseSessions(enrolClasses, window.REGISTER_SETTINGS, now, reg, { backDays: 42, fwdDays: 35 }); } catch (e) { mat = []; }
+  }
+  const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const all = mat.map(s => {
+    const enr = enrolments.find(e => e.classId === s.classId);
+    const d = new Date(s.starts_at);
+    const st = s.derived.state;
+    let status;
+    if (st === 'cancelled') status = 'cancelled';
+    else if (st === 'recorded') {
+      const roster = window.attRosterFor ? window.attRosterFor(s.classId, s.group, { students: store.students }) : [myName];
+      const recs = (window.attRecordsFor && window.attRecordsFor(s, roster, reg)) || {};
+      status = recs[myName] || 'not_marked';
+    }
+    else if (now < s.starts_at) status = 'upcoming';
+    else if (now <= s.ends_at) status = 'live';
+    else status = 'awaiting_register';   // it happened; the register isn't in yet
+    const parts = String(s.cls.time || '').split(/[–—-]/).map(x => x.trim());
+    const teacher = (typeof effectiveTeacher === 'function') ? effectiveTeacher(s.cls, s.dateISO) : s.teacher;
+    return {
+      id: s.id, classId: s.classId, subject: enr ? enr.subject : subjectOfClass(s.name), className: s.name, group: s.group,
+      color: enr ? enr.subjectColor : colorFor(subjectOfClass(s.name)),
+      dateISO: s.dateISO, monthKey: s.dateISO.slice(0, 7), day: d.getDate(),
+      starts_at: s.starts_at, ends_at: s.ends_at,
+      date: `${DOW[d.getDay()]} ${d.getDate()} ${MON[d.getMonth()]}`,
+      time: parts[1] ? `${parts[0]}–${parts[1]}` : (parts[0] || ''),
+      teacher: teacher || 'Centre staff', coverFor: teacher && teacher !== s.teacher ? s.teacher : null,
+      room: s.room || '—', status,
+    };
+  });
   const sessions = {
-    upcoming: src.slice(0, 5).map((e, i) => ({ subject: e.subject, date: dateLabel(UP_DAYS[i]), time: timeFor(i), day: UP_DAYS[i], teacher: e.teacher, room: e.room })),
-    history: src.slice(0, 4).map((e, i) => ({ subject: e.subject, date: dateLabel(HIST[i]), time: timeFor(i), day: HIST[i], teacher: e.teacher, room: e.room, status: i === 3 ? 'missed' : 'attended' })),
+    all: all.slice().sort((a, b) => a.starts_at - b.starts_at),
+    upcoming: all.filter(x => x.ends_at >= now).sort((a, b) => a.starts_at - b.starts_at),
+    history: all.filter(x => x.ends_at < now).sort((a, b) => b.starts_at - a.starts_at),
   };
+  // Attendance per class, from the registers: attended = present + late over every
+  // marked session (excused is not counted against the pupil).
+  enrolments.forEach(e => {
+    const marked = sessions.history.filter(x => x.classId === e.classId && (x.status === 'present' || x.status === 'late' || x.status === 'absent'));
+    e.sessionsTotal = marked.length;
+    e.sessionsAttended = marked.filter(x => x.status !== 'absent').length;
+  });
 
   _cache = { student, currentStudent, enrolments, sessions };
   _cacheKey = sig;
@@ -177,6 +251,23 @@ const getEnrolments = () => build().enrolments;
 const getSubjects   = () => build().enrolments.map(e => e.subject);
 const getEnrolment  = (subject) => build().enrolments.find(e => e.subject === subject) || null;
 const resolveTeacher = (subject) => { const e = getEnrolment(subject); return e ? e.teacher : '—'; };
+
+// ─── What pupils see (decision #54) ─────────────────────────────────────────────
+// Centre policy, set in admin Settings → Centre: 'percentage' | 'grade' | 'both'.
+// A grade here is always the INDICATIVE bucket from klasioGrades.pctToGrade on the
+// pupil's own scale — never presented as an official result.
+const pupilGradeDisplay = () => {
+  try { const c = window.klasioCentreSettings && window.klasioCentreSettings(); return (c && c.pupilGradeDisplay) || 'both'; } catch (e) { return 'both'; }
+};
+const formatAttainment = (pct, qualification) => {
+  if (pct == null || isNaN(Number(pct))) return '—';
+  const mode = pupilGradeDisplay();
+  const level = qualification || getCurrentStudent().qualification;
+  const g = window.klasioGrades ? window.klasioGrades.pctToGrade(Number(pct), { level }) : null;
+  if (mode === 'grade' && g) return g;
+  if (mode === 'both' && g) return `${pct}% · ${g}`;
+  return `${pct}%`;
+};
 
 // ─── §3 Canonical grade model — every grade chip renders through this. ──────────
 const formatGrade = (value, qualification) => {
@@ -238,32 +329,43 @@ const scoreOf = (a, id) => {
   return pts ? Math.round((got / pts) * 100) : null;
 };
 
+// Each metric returns null when there is nothing to measure yet (no published
+// results) — a pupil is never shown 0% for work that hasn't been assessed.
+const lastOf = (arr) => arr.length ? arr[arr.length - 1] : null;
 const metrics = {
-  termAverage() { const e = getEnrolments(); return e.length ? Math.round(e.reduce((s, x) => s + (x.scores[x.scores.length - 1] || 0), 0) / e.length) : 0; },
-  subjectAverage(subject) { const e = getEnrolment(subject); return e ? Math.round(e.scores.reduce((s, n) => s + n, 0) / e.scores.length) : 0; },
-  subjectLatest(subject)  { const e = getEnrolment(subject); return e ? (e.scores[e.scores.length - 1] || 0) : 0; },
+  termAverage() {
+    const latest = getEnrolments().map(x => lastOf(x.scores)).filter(n => n != null);
+    return latest.length ? Math.round(latest.reduce((s, n) => s + n, 0) / latest.length) : null;
+  },
+  subjectAverage(subject) { const e = getEnrolment(subject); return e && e.scores.length ? Math.round(e.scores.reduce((s, n) => s + n, 0) / e.scores.length) : null; },
+  subjectLatest(subject)  { const e = getEnrolment(subject); return e ? lastOf(e.scores) : null; },
+  // Attendance is read back from the registers (null = nothing marked yet).
   attendanceOverall() {
     const e = getEnrolments();
     const a = e.reduce((s, x) => s + x.sessionsAttended, 0);
     const t = e.reduce((s, x) => s + x.sessionsTotal, 0);
-    return t ? +((a / t) * 100).toFixed(1) : 0;
+    return t ? Math.round((a / t) * 100) : null;
   },
-  attendanceForSubject(subject) { const e = getEnrolment(subject); return e && e.sessionsTotal ? Math.round((e.sessionsAttended / e.sessionsTotal) * 100) : 0; },
-  sessionsPerWeek() { return getEnrolments().reduce((s, e) => s + e.sessionsPerWeek, 0); },
+  attendanceForClass(classId) { const e = getEnrolments().find(x => x.classId === classId); return e && e.sessionsTotal ? Math.round((e.sessionsAttended / e.sessionsTotal) * 100) : null; },
+  attendanceForSubject(subject) { const e = getEnrolment(subject); return e && e.sessionsTotal ? Math.round((e.sessionsAttended / e.sessionsTotal) * 100) : null; },
   termTrendDelta() {
-    const e = getEnrolments();
-    if (!e.length) return 0;
-    const prev = Math.round(e.reduce((s, x) => s + (x.scores[x.scores.length - 2] != null ? x.scores[x.scores.length - 2] : x.scores[x.scores.length - 1]), 0) / e.length);
-    return this.termAverage() - prev;
+    const e = getEnrolments().filter(x => x.scores.length >= 2);
+    if (!e.length) return null;
+    const now = Math.round(e.reduce((s, x) => s + x.scores[x.scores.length - 1], 0) / e.length);
+    const prev = Math.round(e.reduce((s, x) => s + x.scores[x.scores.length - 2], 0) / e.length);
+    return now - prev;
   },
-  subjectVsClass(subject) { const e = getEnrolment(subject); return e ? (e.scores[e.scores.length - 1] - e.classAvg[e.classAvg.length - 1]) : 0; },
+  // Class comparison only when the centre shows class averages to pupils (#59).
+  subjectVsClass(subject) { const e = getEnrolment(subject); return showClassAverage() && e && e.scores.length ? (lastOf(e.scores) - lastOf(e.classAvg)) : null; },
+  // A pupil's own direction of travel: latest result against the one before.
+  subjectSinceLast(subject) { const e = getEnrolment(subject); return e && e.scores.length >= 2 ? e.scores[e.scores.length - 1] - e.scores[e.scores.length - 2] : null; },
   // Homework rollup for the Overview tiles + "Continue homework" target — from the
   // real homework store, so it matches the Homework page exactly.
   homeworkSummary() {
     const id = getActiveId();
     const pending = myAssignments()
       .filter(a => hwStateFor(a, id) === 'pending')
-      .map(a => { const d = dueInfo(a); return { id: a.id, title: a.title, subject: a.subject, due: d.due, overdue: d.overdue, status: 'pending' }; });
+      .map(a => { const d = dueInfo(a); return { id: a.id, title: a.title, subject: a.subject, due: d.due, overdue: d.overdue, dueAt: a.dueAt ? new Date(a.dueAt).getTime() : null, status: 'pending' }; });
     const counts = hwCounts();
     return {
       pending,
@@ -323,6 +425,54 @@ const listStudents = () => {
     .sort((a, b) => b.classes - a.classes || a.name.localeCompare(b.name));
 };
 
+// ─── Pupil privacy (decisions #29 / #59) — centre policy, read at call time. ────
+// Class average is off by default: a pupil sees their own trend, not where they sit
+// against peers. Rank also needs the pupil to be at least rankMinAge.
+const privacy = () => (window.klasioPrivacy ? window.klasioPrivacy() : { showRankToStudents: false, rankMinAge: 13, showClassAverageToStudents: false });
+const showClassAverage = () => !!privacy().showClassAverageToStudents;
+const ageOf = (dob, atMs) => {
+  if (!dob) return null;
+  const b = new Date(dob + 'T12:00:00'), n = new Date(atMs);
+  let a = n.getFullYear() - b.getFullYear();
+  if (n.getMonth() < b.getMonth() || (n.getMonth() === b.getMonth() && n.getDate() < b.getDate())) a--;
+  return a;
+};
+const showRank = () => {
+  const p = privacy();
+  if (!p.showRankToStudents) return false;
+  const age = ageOf(build().student.dob, nowMs());
+  return age != null && age >= (p.rankMinAge || 13);
+};
+
+// ─── One session, as the pupil sees it (the session drawer, decision #60) ────────
+const sessionById = (id) => build().sessions.all.find(s => s.id === id) || null;
+// Homework set IN this lesson: assignments for this class that became available
+// between this session starting and the class's next session. Derived — an
+// assignment carries no session link.
+const homeworkForSession = (id) => {
+  const b = build();
+  const s = b.sessions.all.find(x => x.id === id);
+  if (!s || !window.klasioHomework) return [];
+  const next = b.sessions.all.filter(x => x.classId === s.classId && x.starts_at > s.starts_at && x.status !== 'cancelled')[0];
+  const until = next ? next.starts_at : s.starts_at + 7 * 86400000;
+  const me = b.student.id;
+  return window.klasioHomework.listAssignments({ studentId: me, classLabel: s.group })
+    .filter(a => { const t = new Date((a.settings && a.settings.availableFrom) || a.createdAt || 0).getTime(); return t >= s.starts_at && t < until; })
+    .map(a => ({ id: a.id, title: a.title, due: dueInfo(a).due, overdue: dueInfo(a).overdue, state: hwStateFor(a, me) }));
+};
+// The lesson's title/topic/objectives — only when the teacher shared that delivery.
+const lessonSummaryFor = (id) => {
+  const s = sessionById(id);
+  return s && window.klasioLessons ? window.klasioLessons.pupilSummaryFor(s.classId, s.dateISO) : null;
+};
+// Files the teacher made visible to pupils on that lesson (never mark schemes).
+const filesForSession = (id) => {
+  const s = sessionById(id);
+  if (!s || !window.klasioLessons || !window.klasioResources || !window.klasioResources.studentFilesForLesson) return [];
+  const d = window.klasioLessons.deliveryFor(s.classId, s.dateISO);
+  return d ? window.klasioResources.studentFilesForLesson(d.lessonId) : [];
+};
+
 // ─── §10 Shared grade chip — ONE component every student screen renders through. ─
 const GradeChip = ({ value, qualification, color, variant = 'pill', title = 'Predicted grade' }) => {
   const g = formatGrade(value, qualification);
@@ -344,10 +494,14 @@ window.klasioStudent = {
   get enrolments() { return getEnrolments(); },
   get sessions() { return build().sessions; },
   getEnrolments, getSubjects, getEnrolment,
-  resolveTeacher, formatGrade, metrics, homeworkForSubject,
+  resolveTeacher, formatGrade, formatAttainment, pupilGradeDisplay, metrics, homeworkForSubject,
   dueState, dueLabel, getContinueHomework,
   GradeChip,
   listStudents, getActiveId,
+  // clock, calendar, privacy and the session drawer
+  now: nowMs, monthModel, showClassAverage, showRank,
+  sessionById, homeworkForSession, lessonSummaryFor, filesForSession,
+  get student() { return build().student; },
 };
 
 })();

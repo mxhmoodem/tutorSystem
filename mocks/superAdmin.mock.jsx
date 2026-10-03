@@ -20,7 +20,14 @@ const BRAND = {
   statusDomain: 'status.klasio.io',
   billingEmail: 'billing@klasio.io',
   supportEmail: 'support@klasio.io',
+  opsEmail:     'ops@klasio.io',
 };
+// The console's "now" — the Overview date and the status page's "today" both read it.
+const SA_NOW = '2026-07-02T09:30:00';
+
+// The support inbox is the support@ Google Group, delivered to the ops@ mailbox
+// (runbook A2). "Support inbox" opens Gmail as ops@, filtered to that address.
+BRAND.supportInboxUrl = `https://mail.google.com/mail/?authuser=${encodeURIComponent(BRAND.opsEmail)}#search/${encodeURIComponent('to:' + BRAND.supportEmail)}`;
 
 // ─── Tokenised categorical palette (charts / donuts / bars) ──────────────────
 // Defined ONCE so no screen invents ad-hoc chart hexes. `accent()` reads the
@@ -128,7 +135,7 @@ const SA_ACTIVITY = [
   { type: 'signup',   text: 'New admin user registered at Pinnacle Prep',                       time: '6h ago',     severity: 'info',    href: { page: 'users' } },
   { type: 'flag',     text: 'Suspicious login blocked for faisal@elite.ae (12 attempts)',       time: '8h ago',     severity: 'danger',  href: { page: 'security' } },
   { type: 'cancel',   text: 'Lumen Tutors suspended (non-payment, 23 days overdue)',            time: 'Yesterday',  severity: 'danger',  href: { page: 'centres', accountId: 'acc_lumen' } },
-  { type: 'support',  text: 'New support ticket #4821 — "Cannot import student CSV"',           time: 'Yesterday',  severity: 'info',    href: { page: 'comms:support' } },
+  { type: 'support',  text: 'Support session opened on Apex Learning (ref SUP-2291, CSV import)', time: 'Yesterday',  severity: 'info',    href: { page: 'support' } },
   { type: 'upgrade',  text: 'Bright Minds added 14 new student seats',                          time: '2 days ago', severity: 'success', href: { page: 'centres', accountId: 'acc_brightminds' } },
   { type: 'signup',   text: 'New account "NextStep Academy" started a Starter trial',           time: '2 days ago', severity: 'info',    href: { page: 'centres', accountId: 'acc_nextstep' } },
   { type: 'upgrade',  text: 'Scholar Hub renewed its annual Scale contract',                    time: '3 days ago', severity: 'success', href: { page: 'centres', accountId: 'acc_scholarhub' } },
@@ -154,16 +161,76 @@ const SA_DEVICE = [
   { device: 'Tablet',  pct: 11 },
 ];
 
-// ─── Support tickets (owner-side). Each has a status the KPI derives from. ───
-const SA_TICKETS = [
-  { id: '#4821', subject: 'Cannot import student CSV',        centre: 'Apex Learning',    priority: 'high',   status: 'open',     opened: '4h ago', assignee: 'Marcus H.' },
-  { id: '#4820', subject: 'Payment webhook timing out',       centre: 'Bright Minds',     priority: 'urgent', status: 'open',     opened: '8h ago', assignee: 'Marcus H.' },
-  { id: '#4819', subject: 'Question about Scale plan',        centre: 'Summit Academy',   priority: 'low',    status: 'pending',  opened: '1d ago', assignee: 'Support'   },
-  { id: '#4818', subject: 'Bulk export request',              centre: 'Pinnacle Prep',    priority: 'med',    status: 'open',     opened: '1d ago', assignee: 'Marcus H.' },
-  { id: '#4817', subject: 'Reports rate limit',               centre: 'Mind & Method',    priority: 'med',    status: 'resolved', opened: '2d ago', assignee: 'Support'   },
-  { id: '#4816', subject: 'GDPR export request',              centre: 'EduFirst',         priority: 'high',   status: 'pending',  opened: '3d ago', assignee: 'Compliance'},
-  { id: '#4815', subject: 'SSO setup for Google Workspace',   centre: 'Scholar Hub',      priority: 'med',    status: 'open',     opened: '3d ago', assignee: 'Marcus H.' },
-  { id: '#4814', subject: 'Invoice currency wrong (EUR/GBP)', centre: 'Aurora Tuition',   priority: 'high',   status: 'resolved', opened: '4d ago', assignee: 'Support'   },
+// ─── Support sessions (decision #30). Support itself happens by EMAIL — there is
+//     no ticket queue. What the console records is each time the owner opened a
+//     time-boxed session on a tenant: the support-email reference the tenant can
+//     recognise, a stated reason, and when it started and ended (max 60 min). The
+//     live session (if any) sits in tutoros.impersonation.v1; finished ones are
+//     appended to tutoros.supportsessions.v1 on top of this seed. ────────────────
+const SA_SUPPORT_SESSIONS = [
+  { id: 'ss_seed_1', accountId: 'acc_apex',       accountName: 'Apex Learning',  supportRef: 'SUP-2291', reason: 'Student CSV import rejected every row — reproduce the column mapping',  startedAt: '2026-07-01T10:12:00Z', expiresAt: '2026-07-01T10:42:00Z', endedAt: '2026-07-01T10:31:00Z', by: 'Marcus Hale' },
+  { id: 'ss_seed_2', accountId: 'acc_aurora',     accountName: 'Aurora Tuition', supportRef: 'SUP-2284', reason: 'Invoices issued in GBP instead of EUR — check the centre invoice settings', startedAt: '2026-06-28T14:05:00Z', expiresAt: '2026-06-28T15:05:00Z', endedAt: '2026-06-28T14:22:00Z', by: 'Marcus Hale' },
+  { id: 'ss_seed_3', accountId: 'acc_brightminds', accountName: 'Bright Minds', supportRef: 'SUP-2270', reason: 'Owner asked for a walkthrough of report templates',                     startedAt: '2026-06-24T09:00:00Z', expiresAt: '2026-06-24T09:30:00Z', endedAt: '2026-06-24T09:30:00Z', by: 'Marcus Hale' },
+];
+
+// ─── System health. Every figure here is a MOCK, and each carries the place the
+//     real number comes from, so the console never implies it measures something
+//     it doesn't. Services + uptime: an external monitor hitting /v1/health (a
+//     monitor inside the thing it watches reports "fine" while the box is on
+//     fire). Latency + errors: Sentry. Queues: our own tables, read through
+//     GET /v1/admin/system-health (email_outbox is service-role only). ──────────
+// `component` is the customer-facing component each service rolls up into on the
+// public status page (SA_PUBLIC_COMPONENTS) — the public never sees infra names.
+const SA_SERVICES = [
+  { name: 'API (Railway)',              component: 'app',     status: 'operational', uptime: '99.99%', latency: '142ms' },
+  { name: 'Auth (Supabase)',            component: 'signin',  status: 'operational', uptime: '99.98%', latency: '88ms'  },
+  { name: 'Database (Supabase Postgres)', component: 'app',   status: 'operational', uptime: '99.99%', latency: '12ms' },
+  { name: 'Outbox worker (API)',        component: 'email',   status: 'degraded',    uptime: '98.42%', latency: '4.2s'  },
+  { name: 'Email (Resend)',             component: 'email',   status: 'operational', uptime: '99.94%', latency: '210ms' },
+  { name: 'File storage (R2)',          component: 'files',   status: 'operational', uptime: '99.99%', latency: '180ms' },
+  { name: 'Payments (Stripe webhooks)', component: 'billing', status: 'operational', uptime: '99.97%', latency: '320ms' },
+];
+// What the public status page lists — named for what centres USE, not what we run.
+// Each component's status is the worst of the services that roll up into it.
+const SA_PUBLIC_COMPONENTS = [
+  { id: 'app',     name: 'Klasio app',               desc: 'Dashboards, registers, homework, reports and messages' },
+  { id: 'signin',  name: 'Sign-in',                  desc: 'Staff and student sign-in' },
+  { id: 'email',   name: 'Email notifications',      desc: 'Invitations, reminders, invoices and reports sent by email' },
+  { id: 'files',   name: 'File uploads & downloads', desc: 'Homework submissions, resources and attachments' },
+  { id: 'billing', name: 'Billing & payments',       desc: 'Klasio subscriptions and card payments' },
+];
+// Queues the owner can actually act on — the tables Postgres owns (decision #14).
+const SA_QUEUES = [
+  { id: 'outbox',   queue: 'Email outbox',           source: 'email_outbox',                 pending: 3, failed: 1 },
+  { id: 'imports',  queue: 'Import jobs',            source: 'jobs · student/invoice import', pending: 2, failed: 0 },
+  { id: 'privacy',  queue: 'Privacy jobs (SAR / erasure)', source: 'jobs · sar_export/erasure', pending: 1, failed: 0 },
+  { id: 'webhooks', queue: 'Stripe webhooks',        source: 'processed_events',             pending: 0, failed: 0 },
+];
+// Last run of each scheduled job (pg_cron / the API scheduler).
+const SA_CRON = [
+  { job: 'Storage rollups',          lastRun: '02:00 today', ok: true },
+  { job: 'Storage reconciliation (R2)', lastRun: '03:00 today', ok: true },
+  { job: 'Quota warnings (80% / 100%)', lastRun: '06:00 today', ok: true },
+  { job: 'Retention sweep',          lastRun: '04:00 today', ok: true },
+];
+// `title` is the internal name; `public` is what the status page says — written
+// for a centre admin, never naming infrastructure. `minutes` is the duration.
+const SA_INCIDENTS = [
+  { date: '2026-06-26', title: 'Outbox worker latency spike',        duration: '34m',   minutes: 34, severity: 'minor', status: 'resolved', component: 'email',
+    public: { title: 'Delayed email notifications', body: 'Some emails — homework reminders, invoices and reports — arrived up to 30 minutes late. Every queued email was delivered; nothing needs resending.' } },
+  { date: '2026-06-18', title: 'Slow database queries (eu-west-2)',  duration: '12m',   minutes: 12, severity: 'minor', status: 'resolved', component: 'app',
+    public: { title: 'Pages loading slowly', body: 'Dashboards and registers took longer than usual to load for about 12 minutes. No data was affected.' } },
+  { date: '2026-06-02', title: 'Payment webhook delivery delays',    duration: '1h 8m', minutes: 68, severity: 'major', status: 'resolved', component: 'billing',
+    public: { title: 'Plan changes and payments delayed', body: 'Card payments and plan changes were confirmed late for just over an hour. No payment was taken twice, and every account was up to date once it was fixed.' } },
+];
+// Resend delivery events (webhook → email_outbox status), by template.
+const SA_EMAIL_DELIVERY = [
+  ['Staff invitation',      '142',   '99.3%', '0.7%'],
+  ['Homework reminder',     '4,210', '99.2%', '0.8%'],
+  ['Invoice',               '892',   '99.8%', '0.2%'],
+  ['Report sent to guardian', '1,340', '99.6%', '0.4%'],
+  ['Password reset',        '128',   '99.6%', '0.4%'],
+  ['Trial ending',          '12',    '100%',  '0%'],
 ];
 
 // ─── Failed-payment queue (dunning). Tied to REAL accounts so the KPI count
@@ -197,7 +264,7 @@ const SA_AUDIT = [
   { id: 'aud_5', actor: 'Taqqy',         actorRole: 'admin',      action: 'Bulk-exported 142 student records',      type: 'export',   target: 'Bright Minds',        ts: '2026-07-01T11:12:00Z', ip: '92.40.118.3' },
   { id: 'aud_6', actor: 'Marcus Hale',   actorRole: 'superadmin', action: 'Edited pricing plan "Growth"',           type: 'plan',     target: 'Plans',               ts: '2026-06-30T09:30:00Z', ip: '82.14.21.5'  },
   { id: 'aud_7', actor: 'Daniel Mehta',  actorRole: 'admin',      action: 'Invited 3 new teachers',                 type: 'user',     target: 'Apex Learning',       ts: '2026-06-30T08:00:00Z', ip: '203.0.45.9'  },
-  { id: 'aud_8', actor: 'Grace Okonkwo', actorRole: 'admin',      action: 'Enabled SSO (Google Workspace)',         type: 'security', target: 'Scholar Hub',         ts: '2026-06-29T14:22:00Z', ip: '88.97.12.40' },
+  { id: 'aud_8', actor: 'Grace Okonkwo', actorRole: 'admin',      action: 'Switched comms safety preset to Standard', type: 'security', target: 'Scholar Hub',         ts: '2026-06-29T14:22:00Z', ip: '88.97.12.40' },
   { id: 'aud_9', actor: 'System',        actorRole: 'system',     action: 'Nightly backup completed (all tenants)', type: 'system',   target: 'Global',              ts: '2026-06-29T02:00:00Z', ip: 'auto'        },
 ];
 
@@ -215,22 +282,24 @@ const SA_SUSPICIOUS = [
   { id: 'sus_3', email: 'lisa@brightminds.co.uk', attempts: 3, ip: '92.40.118.3',  country: '🇬🇧 UK',  time: 'Yesterday', status: 'cleared' },
 ];
 
-// ─── Feature flags. `realtime_chat` reframed as monitored_messaging so it can
-//     never read as an unmonitored staff↔student channel (safeguarding). ─────
+// ─── Feature flags — product ROLLOUT only (decision #32). One master switch plus
+//     an optional account allowlist: `accountIds: null` = every account, an array
+//     = only those. No percentages, cohorts or plan gates — plans gate surfaces
+//     through capabilities (#25), never through a flag. Seeds tutoros.flags.v1. ─
 const SA_FLAGS = [
-  { id: 'reports_v2',          desc: 'New student report builder (v2)',                         on: true,  scope: 'global',      coverage: '100%' },
-  { id: 'lesson_planner_beta', desc: 'Drag-and-drop lesson planner v2',                         on: true,  scope: 'opt-in',      coverage: '34%'  },
-  { id: 'parent_payments',     desc: 'Parents pay invoices in-app',                             on: false, scope: 'Scale only',  coverage: '0%'   },
-  { id: 'multi_currency',      desc: 'Currency support beyond GBP',                             on: true,  scope: 'global',      coverage: '100%' },
-  { id: 'gradebook_export',    desc: 'Excel gradebook export',                                  on: true,  scope: 'global',      coverage: '100%' },
-  { id: 'hw_auto_marking',     desc: 'Auto-mark homework against teacher answers',              on: false, scope: 'beta cohort', coverage: '8%'   },
-  { id: 'monitored_messaging', desc: 'Monitored student→staff messaging (safeguarding-routed)', on: false, scope: 'opt-in',      coverage: '12%'  },
-  { id: 'mobile_offline',      desc: 'Offline homework on mobile app',                          on: true,  scope: 'beta cohort', coverage: '21%'  },
+  { id: 'reports_v2',          desc: 'New student report builder (v2)',                         on: true,  accountIds: null },
+  { id: 'lesson_planner_beta', desc: 'Drag-and-drop lesson planner v2',                         on: true,  accountIds: ['acc_brightminds', 'acc_apex', 'acc_scholarhub'] },
+  { id: 'multi_currency',      desc: 'Currency support beyond GBP',                             on: true,  accountIds: null },
+  { id: 'gradebook_export',    desc: 'Excel gradebook export',                                  on: true,  accountIds: null },
+  { id: 'hw_auto_marking',     desc: 'Auto-mark homework against teacher answers',              on: true,  accountIds: ['acc_brightminds'] },
+  { id: 'monitored_messaging', desc: 'Monitored student→staff messaging (safeguarding-routed)', on: false, accountIds: ['acc_pinnacle', 'acc_mindmethod'] },
+  { id: 'mobile_offline',      desc: 'Offline homework on mobile app',                          on: true,  accountIds: ['acc_northstar', 'acc_summit'] },
 ];
 
 Object.assign(window, {
   BRAND, SA_CHART_PALETTE, saPalette,
   SA_ACCOUNTS, SA_COUNTRY_FLAG, SA_ROLE_COUNTS,
   SA_USER_GROWTH, SA_MRR_MOVEMENT, SA_ACTIVITY, SA_FEATURE_USAGE, SA_DEVICE,
-  SA_TICKETS, SA_FAILED_PAYMENTS, SA_TXNS, SA_AUDIT, SA_DSAR, SA_SUSPICIOUS, SA_FLAGS,
+  SA_NOW, SA_SUPPORT_SESSIONS, SA_SERVICES, SA_PUBLIC_COMPONENTS, SA_QUEUES, SA_CRON, SA_INCIDENTS, SA_EMAIL_DELIVERY,
+  SA_FAILED_PAYMENTS, SA_TXNS, SA_AUDIT, SA_DSAR, SA_SUSPICIOUS, SA_FLAGS,
 });

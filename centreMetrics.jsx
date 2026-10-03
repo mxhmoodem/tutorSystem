@@ -122,7 +122,10 @@ const cmNum = (v, dflt) => (typeof v === 'number' ? v : dflt);
 const atRiskReason = (s) => {
   if (cmNum(s.attendance, 100) < AT_RISK_THRESHOLDS.attendance) return `Attendance ${cmNum(s.attendance, 0)}%`;
   if (cmNum(s.hw, 100)         < AT_RISK_THRESHOLDS.completion) return `Homework ${cmNum(s.hw, 0)}%`;
-  if (cmNum(s.score, 100)      < AT_RISK_THRESHOLDS.score)      return `Score ${cmNum(s.score, 0)}%`;
+  // Attainment is DERIVED from assessment results (window.klasioScores, decision
+  // #50). A pupil with no results is not flagged on attainment — no data is not a fail.
+  const att = window.studentAttainment ? window.studentAttainment(s) : null;
+  if (att != null && att < AT_RISK_THRESHOLDS.score)         return `Attainment ${att}%`;
   if (s.status === 'at-risk') return 'Flagged by staff';
   return null;
 };
@@ -140,6 +143,29 @@ const getSessionsWeek = (centreId) => {
   const today = CM_DOW[new Date().getDay()];
   return { total: classes.length, today: classes.filter(c => c.day === today).length };
 };
+// Net student movement — level ("142 students") says where the centre is; change
+// says where it's going. A centre enrolling four a month while losing four looks
+// healthy on headcount alone. Joined = first enrolment inside the month (pending,
+// unclaimed accounts aren't enrolled yet, so they don't count); left = enrolment
+// ended inside the month. Production: v_student_movement over `enrolments`.
+const cmMonthOf = (iso) => (iso || '').slice(0, 7);
+const cmNowIso = () => {
+  const t = window.getNow ? window.getNow() : Date.now();
+  const d = new Date(t);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+const getStudentMovement = (centreId, monthIso) => {
+  if (!cmHasRoster(centreId || getActiveCentreId())) return { joined: 0, left: 0, net: 0, month: cmMonthOf(monthIso || cmNowIso()) };
+  const month = cmMonthOf(monthIso || cmNowIso());
+  const seedJoined = window.SEED_JOINED_ON || {};
+  const joinedOn = (s) => s.joinedOn || seedJoined[s.id] || (s.account && s.account.activatedOn) || null;
+  const roster = getStudentsForCentre(centreId).filter(s => !cmPending(s));
+  const leavers = (window.SEED_LEAVERS || []).concat(roster.filter(s => s.leftOn));
+  const joined = roster.concat(window.SEED_LEAVERS || []).filter(s => cmMonthOf(joinedOn(s)) === month).length;
+  const left = leavers.filter(s => cmMonthOf(s.leftOn) === month).length;
+  return { joined, left, net: joined - left, month };
+};
+
 const getCapacityUsed = (centreId) => {
   const classes = getClassesForCentre(centreId);
   const cap  = classes.reduce((n, c) => n + (c.capacity || 0), 0);
@@ -236,7 +262,9 @@ window.centreMetrics = {
   // at-risk (one definition)
   AT_RISK_THRESHOLDS, atRiskReason, isAtRisk, getAtRiskStudents, isActiveStudent,
   // KPIs
-  getAttendanceWeek, getSessionsWeek, getCapacityUsed, getInvoiceRollup,
+  getAttendanceWeek, getSessionsWeek, getCapacityUsed, getInvoiceRollup, getStudentMovement,
+  // does this centre carry a live roster in the prototype (only the primary does)?
+  hasRoster: cmHasRoster,
   // account-pooled
   getSeatUsage, getStoragePool,
 };

@@ -469,9 +469,10 @@ const SETTINGS_ROLE_TAB = {
   superadmin: { id: 'platform', label: 'Platform Defaults', icon: 'settings' },
   admin:      { id: 'centre',   label: 'Centre',            icon: 'book' },
   teacher:    { id: 'teaching', label: 'Teaching',          icon: 'teacher' },
-  student:    { id: 'learning', label: 'Learning',          icon: 'brain' },
 };
 const SETTINGS_SUB = (role) => {
+  // A pupil's Settings is one page with no sections (decision #61).
+  if (role === 'student') return [];
   const first = SETTINGS_ROLE_TAB[role] || SETTINGS_ROLE_TAB.admin;
   // Plans & Billing + Storage moved to the ACCOUNT tier (§3) — no longer settings tabs.
   return [first,
@@ -482,17 +483,17 @@ const SETTINGS_SUB = (role) => {
 };
 
 // Communications is one shared module across roles. Every role gets Announcements +
-// Messages; admins additionally get the Safeguarding (DSL oversight) section, and
-// the superadmin keeps the platform Support section. The composer + DSL view are
-// gated inside the page by the permission helpers. Compound ids follow the
-// `<parent>:<section>` dropdown convention.
+// Messages; admins additionally get the Safeguarding (DSL oversight) section. The
+// composer + DSL view are gated inside the page by the permission helpers.
+// Compound ids follow the `<parent>:<section>` dropdown convention.
 const COMMS_BASE = [
   { id: 'comms:announcements', label: 'Announcements', icon: 'megaphone' },
   { id: 'comms:messages',      label: 'Messages',      icon: 'mail' },
 ];
-// Owner console has no Messages surface (platform owners don't DM tenants) —
-// its Communications is Announcements + Support instead.
-const COMMS_OWNER = [COMMS_BASE[0], { id: 'comms:support', label: 'Support', icon: 'message' }];
+// Owner console has no Messages surface (platform owners don't DM tenants) — its
+// Communications is Announcements (to account admins) only. Support is by email;
+// the owner's `support` page is the support-sessions log, not a comms section.
+const COMMS_OWNER = [COMMS_BASE[0]];
 // No role nests Communications under one dropdown any more — its sections are
 // top-level nav items (admin/teacher group them under a `Communication` section;
 // admin's Safeguarding sits under Operations, and Comms settings became a
@@ -520,10 +521,15 @@ const NAV_CONFIG = {
       { id: 'centres',       icon: 'book',        label: 'Centres',          section: 'Platform' },
       { id: 'users',         icon: 'users',       label: 'Users',            section: 'Platform' },
       { id: 'revenue',       icon: 'invoice',     label: 'Revenue',          section: 'Business' },
+      // Plans, free trials and codes for both audiences (centres + solo tutors).
+      { id: 'pricing',       icon: 'tag',         label: 'Pricing',          section: 'Business' },
       { id: 'engagement',    icon: 'chart',       label: 'Engagement',       section: 'Business' },
       ...commsFlat('Trust & Safety', COMMS_OWNER),
+      { id: 'support',       icon: 'message',     label: 'Support sessions', section: 'Trust & Safety' },
       { id: 'security',      icon: 'alert',       label: 'Security & Audit', section: 'Trust & Safety' },
       { id: 'system',        icon: 'zap',         label: 'System Health',    section: 'System' },
+      // Storage is a cost line and the main abuse vector — its own page, not a Settings tab.
+      { id: 'storage',       icon: 'cloud',       label: 'Storage',          section: 'System' },
       { id: 'controls',      icon: 'settings',    label: 'Platform Controls',section: 'System' },
     ],
     bottom: [{ id: 'settings', icon: 'settings', label: 'Settings', chevron: true }],
@@ -551,12 +557,14 @@ const NAV_CONFIG = {
       { id: 'resources', icon: 'folder',   label: 'Resources', section: 'Academic' },
       { id: 'invoices',  icon: 'invoice',  label: 'Invoices', section: 'Operations' },
       { id: 'timesheets', icon: 'clock',   label: 'Timesheets', section: 'Operations' },
-      { id: 'reports',   icon: 'chart',    label: 'Reports', section: 'Operations', sub: [
-        { id: 'reports:overview', label: 'Overview',    icon: 'dashboard' },
-        { id: 'reports:browse',   label: 'All Reports', icon: 'list' },
-        { id: 'reports:generate', label: 'Generate',    icon: 'plus' },
-        { id: 'reports:settings', label: 'Settings',    icon: 'settings' },
-      ] },
+      // Reports = the student-report product (write, publish, govern). Analytics =
+      // centre-wide figures and exports. Different audience, lifecycle and
+      // permissions, so two items — a Financial Overview never sits inside pupil
+      // reports. (reports:generate is aliased to analytics in index.html.)
+      // One page, no dropdown: the overview figures sit above the list and Settings
+      // is a header button (routed as reports:settings so deep links still land).
+      { id: 'reports',   icon: 'file',     label: 'Reports', section: 'Operations' },
+      { id: 'analytics', icon: 'chart',    label: 'Analytics', section: 'Operations' },
       // Safeguarding is a Communications *section* by route (comms:safeguarding)
       // but an Operations concern by product grouping — the DSL oversight desk.
       { id: 'comms:safeguarding', icon: 'shield', label: 'Safeguarding', section: 'Operations' },
@@ -591,10 +599,10 @@ const NAV_CONFIG = {
       // (The old Work/Progress split put attendance and progress in separate
       // groups even though they're the same follow-up loop.)
       { id: 'attendance',      icon: 'check',     label: 'Attendance', section: 'Student work' },
-      { id: 'homework',        icon: 'notebook_pen', label: 'Homework', section: 'Student work', sub: [
-        { id: 'homework:assignments', label: 'Assignments', icon: 'notebook_pen' },
-        { id: 'homework:analytics',   label: 'Analytics',   icon: 'chart' },
-      ] },
+      // Homework is one destination; Analytics is a lens toggle in its header, not a
+      // sub-item (decision #49). `homework:analytics` still resolves as a deep link.
+      { id: 'homework',        icon: 'notebook_pen', label: 'Homework', section: 'Student work' },
+      // Progress is the real cross-class destination ("how are my pupils doing").
       { id: 'progress',        icon: 'chart',     label: 'Progress', section: 'Student work' },
       { id: 'tracking',        icon: 'star',      label: 'Tracking', section: 'Student work' },
       { id: 'reports',         icon: 'file',      label: 'Reports', section: 'Student work' },
@@ -637,7 +645,7 @@ const PAGE_NAV_PARENT = {
 };
 
 // The page id is the part before any `:` — sub-sections use a `<parent>:<sub>`
-// convention (e.g. reports:browse) while ordinary sub-pages use `<id>_<detail>`
+// convention (e.g. homework:analytics) while ordinary sub-pages use `<id>_<detail>`
 // (e.g. students_add). Both fold back to the parent for nav highlighting and
 // for the breadcrumb trail.
 const navParentId = (active) => {
@@ -808,11 +816,11 @@ const Sidebar = ({ role, active = 'dashboard', onNav, onRoleSwitch, badges, coll
   const [hoveredItem, setHoveredItem] = React.useState(null);
 
   // A sub-item matches the active page when it's an exact compound-section match
-  // (e.g. reports:browse) OR a "whole page" sub (e.g. Teachers) whose page-parent
+  // (e.g. homework:analytics) OR a "whole page" sub (e.g. Teachers) whose page-parent
   // folds onto it — `teacher_profile` → `teacher` → `teachers`. Compound sub ids
   // contain ':' so the folding clauses can never false-match them.
-  // The last clause folds a drill-in page onto a compound sub: `report_detail`
-  // → `report` → `reports` matches the Reports sub `reports:browse`.
+  // The last clause folds a singular drill-in page onto a plural parent's compound
+  // sub (`<x>_detail` → `<x>` → `<x>s:<section>`).
   const subMatches = (sub) => active === sub.id || navParentId(active) === sub.id || navParentId(active) + 's' === sub.id || navParentId(active) + 's' === sub.id.split(':')[0];
   const itemIsActive = (item) => {
     const base = navParentId(active);
@@ -1970,7 +1978,12 @@ const BarChart = ({ labels = [], data = [], color = DS.accent, height = 160 }) =
 };
 
 // ─── Score Pill ────────────────────────────────────────────────────────────────
+// A null score means "no result yet" (e.g. a pupil never assessed) — shown as a
+// neutral dash, never as 0%, so an absence of data is not read as failure.
 const ScorePill = ({ score }) => {
+  if (score == null || Number.isNaN(score)) {
+    return <span title="No results yet" style={{ display: 'inline-block', minWidth: 36, textAlign: 'center', padding: '2px 8px', borderRadius: 5, background: DS.surface, color: DS.faint, fontSize: 12, fontWeight: 600 }}>—</span>;
+  }
   const color = score >= 80 ? DS.success : score >= 60 ? DS.warning : DS.danger;
   const bg    = score >= 80 ? DS.successBg : score >= 60 ? DS.warningBg : DS.dangerBg;
   return (
@@ -2469,6 +2482,129 @@ const SlideOver = ({ open, onClose, title, subtitle, icon, iconColor, width = 44
         {footer && (
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '14px 22px', borderTop: `1px solid ${DS.border}`, background: DS.surface }}>{footer}</div>
         )}
+      </div>
+    </div>
+  );
+};
+
+// ─── Month calendar ──────────────────────────────────────────────────────────────
+// A Monday-first month model for MonthCalendar.
+const CAL_MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const monthGridModel = (y, m) => {
+  const first = new Date(y, m, 1);
+  return { y, m, key: `${y}-${String(m + 1).padStart(2, '0')}`, name: `${CAL_MONTH_NAMES[m]} ${y}`, firstDow: (first.getDay() + 6) % 7, days: new Date(y, m + 1, 0).getDate() };
+};
+
+// ONE month-grid implementation: the pupil's Sessions page and the teacher's
+// Timetable (variant="full", event chips in each cell) and the pupil dashboard's
+// right-rail mini calendar (variant="mini", dotted session days + day selection).
+// Session dates, today and the colour all come from the caller — the grid never
+// invents a date. An item is { id, subject, time, status, label?, tooltip? }:
+// `label` / `tooltip` override the chip text and hover text.
+const MonthCalendar = ({
+  month, today, sessionsByDay = {}, subjColor = () => DS.accent,
+  variant = 'full', selectedDay = null, onSelectDay, onOpenSession,
+  onPrev, onNext, onToday, legend, title,
+}) => {
+  // A busy day shows three chips and a "+N more" that expands it in place, so no
+  // session is ever unreachable from the grid.
+  const [expandedDay, setExpandedDay] = React.useState(null);
+  React.useEffect(() => { setExpandedDay(null); }, [month.key]);
+  const cells = [];
+  for (let i = 0; i < month.firstDow; i++) cells.push(null);
+  for (let d = 1; d <= month.days; d++) cells.push(d);
+  while (cells.length % 7 !== 0) cells.push(null);
+  const mini = variant === 'mini';
+  const navBtn = (label, onClick, rotate) => (
+    <button aria-label={label} onClick={onClick} style={{
+      width: mini ? 26 : 30, height: mini ? 26 : 30, borderRadius:7, border:`1px solid ${DS.border}`,
+      background:DS.bg, cursor:'pointer', display:'inline-flex', alignItems:'center', justifyContent:'center',
+    }}>
+      <span style={{ display:'inline-flex', transform: rotate ? 'rotate(180deg)' : 'none' }}>
+        <Icon name="chevron_r" size={13} color={DS.muted} strokeWidth={2} />
+      </span>
+    </button>
+  );
+  return (
+    <div>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom: mini ? 10 : 16 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          {!mini && <Icon name="calendar" size={16} color={DS.muted} />}
+          <div style={{ fontSize: mini ? 14 : 17, fontWeight:700, color:DS.text, letterSpacing:'-0.3px' }}>{title || month.name}</div>
+        </div>
+        <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+          {legend}
+          {onPrev && navBtn('Previous month', onPrev, true)}
+          {onToday && <button onClick={onToday} style={{ padding: mini ? '4px 9px' : '6px 12px', borderRadius:7, border:`1px solid ${DS.border}`, background:DS.bg, fontSize:12, fontWeight:500, color:DS.sub, cursor:'pointer' }}>Today</button>}
+          {onNext && navBtn('Next month', onNext, false)}
+        </div>
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(7, 1fr)', gap: mini ? 3 : 6, marginBottom: mini ? 3 : 6 }}>
+        {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(d => (
+          <div key={d} style={{ fontSize: mini ? 9 : 11, fontWeight:700, color:DS.muted, letterSpacing:'1px', textAlign:'center', padding: mini ? '2px 0' : '4px 0' }}>{d.toUpperCase()}</div>
+        ))}
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(7, minmax(0, 1fr))', gap: mini ? 3 : 6 }}>
+        {cells.map((d, i) => {
+          const isToday = d === today;
+          const items = (d && sessionsByDay[d]) || [];
+          const selected = d != null && d === selectedDay;
+          if (mini) {
+            const clickable = d != null;
+            return (
+              <button key={i} disabled={!clickable} onClick={() => clickable && onSelectDay && onSelectDay(d)} style={{
+                aspectRatio:'1 / 1', border: selected ? `1.5px solid ${DS.accent}` : isToday ? `1.5px solid ${DS.accentBorder}` : '1px solid transparent',
+                background: d == null ? 'transparent' : selected ? DS.accentLight : 'transparent',
+                borderRadius:8, cursor: clickable ? 'pointer' : 'default', padding:0, position:'relative',
+                display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:2,
+                opacity: d == null ? 0 : 1,
+              }}>
+                <span style={{ fontSize:11.5, fontWeight: isToday || selected ? 700 : 500, color: isToday ? DS.accent : DS.sub, lineHeight:1 }}>{d}</span>
+                <span style={{ display:'flex', gap:2, height:4 }}>
+                  {items.slice(0, 3).map((s, j) => (
+                    <span key={j} style={{ width:4, height:4, borderRadius:'50%', background: s.status === 'absent' ? DS.danger : s.status === 'cancelled' ? DS.faint : subjColor(s.subject) }} />
+                  ))}
+                </span>
+              </button>
+            );
+          }
+          const expanded = expandedDay === d;
+          const shown = expanded ? items : items.slice(0, 3);
+          return (
+            <div key={i} style={{
+              minHeight:90, minWidth:0, padding:'8px 8px 6px', borderRadius:9,
+              background: d == null ? 'transparent' : isToday ? DS.accentLight : DS.surface,
+              border: d == null ? 'none' : `1px solid ${isToday ? DS.accentBorder : DS.border}`,
+              opacity: d == null ? 0 : 1, display:'flex', flexDirection:'column', gap:4,
+            }}>
+              {d != null && (<>
+                <div style={{ fontSize:12, fontWeight: isToday ? 700 : 600, color: isToday ? DS.accent : DS.sub, marginBottom:2 }}>{d}</div>
+                {shown.map((s, j) => {
+                  const cancelled = s.status === 'cancelled';
+                  const missed = s.status === 'absent';
+                  const color = cancelled ? DS.faint : missed ? DS.danger : subjColor(s.subject);
+                  return (
+                    <button key={s.id || j} type="button" disabled={!onOpenSession} onClick={() => onOpenSession && onOpenSession(s.id)}
+                      title={s.tooltip || `${s.subject} · ${s.time}${cancelled ? ' · cancelled' : missed ? ' · absent' : ''}`} style={{
+                      fontSize:10.5, fontWeight:600, color, textAlign:'left', cursor: onOpenSession ? 'pointer' : 'default',
+                      background: missed ? DS.dangerBg : color + '18', border:'none', borderLeft:`2px solid ${color}`,
+                      padding:'3px 6px', borderRadius:4, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
+                      textDecoration: cancelled ? 'line-through' : 'none',
+                    }}>{s.label || `${s.time.split('–')[0]} ${s.subject.split(' ')[0]}`}</button>
+                  );
+                })}
+                {items.length > 3 && (
+                  <button type="button" onClick={() => setExpandedDay(expanded ? null : d)} style={{
+                    fontSize:10, fontWeight:600, color:DS.muted, background:'none', border:'none',
+                    padding:'1px 2px', textAlign:'left', cursor:'pointer',
+                  }}>{expanded ? 'Show less' : `+${items.length - 3} more`}</button>
+                )}
+              </>)}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

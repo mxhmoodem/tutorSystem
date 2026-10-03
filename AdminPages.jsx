@@ -49,10 +49,12 @@ const useAdminStore = () => {
           levels:     parsed.levels     || SEED_LEVELS,
           examBoards: parsed.examBoards || SEED_EXAM_BOARDS,
           holidays:   parsed.holidays   || {},   // { teacherId: [{ id, from, to, reason }] }
+          // Teaching availability (decision #55) — { teacherId: { weekly, blackouts, setBy, updatedAt } }
+          availability: parsed.availability || SEED_AVAILABILITY,
         };
       }
     } catch (e) { /* ignore */ }
-    return { teachers: SEED_TEACHERS, classes: SEED_CLASSES, students: SEED_STUDENTS, subjects: SEED_SUBJECTS, yearGroups: SEED_YEAR_GROUPS, levels: SEED_LEVELS, examBoards: SEED_EXAM_BOARDS, holidays: {} };
+    return { teachers: SEED_TEACHERS, classes: SEED_CLASSES, students: SEED_STUDENTS, subjects: SEED_SUBJECTS, yearGroups: SEED_YEAR_GROUPS, levels: SEED_LEVELS, examBoards: SEED_EXAM_BOARDS, holidays: {}, availability: SEED_AVAILABILITY };
   };
   const [store, setStore] = React.useState(read);
 
@@ -78,6 +80,22 @@ const useAdminStore = () => {
   const setCoversForClasses  = map => persist({ ...store, classes: store.classes.map(c => (c.id in map) ? { ...c, cover: map[c.id] } : c) });
   // Lift cover off every class an away teacher takes (the "remove all cover" button).
   const clearCoverForTeacher = awayName => persist({ ...store, classes: store.classes.map(c => c.teacher === awayName ? { ...c, cover: null } : c) });
+  // A class's background (classCovers.jsx) — NOT the cover teacher above. Its own
+  // write, never through updateClass, so a teacher's access stops at these two
+  // fields. `actor` = { role, name }: an admin may change any class, a teacher only
+  // their own. The input is validated against the one registry; null resets the
+  // class to its subject default (both fields cleared). A refusal writes nothing.
+  const setClassBackground = (classId, input, actor) => {
+    const K = window.klasioCovers;
+    const cls = store.classes.find(c => c.id === classId);
+    if (!cls) return { ok: false, error: 'not_found' };
+    if (!K.canChangeBackground(actor, cls)) return { ok: false, error: 'forbidden' };
+    const valid = K.validateCoverSelection(input);
+    if (!valid.ok) return valid;
+    const stored = K.toStoredCover(valid.value);
+    persist({ ...store, classes: store.classes.map(c => c.id === classId ? { ...c, coverPresetId: stored.presetId, coverIconId: stored.iconId } : c) });
+    return { ok: true };
+  };
   // Create a class AND link its roster in one persist — avoids the stale-closure
   // problem of calling addClass then updateStudent N times (each off the same
   // pre-render snapshot would clobber the previous write).
@@ -166,7 +184,12 @@ const useAdminStore = () => {
   const removeHoliday = (teacherId, holidayId) =>
     persist({ ...store, holidays: { ...store.holidays, [teacherId]: (store.holidays[teacherId] || []).filter(h => h.id !== holidayId) } });
 
-  return { ...store, addTeacher, addTeachers, updateTeacher, removeTeacher, addClass, updateClass, setCover, clearCover, setCoversForClasses, clearCoverForTeacher, createClassWithRoster, enrolStudentsInClass, removeFromClass, addStudent, addStudents, updateStudent, removeStudent, addSubject, updateSubject, removeSubject, addSubjectInline, addYearGroup, addLevel, addExamBoard, addHoliday, removeHoliday };
+  // Set by the teacher (Settings → Teaching), overridable by an admin (teacher
+  // profile). `setBy` records which, so an override is visible to the teacher.
+  const setAvailability = (teacherId, value, setBy) =>
+    persist({ ...store, availability: { ...(store.availability || {}), [teacherId]: { ...value, setBy: setBy || 'teacher', updatedAt: new Date().toISOString() } } });
+
+  return { ...store, setAvailability, addTeacher, addTeachers, updateTeacher, removeTeacher, addClass, updateClass, setCover, clearCover, setCoversForClasses, clearCoverForTeacher, setClassBackground, createClassWithRoster, enrolStudentsInClass, removeFromClass, addStudent, addStudents, updateStudent, removeStudent, addSubject, updateSubject, removeSubject, addSubjectInline, addYearGroup, addLevel, addExamBoard, addHoliday, removeHoliday };
 };
 
 // ─── Admin sub-navigation ───────────────────────────────────────────────────────
@@ -275,7 +298,11 @@ const AdminStudentsPage = () => {
   // Page-level averages, derived from the same filtered roster the table shows.
   const mean = (key) => students.length
     ? Math.round(students.reduce((a, st) => a + (st[key] || 0), 0) / students.length) : 0;
-  const avgAttendance = mean('attendance'), avgHw = mean('hw'), avgScore = mean('score');
+  const avgAttendance = mean('attendance'), avgHw = mean('hw');
+  // Attainment is derived from assessment results (decision #50); pupils with no
+  // results yet are left out of the average rather than counted as 0.
+  const attns = students.map(st => window.studentAttainment(st)).filter(n => typeof n === 'number');
+  const avgScore = attns.length ? Math.round(attns.reduce((a, b) => a + b, 0) / attns.length) : null;
   // Enrolments come from the ONE selector the Dashboard and Classes page use — a
   // second count of the same concept here (summing each student's classIds) gave a
   // different answer on the same screenful of data.
@@ -294,8 +321,8 @@ const AdminStudentsPage = () => {
   // export. This surfaces minors' data, so AADC / Children's-Code minimisation
   // applies; a real backend would also gate this behind a permission + rate limit.
   const exportCsv = () => {
-    const header = ['name', 'year', 'attendance', 'hw', 'score', 'status'];
-    const rows = filtered.map(s => [studentName(s), s.year, s.attendance, s.hw, s.score, cm.isAtRisk(s) ? 'at-risk' : 'on-track']);
+    const header = ['name', 'year', 'attendance', 'hw', 'attainment', 'status'];
+    const rows = filtered.map(s => [studentName(s), s.year, s.attendance, s.hw, window.studentAttainment(s) ?? '', cm.isAtRisk(s) ? 'at-risk' : 'on-track']);
     (window.klasioAudit || (() => {}))('export_csv', `students (${rows.length} records)`);
     try {
       const csv = [header, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
@@ -324,7 +351,7 @@ const AdminStudentsPage = () => {
           tone: avgAttendance < 90 ? DS.warning : undefined },
         { label: 'Avg homework', value: `${avgHw}%`, sub: 'completion rate',
           tone: avgHw < 70 ? DS.warning : undefined },
-        { label: 'Avg score', value: `${avgScore}%`, sub: 'latest assessments' },
+        { label: 'Avg attainment', value: avgScore == null ? '—' : `${avgScore}%`, sub: `from assessment results · ${attns.length} pupils` },
         { label: 'At risk', value: atRiskCount, sub: atRiskCount ? 'need a look' : 'none flagged',
           tone: atRiskCount ? DS.danger : DS.success,
           onClick: () => setFilter('at-risk'),
@@ -347,7 +374,7 @@ const AdminStudentsPage = () => {
       <div style={{ display:'grid', gridTemplateColumns: selected ? '1fr 360px' : '1fr', gap:20 }}>
         <Card>
           <Table
-            cols={['Student','Year','Subjects','Attendance','HW %','Avg Score','Status']}
+            cols={['Student','Year','Subjects','Attendance','HW %','Attainment','Status']}
             rows={filtered.map(s => ({
               // The whole row is the target — a row that opens one thing doesn't need
               // a menu offering that same one thing.
@@ -372,7 +399,7 @@ const AdminStudentsPage = () => {
                 <span style={{ display:'inline-flex', alignItems:'center', justifyContent:'flex-end', gap:3, fontSize:13, fontWeight:600, color: s.hw < 50 ? DS.danger : s.hw < 70 ? DS.warning : DS.success }}>
                   {s.hw < 50 && <Icon name="alert" size={11} />}{s.hw}%
                 </span>,
-                <ScorePill score={s.score} />,
+                <ScorePill score={window.studentAttainment(s)} />,
                 // At-risk is explainable on hover (the reason travels with the pill) —
                 // advisory, never opaque (Children's-Code Part D).
                 <span title={cm.isAtRisk(s) ? cm.atRiskReason(s) : 'On track'}>
@@ -404,7 +431,7 @@ const AdminStudentsPage = () => {
                 ['Guardian', selected.guardianName || '—'],
                 ['Attendance', `${selected.attendance}%`],
                 ['HW Completion', `${selected.hw}%`],
-                ['Average Score', `${selected.score}%`],
+                ['Attainment', window.studentAttainment(selected) == null ? 'No results yet' : `${window.studentAttainment(selected)}%`],
                 ['Last Seen', selected.lastSeen],
               ].map(([l,v]) => (
                 <div key={l} style={{ display:'flex', justifyContent:'space-between', padding:'9px 0', borderBottom:`1px solid ${DS.border}`, fontSize:13 }}>
@@ -465,7 +492,7 @@ const EnrolStudentPage = () => {
       dob: form.dob, year: form.year, email: form.email.trim(), phone: form.phone.trim(), address: form.address.trim(),
       guardianName: form.guardianName.trim(), guardianRelation: form.guardianRelation, guardianEmail: form.guardianEmail.trim(), guardianPhone: form.guardianPhone.trim(),
       subjects: form.subjects, classIds: form.classIds, notes: form.notes.trim(),
-      attendance:100, hw:0, score:0, status:'active',
+      attendance:100, hw:0, status:'active',
       teacher: teacherNames.join(' / ') || '—', lastSeen:'Just enrolled',
     });
     adminNav('students');
@@ -674,7 +701,13 @@ const TARGET_BANK = [
 const studentAnalytics = (student, enrolledClasses) => {
   const rnd = seededRand((student.id || student.name || 'x') + 'profile');
   const pick = arr => arr[Math.floor(rnd()*arr.length)] || arr[0];
-  const base = student.score || 70, hwBase = student.hw || 75, attBase = student.attendance || 92;
+  // Attainment comes from assessment RESULTS through the one score selector
+  // (decision #50) — the profile no longer invents a score. `base` only seeds the
+  // extras that are still synthesised (effort ratings, the homework feed) and
+  // falls back to 70 for a pupil with no results yet.
+  const S = window.klasioScores ? window.klasioScores.getStudentScoreSeries(student.id) : { attainment: [], homework: [], attainmentAvg: null };
+  const attainment = S.attainmentAvg;
+  const base = attainment != null ? attainment : 70, hwBase = student.hw || 75, attBase = student.attendance || 92;
   const alevel = /1[23]/.test(student.year || '');
   const subjects = (student.subjects && student.subjects.length) ? student.subjects : ['General Studies'];
   const teacherFor = subj => {
@@ -683,19 +716,32 @@ const studentAnalytics = (student, enrolledClasses) => {
     return (cls && cls.teacher) || (enrolledClasses[0] && enrolledClasses[0].teacher) || 'Centre staff';
   };
 
-  const trend = ANALYTICS_MONTHS.map((m,i) => {
-    const t = i/(ANALYTICS_MONTHS.length-1);
-    return Math.max(35, Math.min(99, Math.round(base-12 + t*12 + (rnd()-0.5)*7)));
-  });
-  trend[trend.length-1] = base;
-  const cohort = ANALYTICS_MONTHS.map((_,i) => Math.max(45, Math.min(92, Math.round(68 + Math.sin(i/1.5)*3 + (rnd()-0.5)*4))));
+  // Trend = the pupil's actual results in date order, beside each paper's class average.
+  const classAvgFor = (e) => {
+    const a = window.klasioScores ? window.klasioScores.classAssessments(e.classId).find(x => x.id === e.assessmentId) : null;
+    return a && a.classAvgPct != null ? a.classAvgPct : null;
+  };
+  const trend = S.attainment.map(e => e.pct);
+  const trendLabels = S.attainment.map(e => new Date(e.date + 'T00:00:00').toLocaleDateString('en-GB', { day:'numeric', month:'short' }));
+  const cohort = S.attainment.map(e => classAvgFor(e) ?? e.pct);
   const attendanceByMonth = ANALYTICS_MONTHS.map(() => Math.max(60, Math.min(100, Math.round(attBase + (rnd()-0.5)*14))));
 
-  const subjectRows = subjects.map(s => {
-    const score = Math.max(35, Math.min(99, Math.round(base + (rnd()-0.45)*22)));
-    const targetScore = Math.min(99, score + Math.round(rnd()*10));
-    const spark = Array.from({length:6},(_,k)=>Math.max(35,Math.min(99,Math.round(score-8 + k*2 + (rnd()-0.5)*6))));
-    return { name:s, teacher:teacherFor(s), score, predicted:scoreToGrade(score,alevel), target:scoreToGrade(targetScore,alevel), effort:60+Math.round(rnd()*38), spark, onTrack: score>=targetScore-4 };
+  // One row per class the pupil is enrolled in, from that class's results.
+  // Predicted + target are the teacher's stored judgement (decision #28,
+  // klasioTargets) — never derived from a score. "On track" IS derived: the latest
+  // result's indicative grade is at or above the target (v_student_progress).
+  const subjectRows = (enrolledClasses.length ? enrolledClasses : subjects.map(s => ({ id:null, name:s, teacher:teacherFor(s) }))).map(c => {
+    const pts = c.id ? S.attainment.filter(e => e.classId === c.id).map(e => e.pct) : [];
+    const score = pts.length ? pts[pts.length - 1] : null;
+    const tgt = c.id && window.klasioTargets ? window.klasioTargets.get(student.id, c.id) : null;
+    const level = c.id && window.klasioTargets ? window.klasioTargets.levelForClass(c, student) : (alevel ? 'A-Level' : 'GCSE');
+    const G = window.klasioGrades;
+    const indicative = score != null && G ? G.pctToGrade(score, { level }) : null;
+    const order = G ? G.gradesFor({ level }) : [];
+    const onTrack = (indicative && tgt && tgt.target && order.includes(tgt.target)) ? order.indexOf(indicative) <= order.indexOf(tgt.target) : null;
+    return { name: String(c.name || '').replace(/^(GCSE|A-?Level)\s+/i, '') || c.name, teacher: c.teacher || 'Centre staff', score,
+      predicted: (tgt && tgt.predicted) || null, target: (tgt && tgt.target) || null, indicative,
+      effort: 60+Math.round(rnd()*38), spark: pts, onTrack };
   });
 
   const hwPool = hwBase>=85?['Marked','Marked','Marked','Marked','Late']:hwBase>=60?['Marked','Marked','Late','Marked','Missing']:['Marked','Late','Missing','Missing','Late'];
@@ -710,7 +756,7 @@ const studentAnalytics = (student, enrolledClasses) => {
   const dates = ['12 Dec 2025','6 Apr 2026','24 Jun 2026'];
   const reports = subjects.slice(0,3).map((s,i)=>({
     id:i, subject:s, teacher:teacherFor(s), period:periods[i%3], type:i===0?'Termly Progress':'Quick Update',
-    date:dates[i%3], predicted:scoreToGrade((subjectRows[i]&&subjectRows[i].score)||base,alevel),
+    date:dates[i%3], predicted:(subjectRows[i] && subjectRows[i].predicted) || '—',
     status:(i===2&&rnd()>0.6)?'Draft':'Published', summary:pick(REVIEW_BANK),
   }));
 
@@ -740,19 +786,22 @@ const studentAnalytics = (student, enrolledClasses) => {
     Confidence: Math.max(40,Math.min(98,base+Math.round((rnd()-0.4)*20))),
   };
 
-  const predictedGrade = scoreToGrade(base, alevel);
-  const targetGrade = scoreToGrade(Math.min(99, base+6), alevel);
+  // The overall grade is only ever the INDICATIVE bucket of the attainment average;
+  // predicted and target grades are per class, set by each teacher.
+  const indicativeGrade = attainment != null ? scoreToGrade(attainment, alevel) : '—';
+  const targetsSet = subjectRows.filter(r => r.target).length;
   const engagement = Math.round((attBase + hwBase + ratings.Participation)/3);
 
+  const lastResult = S.attainment[S.attainment.length - 1];
   const timeline = [
     { icon:'clip', color:DS.accent, text:`Submitted “${homework[1].title}”`, when:'2 days ago' },
     { icon:'graduation', color:DS.success, text:`Attended ${lessons[0].subject} — ${lessons[0].topic}`, when:'3 days ago' },
-    { icon:'file', color:DS.warning, text:`${reports[0].subject} progress report published`, when:'1 week ago' },
-    { icon:'chart', color:DS.info, text:`Scored ${subjectRows[0].score}% in ${subjectRows[0].name} assessment`, when:'1 week ago' },
+    reports[0] && { icon:'file', color:DS.warning, text:`${reports[0].subject} progress report published`, when:'1 week ago' },
+    lastResult && { icon:'chart', color:DS.info, text:`Scored ${lastResult.pct}% (${lastResult.marks}/${lastResult.max}) in ${lastResult.subject} — ${lastResult.title}`, when:new Date(lastResult.date + 'T00:00:00').toLocaleDateString('en-GB', { day:'numeric', month:'short' }) },
     { icon:'message', color:DS.accent, text:`Message sent to ${student.guardianName||'guardian'}`, when:'2 weeks ago' },
-  ];
+  ].filter(Boolean);
 
-  return { trend, cohort, attendanceByMonth, subjectRows, homework, reports, lessons, meetings, reviews, ratings, targets, predictedGrade, targetGrade, engagement, timeline, alevel };
+  return { trend, trendLabels, cohort, attendanceByMonth, subjectRows, homework, reports, lessons, meetings, reviews, ratings, targets, indicativeGrade, targetsSet, engagement, timeline, alevel, attainment, homeworkAvg: S.homeworkAvg };
 };
 
 // Circular progress gauge — the headline attainment/grade dial.
@@ -852,11 +901,22 @@ const StudentAnalyticsView = ({ student, enrolledClasses, role = 'admin' }) => {
   // / revoke mutations). useAdminStore is per-component state with no cross-notify, so
   // the parent's `student` prop wouldn't reflect those writes until a remount.
   const account = (store.students.find(s => s.id === student.id) || student).account || {};
-  const invoices = (typeof REPORTS_INVOICES !== 'undefined' ? REPORTS_INVOICES : []).filter(i => i.student === studentName(student));
-  const notStarted = !enrolledClasses.length && !(student.score || student.attendance || student.hw);
+  // Fees come from the ONE invoice ledger (window.invLedgerRows) — joined on the
+  // student's id, never matched by name, and with status derived exactly as the
+  // Invoices page derives it.
+  const invoices = (window.invLedgerRows ? window.invLedgerRows(r => r.studentIds.includes(student.id)) : [])
+    .map(r => ({ number: r.number, plan: r.classes.join(', ') || 'Tuition', amount: r.totals.total, outstanding: r.totals.outstanding,
+      due: r.totals.nextDue ? r.totals.nextDue.dueDate : null, status: r.status }));
+  const notStarted = !enrolledClasses.length && !(window.studentAttainment(student) != null || student.attendance || student.hw);
   const span2 = { gridColumn:'1 / -1' };
 
   const [tab, setTab] = React.useState('attainment');
+  // While this profile is open, the header's "Raise a concern" is pre-filled with
+  // this pupil (teachers and admins alike).
+  React.useEffect(() => {
+    window.__concernContext = { subjectType: 'student', studentId: student.id };
+    return () => { window.__concernContext = null; };
+  }, [student.id]);
   const [resetOpen, setResetOpen] = React.useState(false);
   const [resetInfo, setResetInfo] = React.useState(null);   // { code, url } of the freshly issued link
   const [pinOpen, setPinOpen] = React.useState(false);
@@ -867,7 +927,7 @@ const StudentAnalyticsView = ({ student, enrolledClasses, role = 'admin' }) => {
   // ── Account / sign-in facts, derived from the claim model ──
   const under13     = !!account.underThirteen;
   const setupLbl    = (window.SETUP_LABEL && window.SETUP_LABEL[account.setupMethod]) || capWord(account.setupMethod || account.dailyMethod || '—');
-  const centreCode  = (typeof ONB_CENTRE !== 'undefined' && ONB_CENTRE.code) || '—';
+  const centreCode  = (window.centreCodeFor && window.centreCodeFor()) || (typeof ONB_CENTRE !== 'undefined' && ONB_CENTRE.code) || '—';
   const resetTarget = under13 ? (student.guardianEmail || 'the guardian email on file') : (account.syntheticEmail || student.email || 'the student email on file');
   const copy = txt => { try { navigator.clipboard.writeText(String(txt)); } catch (e) {} };
 
@@ -910,6 +970,8 @@ const StudentAnalyticsView = ({ student, enrolledClasses, role = 'admin' }) => {
     { id:'classes',    label:'Classes',            icon:'book' },
     { id:'fees',       label:'Fees',               icon:'invoice' },
     { id:'account',    label:'Account',            icon:'lock' },
+    // DSL / centre-admin only: everything logged about this child, in one place.
+    { id:'safeguarding', label:'Safeguarding',     icon:'shield' },
   ];
   // Layer 1 of the header trail — the profile page itself owns layer 0 (the
   // student's name), this adds the tab you're reading inside it.
@@ -969,36 +1031,45 @@ const StudentAnalyticsView = ({ student, enrolledClasses, role = 'admin' }) => {
       <Card title="Attainment overview" icon="chart" accent={DS.accent} style={span2}>
         <div style={{ padding:'20px 24px', display:'flex', gap:28, alignItems:'center', flexWrap:'wrap' }}>
           <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:10 }}>
-            <GaugeRing value={student.score||0} label={A.predictedGrade} sub="Predicted" color={gradeColour(student.score||0)} />
+            <GaugeRing value={A.attainment||0} label={A.indicativeGrade} sub={A.attainment == null ? 'No results yet' : 'Indicative'} color={A.attainment == null ? DS.faint : gradeColour(A.attainment)} />
             <Badge variant={student.status==='at-risk'?'danger':'success'}>{student.status==='at-risk'?'Needs support':'On track'}</Badge>
           </div>
           <div style={{ flex:1, minWidth:260, display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(118px,1fr))', gap:12 }}>
             {kpiTile('Attendance', (student.attendance||0)+'%', (student.attendance||0)<80?DS.danger:DS.success)}
             {kpiTile('Homework', (student.hw||0)+'%', (student.hw||0)<50?DS.danger:DS.success)}
-            {kpiTile('Avg score', (student.score||0)+'%', (student.score||0)<60?DS.danger:DS.success)}
+            {kpiTile('Attainment', A.attainment == null ? '—' : A.attainment+'%', A.attainment == null ? DS.faint : A.attainment<60?DS.danger:DS.success)}
+            {kpiTile('Homework avg', A.homeworkAvg == null ? '—' : A.homeworkAvg+'%', DS.info)}
             {kpiTile('Engagement', A.engagement+'%', DS.info)}
-            {kpiTile('Target grade', A.targetGrade, DS.success)}
+            {kpiTile('Targets set', `${A.targetsSet}/${A.subjectRows.length}`, A.targetsSet < A.subjectRows.length ? DS.warning : DS.success)}
           </div>
         </div>
       </Card>
 
-      <Card title="Subject Performance" icon="book" accent="#7C3AED" style={span2} subtitle={`Predicted grades and recent trend across ${A.subjectRows.length} subject${A.subjectRows.length===1?'':'s'}`}>
+      <Card title="Subject Performance" icon="book" accent="#7C3AED" style={span2} subtitle={`Teacher-set predicted and target grades, and the recent trend, across ${A.subjectRows.length} subject${A.subjectRows.length===1?'':'s'}`}>
         <Table cols={['Subject','Teacher','Latest','Predicted','Target','Trend','Status']}
           rows={A.subjectRows.map(s => [
             <span style={{ display:'flex', alignItems:'center', gap:9 }}><span style={{ width:9, height:9, borderRadius:3, background:subjectColor(s.name), flexShrink:0 }} /><span style={{ fontSize:13, fontWeight:600, color:DS.text }}>{s.name}</span></span>,
             <span style={{ fontSize:13, color:DS.muted }}>{s.teacher}</span>,
             <ScorePill score={s.score} />,
-            <span style={{ fontSize:13.5, fontWeight:700, color:DS.text }}>{s.predicted}</span>,
-            <span style={{ fontSize:13, color:DS.muted }}>{s.target}</span>,
-            <Sparkline data={s.spark} color={subjectColor(s.name)} width={84} height={26} />,
-            <StatusPill status={s.onTrack?'On track':'Below target'} tone={s.onTrack?'positive':'warning'} />,
+            s.predicted ? <span style={{ fontSize:13.5, fontWeight:700, color:DS.text }}>{s.predicted}</span> : <span style={{ fontSize:12, color:DS.faint }}>Not set</span>,
+            s.target ? <span style={{ fontSize:13, color:DS.muted }}>{s.target}</span> : <span style={{ fontSize:12, color:DS.faint }}>Not set</span>,
+            s.spark.length >= 2 ? <Sparkline data={s.spark} color={subjectColor(s.name)} width={84} height={26} /> : <span style={{ fontSize:12, color:DS.faint }}>—</span>,
+            s.onTrack == null ? <StatusPill tone="neutral">{s.score == null ? 'No results' : 'No target'}</StatusPill> : <StatusPill status={s.onTrack?'On track':'Below target'} tone={s.onTrack?'positive':'warning'} />,
           ])} />
       </Card>
 
-      <Card title="Attainment Trend" icon="trending_up" accent={DS.info} subtitle="Score vs cohort">
+      <Card title="Attainment Trend" icon="trending_up" accent={DS.info} subtitle="Assessment results vs the class average">
         <div style={{ padding:'16px 18px' }}>
-          <LineChart labels={ANALYTICS_MONTHS} height={196} series={[{ label:'Student %', data:A.trend, color:DS.accent }, { label:'Cohort %', data:A.cohort, color:DS.faint }]} />
-          <ChartLegend items={[['Student',DS.accent],['Cohort',DS.faint]]} />
+          {A.trend.length >= 2 ? (
+            <>
+              <LineChart labels={A.trendLabels} height={196} series={[{ label:'Student %', data:A.trend, color:DS.accent }, { label:'Class avg %', data:A.cohort, color:DS.faint }]} />
+              <ChartLegend items={[['Student',DS.accent],['Class average',DS.faint]]} />
+            </>
+          ) : (
+            <div style={{ padding:'36px 0', textAlign:'center', fontSize:13, color:DS.muted }}>
+              {A.trend.length ? 'One result so far — a trend needs at least two.' : 'No assessment results yet.'}
+            </div>
+          )}
         </div>
       </Card>
       <Card title="Performance & Effort" icon="star" accent={DS.accent}>
@@ -1149,9 +1220,9 @@ const StudentAnalyticsView = ({ student, enrolledClasses, role = 'admin' }) => {
           {invoices.length ? invoices.map((inv,i) => (
             <div key={i} style={{ display:'flex', alignItems:'center', gap:12, padding:'13px 20px', borderBottom:i<invoices.length-1?`1px solid ${DS.border}`:'none' }}>
               <div style={{ width:34, height:34, borderRadius:9, background:'#16A34A18', color:'#16A34A', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}><Icon name="invoice" size={16} /></div>
-              <div style={{ flex:1, minWidth:0 }}><div style={{ fontSize:13.5, fontWeight:600, color:DS.text }}>{inv.plan}</div><div style={{ fontSize:11.5, color:DS.muted }}>Due {inv.due}</div></div>
+              <div style={{ flex:1, minWidth:0 }}><div style={{ fontSize:13.5, fontWeight:600, color:DS.text }}>{inv.plan}</div><div style={{ fontSize:11.5, color:DS.muted }}>{inv.number}{inv.due ? ` · next due ${inv.due}` : ''}{inv.outstanding > 0 && inv.status !== 'void' ? ` · £${inv.outstanding} outstanding` : ''}</div></div>
               <span style={{ fontSize:14, fontWeight:700, color:DS.text }}>£{inv.amount}</span>
-              <Badge variant={inv.status==='paid'?'success':inv.status==='overdue'?'danger':'warning'}>{capWord(inv.status)}</Badge>
+              <Badge variant={inv.status==='paid'?'success':inv.status==='overdue'?'danger':inv.status==='void'?'default':'warning'}>{capWord(inv.status)}</Badge>
             </div>
           )) : <EmptyState icon="invoice" title="No invoices on record" message="When this student is added to a billing plan their invoices will appear here." />}
         </div>
@@ -1205,14 +1276,20 @@ const StudentAnalyticsView = ({ student, enrolledClasses, role = 'admin' }) => {
   );
 
   const tabBody = { attainment:tabAttainment, attendance:tabAttendance, homework:tabHomework, reports:tabReports, classes:tabClasses };
+  // Safeguarding tab — the child's concern chronology (Communications.jsx
+  // StudentConcernsPanel over the one lifted comms store). Never on a teacher's view.
+  const tabSafeguarding = window.StudentConcernsPanel
+    ? <window.StudentConcernsPanel comms={window.__comms} studentId={student.id} studentName={studentName(student)} />
+    : null;
   const panel = tab==='account' ? tabAccount
     : tab==='fees' ? tabFees
+    : tab==='safeguarding' ? tabSafeguarding
     : (notStarted ? notStartedEmpty : tabBody[tab]);
 
   // ── RIGHT: tab strip + the active tab, scrolling on its own ──
   const main = (
     <main style={{ flex:1, minWidth:0, display:'flex', flexDirection:'column', overflow:'hidden' }}>
-      <ProfileTabStrip tabs={TABS.filter(t => !(isTeacher && (t.id === 'fees' || t.id === 'account')))} active={tab} onChange={setTab} />
+      <ProfileTabStrip tabs={TABS.filter(t => !(isTeacher && (t.id === 'fees' || t.id === 'account' || t.id === 'safeguarding')))} active={tab} onChange={setTab} />
       <div style={{ flex:1, overflow:'auto', paddingTop:16, paddingRight:2, paddingBottom:24 }}>
         {panel}
       </div>
@@ -1914,7 +1991,7 @@ const SubjectDetailPage = () => {
           <EmptyState icon="graduation" title="No students" message={`No students are enrolled in ${sub.name}.`} />
         ) : (
           <Table
-            cols={['Student','Year','Attendance','HW %','Avg Score','']}
+            cols={['Student','Year','Attendance','HW %','Attainment','']}
             rows={students.map(s => [
               <button onClick={() => adminNav('student_profile', s.id)} style={{ background:'none', border:'none', padding:0, cursor:'pointer', textAlign:'left' }}>
                 <span style={{ fontSize:13, fontWeight:600, color:DS.accent }}>{studentName(s)}</span>
@@ -1922,7 +1999,7 @@ const SubjectDetailPage = () => {
               <span style={{ fontSize:13, color:DS.muted }}>{s.year}</span>,
               <span style={{ fontSize:13, fontWeight:600, color: s.attendance < 80 ? DS.danger : DS.success }}>{s.attendance}%</span>,
               <span style={{ fontSize:13, fontWeight:600, color: s.hw < 50 ? DS.danger : DS.success }}>{s.hw}%</span>,
-              <ScorePill score={s.score} />,
+              <ScorePill score={window.studentAttainment(s)} />,
               <Btn variant="ghost" icon="eye" small onClick={() => adminNav('student_profile', s.id)}>Profile</Btn>,
             ])}
           />
@@ -1944,6 +2021,14 @@ const AdminClassesPage = ({ section }) => {
   const [search, setSearch] = React.useState('');
   const [modalOpen, setModalOpen] = React.useState(false);
   const [editing, setEditing] = React.useState(null);
+  // Classes | Requests — teacher class-change requests are worked from here
+  // (decision #46). A dashboard alert or the nav badge can land straight on them.
+  const [pane, setPane] = React.useState(() => {
+    if (window.__classesPane) { const p = window.__classesPane; window.__classesPane = null; return p; }
+    return 'classes';
+  });
+  const requests = window.useClassRequests ? window.useClassRequests() : [];
+  const openRequests = requests.filter(r => r.status === 'open').length;
 
   const classes = store.classes;
   const totalSeats = classes.reduce((s, c) => s + c.capacity, 0);
@@ -1981,12 +2066,18 @@ const AdminClassesPage = ({ section }) => {
           tone: unstaffed ? DS.danger : DS.success },
       ]} />
 
-      {/* Toolbar — search (Classes/Subjects split lives in the sidebar nav) */}
+      {/* Toolbar — Classes | Requests, then search (Classes/Subjects split lives in the sidebar nav) */}
       <div style={{ display:'flex', gap:12, marginBottom:20, alignItems:'center' }}>
-        <SearchInput value={search} onChange={e => setSearch(e.target.value)} placeholder="Search classes, subjects or teachers…" />
+        <Segmented value={pane} onChange={setPane} options={[
+          { id:'classes', label:'Classes' },
+          { id:'requests', label:'Requests', count: openRequests || null },
+        ]} />
+        {pane === 'classes' && <SearchInput value={search} onChange={e => setSearch(e.target.value)} placeholder="Search classes, subjects or teachers…" />}
       </div>
 
-      <Card>
+      {pane === 'requests' && window.ClassRequestsQueue && <window.ClassRequestsQueue />}
+
+      {pane === 'classes' && <Card>
         {filtered.length === 0 ? (
           <EmptyState icon="book" title="No classes found" message={search ? `No classes match “${search}”.` : 'Create your first class to start scheduling sessions.'} action={!search && <Btn variant="primary" icon="plus" onClick={() => adminNav('classes_add')}>Add Class</Btn>} />
         ) : (
@@ -2042,7 +2133,7 @@ const AdminClassesPage = ({ section }) => {
             })}
           />
         )}
-      </Card>
+      </Card>}
 
       <ClassFormModal open={modalOpen} onClose={() => setModalOpen(false)} onSave={handleSave} store={store} teachers={store.teachers} editing={editing} />
     </div>
@@ -2062,17 +2153,28 @@ const AddClassPage = () => {
   const [step, setStep] = React.useState(0);
   const [touched, setTouched] = React.useState(false);
   const [search, setSearch] = React.useState('');
-  const [form, setForm] = React.useState({
-    name:'', description:'',
-    subjectId:'', yearGroupId:'', levelId:'', examBoardId:'',
+  // Opened from a teacher's new-class request (ClassRequests.jsx): the request is
+  // a PREFILL, never a creation — subject / year / level / teacher / preferred slot
+  // arrive filled in and the admin still decides the day, time and room.
+  const [prefill] = React.useState(() => { const p = window.__classPrefill || null; window.__classPrefill = null; return p; });
+  const byName = (list, name) => (list || []).find(x => String(x.name).toLowerCase() === String(name || '').toLowerCase());
+  const addMinutes = (hhmm, mins) => { const [h, m] = String(hhmm).split(':').map(Number); const t = (h * 60 + m + mins) % 1440; return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`; };
+  const [form, setForm] = React.useState(() => ({
+    name: prefill ? [prefill.level, prefill.subject].filter(Boolean).join(' ') : '', description:'',
+    subjectId: (prefill && byName(store.subjects, prefill.subject) || {}).id || '',
+    yearGroupId: (prefill && byName(store.yearGroups, prefill.yearGroup) || {}).id || '',
+    levelId: (prefill && byName(store.levels, prefill.level) || {}).id || '',
+    examBoardId:'',
     groupLabel:'',
     // Default the teacher to the signed-in teaching principal so a class the admin
     // creates immediately shows up on the (single-persona) teacher surface — the
     // teacher view resolves "my classes" by matching this name. Admin can change it.
-    teacher: (window.teacherMetrics && window.teacherMetrics.getPrincipal && window.teacherMetrics.getPrincipal().name) || '',
-    room:'', day:'Monday', startTime:'09:00', endTime:'10:30',
-    capacity:'10', status:'active', studentIds:[],
-  });
+    teacher: (prefill && prefill.teacher) || (window.teacherMetrics && window.teacherMetrics.getPrincipal && window.teacherMetrics.getPrincipal().name) || '',
+    room:'', day: (prefill && prefill.day) || 'Monday',
+    startTime: (prefill && prefill.startTime) || '09:00',
+    endTime: (prefill && prefill.startTime) ? addMinutes(prefill.startTime, 90) : '10:30',
+    capacity: prefill && prefill.capacity ? String(Math.max(prefill.capacity, 6)) : '10', status:'active', studentIds:[],
+  }));
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const toggleStudent = id => setForm(f => ({ ...f, studentIds: f.studentIds.includes(id) ? f.studentIds.filter(x => x !== id) : [...f.studentIds, id] }));
 
@@ -2107,7 +2209,7 @@ const AddClassPage = () => {
     // Persist the rich record: the four dimension ids + the flat fields the rest of
     // the app already reads (name/group/teacher/day/time/room), plus the roster.
     // createClassWithRoster also writes each student's classIds in the same persist.
-    store.createClassWithRoster({
+    const newId = store.createClassWithRoster({
       name: form.name.trim(),
       description: form.description.trim(),
       subjectId: form.subjectId, yearGroupId: form.yearGroupId, levelId: form.levelId, examBoardId: form.examBoardId,
@@ -2120,17 +2222,46 @@ const AddClassPage = () => {
       studentIds: form.studentIds, students: form.studentIds.length,
       status: form.status, tags: levelName ? [levelName] : [],
     }, form.studentIds);
+    if (window.markCentreSetup) window.markCentreSetup('classes');   // setup step: a class now exists at this centre
+    // Close the teacher's request that this class answers, linking the new class.
+    if (prefill && prefill.requestId && window.klasioClassRequests) {
+      window.klasioClassRequests.decide(prefill.requestId, 'actioned',
+        `Class created: ${form.name.trim()} · ${form.day} ${timeValue}${form.room.trim() ? ` · ${form.room.trim()}` : ''}.`, { resultClassId: newId });
+      window.__classesPane = 'requests';
+    }
     adminNav('classes');
   };
 
   const q = search.trim().toLowerCase();
   const studentMatches = store.students.filter(s => !q || studentName(s).toLowerCase().includes(q) || (s.year || '').toLowerCase().includes(q));
 
+  // Advisory only (decision #55): the admin owns the timetable and may override —
+  // this names the conflict, it never blocks Create.
+  const slot = { day: form.day, start: form.startTime, end: form.endTime };
+  const selTeacher = store.teachers.find(t => t.name === form.teacher);
+  const slotWarnings = [availabilityIssue(store, selTeacher, slot), teachingClash(store, selTeacher, slot)].filter(Boolean);
+  const slotWarning = slotWarnings.length > 0 && (
+    <div style={{ display:'flex', gap:9, alignItems:'flex-start', padding:'10px 12px', margin:'4px 0 14px', background:DS.warningBg, border:`1px solid ${DS.warningBorder}`, borderRadius:9, fontSize:12.5, color:DS.sub, lineHeight:1.5 }}>
+      <Icon name="alert" size={15} color={DS.warning} />
+      <div>{slotWarnings.map(w => <div key={w}>{w}.</div>)}<div style={{ color:DS.muted }}>You can still create the class — this is a heads-up, not a block.</div></div>
+    </div>
+  );
+
   return (
     <div style={pageFrame({ narrow: true })}>
       <FlowHeader title="Create New Class" subtitle="Set up a new class group"
         onBack={back} backLabel={step === 0 ? 'Classes' : CLASS_STEPS[step - 1]} />
       <StepTabs steps={CLASS_STEPS} current={step} onJump={setStep} />
+
+      {prefill && (
+        <div style={{ display:'flex', gap:10, alignItems:'flex-start', padding:'12px 14px', marginBottom:14, background:DS.infoBg, border:`1px solid ${DS.cardBorder}`, borderRadius:10, fontSize:12.5, color:DS.sub, lineHeight:1.5 }}>
+          <Icon name="send" size={15} color={DS.info} />
+          <div>
+            <strong style={{ color:DS.text }}>Prefilled from {prefill.teacher}’s request.</strong> Their preferred slot is filled in, but the day, time and room are still your call. Creating the class closes the request and tells them.
+            {prefill.note && <div style={{ marginTop:4, color:DS.muted }}>“{prefill.note}”</div>}
+          </div>
+        </div>
+      )}
 
       {/* Live preview chip */}
       <div style={{ display:'flex', alignItems:'center', gap:12, padding:'12px 14px', marginBottom:18, background: color + '12', border:`1px solid ${color}33`, borderRadius:10 }}>
@@ -2177,6 +2308,7 @@ const AddClassPage = () => {
               <Field label="Start Time" required error={touched && stepErrs[1].time}><Input type="time" value={form.startTime} onChange={e => set('startTime', e.target.value)} invalid={touched && !!stepErrs[1].time} icon="clock" /></Field>
               <Field label="End Time" required error={touched && stepErrs[1].time}><Input type="time" value={form.endTime} onChange={e => set('endTime', e.target.value)} invalid={touched && !!stepErrs[1].time} icon="clock" /></Field>
             </div>
+            {slotWarning}
             <FlowSection icon="pin" title="Room & Capacity" />
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'0 18px' }}>
               <Field label="Room"><Input value={form.room} onChange={e => set('room', e.target.value)} icon="pin" placeholder="e.g. Room 3" /></Field>
@@ -2190,9 +2322,13 @@ const AddClassPage = () => {
             <Field label="Teacher">
               <Select value={form.teacher} onChange={e => set('teacher', e.target.value)}>
                 <option value="">Assign teacher…</option>
-                {store.teachers.map(t => <option key={t.id}>{t.name}</option>)}
+                {store.teachers.map(t => {
+                  const off = availabilityIssue(store, t, slot) || teachingClash(store, t, slot);
+                  return <option key={t.id} value={t.name}>{t.name}{off ? ' — not free then' : ''}</option>;
+                })}
               </Select>
             </Field>
+            {slotWarning}
 
             <FlowSection icon="users" title={`Enrol Students · ${form.studentIds.length} selected`} />
             <div style={{ marginBottom:12 }}>
@@ -2253,6 +2389,19 @@ const seededRand = seed => {
 // `editing` = a cover already exists (controls title + the Remove button); `prefill`
 // only seeds the form — it may come from an existing cover OR the away teacher's
 // booked holiday, so it is kept distinct from whether we're editing.
+// Cover candidates ranked by who is actually FREE for these classes over the cover
+// window (decision #55): availability + blackout dates + not already teaching then.
+// Free first; everyone else still listed, with the reason they may not be.
+const rankCoverCandidates = (store, candidates, classes, win) => candidates.map(t => {
+  const issues = (classes || []).map(c => {
+    const sl = avSplit(c.time);
+    const slot = { day: c.day, start: sl.start, end: sl.end, from: win && win.from, to: win && win.to };
+    return availabilityIssue(store, t, slot) || teachingClash(store, t, slot, c.id);
+  }).filter(Boolean);
+  return { t, issue: issues[0] || null, free: (classes || []).length - issues.length };
+}).sort((a, b) => (a.issue ? 1 : 0) - (b.issue ? 1 : 0) || b.free - a.free || a.t.name.localeCompare(b.t.name));
+const coverOptionLabel = (r) => `${r.t.name}${r.issue ? ` — ${r.issue.replace(/^\S+\s/, '')}` : ' — free'}`;
+
 const CoverModal = ({ open, onClose, store, awayName, classes = [], prefill, editing, onApply, onClear }) => {
   const candidates = store.teachers.filter(t => t.name !== awayName && t.status !== 'invited');
   const blank = { teacherId:'', from:'', to:'', reason:'' };
@@ -2302,12 +2451,20 @@ const CoverModal = ({ open, onClose, store, awayName, classes = [], prefill, edi
         </div>
       </div>
 
-      <Field label="Cover teacher" required>
+      <Field label="Cover teacher" required hint="Ranked by who is free for these sessions — from each teacher's availability, blackout dates and timetable.">
         <Select value={form.teacherId} onChange={e => set('teacherId', e.target.value)}>
           <option value="">Select a teacher…</option>
-          {candidates.map(t => <option key={t.id} value={t.id}>{t.name}{t.subject ? ` — ${t.subject}` : ''}</option>)}
+          {rankCoverCandidates(store, candidates, classes, form).map(r => <option key={r.t.id} value={r.t.id}>{coverOptionLabel(r)}</option>)}
         </Select>
       </Field>
+      {picked && (() => {
+        const r = rankCoverCandidates(store, [picked], classes, form)[0];
+        return r && r.issue ? (
+          <div style={{ display:'flex', gap:8, alignItems:'flex-start', padding:'9px 12px', margin:'-6px 0 14px', background:DS.warningBg, borderRadius:8, fontSize:12.5, color:DS.sub }}>
+            <Icon name="alert" size={14} color={DS.warning} /><span>{r.issue}. You can still assign them.</span>
+          </div>
+        ) : null;
+      })()}
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'0 16px' }}>
         <Field label="From" required><Input type="date" value={form.from} onChange={e => set('from', e.target.value)} icon="calendar" invalid={badRange} /></Field>
         <Field label="To" required error={badRange ? 'End is before start' : ''}><Input type="date" value={form.to} onChange={e => set('to', e.target.value)} icon="calendar" invalid={badRange} /></Field>
@@ -2398,9 +2555,9 @@ const TeacherCoverModal = ({ open, onClose, store, teacher, classes = [], prefil
                   <div style={{ fontSize:13, fontWeight:600, color:DS.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{c.name}</div>
                   <div style={{ fontSize:11.5, color:DS.muted }}>{c.group} · {c.day} {c.time}</div>
                 </div>
-                <Select value={assign[c.id] || ''} onChange={e => setOne(c.id, e.target.value)} style={{ width:190, flexShrink:0 }}>
+                <Select value={assign[c.id] || ''} onChange={e => setOne(c.id, e.target.value)} style={{ width:230, flexShrink:0 }}>
                   <option value="">— No cover —</option>
-                  {candidates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                  {rankCoverCandidates(store, candidates, [c], win).map(r => <option key={r.t.id} value={r.t.id}>{coverOptionLabel(r)}</option>)}
                 </Select>
               </div>
             );
@@ -2422,7 +2579,7 @@ const ADMIN_CLASS_TABS = [
   { id:'sessions',      label:'Sessions',      icon:'calendar' },
   { id:'plans',         label:'Lesson plans',  icon:'book' },
   { id:'homework',      label:'Homework',      icon:'clip' },
-  { id:'announcements', label:'Announcements', icon:'megaphone' },
+  { id:'stream',        label:'Stream',        icon:'megaphone' },
 ];
 
 const DOW_INDEX = { Sunday:0, Monday:1, Tuesday:2, Wednesday:3, Thursday:4, Friday:5, Saturday:6 };
@@ -2468,12 +2625,13 @@ const ClassDetailPage = () => {
   const cls = store.classes.find(c => c.id === id);
   const [modalOpen, setModalOpen] = React.useState(false);
   const [coverOpen, setCoverOpen] = React.useState(false);
+  const [backgroundOpen, setBackgroundOpen] = React.useState(false);
   const [tab, setTab] = React.useState('overview');
   const [sessionDetail, setSessionDetail] = React.useState(null);
 
   // Re-sync per-class state when the opened class changes (the page stays mounted
   // on class→class navigation, so useState initialisers alone wouldn't refresh).
-  React.useEffect(() => { setTab('overview'); setSessionDetail(null); }, [id]);
+  React.useEffect(() => { setTab('overview'); setSessionDetail(null); setBackgroundOpen(false); }, [id]);
 
   if (!cls) return (
     <div style={pageFrame()}>
@@ -2491,6 +2649,9 @@ const ClassDetailPage = () => {
   const examBoard = store.examBoards.find(b => b.id === cls.examBoardId);
   const roster = store.students.filter(s => (s.classIds || []).includes(cls.id));
   const fill = cls.capacity ? Math.min(100, Math.round((cls.students / cls.capacity) * 100)) : 0;
+  // The class's background, through the one read path (classCovers.jsx). A centre
+  // admin may change any class's background.
+  const background = window.klasioCovers.classCover(cls, store.subjects);
 
   // Cover (substitute) state for this class.
   const cover = cls.cover;
@@ -2503,7 +2664,8 @@ const ClassDetailPage = () => {
 
   // ── Derived rollups — every number traces to ground-truth records ──
   const rnd = seededRand(cls.id);
-  const avgScore   = roster.length ? Math.round(roster.reduce((a, s) => a + (s.score || 0), 0) / roster.length) : 0;
+  // Class attainment from this class's assessment results (decision #50).
+  const avgScore   = (window.klasioScores && window.klasioScores.classAttainment(cls.id).avg) || 0;
   const attendance = roster.length ? Math.round(roster.reduce((a, s) => a + (s.attendance || 0), 0) / roster.length) : 0;
 
   // Homework set for this class — the SAME source the teacher class workspace reads
@@ -2516,9 +2678,14 @@ const ClassDetailPage = () => {
 
   // Lesson plans recorded for this class — read straight from the plans store, keyed
   // by class group. Read-only (D2). State derives from the plan date vs today.
-  const plans = Object.values(window.__lessonPlans || {})
-    .filter(p => p.group === cls.group)
-    .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  // Planned lessons for THIS class id (decision #47) — each joins its reusable
+  // lesson for the content; notes/reflection are this class's own.
+  const plans = window.klasioLessons ? window.klasioLessons.deliveriesForClass(cls.id).map(d => {
+    const l = window.klasioLessons.getLesson(d.lessonId) || {};
+    const owner = (store.teachers.find(t => t.id === l.ownerId) || {}).name || null;
+    const nFiles = window.klasioResources && window.klasioResources.contextLinkCount ? window.klasioResources.contextLinkCount('lesson', d.lessonId) : 0;
+    return { ...d, lesson: l, owner, nFiles };
+  }) : [];
 
   // Session log (derived — no session store; see helper). Register-taken is the
   // admin's real concern here.
@@ -2527,10 +2694,14 @@ const ClassDetailPage = () => {
   const scheduled = sessions.filter(s => s.status === 'scheduled').length;
   const openRegisters = sessions.filter(s => s.status === 'delivered' && s.registerTaken === false).length;
 
-  // Class-scoped announcements (read-only oversight — every class post, whatever role
-  // it targeted). Read count + reach derived at render (window.classAnnouncementsFor).
-  const centreId = 'bm';
+  // The class's Stream, as oversight: the teacher's stream posts (class_posts) AND
+  // the class-scoped announcements (comms store), merged into one feed — two
+  // stores, one rendering, the same merge the teacher's Stream tab shows. Without
+  // the posts, an admin would read "0" here while the teacher's stream was full.
+  // Read count + reach derived at render (window.classAnnouncementsFor).
+  const centreId = (window.__getCentre && window.__getCentre()) || 'bm';
   const announcements = window.classAnnouncementsFor ? window.classAnnouncementsFor(centreId, cls.id) : [];
+  const streamPosts = (window.classLS && window.classLS.getStream(cls.id)) || [];
 
   const weeks = ['W1','W2','W3','W4','W5','W6','W7','W8'];
   const scoreTrend = weeks.map((_, i) => Math.max(40, Math.min(98, (avgScore || 60) - 10 + i * 2 + Math.round((rnd() - 0.5) * 8))));
@@ -2570,6 +2741,7 @@ const ClassDetailPage = () => {
       <Btn variant="secondary" icon="megaphone" small onClick={() => announceToClass(cls)}>Post announcement</Btn>
       <Btn variant="secondary" icon="message" small onClick={() => window.__navigate && window.__navigate('admin', 'comms:messages')}>Message class</Btn>
       <Btn variant="secondary" icon="edit" small onClick={() => setModalOpen(true)}>Edit class</Btn>
+      <Btn variant="secondary" icon="image" small onClick={() => setBackgroundOpen(true)}>Change background</Btn>
     </div>
   );
 
@@ -2695,7 +2867,8 @@ const ClassDetailPage = () => {
           cols={['Student','Attendance','HW %','Grade','Guardian','']}
           rows={roster.map(s => {
             const chips = attentionChips(s);
-            const grade = window.klasioStudent ? window.klasioStudent.formatGrade(s.score, gradeLevel) : s.score;
+            const attn = window.studentAttainment(s);
+            const grade = attn == null ? '—' : window.klasioStudent ? window.klasioStudent.formatGrade(attn, gradeLevel) : attn;
             return [
               <div>
                 <button onClick={() => adminNav('student_profile', s.id)} style={{ background:'none', border:'none', padding:0, cursor:'pointer', textAlign:'left' }}>
@@ -2766,29 +2939,21 @@ const ClassDetailPage = () => {
         <div>
           {plans.map((p, i) => {
             const st = planState(p.date);
-            const res = (p.plan && p.plan.resources) || [];
             return (
-              <div key={p.date + i} style={{ padding:'16px 20px', borderTop: i ? `1px solid ${DS.border}` : 'none', display:'flex', gap:16, alignItems:'flex-start' }}>
+              <div key={p.id} style={{ padding:'16px 20px', borderTop: i ? `1px solid ${DS.border}` : 'none', display:'flex', gap:16, alignItems:'flex-start' }}>
                 <div style={{ width:52, textAlign:'center', flexShrink:0 }}>
                   <div style={{ fontSize:11, color:DS.muted, textTransform:'uppercase', fontWeight:600 }}>{CLASS_MONTHS[Number((p.date || '').slice(5, 7)) - 1] || ''}</div>
                   <div style={{ fontSize:22, fontWeight:800, color, lineHeight:1 }}>{Number((p.date || '').slice(8, 10)) || ''}</div>
                 </div>
                 <div style={{ flex:1, minWidth:0 }}>
                   <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                    <div style={{ fontSize:14, fontWeight:700, color:DS.text }}>{p.plan.title}</div>
+                    <div style={{ fontSize:14, fontWeight:700, color:DS.text }}>{p.lesson.title || 'Untitled lesson'}</div>
                     <StatusPill status={st.label} tone={st.tone} />
                   </div>
-                  <div style={{ fontSize:12, color:DS.muted, marginTop:2 }}>{p.plan.topic}{p.plan.duration ? ` · ${p.plan.duration} min` : ''}{p.owner ? ` · ${p.owner}` : ''}</div>
-                  {p.plan.objectives && <div style={{ fontSize:12.5, color:DS.sub, marginTop:8, lineHeight:1.5, display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical', overflow:'hidden' }}>{p.plan.objectives.replace(/•/g, '').replace(/\n/g, ' ').trim()}</div>}
-                  {res.length > 0 && (
-                    <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginTop:10 }}>
-                      {res.map(r => (
-                        <span key={r.id} style={{ display:'inline-flex', alignItems:'center', gap:6, fontSize:11.5, color:DS.sub, background:DS.surface, border:`1px solid ${DS.border}`, borderRadius:8, padding:'4px 9px' }}>
-                          <Icon name="file" size={12} color={DS.faint} />{r.name}<span style={{ color:DS.faint }}>· {fileSize(r.size)}</span>
-                        </span>
-                      ))}
-                    </div>
-                  )}
+                  <div style={{ fontSize:12, color:DS.muted, marginTop:2 }}>{[p.lesson.topic, p.lesson.duration ? `${p.lesson.duration} min` : null, p.owner, p.nFiles ? `${p.nFiles} file${p.nFiles === 1 ? '' : 's'}` : null].filter(Boolean).join(' · ')}</div>
+                  {p.notes && <div style={{ fontSize:12.5, color:DS.sub, marginTop:8, lineHeight:1.5 }}><strong style={{ fontWeight:600 }}>Notes:</strong> {p.notes}</div>}
+                  {p.lesson.objectives && <div style={{ fontSize:12.5, color:DS.sub, marginTop:8, lineHeight:1.5, display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical', overflow:'hidden' }}>{p.lesson.objectives.replace(/•/g, '').replace(/\n/g, ' ').trim()}</div>}
+                  {p.reflection && <div style={{ fontSize:12.5, color:DS.sub, marginTop:6, fontStyle:'italic' }}>“{p.reflection}”</div>}
                 </div>
               </div>
             );
@@ -2826,29 +2991,50 @@ const ClassDetailPage = () => {
     </Card>
   );
 
-  // ── Tab · Announcements (class-scoped posts; author, sent date, read count) ──
-  const tabAnnouncements = (
-    <Card title={`Class announcements · ${announcements.length}`} icon="megaphone" accent={DS.accent}>
-      {announcements.length === 0 ? (
-        <EmptyState icon="megaphone" title="No class announcements" message="Announcements posted to this class will appear here." />
+  // ── Tab · Stream (posts + class announcements, one feed; read-only oversight) ──
+  // Pinned announcements lead; everything else is newest-first by when it was posted.
+  const feed = [
+    ...announcements.map(a => ({ kind:'announcement', at:new Date(a.createdAt).getTime(), a })),
+    ...streamPosts.map(p => ({ kind:'post', at:p.at, p })),
+  ].sort((x, y) => ((y.kind === 'announcement' && y.a.pinned) - (x.kind === 'announcement' && x.a.pinned)) || (y.at - x.at));
+  const tabStream = (
+    <Card title={`Stream · ${streamPosts.length} post${streamPosts.length === 1 ? '' : 's'} · ${announcements.length} announcement${announcements.length === 1 ? '' : 's'}`} icon="megaphone" accent={DS.accent}
+      actions={[<Btn key="ann" variant="secondary" small icon="megaphone" onClick={() => announceToClass(cls)}>Post announcement</Btn>]}>
+      {feed.length === 0 ? (
+        <EmptyState icon="megaphone" title="Nothing in this class's stream yet" message="Posts from the teacher and announcements to this class will appear here." />
       ) : (
         <div>
-          {announcements.map((a, i) => (
-            <div key={a.id} style={{ padding:'15px 20px', borderTop: i ? `1px solid ${DS.border}` : 'none' }}>
+          {feed.map((f, i) => f.kind === 'announcement' ? (
+            <div key={'a' + f.a.id} style={{ padding:'15px 20px', borderTop: i ? `1px solid ${DS.border}` : 'none' }}>
               <div style={{ display:'flex', alignItems:'flex-start', gap:12 }}>
-                <Avatar name={a.authorName} size={36} color={color} />
+                <div style={{ width:36, height:36, borderRadius:'50%', flexShrink:0, background:DS.accentLight, color:DS.accent, display:'flex', alignItems:'center', justifyContent:'center' }}><Icon name="megaphone" size={16} /></div>
                 <div style={{ flex:1, minWidth:0 }}>
                   <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
-                    <span style={{ fontSize:13.5, fontWeight:700, color:DS.text }}>{a.title}</span>
-                    {a.pinned && <Badge variant="default">Pinned</Badge>}
-                    {a.requiresAck && <Badge variant="warning">Ack required</Badge>}
+                    <span style={{ fontSize:13.5, fontWeight:700, color:DS.text }}>{f.a.title}</span>
+                    <Badge variant="accent">Announcement</Badge>
+                    {f.a.pinned && <Badge variant="default">Pinned</Badge>}
+                    {f.a.requiresAck && <Badge variant="warning">Ack required</Badge>}
                   </div>
-                  <div style={{ fontSize:11.5, color:DS.muted, marginTop:1 }}>{a.authorName} · {fmtDay(a.createdAt.slice(0, 10))}</div>
-                  <div style={{ fontSize:12.5, color:DS.sub, marginTop:8, lineHeight:1.5 }}>{a.body}</div>
+                  <div style={{ fontSize:11.5, color:DS.muted, marginTop:1 }}>{f.a.authorName} · {fmtDay(f.a.createdAt.slice(0, 10))}</div>
+                  <div style={{ fontSize:12.5, color:DS.sub, marginTop:8, lineHeight:1.5 }}>{f.a.body}</div>
                 </div>
                 <div style={{ textAlign:'right', flexShrink:0 }}>
-                  <div style={{ fontSize:16, fontWeight:800, color:DS.text, fontVariantNumeric:'tabular-nums' }}>{a.readCount}/{a.recipientCount}</div>
+                  <div style={{ fontSize:16, fontWeight:800, color:DS.text, fontVariantNumeric:'tabular-nums' }}>{f.a.readCount}/{f.a.recipientCount}</div>
                   <div style={{ fontSize:10.5, color:DS.faint, textTransform:'uppercase', letterSpacing:0.5 }}>Read</div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div key={'p' + f.p.id} style={{ padding:'15px 20px', borderTop: i ? `1px solid ${DS.border}` : 'none' }}>
+              <div style={{ display:'flex', alignItems:'flex-start', gap:12 }}>
+                <Avatar name={f.p.author} size={36} color={color} />
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+                    <span style={{ fontSize:13.5, fontWeight:700, color:DS.text }}>{f.p.author}</span>
+                    <Badge variant="default">Post</Badge>
+                  </div>
+                  <div style={{ fontSize:11.5, color:DS.muted, marginTop:1 }}>{fmtDay(new Date(f.p.at).toISOString().slice(0, 10))}</div>
+                  <div style={{ fontSize:12.5, color:DS.sub, marginTop:8, lineHeight:1.5, whiteSpace:'pre-wrap' }}>{f.p.text}</div>
                 </div>
               </div>
             </div>
@@ -2858,13 +3044,13 @@ const ClassDetailPage = () => {
     </Card>
   );
 
-  const tabBody = { overview:tabOverview, roster:tabRoster, sessions:tabSessions, plans:tabPlans, homework:tabHomework, announcements:tabAnnouncements };
+  const tabBody = { overview:tabOverview, roster:tabRoster, sessions:tabSessions, plans:tabPlans, homework:tabHomework, stream:tabStream };
 
   return (
     <div style={{ ...pageFrame({ flush: true }), height:'calc(100vh - 52px)', overflow:'auto' }}>
       <ClassDetailShell
         onBack={() => adminNav('classes')} backLabel="Classes"
-        color={color} bannerTheme="default"
+        color={color} cover={background}
         chips={[subject && subject.name, level && level.name, examBoard && examBoard.name, cls.status === 'paused' ? 'Paused' : 'Active', `${cls.students}/${cls.capacity}`]}
         title={cls.name} subtitle={`${cls.group} · ${cls.day} ${cls.time} · ${cls.room || 'No room'} · ${cls.teacher}`}
         bannerRight={bannerActions} preBanner={coverBanner}
@@ -2874,6 +3060,10 @@ const ClassDetailPage = () => {
       </ClassDetailShell>
 
       <ClassFormModal open={modalOpen} onClose={() => setModalOpen(false)} onSave={handleSave} store={store} teachers={store.teachers} editing={cls} />
+      <ClassBackgroundDialog open={backgroundOpen} onClose={() => setBackgroundOpen(false)}
+        cover={background} classId={cls.id} subjectName={window.klasioCovers.coverSubjectName(cls, store.subjects)}
+        title={cls.name} subtitle={`${cls.group} · ${cls.day} ${cls.time} · ${cls.room || 'No room'} · ${cls.teacher}`}
+        onSave={sel => store.setClassBackground(cls.id, sel, { role: 'admin' })} />
       <CoverModal open={coverOpen} onClose={() => setCoverOpen(false)} store={store} awayName={cls.teacher} classes={[cls]}
         prefill={coverPrefill} editing={!!cover} onApply={cv => store.setCover(cls.id, cv)} onClear={() => store.clearCover(cls.id)} />
 
@@ -3162,7 +3352,105 @@ const TEACHER_PROFILE_TABS = [
   { id:'attendance', label:'Attendance', icon:'calendar' },
   { id:'cover',      label:'Cover',      icon:'teacher' },
   { id:'holidays',   label:'Holidays',   icon:'clock' },
+  { id:'availability', label:'Availability', icon:'calendar' },
 ];
+
+// ─── Teaching availability (decision #55) ─────────────────────────────────────────
+// Weekly windows a teacher can teach + dated blackouts. Set by the teacher, visible
+// to and overridable by the admin, and ADVISORY: Create-a-class warns and the cover
+// picker ranks by it; nothing is blocked. A teacher who never set it gets no warnings
+// (unknown is not "unavailable"). Replaces the dead per-teacher "working hours".
+const AV_DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+const avMinutes = (hhmm) => { const p = String(hhmm || '0:0').split(':').map(Number); return (p[0] || 0) * 60 + (p[1] || 0); };
+const avSplit = (time) => { const p = String(time || '').split(/[–—-]/).map(s => s.trim()); return { start: p[0] || '', end: p[1] || '' }; };
+const teacherAvailability = (store, teacherId) => ((store && store.availability) || {})[teacherId] || null;
+const avFirst = (t) => String((t && t.name) || 'This teacher').split(' ')[0];
+
+// Advisory reason a teacher can't take a slot, or null. `from`/`to` (ISO dates)
+// bring blackout dates into play — a recurring class with no dates checks only
+// the weekly pattern.
+const availabilityIssue = (store, teacher, slot) => {
+  const av = teacher && teacherAvailability(store, teacher.id);
+  if (!av) return null;
+  const s = slot || {};
+  if (s.from || s.to) {
+    const bo = (av.blackouts || []).find(b => (!s.to || b.from <= s.to) && (!s.from || b.to >= s.from));
+    if (bo) return `${avFirst(teacher)} is unavailable ${fmtRange(bo.from, bo.to)}${bo.note ? ` (${bo.note})` : ''}`;
+  }
+  if (!s.day) return null;
+  const wins = (av.weekly || {})[s.day] || [];
+  if (!wins.length) return `${avFirst(teacher)} doesn't teach on ${s.day}s`;
+  if (s.start && s.end) {
+    const a = avMinutes(s.start), b = avMinutes(s.end);
+    if (!wins.some(w => avMinutes(w.from) <= a && avMinutes(w.to) >= b)) {
+      const part = a >= 16 * 60 ? 'evenings' : a < 12 * 60 ? 'mornings' : 'afternoons';
+      return `${avFirst(teacher)} doesn't teach ${s.day} ${part} (available ${wins.map(w => `${w.from}–${w.to}`).join(', ')})`;
+    }
+  }
+  return null;
+};
+// Already teaching another class in that slot? (a double-booking, not availability)
+const teachingClash = (store, teacher, slot, exceptClassId) => {
+  if (!teacher || !slot || !slot.day || !slot.start || !slot.end) return null;
+  const a = avMinutes(slot.start), b = avMinutes(slot.end);
+  const hit = (store.classes || []).find(c => c.id !== exceptClassId && c.status !== 'archived' && c.day === slot.day
+    && (c.teacher === teacher.name || (c.cover && c.cover.teacher === teacher.name && (!slot.from || !c.cover.to || c.cover.to >= slot.from)))
+    && (() => { const t = avSplit(c.time); return avMinutes(t.start) < b && avMinutes(t.end) > a; })());
+  return hit ? `${avFirst(teacher)} already teaches ${hit.name} (${hit.group}) ${hit.day} ${hit.time}` : null;
+};
+
+// Weekly windows + blackout dates. One window per day keeps it quick to fill in;
+// `value` null = never set.
+const AvailabilityEditor = ({ value, onChange }) => {
+  const weekly = (value && value.weekly) || {};
+  const blackouts = (value && value.blackouts) || [];
+  const [bo, setBo] = React.useState({ from:'', to:'', note:'' });
+  const emit = (patch) => onChange({ weekly, blackouts, ...patch });
+  const setDay = (day, win) => emit({ weekly: { ...weekly, [day]: win ? [win] : [] } });
+  return (
+    <div>
+      <div style={{ fontSize:12, fontWeight:600, color:DS.muted, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:6 }}>Weekly pattern</div>
+      {AV_DAYS.map((day, i) => {
+        const win = (weekly[day] || [])[0] || null;
+        return (
+          <div key={day} style={{ display:'flex', alignItems:'center', gap:12, padding:'8px 0', borderTop: i ? `1px solid ${DS.border}` : 'none' }}>
+            <label style={{ display:'flex', alignItems:'center', gap:9, width:140, cursor:'pointer', fontSize:13, color: win ? DS.text : DS.muted }}>
+              <input type="checkbox" checked={!!win} onChange={e => setDay(day, e.target.checked ? { from:'09:00', to:'17:00' } : null)} />
+              {day}
+            </label>
+            {win ? (
+              <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <Input type="time" value={win.from} onChange={e => setDay(day, { ...win, from: e.target.value })} style={{ width:110 }} />
+                <span style={{ fontSize:12, color:DS.faint }}>to</span>
+                <Input type="time" value={win.to} onChange={e => setDay(day, { ...win, to: e.target.value })} style={{ width:110 }} />
+              </div>
+            ) : <span style={{ fontSize:12.5, color:DS.faint }}>Not available</span>}
+          </div>
+        );
+      })}
+      <div style={{ fontSize:12, fontWeight:600, color:DS.muted, textTransform:'uppercase', letterSpacing:'0.06em', margin:'18px 0 6px' }}>Dates I can't teach</div>
+      {blackouts.length === 0 && <div style={{ fontSize:12.5, color:DS.faint, padding:'4px 0 8px' }}>None — add exam marking weeks, appointments or other commitments.</div>}
+      {blackouts.map(b => (
+        <div key={b.id} style={{ display:'flex', alignItems:'center', gap:10, padding:'7px 0', borderTop:`1px solid ${DS.border}` }}>
+          <Icon name="calendar" size={14} color={DS.faint} />
+          <span style={{ flex:1, fontSize:13, color:DS.text }}>{fmtRange(b.from, b.to)}{b.note ? <span style={{ color:DS.muted }}> · {b.note}</span> : null}</span>
+          <button onClick={() => emit({ blackouts: blackouts.filter(x => x.id !== b.id) })} style={{ background:'none', border:'none', cursor:'pointer', color:DS.faint, padding:4 }}><Icon name="x" size={14} /></button>
+        </div>
+      ))}
+      <div style={{ display:'grid', gridTemplateColumns:'150px 150px 1fr auto', gap:8, alignItems:'center', marginTop:8 }}>
+        <Input type="date" value={bo.from} onChange={e => setBo(x => ({ ...x, from: e.target.value }))} />
+        <Input type="date" value={bo.to} onChange={e => setBo(x => ({ ...x, to: e.target.value }))} />
+        <Input value={bo.note} onChange={e => setBo(x => ({ ...x, note: e.target.value }))} placeholder="Reason (optional)" />
+        <Btn variant="secondary" icon="plus" small onClick={() => {
+          if (!bo.from) return;
+          const to = bo.to && bo.to >= bo.from ? bo.to : bo.from;
+          emit({ blackouts: [...blackouts, { id:'bo' + Date.now(), from: bo.from, to, note: bo.note.trim() }] });
+          setBo({ from:'', to:'', note:'' });
+        }}>Add</Btn>
+      </div>
+    </div>
+  );
+};
 
 const TeacherProfilePage = () => {
   const store = useAdminStore();
@@ -3498,7 +3786,23 @@ const TeacherProfilePage = () => {
     </div>
   );
 
-  const tabBody = { overview:tabOverview, classes:tabClasses, attendance:tabAttendance, cover:tabCover, holidays:tabHolidays };
+  // ── Tab 6 · Availability (decision #55) ──
+  // Set by the teacher in Settings → Teaching; visible here and overridable by an
+  // admin. Advisory: Create-a-class warns and the cover picker ranks by it — it
+  // never blocks an assignment.
+  const avail = teacherAvailability(store, teacher.id);
+  const tabAvailability = (
+    <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+      <Card title="Teaching availability" icon="calendar" accent={DS.accent}
+        subtitle={avail ? `${avail.setBy === 'admin' ? 'Overridden by an admin' : `Set by ${teacher.name.split(' ')[0]}`} · updated ${avail.updatedAt ? new Date(avail.updatedAt).toLocaleDateString('en-GB', { day:'numeric', month:'short' }) : '—'}` : `${teacher.name.split(' ')[0]} hasn't set their availability yet — no warnings are shown for them.`}>
+        <div style={{ padding:'14px 20px' }}>
+          <AvailabilityEditor value={avail} onChange={v => store.setAvailability(teacher.id, v, 'admin')} />
+        </div>
+      </Card>
+    </div>
+  );
+
+  const tabBody = { overview:tabOverview, classes:tabClasses, attendance:tabAttendance, cover:tabCover, holidays:tabHolidays, availability:tabAvailability };
 
   // View mode = fixed full-height shell: the hero and left aside stay put while
   // the right-hand tabs scroll on their own (mirrors the student profile).
@@ -3688,31 +3992,32 @@ const timeMins = t => { const [h, m] = (t || '0:0').split(':').map(Number); retu
 const scheduleWeekDate = (dayName) => {
   const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
   const idx = days.indexOf(dayName);
-  if (idx < 0) return new Date().toISOString().slice(0, 10);
+  const iso = (d) => (window.attIso ? window.attIso(d) : d.toISOString().slice(0, 10));
+  if (idx < 0) return iso(new Date());
   const base = new Date(window.getNow ? window.getNow() : Date.now());
   const jsDow = base.getDay();                       // 0 = Sun … 6 = Sat
   const monday = new Date(base);
   monday.setDate(base.getDate() + (jsDow === 0 ? -6 : 1 - jsDow));
   const target = new Date(monday);
   target.setDate(monday.getDate() + idx);
-  return target.toISOString().slice(0, 10);
+  return iso(target);
 };
 
 const AdminSchedulePage = () => {
   const store = useAdminStore();
   const [teacherFilter, setTeacherFilter] = React.useState('all');
-  // A single session (one class occurrence at a date) opens a read-only detail
-  // view within Schedule — no new page id (§4.4).
-  const [session, setSession] = React.useState(null);
+  // A single session (one class occurrence at a date) opens in the right-hand
+  // session drawer over the grid — never a page of its own. Another page can still
+  // deep-link straight into one via adminParam { session:{classId,date} }.
+  const [session, setSession] = React.useState(() => {
+    const p = adminParam();
+    if (p && typeof p === 'object' && p.session) {
+      window.__adminParam = null;
+      return p.session;
+    }
+    return null;
+  });
   const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-  // The session detail is a page *inside* Timetable, so it says so in the crumbs.
-  usePageTrail(session
-    ? [{ label: (store.classes.find(c => c.id === session.classId) || {}).name || 'Session' }]
-    : []);
-
-  if (session && window.ResourceSessionDetail) {
-    return <window.ResourceSessionDetail classId={session.classId} date={session.date} onBack={() => setSession(null)} />;
-  }
 
   const classes = store.classes.filter(c =>
     c.status !== 'paused' && (teacherFilter === 'all' || c.teacher === teacherFilter));
@@ -3828,6 +4133,10 @@ const AdminSchedulePage = () => {
       <div style={{ fontSize:12, color:DS.faint, marginTop:12 }}>
         Showing {classes.length} session{classes.length===1?'':'s'}{teacherFilter!=='all' ? ` for ${teacherFilter}` : ' across all teachers'} · paused classes hidden.
       </div>
+
+      {session && window.SessionDrawer && (
+        <window.SessionDrawer classId={session.classId} date={session.date} role="admin" onClose={() => setSession(null)} />
+      )}
     </div>
   );
 };
@@ -3863,4 +4172,4 @@ const AdminPages = ({ page, section }) => {
 
 // teacherAttendanceMap is exported so other surfaces (and tests) can ask the same
 // question the Teachers page asks, rather than re-deriving staff attendance.
-Object.assign(window, { AdminPages, teacherAttendanceMap, TEACHER_ATT_WINDOW });
+Object.assign(window, { AdminPages, teacherAttendanceMap, TEACHER_ATT_WINDOW, AvailabilityEditor, availabilityIssue, teachingClash, teacherAvailability });
